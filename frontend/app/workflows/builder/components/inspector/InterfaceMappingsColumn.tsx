@@ -6,8 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel, SelectSeparator } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { FileText, Save, Edit, X, Info, Plus, Trash2, ChevronRight } from 'lucide-react';
+import { FileText, Save, Edit, X, Plus, Trash2, ChevronRight } from 'lucide-react';
 import { useInterfaceById } from '../../hooks/useInterfaces';
 import { orchestratorApi } from '@/lib/api';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
@@ -23,6 +22,7 @@ import { nodeSupportsPolicy } from '../../utils/nodePolicy';
 import { OptionalFeatureNotice } from './OptionalFeatureNotice';
 import { RENDERER_ENABLE_COMMAND } from '@/lib/optionalComponentCommands';
 import { useFeatureCapabilities } from '@/hooks/useFeatureCapabilities';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 interface InterfaceMappingsColumnProps {
   node: { data: BuilderNodeData; id: string } | null;
@@ -620,6 +620,53 @@ export const InterfaceMappingsColumn = ({
     }
   }, [isEditMode, hasInterfaceId, interfaceDetails, getEditorExpression, editedHtmlTemplate, stripHtmlTags]);
 
+  // Same for the other stored fields, which were set once per interface: an edit made
+  // elsewhere (the agent, the interface page) left them at their first value, and the
+  // next Save from this inspector wrote that old CSS/JS/format back over the newer one.
+  // A field follows the stored value only when that STORED value changes, never because
+  // it differs: right after this inspector's own Save the cache still holds the previous
+  // value until the refetch lands, and following it would revert what was just saved.
+  // A field the user has changed and not saved (edited !== original) is left alone: the
+  // format picker is editable outside edit mode, and a focus refetch must not undo it.
+  const lastStoredFieldsRef = React.useRef<{ id: string; html: string; css: string; js: string; format: string | null } | null>(null);
+  React.useEffect(() => {
+    if (!hasInterfaceId || !interfaceId || !interfaceDetails || initializedInterfaceId !== interfaceId) return;
+    const stored = {
+      id: interfaceId,
+      html: stripHtmlTags(interfaceDetails.htmlTemplate || interfaceDetails.editorExpression || ''),
+      css: interfaceDetails.cssTemplate || '',
+      js: (interfaceDetails as any).jsTemplate || '',
+      format: interfaceDetails.format ?? null,
+    };
+    const last = lastStoredFieldsRef.current;
+    lastStoredFieldsRef.current = stored;
+    if (!last || last.id !== interfaceId) return; // First look: the init effect set the fields.
+    // The Cancel target always moves to the new stored value, so Cancel restores what is
+    // stored now rather than what was stored when the edit began; the edited value moves
+    // only if the user has not touched it.
+    // The HTML's edited value is kept in step by the effect above (outside edit mode);
+    // only its Cancel target is moved here. The canvas node treats a stored change that
+    // lands during a draft as seen, so Cancel is what brings that change back.
+    if (stored.html !== last.html) {
+      setOriginalTemplateOnEdit(stored.html);
+    }
+    if (stored.css !== last.css) {
+      if (editedCssTemplate === originalCssTemplateOnEdit) setEditedCssTemplate(stored.css);
+      setOriginalCssTemplateOnEdit(stored.css);
+    }
+    if (stored.js !== last.js) {
+      if (editedJsTemplate === originalJsTemplateOnEdit) setEditedJsTemplate(stored.js);
+      setOriginalJsTemplateOnEdit(stored.js);
+    }
+    if (stored.format !== last.format) {
+      if (editedFormat === originalFormatOnEdit) setEditedFormat(stored.format);
+      setOriginalFormatOnEdit(stored.format);
+    }
+  // Only a new stored value re-runs this; the edited/original pairs are read, not watched,
+  // so typing in a field never triggers a reset of it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasInterfaceId, interfaceDetails, initializedInterfaceId, interfaceId]);
+
   // Check if there's a difference between edited template and DB template
   // Don't recalculate hasChanges right after saving to prevent race conditions
   const dbTemplate = interfaceDetails?.htmlTemplate || interfaceDetails?.editorExpression || '';
@@ -822,16 +869,7 @@ export const InterfaceMappingsColumn = ({
       title={t('columnTitle')}
       showRightBorder={true}
       headerRight={
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-            >
-              <Info className="h-3 w-3 text-slate-500" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className="w-[min(420px,calc(100vw-32px))] max-h-[600px] overflow-y-auto p-4 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-[24px] z-[99999]" side="right" align="start">
+        <InfoPopover label={t('columnTitle')} size="sm" side="right" align="start" contentClassName="w-[min(420px,calc(100vw-32px))] max-h-[600px] p-4 rounded-[24px]">
             <div className="space-y-3">
               <h4 className="font-semibold text-sm">{t('expressionGuideTitle')}</h4>
               <div className="space-y-3 text-xs text-slate-600 dark:text-slate-300">
@@ -960,8 +998,7 @@ export const InterfaceMappingsColumn = ({
                 </div>
               </div>
             </div>
-          </PopoverContent>
-        </Popover>
+          </InfoPopover>
       }
     >
       <div className="flex flex-col space-y-4 pt-2">
@@ -972,16 +1009,9 @@ export const InterfaceMappingsColumn = ({
             <div className="flex items-center justify-between mt-2 px-1 gap-3">
               <div className="flex items-center gap-1">
                 <span className="text-sm text-slate-600 dark:text-slate-300">{t('entryInterface')}</span>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                      <Info className="h-2.5 w-2.5 text-slate-400" />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-[240px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                    <p className="text-xs text-slate-600 dark:text-slate-300">{t('entryInterfaceDescription')}</p>
-                  </PopoverContent>
-                </Popover>
+                <InfoPopover label={t('entryInterface')} size="xs" side="right" align="start" contentClassName="w-[240px] p-3">
+                  <p className="text-xs text-slate-600 dark:text-slate-300">{t('entryInterfaceDescription')}</p>
+                </InfoPopover>
               </div>
               <Switch
                 checked={isOnlyInterface || interfaceData.isEntryInterface === true}
@@ -1007,16 +1037,9 @@ export const InterfaceMappingsColumn = ({
             <div className="flex items-center justify-between mt-2 px-1 gap-3">
               <div className="flex items-center gap-1">
                 <span className="text-sm text-slate-600 dark:text-slate-300">{t('generateScreenshot')}</span>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                      <Info className="h-2.5 w-2.5 text-slate-400" />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-[260px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                    <p className="text-xs text-slate-600 dark:text-slate-300">{t('generateScreenshotDescription')}</p>
-                  </PopoverContent>
-                </Popover>
+                <InfoPopover label={t('generateScreenshot')} size="xs" side="right" align="start" contentClassName="w-[260px] p-3">
+                  <p className="text-xs text-slate-600 dark:text-slate-300">{t('generateScreenshotDescription')}</p>
+                </InfoPopover>
               </div>
               <Switch
                 checked={interfaceData.generateScreenshot === true}
@@ -1039,16 +1062,9 @@ export const InterfaceMappingsColumn = ({
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-1">
                   <span className="text-sm text-slate-600 dark:text-slate-300">{t('generatePdf')}</span>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                        <Info className="h-2.5 w-2.5 text-slate-400" />
-                      </button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-[260px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                      <p className="text-xs text-slate-600 dark:text-slate-300">{t('generatePdfDescription')}</p>
-                    </PopoverContent>
-                  </Popover>
+                  <InfoPopover label={t('generatePdf')} size="xs" side="right" align="start" contentClassName="w-[260px] p-3">
+                    <p className="text-xs text-slate-600 dark:text-slate-300">{t('generatePdfDescription')}</p>
+                  </InfoPopover>
                 </div>
                 <Switch
                   checked={interfaceData.generatePdf === true}
@@ -1117,16 +1133,9 @@ export const InterfaceMappingsColumn = ({
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-1">
                   <span className="text-sm text-slate-600 dark:text-slate-300">{t('generateVideo')}</span>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                        <Info className="h-2.5 w-2.5 text-slate-400" />
-                      </button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-[260px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                      <p className="text-xs text-slate-600 dark:text-slate-300">{t('generateVideoDescription')}</p>
-                    </PopoverContent>
-                  </Popover>
+                  <InfoPopover label={t('generateVideo')} size="xs" side="right" align="start" contentClassName="w-[260px] p-3">
+                    <p className="text-xs text-slate-600 dark:text-slate-300">{t('generateVideoDescription')}</p>
+                  </InfoPopover>
                 </div>
                 <Switch
                   checked={interfaceData.generateVideo === true}
@@ -1282,16 +1291,9 @@ export const InterfaceMappingsColumn = ({
             <div className="flex items-center justify-between mt-2 px-1 gap-3">
               <div className="flex items-center gap-1">
                 <span className="text-sm text-slate-600 dark:text-slate-300">{t('exposeRenderedSource')}</span>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                      <Info className="h-2.5 w-2.5 text-slate-400" />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-[260px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                    <p className="text-xs text-slate-600 dark:text-slate-300">{t('exposeRenderedSourceDescription')}</p>
-                  </PopoverContent>
-                </Popover>
+                <InfoPopover label={t('exposeRenderedSource')} size="xs" side="right" align="start" contentClassName="w-[260px] p-3">
+                  <p className="text-xs text-slate-600 dark:text-slate-300">{t('exposeRenderedSourceDescription')}</p>
+                </InfoPopover>
               </div>
               <Switch
                 checked={interfaceData.exposeRenderedSource === true}
@@ -1332,27 +1334,17 @@ export const InterfaceMappingsColumn = ({
                     {!isActionMappingSectionOpen && Object.keys(editedActionMapping).length > 0 && (
                       <span className="text-xs text-slate-400 dark:text-slate-500">({Object.keys(editedActionMapping).length})</span>
                     )}
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <button
-                          type="button"
-                          className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-                        >
-                          <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-                        </button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                        <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                          <p className="font-semibold text-slate-900 dark:text-slate-100">{t('actionMappingSection')}</p>
-                          <p className="text-xs">{t('actionMappingInfoDesc')}</p>
-                          <ul className="list-disc list-inside space-y-1 text-xs">
-                            <li>{t('actionMappingInfoAction')}</li>
-                            <li>{t('actionMappingInfoTarget')}</li>
-                            <li>{t('actionMappingInfoTypes')}</li>
-                          </ul>
-                        </div>
-                      </PopoverContent>
-                    </Popover>
+                    <InfoPopover label={t('actionMappingSection')} size="sm" side="right" align="start">
+                      <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                        <p className="font-semibold text-slate-900 dark:text-slate-100">{t('actionMappingSection')}</p>
+                        <p className="text-xs">{t('actionMappingInfoDesc')}</p>
+                        <ul className="list-disc list-inside space-y-1 text-xs">
+                          <li>{t('actionMappingInfoAction')}</li>
+                          <li>{t('actionMappingInfoTarget')}</li>
+                          <li>{t('actionMappingInfoTypes')}</li>
+                        </ul>
+                      </div>
+                    </InfoPopover>
                   </div>
                   {!isRunMode && (
                     <Button
@@ -1385,22 +1377,18 @@ export const InterfaceMappingsColumn = ({
 
                       {/* Fields */}
                       <div className="flex-1 min-w-0 space-y-1.5">
-                        {/* Action Name */}
-                        <label className="flex flex-col gap-1">
+                        {/* Action Name. A div, not a <label>: a label with no htmlFor binds to its FIRST
+                            labelable child, which is the "i" button, so a click on the text opened
+                            the info panel and the input went unnamed. The input is named below. */}
+                        <div className="flex flex-col gap-1">
                           <div className="flex items-center gap-1">
                             <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">{t('actionName')}</span>
-                            <Popover>
-                              <PopoverTrigger asChild>
-                                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                                  <Info className="h-2.5 w-2.5 text-slate-400" />
-                                </button>
-                              </PopoverTrigger>
-                              <PopoverContent className="w-[240px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                                <p className="text-xs text-slate-600 dark:text-slate-300">{t('actionNameInfo')}</p>
-                              </PopoverContent>
-                            </Popover>
+                            <InfoPopover label={t('actionName')} size="xs" side="right" align="start" contentClassName="w-[240px] p-3">
+                              <p className="text-xs text-slate-600 dark:text-slate-300">{t('actionNameInfo')}</p>
+                            </InfoPopover>
                           </div>
                           <Input
+                            aria-label={t('actionName')}
                             value={selector}
                             onChange={(e) => {
                               const newSelector = e.target.value;
@@ -1424,7 +1412,7 @@ export const InterfaceMappingsColumn = ({
                             className="w-full font-mono"
                             disabled={isRunMode}
                           />
-                        </label>
+                        </div>
 
                         {/* Action target select */}
                         <label className="flex flex-col gap-1">
@@ -1774,27 +1762,17 @@ export const InterfaceMappingsColumn = ({
                     <ChevronRight className={`h-3.5 w-3.5 text-slate-400 dark:text-slate-500 transition-transform ${isVariableMappingSectionOpen ? 'rotate-90' : ''}`} />
                     <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-300">{t('variableMapping')}</span>
                   </button>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <button
-                        type="button"
-                        className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-                      >
-                        <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-                      </button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                      <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                        <p className="font-semibold text-slate-900 dark:text-slate-100">{t('variableMapping')}</p>
-                        <p className="text-xs">{t('variableMappingInfoDesc')}</p>
-                        <ul className="list-disc list-inside space-y-1 text-xs">
-                          <li>{t('variableMappingInfoTemplate')}</li>
-                          <li>{t('variableMappingInfoDrag')}</li>
-                          <li>{t('variableMappingInfoExpression')}</li>
-                        </ul>
-                      </div>
-                    </PopoverContent>
-                  </Popover>
+                  <InfoPopover label={t('variableMapping')} size="sm" side="right" align="start">
+                    <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                      <p className="font-semibold text-slate-900 dark:text-slate-100">{t('variableMapping')}</p>
+                      <p className="text-xs">{t('variableMappingInfoDesc')}</p>
+                      <ul className="list-disc list-inside space-y-1 text-xs">
+                        <li>{t('variableMappingInfoTemplate')}</li>
+                        <li>{t('variableMappingInfoDrag')}</li>
+                        <li>{t('variableMappingInfoExpression')}</li>
+                      </ul>
+                    </div>
+                  </InfoPopover>
                 </div>
                 <span className="text-xs text-slate-400 dark:text-slate-500">{interfaceDetails.templateVariables.length > 1 ? t('variableCountPlural', { count: interfaceDetails.templateVariables.length }) : t('variableCount', { count: interfaceDetails.templateVariables.length })}</span>
               </div>

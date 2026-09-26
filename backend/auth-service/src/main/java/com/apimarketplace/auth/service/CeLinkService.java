@@ -9,15 +9,24 @@ import com.apimarketplace.auth.dto.CeLinkSummary;
 import com.apimarketplace.auth.repository.CeLinkHeartbeatRepository;
 import com.apimarketplace.auth.repository.CeLinkRepository;
 import com.apimarketplace.auth.repository.UserRepository;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
+import com.apimarketplace.common.plan.PlanTier;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +49,8 @@ import java.util.stream.Collectors;
  *           (no info leak - closes the squat-confirmation oracle, doc §1 #16)</li>
  *     </ul>
  *   </li>
+ *   <li>Else, when the caller has no account (a session that outlived its deletion):
+ *       401, nothing written.</li>
  *   <li>Else: INSERT new row + REGISTER audit + return 201.</li>
  * </ol>
  *
@@ -67,14 +78,29 @@ public class CeLinkService {
     private final CeLinkActiveRowCache activeRowCache;
     private final CeLinkActiveRowCachePublisher cachePublisher;
     private final ApplicationEventPublisher eventPublisher;
+    private final PlanResolutionService planResolutionService;
+    /**
+     * PAID plan codes for {@link #planAccess}, keyed by cloud user id alone: the decision reads
+     * the user's DEFAULT workspace whatever the request carries, so the user is the whole key.
+     * Only a PAID answer is ever stored. An unpaid answer and a failed lookup are re-read on
+     * every call, so paying lands on the very next call on EVERY replica (no invalidation to
+     * broadcast), and a transient lookup failure can never pin a paying customer to a 30 s
+     * suspension. The price is that a downgrade takes up to the TTL to land. The LINK state is
+     * never cached here, so a revoke still takes effect on the next call. {@code null} when the
+     * TTL is zero (tests, or ops turning the cache off).
+     */
+    private final Cache<Long, String> paidPlanCache;
 
+    @Autowired
     public CeLinkService(CeLinkRepository repository,
                          CeLinkHeartbeatRepository heartbeatRepository,
                          UserRepository userRepository,
                          CeLinkAuditService auditService,
                          CeLinkActiveRowCache activeRowCache,
                          CeLinkActiveRowCachePublisher cachePublisher,
-                         ApplicationEventPublisher eventPublisher) {
+                         ApplicationEventPublisher eventPublisher,
+                         PlanResolutionService planResolutionService,
+                         @Value("${cloud-link.plan-access-cache.ttl-seconds:30}") long planCacheTtlSeconds) {
         this.repository = repository;
         this.heartbeatRepository = heartbeatRepository;
         this.userRepository = userRepository;
@@ -82,6 +108,13 @@ public class CeLinkService {
         this.activeRowCache = activeRowCache;
         this.cachePublisher = cachePublisher;
         this.eventPublisher = eventPublisher;
+        this.planResolutionService = planResolutionService;
+        this.paidPlanCache = planCacheTtlSeconds > 0
+                ? Caffeine.newBuilder()
+                        .expireAfterWrite(Duration.ofSeconds(planCacheTtlSeconds))
+                        .maximumSize(10_000)
+                        .build()
+                : null;
     }
 
     /** Drop the local cache + broadcast to sibling replicas. Single chokepoint. */
@@ -102,6 +135,16 @@ public class CeLinkService {
             CeLink row = existing.get();
             if (row.getUserId().equals(callerUserId)) {
                 if (row.getStatus() == CeLink.Status.ACTIVE) {
+                    // Idempotent retry of a link the caller already owns. The plan is
+                    // re-checked here too: an install linked while paid and re-registering
+                    // after a fall back to FREE must learn it is suspended, not be told
+                    // "registered". The row is kept as is (suspended, never revoked).
+                    CeLinkAccessResult access = planAccess(callerUserId);
+                    if (!access.isActive()) {
+                        log.info("CeLink register refused (plan required) installId={} userId={} plan={}",
+                                installId, callerUserId, access.planCode());
+                        return CeLinkRegisterResponse.planRequired(access.planCode());
+                    }
                     // Idempotent retry: return current scopes, no audit row (not a state change).
                     log.debug("CeLink register idempotent for installId={} userId={}", installId, callerUserId);
                     return CeLinkRegisterResponse.ok(row.getScopes());
@@ -136,7 +179,26 @@ public class CeLinkService {
             return CeLinkRegisterResponse.alreadyBound(null);
         }
 
-        // New register.
+        // New register. The caller id comes from the request header, which the gateway resolves
+        // through a cache that outlives the deletion of an account by minutes. Without this check
+        // the insert trips ce_link's foreign key to auth.users and the caller gets a 500; the
+        // same defect answered 500 on POST /api/changelog/seen in prod (2026-09-22). The row lock
+        // is held until this transaction commits, so an account deletion racing the insert waits
+        // for it instead of breaking the foreign key between the check and the write. The caller
+        // here is a CE server, never the web client, so a 401 cannot log anyone out.
+        if (userRepository.lockExistingForKeyShare(callerUserId).isEmpty()) {
+            log.info("CeLink register refused: no account has userId={} (installId={})", callerUserId, installId);
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "no account for this session");
+        }
+
+        // New register: only an account on a paid plan may link an install. Nothing is
+        // written for a refused caller, so paying and retrying is a plain first register.
+        CeLinkAccessResult access = planAccess(callerUserId);
+        if (!access.isActive()) {
+            log.info("CeLink register refused (plan required) installId={} userId={} plan={}",
+                    installId, callerUserId, access.planCode());
+            return CeLinkRegisterResponse.planRequired(access.planCode());
+        }
         CeLink fresh = new CeLink(installId, callerUserId,
                 label == null || label.isBlank() ? "CE install" : label);
         repository.save(fresh);
@@ -263,6 +325,11 @@ public class CeLinkService {
         return activeRowCache.get(userId, repository::userHasAnyActiveLink);
     }
 
+    /**
+     * Whether {@code userId} owns an ACTIVE link row for {@code installId}. LINK STATE ONLY:
+     * a suspended link (active row, unpaid plan) still answers true here. Every gate that
+     * decides whether a linked install may USE the cloud must call {@link #linkAccess}.
+     */
     @Transactional(readOnly = true)
     public boolean userOwnsActiveLink(Long userId, UUID installId) {
         if (userId == null || installId == null) {
@@ -271,6 +338,67 @@ public class CeLinkService {
         return repository.findByInstallIdAndUserId(installId, userId)
                 .map(CeLink::isActive)
                 .orElse(false);
+    }
+
+    /**
+     * The single "linked AND paid" decision behind every CE-link-gated cloud endpoint
+     * (register, heartbeat, the internal {@code /ce-link/{installId}/active} probe the relays
+     * call through auth-client).
+     *
+     * <ul>
+     *   <li>{@code NOT_LINKED}: no ACTIVE link row for (install, user). No plan is consulted.</li>
+     *   <li>{@code PLAN_REQUIRED}: the link is ACTIVE but the governing plan is not paid. The
+     *       link is SUSPENDED, never revoked, so it comes back by itself once the account pays.</li>
+     *   <li>{@code ACTIVE}: linked and paid.</li>
+     * </ul>
+     */
+    @Transactional(readOnly = true)
+    public CeLinkAccessResult linkAccess(Long userId, UUID installId) {
+        if (!userOwnsActiveLink(userId, installId)) {
+            return CeLinkAccessResult.notLinked();
+        }
+        return planAccess(userId);
+    }
+
+    /**
+     * Is the governing plan of {@code userId} paid? The governing plan is the plan of the OWNER
+     * of the user's DEFAULT workspace ({@link PlanResolutionService#resolveDefaultWorkspacePlan}):
+     * the workspace the gateway resolves for a CE install's calls, which carry no active-workspace
+     * claim. Deliberately NOT the browser's active workspace: eligibility is asked from the
+     * browser and register / heartbeat / relays from the CE, and both must get the same answer.
+     * A member whose DEFAULT workspace is a paid TEAM workspace is allowed; a member who is only
+     * browsing a paid workspace while their default is FREE is not.
+     *
+     * <p><b>Fails CLOSED, a deliberate exception to "plan gating fails open":</b> a CE link spends
+     * cloud money (LLM, search and catalog calls run on the cloud's keys), so FREE, CREDIT_PACK,
+     * CE, blank and unknown codes all answer PLAN_REQUIRED ({@link PlanTier#isPaid}), and so does
+     * a plan lookup that FAILED (plan code null). The refusal is temporary by construction:
+     * suspend, never revoke, and a failure is never cached.
+     *
+     * <p>Only a PAID answer is cached ({@code cloud-link.plan-access-cache.ttl-seconds}, 30 s,
+     * per replica): the relays call this on every LLM call. Paying therefore lands immediately
+     * everywhere; a downgrade lands within the TTL.
+     */
+    public CeLinkAccessResult planAccess(Long userId) {
+        if (userId == null) {
+            return CeLinkAccessResult.notLinked();
+        }
+        String cached = paidPlanCache != null ? paidPlanCache.getIfPresent(userId) : null;
+        if (cached != null) {
+            return CeLinkAccessResult.active(cached);
+        }
+        PlanResolutionService.DefaultWorkspacePlan plan = planResolutionService.resolveDefaultWorkspacePlan(userId);
+        if (plan == null || plan.lookupFailed()) {
+            log.warn("CE-link plan lookup failed for userId={} - refusing this call, not caching", userId);
+            return CeLinkAccessResult.planRequired(null);
+        }
+        if (!PlanTier.isPaid(plan.planCode())) {
+            return CeLinkAccessResult.planRequired(plan.planCode());
+        }
+        if (paidPlanCache != null) {
+            paidPlanCache.put(userId, plan.planCode());
+        }
+        return CeLinkAccessResult.active(plan.planCode());
     }
 
     /**

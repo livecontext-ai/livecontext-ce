@@ -97,7 +97,7 @@ public class AuthMetrics {
         //
         // For each event type we register the cartesian product of meaningful
         // tags. The recorder later increments the same counters in place.
-        for (String provider : new String[]{"keycloak", "google", "github", "local"}) {
+        for (String provider : new String[]{"keycloak", "google", "github", "local", "saml"}) {
             Counter.builder(LOGIN_TOTAL).tags("result","success","provider",provider,"reason",LOGIN_REASON_NONE).register(registry);
             // Exactly the reasons a producer can actually emit, and all of them. Adding
             // cross_provider_conflict closes the hole this whole class is about (it is recorded
@@ -128,7 +128,7 @@ public class AuthMetrics {
         // token it could parse, and a self-hosted "local" token is recognised earlier and
         // never reaches the counter, so a pre-registered local series would be a permanently
         // flat line that an operator would read as healthy rather than as unreachable.
-        for (String provider : new String[]{"keycloak", "google", "github"}) {
+        for (String provider : new String[]{"keycloak", "google", "github", "saml"}) {
             for (String reason : new String[]{AUTH_TIME_ABSENT, AUTH_TIME_FUTURE}) {
                 Counter.builder(AUTH_TIME_CLAIM_MISSING_TOTAL)
                         .tags("provider", provider, "reason", reason).register(registry);

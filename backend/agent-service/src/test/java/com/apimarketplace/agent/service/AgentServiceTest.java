@@ -2779,6 +2779,105 @@ class AgentServiceTest {
     }
 
     // =====================================================================
+    // Chat channel (V523 destination, V524 on/off) and the arming rule
+    // =====================================================================
+    @Nested
+    @DisplayName("chat channel of an agent (V523/V524)")
+    class ChatChannel {
+
+        private AgentEntity personal() {
+            AgentEntity entity = agentWith(AGENT_ID, TENANT_ID, "Finance");
+            entity.setOrganizationId(null);
+            when(agentRepository.findById(AGENT_ID)).thenReturn(Optional.of(entity));
+            return entity;
+        }
+
+        @Test
+        @DisplayName("stores the chosen destination, and null goes back to the workspace default")
+        void storesDestination() {
+            AgentEntity entity = personal();
+            stubSaveReturnsArgument();
+            UUID link = UUID.fromString("77777777-7777-4777-8777-777777777777");
+
+            assertThat(agentService.setChatChannelLinkId(AGENT_ID, TENANT_ID, null, link).getChatChannelLinkId())
+                    .isEqualTo(link);
+            assertThat(agentService.setChatChannelLinkId(AGENT_ID, TENANT_ID, null, null).getChatChannelLinkId())
+                    .isNull();
+            verify(agentRepository, times(2)).save(entity);
+        }
+
+        @Test
+        @DisplayName("a new agent is on by default: nothing changes for agents that existed before the switch")
+        void onByDefault() {
+            assertThat(new AgentEntity().isChatChannelEnabled()).isTrue();
+        }
+
+        @Test
+        @DisplayName("switching the channel off also disarms sensitive-action asking")
+        void offDisarms() {
+            AgentEntity entity = personal();
+            entity.setRequireToolAuthorization(true);
+            stubSaveReturnsArgument();
+
+            AgentEntity result = agentService.setChatChannelEnabled(AGENT_ID, TENANT_ID, null, false);
+
+            assertThat(result.isChatChannelEnabled()).isFalse();
+            // Armed with nowhere to ask, every unattended sensitive action would be refused.
+            assertThat(result.getRequireToolAuthorization()).isFalse();
+        }
+
+        @Test
+        @DisplayName("switching it on leaves sensitive-action asking as it was")
+        void onKeepsArming() {
+            AgentEntity entity = personal();
+            entity.setChatChannelEnabled(false);
+            stubSaveReturnsArgument();
+
+            AgentEntity result = agentService.setChatChannelEnabled(AGENT_ID, TENANT_ID, null, true);
+
+            assertThat(result.isChatChannelEnabled()).isTrue();
+            assertThat(result.getRequireToolAuthorization()).isFalse();
+        }
+
+        @Test
+        @DisplayName("a restricted member cannot switch it - no save")
+        void deniedForRestrictedMember() {
+            AgentEntity entity = agentWith(AGENT_ID, TENANT_ID, "Org Worker");
+            entity.setOrganizationId("org-42");
+            when(agentRepository.findById(AGENT_ID)).thenReturn(Optional.of(entity));
+            when(orgAccessService.canWrite("org-42", TENANT_ID, "agent", AGENT_ID.toString(), null)).thenReturn(false);
+
+            assertThatThrownBy(() -> agentService.setChatChannelEnabled(AGENT_ID, TENANT_ID, "org-42", false))
+                    .isInstanceOf(com.apimarketplace.auth.client.access.OrgAccessDeniedException.class);
+            verify(agentRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("asking permission cannot be armed while the channel is off - nothing saved")
+        void cannotArmWithChannelOff() {
+            AgentEntity entity = personal();
+            entity.setChatChannelEnabled(false);
+
+            assertThatThrownBy(() -> agentService.setRequireToolAuthorization(AGENT_ID, TENANT_ID, null, null, true))
+                    .isInstanceOf(AgentService.ChannelRequiredException.class)
+                    .hasMessageContaining("chat channel is off");
+            verify(agentRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("disarming is always allowed, channel on or off")
+        void canAlwaysDisarm() {
+            AgentEntity entity = personal();
+            entity.setChatChannelEnabled(false);
+            entity.setRequireToolAuthorization(true);
+            stubSaveReturnsArgument();
+
+            assertThat(agentService.setRequireToolAuthorization(AGENT_ID, TENANT_ID, null, null, false)
+                    .getRequireToolAuthorization()).isFalse();
+        }
+    }
+
+    // =====================================================================
     // setBacklogEnabled (V340) - opt-in flag, same scope gate as updateAgent
     // =====================================================================
     @Nested

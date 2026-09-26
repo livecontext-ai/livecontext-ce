@@ -289,6 +289,9 @@ class ConversationToolExecutionServiceTest {
 
             assertThat(result.success()).isFalse();
             assertThat(result.error()).contains("Tool result not found");
+            // Prod 2026-09-23: an agent asked for a call of its own running turn and got a dead end.
+            // The refusal says why and what to do instead.
+            assertThat(result.error()).contains("saved when its turn ends").contains("call that tool again");
         }
 
         @Test

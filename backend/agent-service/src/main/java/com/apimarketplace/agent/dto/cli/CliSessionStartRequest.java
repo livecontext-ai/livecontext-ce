@@ -57,15 +57,69 @@ public record CliSessionStartRequest(
      * values outside are pulled to the nearest bound; 0 and negative mean "not said"). The
      * gate's budget and half the inactivity window still bind above it.
      */
-    Integer maxToolHoldSeconds
+    Integer maxToolHoldSeconds,
+    /**
+     * The task this run executes, when it does ({@code __taskId__}). Null for a chat. It is what
+     * makes the run not promptable: a task has nobody in front of the chat, so a question goes to
+     * the connected chat channel instead of waiting on a screen nobody has open.
+     */
+    String taskId,
+    /** True when the dispatcher said nobody is in front of this run: schedule, webhook, task. */
+    Boolean unattendedRun,
+    /** True when the bound agent asks permission for sensitive actions wherever it runs. */
+    Boolean requireToolAuthorization,
+    /**
+     * How deep this run is in a chain of agents ({@code __agent_depth__}): 0 or null for a run a
+     * person started, 1 and more for a sub-agent. A sub-agent's conversation is read by nobody and
+     * its parent is waiting on it, so it must never park a card for a person.
+     */
+    Integer agentDepth,
+    /**
+     * The workflow run this session's agent node belongs to ({@code __workflowRunId__}). A reply
+     * arriving later cannot re-enter a completed node, so such a run never asks through a channel.
+     */
+    String workflowRunId
 ) {
+    public CliSessionStartRequest(List<String> enabledModules, String sessionId, String model,
+                                  String conversationId, String conversationServiceUrl, String streamId,
+                                  Boolean isNewConversation, String agentId, String executionId,
+                                  List<String> approvedToolActions, Integer inactivityTimeoutSeconds,
+                                  Integer maxToolHoldSeconds, String taskId, Boolean unattendedRun,
+                                  Boolean requireToolAuthorization, Integer agentDepth) {
+        this(enabledModules, sessionId, model, conversationId, conversationServiceUrl, streamId,
+                isNewConversation, agentId, executionId, approvedToolActions, inactivityTimeoutSeconds,
+                maxToolHoldSeconds, taskId, unattendedRun, requireToolAuthorization, agentDepth, null);
+    }
+
+    public CliSessionStartRequest(List<String> enabledModules, String sessionId, String model,
+                                  String conversationId, String conversationServiceUrl, String streamId,
+                                  Boolean isNewConversation, String agentId, String executionId,
+                                  List<String> approvedToolActions, Integer inactivityTimeoutSeconds,
+                                  Integer maxToolHoldSeconds, String taskId, Boolean unattendedRun,
+                                  Boolean requireToolAuthorization) {
+        this(enabledModules, sessionId, model, conversationId, conversationServiceUrl, streamId,
+                isNewConversation, agentId, executionId, approvedToolActions, inactivityTimeoutSeconds,
+                maxToolHoldSeconds, taskId, unattendedRun, requireToolAuthorization, null, null);
+    }
+
+    public CliSessionStartRequest(List<String> enabledModules, String sessionId, String model,
+                                  String conversationId, String conversationServiceUrl, String streamId,
+                                  Boolean isNewConversation, String agentId, String executionId,
+                                  List<String> approvedToolActions, Integer inactivityTimeoutSeconds,
+                                  Integer maxToolHoldSeconds) {
+        this(enabledModules, sessionId, model, conversationId, conversationServiceUrl, streamId,
+                isNewConversation, agentId, executionId, approvedToolActions, inactivityTimeoutSeconds,
+                maxToolHoldSeconds, null, null, null);
+    }
+
 
     public CliSessionStartRequest(List<String> enabledModules, String sessionId, String model,
                                   String conversationId, String conversationServiceUrl, String streamId,
                                   Boolean isNewConversation, String agentId, String executionId,
                                   List<String> approvedToolActions, Integer inactivityTimeoutSeconds) {
         this(enabledModules, sessionId, model, conversationId, conversationServiceUrl, streamId,
-                isNewConversation, agentId, executionId, approvedToolActions, inactivityTimeoutSeconds, null);
+                isNewConversation, agentId, executionId, approvedToolActions, inactivityTimeoutSeconds, null,
+                null, null, null);
     }
 
     /**

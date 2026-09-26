@@ -265,6 +265,160 @@ class StripeBillingServiceTest {
             verify(billingCustomerRepository).findByUserId(USER_ID);
         }
 
+        private com.apimarketplace.auth.lifecycle.CheckoutStartedThrottle throttle;
+        /** Payloads that reached the queue AND were granted their window, in order. */
+        private final java.util.List<java.util.Map<String, Object>> emitted = new java.util.ArrayList<>();
+
+        /**
+         * Lifecycle bean (active or not) plus a throttle that grants every window unless a test says
+         * otherwise. {@code emitIfClaimed} is played like the worker does: claim, then send.
+         */
+        /** The mocked throttle's claim() answers through its tryAcquire(), like the real one. */
+        private void claimsDelegateToTryAcquire() {
+            org.mockito.Mockito.lenient().when(throttle.claim(any(), any())).thenAnswer(inv -> {
+                Long userId = inv.getArgument(0);
+                String kind = inv.getArgument(1);
+                return (com.apimarketplace.auth.lifecycle.LifecycleEmailService.Claim) () -> throttle.tryAcquire(userId, kind);
+            });
+        }
+
+        private com.apimarketplace.auth.lifecycle.LifecycleEmailService wireLifecycle(boolean active) {
+            com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails = mock(com.apimarketplace.auth.lifecycle.LifecycleEmailService.class);
+            org.mockito.Mockito.lenient().when(lifecycleEmails.isActive()).thenReturn(active);
+            org.mockito.Mockito.lenient().doAnswer(inv -> {
+                com.apimarketplace.auth.lifecycle.LifecycleEmailService.Claim claim = inv.getArgument(3);
+                if (claim.getAsBoolean()) emitted.add(inv.getArgument(2));
+                return null;
+            }).when(lifecycleEmails).emitIfClaimed(any(), any(), any(), any());
+            throttle = mock(com.apimarketplace.auth.lifecycle.CheckoutStartedThrottle.class);
+            org.mockito.Mockito.lenient().when(throttle.tryAcquire(any(), any())).thenReturn(true);
+            claimsDelegateToTryAcquire();
+            org.springframework.test.util.ReflectionTestUtils.setField(stripeBillingService, "lifecycleEmails", lifecycleEmails);
+            org.springframework.test.util.ReflectionTestUtils.setField(stripeBillingService, "checkoutStartedThrottle", throttle);
+            return lifecycleEmails;
+        }
+
+        @Test
+        @DisplayName("lifecycle: inactive lifecycle emails (CE) claim no throttle window and emit nothing")
+        void inactiveLifecycleClaimsNoWindow() {
+            com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails = wireLifecycle(false);
+
+            stripeBillingService.emitCheckoutStarted(USER_ID, StripeBillingService.PAYG_DISPLAY_NAME,
+                    com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_CREDITS);
+
+            org.mockito.Mockito.verifyNoInteractions(throttle);
+            verify(lifecycleEmails, never()).emitIfClaimed(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("lifecycle: a refused throttle window (or a throttle that cannot answer) emits nothing")
+        void refusedWindowEmitsNothing() {
+            wireLifecycle(true);
+            when(throttle.tryAcquire(USER_ID, com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_CREDITS)).thenReturn(false);
+
+            stripeBillingService.emitCheckoutStarted(USER_ID, StripeBillingService.PAYG_DISPLAY_NAME,
+                    com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_CREDITS);
+
+            assertThat(emitted).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Regression (checkout lost): the checkout path never claims the window itself, the queued task does")
+        void checkoutNeverClaimsInsideItsOwnTransaction() {
+            com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails = mock(com.apimarketplace.auth.lifecycle.LifecycleEmailService.class);
+            when(lifecycleEmails.isActive()).thenReturn(true);
+            throttle = mock(com.apimarketplace.auth.lifecycle.CheckoutStartedThrottle.class);
+            when(throttle.tryAcquire(any(), any())).thenReturn(true);
+            claimsDelegateToTryAcquire();
+            org.springframework.test.util.ReflectionTestUtils.setField(stripeBillingService, "lifecycleEmails", lifecycleEmails);
+            org.springframework.test.util.ReflectionTestUtils.setField(stripeBillingService, "checkoutStartedThrottle", throttle);
+
+            stripeBillingService.emitCheckoutStarted(USER_ID, StripeBillingService.PAYG_DISPLAY_NAME,
+                    com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_CREDITS);
+
+            verify(throttle, never()).tryAcquire(any(), any());
+            org.mockito.ArgumentCaptor<com.apimarketplace.auth.lifecycle.LifecycleEmailService.Claim> claim =
+                    org.mockito.ArgumentCaptor.forClass(com.apimarketplace.auth.lifecycle.LifecycleEmailService.Claim.class);
+            verify(lifecycleEmails).emitIfClaimed(org.mockito.ArgumentMatchers.eq(USER_ID),
+                    org.mockito.ArgumentMatchers.eq(com.apimarketplace.auth.lifecycle.LifecycleEvents.CHECKOUT_STARTED),
+                    org.mockito.ArgumentMatchers.eq(java.util.Map.<String, Object>of("plan", "PAYG", "kind", "credits")),
+                    claim.capture());
+            assertThat(claim.getValue().getAsBoolean()).isTrue();
+            verify(throttle).tryAcquire(USER_ID, com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_CREDITS);
+        }
+
+        @Test
+        @DisplayName("lifecycle: a created subscription Checkout emits checkout.started {plan, kind=subscription}")
+        void checkoutCreationEmitsLifecycleEvent() throws Exception {
+            wireLifecycle(true);
+            User user = buildUser(USER_ID, "test@example.com");
+            BillingCustomer bc = buildBillingCustomer(1L, user, STRIPE_CUSTOMER_ID);
+            when(priceCacheService.getPriceId("STARTER", "monthly")).thenReturn(Optional.of(STRIPE_PRICE_ID_STARTER_MONTHLY));
+            when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.empty());
+            when(billingCustomerRepository.findByUserId(USER_ID)).thenReturn(Optional.of(bc));
+            when(nonceUtil.generateNonce(USER_ID)).thenReturn(NONCE_VALUE);
+            when(customerService.retrieve(STRIPE_CUSTOMER_ID)).thenReturn(mock(Customer.class));
+            Session session = mock(Session.class);
+            when(session.getUrl()).thenReturn("https://checkout.stripe.com/lc");
+            when(session.getId()).thenReturn("cs_lc");
+            when(sessionService.create(any(SessionCreateParams.class))).thenReturn(session);
+
+            stripeBillingService.createCheckoutSession(USER_ID, "STARTER", "monthly");
+
+            assertThat(emitted).containsExactly(java.util.Map.of("plan", "Starter", "kind", "subscription"));
+        }
+
+        @Test
+        @DisplayName("lifecycle: checkout.started carries the plan DISPLAY name from the plan row, never the lowercase code")
+        void checkoutStartedCarriesPlanDisplayName() {
+            wireLifecycle(true);
+            Plan pro = new Plan();
+            pro.setCode("PRO");
+            pro.setName("Pro");
+            when(planRepository.findByCode("PRO")).thenReturn(Optional.of(pro));
+
+            stripeBillingService.emitCheckoutStarted(USER_ID, "pro", com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_SUBSCRIPTION);
+
+            assertThat(emitted).containsExactly(java.util.Map.of("plan", "Pro", "kind", "subscription"));
+        }
+
+        @Test
+        @DisplayName("lifecycle: a repeated checkout of the same kind within 24 h emits checkout.started once")
+        void repeatedCheckoutStartedIsThrottled() {
+            wireLifecycle(true);
+            Plan pro = new Plan();
+            pro.setCode("PRO");
+            pro.setName("Pro");
+            when(planRepository.findByCode("PRO")).thenReturn(Optional.of(pro));
+
+            // The durable throttle (one window per user and kind, in the database) grants the
+            // first subscription checkout and refuses the second; the credits kind is its own window.
+            when(throttle.tryAcquire(USER_ID, com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_SUBSCRIPTION)).thenReturn(true, false);
+            stripeBillingService.emitCheckoutStarted(USER_ID, "pro", com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_SUBSCRIPTION);
+            stripeBillingService.emitCheckoutStarted(USER_ID, "pro", com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_SUBSCRIPTION);
+            // A credits checkout is another kind: it is not swallowed by the plan checkout.
+            stripeBillingService.emitCheckoutStarted(USER_ID, StripeBillingService.PAYG_DISPLAY_NAME,
+                    com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_CREDITS);
+
+            assertThat(emitted).containsExactly(
+                    java.util.Map.of("plan", "Pro", "kind", "subscription"),
+                    java.util.Map.of("plan", "PAYG", "kind", "credits"));
+        }
+
+        @Test
+        @DisplayName("lifecycle: a failing lifecycle bean never fails the checkout")
+        void lifecycleFailureNeverFailsCheckout() {
+            com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails = wireLifecycle(true);
+            org.mockito.Mockito.doThrow(new IllegalStateException("boom")).when(lifecycleEmails)
+                    .emitIfClaimed(any(), any(), any(), any());
+
+            stripeBillingService.emitCheckoutStarted(USER_ID, StripeBillingService.PAYG_DISPLAY_NAME,
+                    com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_CREDITS);
+
+            verify(lifecycleEmails).emitIfClaimed(any(), any(), any(), any());
+        }
+
         @Test
         @DisplayName("should create checkout session for existing customer with providerCustomerId")
         void shouldCreateCheckoutForExistingCustomer() throws Exception {

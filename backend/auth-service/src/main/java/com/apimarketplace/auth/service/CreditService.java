@@ -30,6 +30,20 @@ public class CreditService {
     private static final Logger log = LoggerFactory.getLogger(CreditService.class);
     private static final BigDecimal UNLIMITED_BALANCE = new BigDecimal("999999999");
 
+    /**
+     * The floor of the COST-BLIND gates: {@link #hasSufficientCredits} (the {@code /check} gate a
+     * workflow node and the scheduled chat ask) and {@link #canAfford} without a projected cost.
+     * Below it a workflow stops, since a node costs at least one credit. {@link CreditAlertScheduler}
+     * announces "out of credits" at this same bar, so the alert arrives when workflows stop, not
+     * only once the balance reaches zero (a refused debit never takes it there).
+     *
+     * <p>Not a universal floor: the cost-aware chat pre-flight ({@code canAfford} with an estimate)
+     * and {@link #deductCredits} compare against the actual cost, and the orchestrator's budget
+     * mirror has its own per-node estimate. The full list of where this bar and the real refusals
+     * part ways is kept in one place, on {@code CreditAlertScheduler.Candidate#levelToAlert}.
+     */
+    public static final BigDecimal MIN_USABLE_BALANCE = BigDecimal.ONE;
+
     private final SubscriptionRepository subscriptionRepository;
     private final CreditLedgerRepository ledgerRepository;
     private final ModelPricingService pricingService;
@@ -195,17 +209,19 @@ public class CreditService {
     }
 
     // ============================================================================
-    // Free-plan workflow-credit scoping (Cloud only - CE runs in unlimited mode).
+    // Free-plan credit scoping (Cloud only - CE runs in unlimited mode).
     // The monthly Free grant lands on the sub bucket (remaining_credits). On the
-    // FREE plan that bucket may fund ONLY workflow-node orchestration; every other
-    // consumption (chat, agent, classify/guardrail/browser, web search/fetch,
-    // image generation, platform markup) must draw the PAYG top-up bucket instead.
-    // Paid plans are unaffected (the sub bucket funds everything); CE is unaffected
-    // because every consume / pre-flight path short-circuits on `unlimited` before
-    // reaching this routing. See AGENTS.md "Regle architecturale CE / Cloud".
+    // FREE plan that ONE pool funds workflow-node orchestration AND the LLM turns
+    // of FREE_TIER_LLM_SOURCE_TYPES, the latter only on a model a cloud admin opened
+    // to the free tier (model_pricing.free_tier). Every other consumption (an LLM
+    // turn on any other model, web search/fetch, image generation, platform markup)
+    // must draw the PAYG top-up bucket instead. Paid plans are unaffected (the sub
+    // bucket funds everything); CE is unaffected because every consume / pre-flight
+    // path short-circuits on `unlimited` before reaching this routing. See AGENTS.md
+    // "Regle architecturale CE / Cloud".
     // ============================================================================
 
-    /** source_types the Free monthly (sub) bucket is allowed to fund. */
+    /** source_types the Free monthly (sub) bucket funds whatever the model. */
     private static final java.util.Set<String> WORKFLOW_SUB_ELIGIBLE_SOURCE_TYPES =
             java.util.Set.of("WORKFLOW_NODE", "WORKFLOW_NODE_PROMO");
 
@@ -228,45 +244,55 @@ public class CreditService {
     private static final java.util.Set<String> PAYG_BUCKET_SOURCE_TYPES =
             java.util.Set.of("PAYG_TOPUP", "REWARD_REFERRAL", "REWARD_CLAWBACK", "MANUAL_ADJUSTMENT");
 
-    /** Plan code whose monthly (sub) bucket is restricted to workflow orchestration. */
+    /**
+     * Plan code whose monthly (sub) bucket is scoped: workflow orchestration plus LLM turns
+     * on free-tier models (V512), nothing else.
+     */
     private static final String WORKFLOW_CREDITS_ONLY_PLAN_CODE = "FREE";
 
     /**
-     * LLM source types the separate AI allowance may fund (V494) - "agents of every
-     * kind": the agent loop itself, a chat turn, and the auxiliary LLM calls a run
-     * makes on the user's behalf.
+     * LLM source types a free-tier model may run on the Free plan's monthly credits -
+     * "agents of every kind": the agent loop itself, a chat turn, and the auxiliary LLM
+     * calls a run makes on the user's behalf. The same set gates the legacy per-plan AI
+     * allowance ({@code plan.included_ai_credits}, V494), which no plan grants any more
+     * since the Free plan's two pots were merged into one.
      *
      * <p>Deliberately excludes the flat-cost add-ons (web search/fetch, image
-     * generation, platform markup) and workflow nodes: the AI pot exists to let a
-     * visitor talk to an agent, and those keep their existing funding.
+     * generation, platform markup): those keep their PAYG-only funding on Free.
      *
      * <p>{@code CE_LLM_RELAY} is LLM work and is still excluded, which is the one
      * omission worth stating: those tokens are forwarded on behalf of a SELF-HOSTED
      * install through its cloud link, not typed by a visitor into this product. The
-     * allowance is an on-ramp for the hosted free tier, and letting a relay draw it
-     * would hand every linked install 100 credits a month of platform inference.
+     * free tier is an on-ramp for the hosted product, and letting a relay draw it
+     * would hand every linked install a monthly grant of platform inference.
      */
-    private static final java.util.Set<String> AI_ALLOWANCE_SOURCE_TYPES = java.util.Set.of(
+    private static final java.util.Set<String> FREE_TIER_LLM_SOURCE_TYPES = java.util.Set.of(
             "AGENT_EXECUTION", "CHAT_CONVERSATION", "CLASSIFY_EXECUTION",
             "GUARDRAIL_EXECUTION", "COMPACTION_SUMMARY", "BROWSER_AGENT_EXECUTION",
             "CLI_SESSION");
 
     /**
      * True when the {@code sub} (monthly) bucket may fund a debit of
-     * {@code sourceType}. Always true in unlimited mode (CE) and for non-FREE
-     * plans, so this is a behavioural no-op everywhere except FREE-plan Cloud
-     * accounts. On the FREE plan only workflow-node orchestration may draw the
-     * monthly grant; every other source type is restricted to the PAYG bucket.
+     * {@code sourceType} on {@code (provider, model)}. Always true in unlimited mode
+     * (CE) and for non-FREE plans, so this is a behavioural no-op everywhere except
+     * FREE-plan Cloud accounts. On the FREE plan the monthly grant is one pool for
+     * workflow-node orchestration and for LLM turns on a model opened to the free tier
+     * ({@link #FREE_TIER_LLM_SOURCE_TYPES} + {@code model_pricing.free_tier}); every
+     * other debit is restricted to the PAYG bucket. A null model (a model-blind gate)
+     * is never free-tier, which fails closed.
      */
-    private boolean subBucketEligible(Subscription sub, String sourceType) {
+    private boolean subBucketEligible(Subscription sub, String sourceType, String provider, String model) {
         if (unlimited) return true;
         if (!isWorkflowCreditsOnlyPlan(sub)) return true;
-        return sourceType != null && WORKFLOW_SUB_ELIGIBLE_SOURCE_TYPES.contains(sourceType);
+        if (sourceType == null) return false;
+        if (WORKFLOW_SUB_ELIGIBLE_SOURCE_TYPES.contains(sourceType)) return true;
+        return FREE_TIER_LLM_SOURCE_TYPES.contains(sourceType)
+                && pricingService.isFreeTierModel(provider, model);
     }
 
     /**
      * True when {@code sub} is on the FREE plan whose monthly bucket is
-     * workflow-scoped. Both the bucket routing ({@link #subBucketEligible})
+     * scoped (workflows + free-tier LLM turns). Both the bucket routing ({@link #subBucketEligible})
      * and the PAYG-debt leg of the delinquency lifecycle apply ONLY here:
      * on paid plans every debit nets against the two-bucket total, so a
      * positive total means any PAYG deficit is already economically
@@ -281,7 +307,7 @@ public class CreditService {
      * True when the separate AI allowance may fund this debit (V494). Three gates,
      * all required:
      * <ol>
-     *   <li>the source type is an LLM one ({@link #AI_ALLOWANCE_SOURCE_TYPES}),</li>
+     *   <li>the source type is an LLM one ({@link #FREE_TIER_LLM_SOURCE_TYPES}),</li>
      *   <li>the model is one a cloud admin opened to the free tier, and</li>
      *   <li>the account actually holds an allowance.</li>
      * </ol>
@@ -296,7 +322,7 @@ public class CreditService {
      */
     private boolean aiAllowanceEligible(Subscription sub, String sourceType, String provider, String model) {
         if (unlimited || sub == null) return false;
-        if (sourceType == null || !AI_ALLOWANCE_SOURCE_TYPES.contains(sourceType)) return false;
+        if (sourceType == null || !FREE_TIER_LLM_SOURCE_TYPES.contains(sourceType)) return false;
         if (sub.getAiRemainingCredits().signum() <= 0) return false;
         // Defence in depth: the pot is only spendable while the account's CURRENT plan
         // grants one. Keeping the balance as the only condition made a single missed
@@ -322,7 +348,7 @@ public class CreditService {
      * forgets the model gets the pre-V494 answer" is a silent wrong answer, not a default.
      */
     private BigDecimal eligibleBalance(Subscription sub, String sourceType, String provider, String model) {
-        BigDecimal base = subBucketEligible(sub, sourceType)
+        BigDecimal base = subBucketEligible(sub, sourceType, provider, model)
                 ? sub.getTotalBalance()
                 : sub.getPaygRemainingCredits();
         return aiAllowanceEligible(sub, sourceType, provider, model)
@@ -491,7 +517,7 @@ public class CreditService {
                                                      String sourceType) {
         boolean chat = "CHAT_CONVERSATION".equals(sourceType);
         Long debitUserId = resolvePayer(userId);
-        if (chat && sourceId != null
+        if (chat && hasIdempotencyKey(sourceId)
                 && ledgerRepository.findFirstBySourceIdAndSourceType(sourceId, sourceType).isPresent()) {
             log.debug("Own-key chat already debited for conversationId={}, skipping duplicate", sourceId);
             return CreditConsumeResult.success(BigDecimal.ZERO, getBalance(debitUserId)).withConsumption(BigDecimal.ZERO);
@@ -600,6 +626,9 @@ public class CreditService {
         entry.setSourceId(sourceId);
         entry.setDescription(truncateDescription(
                 appendExecutorAudit("Workflow node (promo, free): " + sourceId, executorUserId, payerUserId)));
+        // checkIdempotency lets a legacy WORKFLOW_NODE_REJECTED row through; it must leave the
+        // key before this row takes it, as on every other write path.
+        freeKeyForCharge(rowOnKey(sourceId), sourceId);
         ledgerRepository.save(entry);
         log.info("Workflow node free via promo: executor={} payer={} source={}", executorUserId, payerUserId, sourceId);
         return CreditConsumeResult.success(BigDecimal.ZERO, balance);
@@ -609,12 +638,17 @@ public class CreditService {
      * Marketplace purchase. Bypasses the owner-pays redirect so the purchasing
      * user's wallet is debited regardless of which workspace they're in (the
      * acquired publication is owned by the purchaser, not the workspace).
+     *
+     * <p>{@code purchaseKey} identifies the PURCHASE
+     * ({@link com.apimarketplace.common.credit.SourceIdBuilder#marketplacePurchase}), so every
+     * buyer of a publication is charged and a retry of the same purchase is answered by
+     * {@link #replayOf} as already paid, never charged twice.
      */
     @Transactional
-    public CreditConsumeResult consumeForMarketplacePurchase(Long userId, String publicationId, int credits) {
+    public CreditConsumeResult consumeForMarketplacePurchase(Long userId, String purchaseKey, int credits) {
         BigDecimal cost = BigDecimal.valueOf(credits);
-        return deductCredits(userId, cost, "MARKETPLACE_PURCHASE", publicationId,
-                null, null, null, null, "Publication purchase: " + publicationId, userId);
+        return deductCredits(userId, cost, "MARKETPLACE_PURCHASE", purchaseKey,
+                null, null, null, null, "Publication purchase: " + purchaseKey, userId);
     }
 
     /**
@@ -738,11 +772,127 @@ public class CreditService {
      * on the subscription row when the ledger row already exists.
      */
     private CreditConsumeResult checkIdempotency(Long userId, String sourceId) {
-        if (sourceId != null && ledgerRepository.existsBySourceId(sourceId)) {
+        // A refusal is not a charge: a legacy *_REJECTED row on this key must not make a retry
+        // look already paid (deductCredits moves it off the key and charges).
+        if (hasIdempotencyKey(sourceId) && ledgerRepository.existsNonRejectionBySourceId(sourceId)) {
             log.debug("Credit already recorded for sourceId={}, skipping duplicate", sourceId);
             return CreditConsumeResult.success(BigDecimal.ZERO, getBalance(userId));
         }
         return null;
+    }
+
+    /**
+     * The row currently holding {@code sourceId}, if any (the key is unique, so at most one).
+     * Read once by {@link #deductCredits} right before each of its ledger writes, and handed to
+     * {@link #replayOf} and then {@link #freeKeyForCharge}.
+     */
+    private Optional<CreditLedgerEntry> rowOnKey(String sourceId) {
+        return hasIdempotencyKey(sourceId) ? ledgerRepository.findFirstBySourceId(sourceId) : Optional.empty();
+    }
+
+    /**
+     * Whether {@code sourceId} can identify a charge at all, i.e. may be looked up to answer a
+     * retry as already paid. Every idempotency lookup of the consume paths asks this, never
+     * {@code != null} on its own.
+     *
+     * <p>A blank key is not null: {@code CreditConsumptionClient.consumeCredits} sends {@code ""}
+     * for a caller that had no key, so every keyless consumption of a payer arrives with the SAME
+     * blank key. Looked up, the first keyless row would answer every later one, of the same payer
+     * and type, as "already paid", and nothing after it would ever be billed. Treated as no key,
+     * a later keyless write meets the unique index instead, which refuses it without charging: the
+     * behaviour before any lookup existed.
+     */
+    private static boolean hasIdempotencyKey(String sourceId) {
+        return sourceId != null && !sourceId.isBlank();
+    }
+
+    /**
+     * The key a consume request is written under: {@code null} for a blank one. Applied at the
+     * HTTP boundary ({@code CreditController}), where the blank key is born
+     * ({@code CreditConsumptionClient} sends {@code ""} for "no key"). Stored as {@code ""}, every
+     * keyless charge of the ledger shared one value that {@code idx_cl_source_id_unique}
+     * ({@code WHERE source_id IS NOT NULL}) still covers, so the second keyless charge ever
+     * written anywhere was refused with a 500 and never billed. As NULL, each keyless charge is
+     * its own row and is billed.
+     */
+    public static String idempotencyKeyOrNull(String sourceId) {
+        return hasIdempotencyKey(sourceId) ? sourceId : null;
+    }
+
+    /**
+     * Idempotency gate of every ledger write in {@link #deductCredits}. Side-effect free.
+     *
+     * <p>Race-safe only on the metered path, where it runs under the subscription lock. The
+     * zero-cost and unlimited branches take no lock, so two concurrent first writes of one key
+     * can still both pass it and the loser meets the unique index, as before this gate existed.
+     *
+     * <ul>
+     *   <li>No row on the key, or a rejection audit row: {@code null}, the caller goes on to its
+     *       balance decision (a refusal is not a charge).</li>
+     *   <li>The same payer already has a row of the same {@code sourceType} on the key: this is
+     *       a replay (dead-letter retry, reaper, client retry) of a consumption already charged.
+     *       Returns an idempotent success that debits nothing, whatever the balance is now.
+     *       Before, the replay went on to debit again, hit {@code idx_cl_source_id_unique} on
+     *       INSERT and answered HTTP 500, which the dead-letter retry re-sent ten times.</li>
+     *   <li>Any other row (another payer, another source type): {@code null}, deliberately. Not
+     *       answering success is what keeps a key collision from turning into a free purchase;
+     *       the unique index still refuses the write, as it did before.</li>
+     * </ul>
+     *
+     * <p>A marketplace purchase is a replay like any other consumption only when its key is the
+     * per-purchase key ({@code SourceIdBuilder.marketplacePurchase}: buyer organization and
+     * publication, the pair the receipt is unique on). A bare publication id, the key every
+     * purchase carried before, names the publication and not the purchase, so on it "same key,
+     * same buyer" can be a genuine second purchase from another workspace: never waved through.
+     */
+    private CreditConsumeResult replayOf(Optional<CreditLedgerEntry> onKey, Long payerUserId,
+                                         String sourceType, String sourceId) {
+        if (onKey.isEmpty()) return null;
+        CreditLedgerEntry row = onKey.get();
+        if (CreditRejectionAuditWriter.isRejectionRow(row)) return null;
+        // A key that names only the publication (not the purchase) cannot tell a retry from a
+        // genuine second purchase: never waved through. The per-purchase key can, and does.
+        if ("MARKETPLACE_PURCHASE".equals(sourceType)
+                && !com.apimarketplace.common.credit.SourceIdBuilder.isMarketplacePurchase(sourceId)) {
+            return null;
+        }
+        if (java.util.Objects.equals(sourceType, row.getSourceType())
+                && java.util.Objects.equals(payerUserId, row.getUserId())) {
+            log.info("Replay of an already-recorded {} for sourceId={} (payer {}): idempotent success, nothing debited",
+                    sourceType, sourceId, payerUserId);
+            return CreditConsumeResult.success(BigDecimal.ZERO, unlimited ? UNLIMITED_BALANCE : getBalance(payerUserId));
+        }
+        log.warn("sourceId={} already holds a {} row of payer {}, requested {} for payer {}: leaving it to the unique index",
+                sourceId, row.getSourceType(), row.getUserId(), sourceType, payerUserId);
+        return null;
+    }
+
+    /**
+     * Called only once the charge IS going to be written: moves a legacy rejection audit row
+     * (written on the bare key before rejection rows got their own) off {@code sourceId}, so the
+     * charge of a consumption refused before 2026-09-25 can be recorded after a top-up.
+     *
+     * <p>Never on the refusal path. The move is an UPDATE in the caller's transaction, and a
+     * refusal then writes its own audit row in a REQUIRES_NEW transaction on the very key the
+     * move just took: that INSERT would wait on a lock held by the transaction it suspended, a
+     * cycle PostgreSQL cannot see (it spans two connections), stalled until a timeout.
+     *
+     * <p>The row goes to the key rejection rows use now; if a newer refusal of the same turn
+     * already holds it, to a second deterministic key. Both rows stay, nothing is deleted.
+     * Flushed at once so the UPDATE reaches the database before the charge's INSERT (Hibernate
+     * flushes inserts first).
+     */
+    private void freeKeyForCharge(Optional<CreditLedgerEntry> onKey, String sourceId) {
+        if (onKey.isEmpty() || !CreditRejectionAuditWriter.isRejectionRow(onKey.get())) return;
+        CreditLedgerEntry legacy = onKey.get();
+        String target = CreditRejectionAuditWriter.rejectionSourceId(sourceId);
+        if (ledgerRepository.existsBySourceId(target)) {
+            target = CreditRejectionAuditWriter.rejectionSourceId(sourceId + ":legacy");
+        }
+        legacy.setSourceId(target);
+        ledgerRepository.saveAndFlush(legacy);
+        log.info("Moved legacy {} audit row {} off sourceId={} to {} so the charge can be recorded",
+                legacy.getSourceType(), legacy.getId(), sourceId, target);
     }
 
     /**
@@ -773,7 +923,7 @@ public class CreditService {
                                                LlmTokenBreakdown usage) {
         Long debitUserId = resolvePayer(userId);
         // Idempotency narrowed to CHAT_CONVERSATION - see method Javadoc.
-        if (conversationId != null
+        if (hasIdempotencyKey(conversationId)
                 && ledgerRepository.findFirstBySourceIdAndSourceType(conversationId, "CHAT_CONVERSATION").isPresent()) {
             log.debug("Chat already debited for conversationId={}, skipping duplicate", conversationId);
             return CreditConsumeResult.success(BigDecimal.ZERO, getBalance(debitUserId));
@@ -823,7 +973,7 @@ public class CreditService {
         Long debitUserId = resolvePayer(userId);
         // Idempotency narrowed to CE_LLM_RELAY - see method Javadoc. Guards the
         // centralized settle/reaper race; a no-op for the unique-per-call legacy path.
-        if (sourceId != null
+        if (hasIdempotencyKey(sourceId)
                 && ledgerRepository.findFirstBySourceIdAndSourceType(sourceId, "CE_LLM_RELAY").isPresent()) {
             log.debug("CE relay already settled for sourceId={}, skipping duplicate", sourceId);
             return CreditConsumeResult.success(BigDecimal.ZERO, getBalance(debitUserId));
@@ -877,7 +1027,7 @@ public class CreditService {
                     userId, apiToolName, markupAmount, runId, sourceId);
             return CreditConsumeResult.success(BigDecimal.ZERO, getBalance(userId));
         }
-        if (sourceId != null && ledgerRepository.existsBySourceId(sourceId)) {
+        if (hasIdempotencyKey(sourceId) && ledgerRepository.existsNonRejectionBySourceId(sourceId)) {
             log.debug("Platform markup already recorded for sourceId={}, skipping duplicate", sourceId);
             return CreditConsumeResult.success(BigDecimal.ZERO, getBalance(userId));
         }
@@ -956,6 +1106,24 @@ public class CreditService {
     }
 
     /**
+     * What an agent/chat turn on {@code (provider, model)} can actually spend: the same
+     * {@link #eligibleBalance} the debit draws from, read for an LLM source type.
+     *
+     * <p>Read by the balance endpoint so an LLM budget guard budgets against the money
+     * THIS model's turns can reach. On the Free plan that is the monthly pool plus PAYG
+     * on a free-tier model, and PAYG alone on any other model; a guard handed the total
+     * instead would let a loop run on monthly credits no debit for it can draw. Paid
+     * plans and CE get their full balance, as before.
+     */
+    @Transactional(readOnly = true)
+    public BigDecimal getLlmSpendableBalance(Long userId, String provider, String model) {
+        if (unlimited) return UNLIMITED_BALANCE;
+        Subscription sub = resolveActiveSubscription(userId);
+        if (sub == null) return BigDecimal.ZERO;
+        return eligibleBalance(sub, "AGENT_EXECUTION", provider, model);
+    }
+
+    /**
      * V250 - bucket-aware balance view for the wallet UI. Returns the two
      * buckets separately so the frontend can render "sub: X / payg: Y"
      * without doing arithmetic. Sums match {@link #getBalance(Long)}.
@@ -964,19 +1132,6 @@ public class CreditService {
      * frontend's "infinity" rendering does not need a special case.
      */
     @Transactional(readOnly = true)
-    /**
-     * Whether the monthly AI allowance may be spent on {@code (provider, model)} (V494).
-     *
-     * <p>Read by the balance endpoint so an LLM budget guard can be told what the pot is
-     * worth FOR THE MODEL IT IS RUNNING, rather than being handed the figure and left to
-     * assume. Mirrors the model half of {@link #aiAllowanceEligible}; the balance and
-     * source-type halves belong to the caller's own question.
-     */
-    public boolean isAiAllowanceSpendableOn(String provider, String model) {
-        if (unlimited) return false;
-        return pricingService.isFreeTierModel(provider, model);
-    }
-
     public BalanceBreakdown getBalanceBreakdown(Long userId) {
         if (unlimited) {
             return new BalanceBreakdown(UNLIMITED_BALANCE, UNLIMITED_BALANCE, UNLIMITED_BALANCE, BigDecimal.ZERO, false, false);
@@ -995,8 +1150,8 @@ public class CreditService {
                 // opinion about it, and it would be wrong for the ordinary paid
                 // account: a monthly balance with no top-up is the NORMAL state
                 // of a PRO subscriber, whose monthly credits pay for everything.
-                // Only the Free plan's grant is workflow-scoped, and only this
-                // class knows that.
+                // Only the Free plan's grant is scoped, and only this class
+                // knows that.
                 isWorkflowCreditsOnlyPlan(sub));
     }
 
@@ -1006,10 +1161,13 @@ public class CreditService {
      * DTO so callers don't recompute.
      *
      * @param monthlyCreditsAreWorkflowOnly true when this account's monthly
-     *        grant may fund workflow-node orchestration and nothing else, so a
-     *        platform-key call (a generation, a chat, a web search) has to draw
-     *        the top-up bucket. False for every paid plan and for CE, where the
-     *        monthly balance pays for everything.
+     *        grant is the Free plan's scoped pool: it funds workflow-node
+     *        orchestration and chat/agent turns on free-tier models, and nothing
+     *        else, so any other platform-key call (a generation, a web search, a
+     *        turn on another model) has to draw the top-up bucket. False for every
+     *        paid plan and for CE, where the monthly balance pays for everything.
+     *        The name predates the merge of the Free plan's two pots and is kept
+     *        for API compatibility.
      */
     /**
      * {@code aiBalance} (V494) is the monthly AI allowance left. It is NOT part of
@@ -1070,8 +1228,8 @@ public class CreditService {
 
     /**
      * Source-type-aware existence check for the generic {@code /check} gate.
-     * On the FREE plan (Cloud), a non-workflow {@code sourceType} is checked
-     * against the PAYG bucket alone, mirroring the {@link #canAfford} pre-flight
+     * On the FREE plan (Cloud), a non-workflow {@code sourceType} without a model
+     * is checked against the PAYG bucket alone, mirroring the {@link #canAfford} pre-flight
      * and the post-flight {@link #deductCredits} bucket routing. Pre-fix, the
      * internal/scheduled chat gate called the total-balance form: a Free user
      * holding monthly workflow-only credits but no PAYG top-up passed the gate,
@@ -1081,11 +1239,11 @@ public class CreditService {
      * and paid plans are unaffected (eligible balance == total balance).
      *
      * <p><b>Model-blind, and no longer used in production (V494).</b> Every real caller
-     * moved to the 4-arg form, because without a model this answer EXCLUDES the Free
-     * plan's AI allowance and therefore refuses turns the pot would have paid for. It is
-     * kept because it still answers a real question (the account-level, model-independent
-     * one the workflow launch gates ask) and tests pin the FREE workflow scoping through
-     * it. Do not wire a chat or agent gate to it.
+     * moved to the 4-arg form, because without a model no LLM turn is free-tier, so on the
+     * Free plan this answer EXCLUDES the monthly credits (V512) and refuses turns they
+     * would have paid for. It is kept because it still answers a real question (the
+     * account-level, model-independent one the workflow launch gates ask) and tests pin
+     * the FREE scoping through it. Do not wire a chat or agent gate to it.
      */
     @Transactional(readOnly = true)
     public boolean hasSufficientCredits(Long userId, String sourceType) {
@@ -1112,7 +1270,7 @@ public class CreditService {
         BigDecimal available = sourceType == null
                 ? sub.getTotalBalance()
                 : eligibleBalance(sub, sourceType, provider, model);
-        return available.compareTo(BigDecimal.ONE) >= 0; // minimum 1 credit needed
+        return available.compareTo(MIN_USABLE_BALANCE) >= 0;
     }
 
     /**
@@ -1131,12 +1289,12 @@ public class CreditService {
     }
 
     /**
-     * Source-type-aware affordability for the chat / agent pre-flight gate. On
-     * the FREE plan (Cloud), a non-workflow {@code sourceType} is checked against
-     * the PAYG bucket alone, mirroring the post-flight {@link #deductCredits}
-     * bucket routing: a Free user holding monthly workflow credits but no PAYG
-     * top-up is refused a chat / agent turn up-front instead of letting the LLM
-     * run and 402-ing post-flight. A {@code null} sourceType keeps the legacy
+     * Source-type-aware affordability, model-blind. On the FREE plan (Cloud), a
+     * non-workflow {@code sourceType} is checked against the PAYG bucket alone,
+     * because without a model no LLM turn can be free-tier (V512): it fails closed,
+     * mirroring what {@link #deductCredits} would draw for a turn on a non-free-tier
+     * model. Chat / agent gates that know the model must use the 5-arg form, which
+     * also counts the monthly credits on a free-tier model. A {@code null} sourceType keeps the legacy
      * total-balance check (used by the back-compat two-arg overload). Unlimited
      * (CE) and paid plans are unaffected (eligible balance == total balance).
      */
@@ -1164,7 +1322,7 @@ public class CreditService {
                 ? sub.getTotalBalance()
                 : eligibleBalance(sub, sourceType, provider, model);
         if (projectedCost == null || projectedCost.signum() <= 0) {
-            return available.compareTo(BigDecimal.ONE) >= 0; // minimum 1 credit needed
+            return available.compareTo(MIN_USABLE_BALANCE) >= 0;
         }
         return available.compareTo(projectedCost) >= 0;
     }
@@ -1348,12 +1506,40 @@ public class CreditService {
                 ? ledgerRepository.getDistinctSourceTypes(userId, from, orgId)
                 : ledgerRepository.getDistinctSourceTypesForPayerAndExecutor(payerUserId, userId, from, orgId);
 
+        // The same window, by model, and the window of the same length just before it, so the
+        // page can say which models the spend went to and how the period compares.
+        LocalDateTime now = from.plusDays(days);
+        LocalDateTime previousFrom = from.minusDays(days);
+        List<Map<String, Object>> modelUsage = toModelUsage(isOwnerView
+                ? ledgerRepository.getModelUsage(userId, from, now, sourceType, provider, model, orgId)
+                : ledgerRepository.getModelUsageForPayerAndExecutor(payerUserId, userId, from, now, sourceType, provider, model, orgId));
+        List<Map<String, Object>> previousModelUsage = toModelUsage(isOwnerView
+                ? ledgerRepository.getModelUsage(userId, previousFrom, from, sourceType, provider, model, orgId)
+                : ledgerRepository.getModelUsageForPayerAndExecutor(payerUserId, userId, previousFrom, from, sourceType, provider, model, orgId));
+
         Map<String, Object> result = new HashMap<>();
         result.put("dailyUsage", dailyUsage);
         result.put("providers", providers);
         result.put("models", models);
         result.put("sourceTypes", sourceTypes);
+        result.put("modelUsage", modelUsage);
+        result.put("previousModelUsage", previousModelUsage);
         return result;
+    }
+
+    /** Rows of {@link CreditLedgerRepository#getModelUsage}: provider, model, sourceType, count, credits, tokens. */
+    private static List<Map<String, Object>> toModelUsage(List<Object[]> rows) {
+        return rows.stream().map(row -> {
+            // HashMap, not Map.of: provider and model are null on rows that are not an LLM call.
+            Map<String, Object> entry = new HashMap<>();
+            entry.put("provider", row[0]);
+            entry.put("model", row[1]);
+            entry.put("sourceType", row[2]);
+            entry.put("count", row[3]);
+            entry.put("credits", row[4]);
+            entry.put("tokens", row[5]);
+            return entry;
+        }).toList();
     }
 
     /**
@@ -1529,6 +1715,10 @@ public class CreditService {
                     || (completionTokens != null && completionTokens > 0);
             boolean costIsExactlyZero = cost.signum() == 0;
             if (hasTokenUsage && costIsExactlyZero) {
+                Optional<CreditLedgerEntry> onKey = rowOnKey(sourceId);
+                CreditConsumeResult replay = replayOf(onKey, userId, sourceType, sourceId);
+                if (replay != null) return replay;
+                freeKeyForCharge(onKey, sourceId);
                 BigDecimal balance = unlimited ? UNLIMITED_BALANCE : getBalance(userId);
                 CreditLedgerEntry entry = new CreditLedgerEntry();
                 entry.setUserId(userId);
@@ -1555,6 +1745,10 @@ public class CreditService {
 
         // Unlimited mode: track consumption in ledger but never deduct from balance
         if (unlimited) {
+            Optional<CreditLedgerEntry> onKey = rowOnKey(sourceId);
+            CreditConsumeResult replay = replayOf(onKey, userId, sourceType, sourceId);
+            if (replay != null) return replay;
+            freeKeyForCharge(onKey, sourceId);
             CreditLedgerEntry entry = new CreditLedgerEntry();
             entry.setUserId(userId);
             entry.setExecutorUserId(effectiveExecutor);  // PR11 - quota enforcement key
@@ -1582,6 +1776,13 @@ public class CreditService {
             return CreditConsumeResult.noSubscription();
         }
 
+        // Checked UNDER the subscription lock, and before the balance decision: a replay that
+        // raced the original waits here until the original commits, then sees its row, and a
+        // replay of a turn already charged answers success even if the wallet is now empty.
+        Optional<CreditLedgerEntry> onKey = rowOnKey(sourceId);
+        CreditConsumeResult replay = replayOf(onKey, userId, sourceType, sourceId);
+        if (replay != null) return replay;
+
         // PR11d-a (TOCTOU race fix, audit B 2026-05-12 MUST-FIX #1):
         // The cap check NOW runs INSIDE the same transaction as the debit,
         // AFTER findSubscriptionForUpdate has taken a PESSIMISTIC_WRITE lock
@@ -1594,16 +1795,16 @@ public class CreditService {
         CreditConsumeResult capRefused = enforceQuotaCap(effectiveExecutor, cost, userId);
         if (capRefused != null) return capRefused;
 
-        // Free workflow-credit scoping (Cloud only): on the FREE plan the monthly
-        // sub bucket funds ONLY workflow-node orchestration; every other source
-        // type draws the PAYG bucket alone. subBucketEligible short-circuits to
+        // Free credit scoping (Cloud only): on the FREE plan the monthly sub bucket
+        // funds workflow-node orchestration and LLM turns on a free-tier model; every
+        // other debit draws the PAYG bucket alone. subBucketEligible short-circuits to
         // true under unlimited (CE) and for paid plans, so currentBalance ==
         // availableBalance there and this is a behavioural no-op.
-        boolean subEligible = subBucketEligible(sub, sourceType);
-        // V494: an LLM turn on a model opened to the free tier may also draw the
-        // separate AI allowance, which applyDebit spends BEFORE sub/PAYG. It has to
-        // count as available here too, or the gate refuses a turn the debit would
-        // have funded.
+        boolean subEligible = subBucketEligible(sub, sourceType, provider, model);
+        // V494: an LLM turn on a model opened to the free tier may also draw a plan's
+        // separate AI allowance (none is granted today), which applyDebit spends BEFORE
+        // sub/PAYG. It has to count as available here too, or the gate refuses a turn
+        // the debit would have funded.
         boolean aiEligible = aiAllowanceEligible(sub, sourceType, provider, model);
         BigDecimal currentBalance = sub.getTotalBalance();
         BigDecimal availableBalance = subEligible ? currentBalance : sub.getPaygRemainingCredits();
@@ -1624,7 +1825,7 @@ public class CreditService {
             // Written in a transaction of ITS OWN (see CreditRejectionAuditWriter). It used to
             // share this one, on the stated belief that "if the save throws, the caller still
             // receives insufficientCredits". It did not. source_id is unique across the whole
-            // ledger, so a retried turn on an empty wallet writes the same key twice, the second
+            // ledger, so a retried turn on an empty wallet writes the same rejection key twice, the second
             // write poisons this transaction, and the caller gets an UnexpectedRollbackException
             // from the commit instead of the refusal it was promised: an HTTP 500 for a user
             // whose only problem was being out of credits.
@@ -1636,7 +1837,9 @@ public class CreditService {
                 rejected.setAmount(BigDecimal.ZERO);
                 rejected.setBalanceAfter(availableBalance);
                 rejected.setSourceType(sourceType + "_REJECTED");
-                rejected.setSourceId(sourceId);
+                // Never the bare key: that one is reserved for the charge a replay writes once
+                // the wallet is topped up (see CreditRejectionAuditWriter.REJECTION_KEY_SUFFIX).
+                rejected.setSourceId(CreditRejectionAuditWriter.rejectionSourceId(sourceId));
                 rejected.setProvider(provider);
                 rejected.setModel(model);
                 rejected.setPromptTokens(promptTokens);
@@ -1664,20 +1867,15 @@ public class CreditService {
         // V250: apply debit across sub + payg buckets. The new total balance
         // can go negative under the allowNegative branch (chat post-flight
         // overshoot). When negative, drain sub fully then drain payg. When the
-        // sub bucket is not eligible (FREE non-workflow), the whole debit routes
-        // to PAYG so the monthly workflow grant stays untouched.
+        // sub bucket is not eligible (a FREE spend outside the scoped pool), the
+        // whole debit routes to PAYG so the monthly grant stays untouched.
+        // Past the refusal branch: this consumption WILL be written, so a legacy rejection row
+        // may now leave the key (never earlier, see freeKeyForCharge).
+        freeKeyForCharge(onKey, sourceId);
         BucketSplit debitSplit = applyDebit(sub, cost, subEligible, aiEligible);
-        // What the buckets actually gave up. Equal to cost on every path except the
-        // allowance-funded tail applyDebit absorbs, and the ledger has to state the
-        // movement rather than the intent, or reconciliation reads the difference as
-        // drift. The absorbed part is platform cost on inference it was already granting.
+        // What the buckets gave up: always the full cost (applyDebit books every tail on
+        // a bucket), stated as the sum so the ledger records the movement itself.
         BigDecimal debited = debitSplit.fromSub().add(debitSplit.fromPayg()).add(debitSplit.fromAi());
-        if (debited.compareTo(cost) < 0) {
-            log.info("User {} {}: {} of {} credits absorbed - the AI allowance covered the rest and "
-                            + "a free-tier turn may not create PAYG debt (pot={}, payg={})",
-                    userId, sourceType, cost.subtract(debited), cost,
-                    sub.getAiRemainingCredits(), sub.getPaygRemainingCredits());
-        }
         BigDecimal newBalance = sub.getTotalBalance();
         // Free workflow-credit scoping: a PAYG-routed overshoot (!subEligible,
         // allowNegative post-flight) drives the PAYG bucket negative while the
@@ -1686,11 +1884,9 @@ public class CreditService {
         // not eligible for this source type). Without this branch the delinquent
         // gate never fired for Free accounts: each chat turn's overshoot was
         // unbounded and repeatable as long as the monthly grant masked the total.
-        // V494 note: these rules are deliberately UNCHANGED. An allowance-funded turn
-        // cannot reach them holding a debt, because applyDebit absorbs the tail instead
-        // of pushing PAYG negative - so the pot's normal monthly exhaustion neither
-        // latches the flag nor leaves an unlatched negative PAYG behind to block a
-        // later clear.
+        // A free-tier LLM turn (V512) is sub-eligible, so its overshoot lands on the
+        // monthly bucket and only the negative-total leg can fire: the next monthly
+        // reset or a top-up clears it through clearDelinquentIfPositive.
         boolean paygOwed = !subEligible && sub.getPaygRemainingCredits().signum() < 0;
         if (newBalance.signum() < 0 || paygOwed) {
             log.warn("User {} {} debited despite insufficient credits: totalBalance went {} -> {} (cost={}, sub={}, payg={}, paygOwed={}). " +
@@ -1724,8 +1920,7 @@ public class CreditService {
         entry.setCompletionTokens(completionTokens);
         entry.setCachedTokens(cachedTokens);
         // V494: what the AI allowance paid. The row's `amount` states what the buckets
-        // ACTUALLY gave up - the full cost on every path except the absorbed free-tier
-        // tail above - and the allowance part of that movement never touched the wallet
+        // gave up, and the allowance part of that movement never touched the wallet
         // the reconciliation compares against, so it is recorded here for
         // CreditReconciliationService to add back. Without it every AI-funded turn grows
         // an unexplained drift and pages ops.
@@ -1927,7 +2122,7 @@ public class CreditService {
         // workflow-node orchestration, so on the FREE plan it draws the PAYG
         // bucket alone (availableBalance), leaving the monthly grant untouched.
         // No-op for paid plans / CE (subEligible == true -> available == total).
-        boolean subEligible = subBucketEligible(sub, "PLATFORM_MARKUP");
+        boolean subEligible = subBucketEligible(sub, "PLATFORM_MARKUP", null, null);
         BigDecimal currentBalance = sub.getTotalBalance();
         BigDecimal availableBalance = subEligible ? currentBalance : sub.getPaygRemainingCredits();
         BigDecimal newBalance = currentBalance.subtract(projected);
@@ -2069,7 +2264,7 @@ public class CreditService {
         // Free workflow-credit scoping: any extra charge beyond the original
         // reserve (actual > reserved) must drain the same PAYG-only bucket the
         // reserve used on a FREE account. No-op for paid plans / CE.
-        boolean subEligible = subBucketEligible(sub, "PLATFORM_MARKUP");
+        boolean subEligible = subBucketEligible(sub, "PLATFORM_MARKUP", null, null);
 
         BigDecimal reserved = row.getAmount().abs();          // positive
         // V250: use total balance (sub + payg) for the chargeable arithmetic.
@@ -2408,24 +2603,13 @@ public class CreditService {
      * than the remaining allowance from wasting it: the pot is spent to the last credit,
      * and the rest is charged normally.
      *
-     * <p><b>An allowance-funded turn can never drive PAYG below zero.</b> When the sub
-     * bucket is not eligible (a FREE chat/agent turn) the remainder is capped at what
-     * PAYG actually holds, and the uncovered tail is ABSORBED rather than booked as
-     * debt. Three things follow, and all three were wrong before:
-     * <ul>
-     *   <li>The account is not bricked. A negative PAYG on a workflow-credits-only plan
-     *       is unclearable by construction - {@code clearDelinquentIfPositive} refuses
-     *       while it is negative and no renewal resets PAYG - so the pot's NORMAL
-     *       monthly exhaustion used to latch {@code delinquent} for good, as soon as the
-     *       workflow bucket was smaller than the overshoot (i.e. any free account that
-     *       had also used its workflow credits).</li>
-     *   <li>The delinquency rules below need no exception, so the protection they give
-     *       every other path is untouched.</li>
-     *   <li>No unlatched negative PAYG is left on the row to poison a later clear.</li>
-     * </ul>
-     * The absorbed tail is bounded by one turn's estimate error, on inference the
-     * platform was already granting, and the caller records what was ACTUALLY taken so
-     * the ledger and the balances still agree exactly.
+     * <p><b>An allowance-funded remainder always goes through the sub/PAYG split.</b>
+     * The allowance is only ever eligible where the sub bucket is too: on a paid plan
+     * the sub bucket funds everything, and on the Free plan a free-tier LLM turn is
+     * sub-eligible since V512. So the tail of a turn the pot cannot cover is an ordinary
+     * debit on the monthly bucket first, never an unclearable PAYG debt. (Before V512 a
+     * Free turn was NOT sub-eligible, and a dedicated branch absorbed that tail instead;
+     * it became unreachable and was removed.)
      *
      * <p>The returned split describes the REMAINDER only. Its {@code fromPayg} is
      * what the reservation lifecycle refunds proportionally, and a reservation is
@@ -2433,11 +2617,8 @@ public class CreditService {
      */
     private static BucketSplit applyDebit(Subscription sub, BigDecimal totalCost,
                                           boolean subEligible, boolean aiEligible) {
-        // Tracked explicitly rather than derived from the remainder: the remainder is
-        // capped below, and deriving the pot draw from it afterwards reported the
-        // ABSORBED tail as allowance-funded - which would have overstated ai_portion
-        // and, through the reconciliation add-back, invented credits out of a rounding
-        // error. The pot gave what it gave.
+        // Tracked explicitly: it is what ai_portion records and the reconciliation adds
+        // back, so it must be exactly what the pot gave.
         BigDecimal fromAi = BigDecimal.ZERO;
         BigDecimal remainder = totalCost;
         if (aiEligible && totalCost.signum() > 0) {
@@ -2446,11 +2627,6 @@ public class CreditService {
                 sub.setAiRemainingCredits(sub.getAiRemainingCredits().subtract(fromAi));
                 remainder = totalCost.subtract(fromAi);
             }
-        }
-        if (fromAi.signum() > 0 && !subEligible) {
-            // See the javadoc: the tail this turn cannot pay for is absorbed, never
-            // booked as PAYG debt, because that debt is unclearable on this plan shape.
-            remainder = remainder.min(sub.getPaygRemainingCredits().max(BigDecimal.ZERO));
         }
         BucketSplit split = subEligible
                 ? splitBuckets(sub, remainder)
@@ -2537,8 +2713,9 @@ public class CreditService {
          * Refused because of WHICH credits the account holds, not how many.
          *
          * <p>The monthly grant on the Free plan funds workflow-node
-         * orchestration and nothing else, so a platform-key call (generation,
-         * chat, agent, web search) has to draw the PAYG top-up bucket. An
+         * orchestration and chat/agent turns on free-tier models, and nothing
+         * else, so any other platform-key call (a generation, a web search, a
+         * turn on another model) has to draw the PAYG top-up bucket. An
          * account holding only the monthly grant is therefore refused even
          * though it has a balance, and telling it "Insufficient credits:
          * balance=0" is worse than saying nothing: the app shows that user a
@@ -2552,8 +2729,8 @@ public class CreditService {
         public static CreditConsumeResult monthlyCreditsNotEligible(BigDecimal payg, BigDecimal required,
                                                                      BigDecimal total) {
             return new CreditConsumeResult(false,
-                    "PLAN_EXCLUDES_THIS: your monthly Free credits fund workflow runs only, so they cannot pay "
-                            + "for this. It costs " + required + " credits and your top-up balance is " + payg
+                    "PLAN_EXCLUDES_THIS: your monthly Free credits fund workflow runs and chat or agent turns on "
+                            + "the models marked Free, so they cannot pay for this. It costs " + required + " credits and your top-up balance is " + payg
                             + " (of " + total + " total). An active subscription or a credit top-up pays for it. "
                             + "A provider key you configured yourself is never charged by the platform.",
                     BigDecimal.ZERO, payg, false);

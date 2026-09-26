@@ -49,12 +49,20 @@ public class NodeDescriptionBuilder {
      * Build description for a node based on its type.
      */
     public DescriptionResult buildDescription(String nodeId, Map<String, Object> node, String tenantId) {
+        return buildDescription(nodeId, node, tenantId, null);
+    }
+
+    /**
+     * Org-aware variant: the table lookup of a CRUD step carries the workspace, so a table
+     * created by another member of it is not reported missing.
+     */
+    public DescriptionResult buildDescription(String nodeId, Map<String, Object> node, String tenantId, String orgId) {
         if (nodeId.startsWith("trigger:")) {
             return buildTriggerDescription(node);
         } else if (nodeId.startsWith("agent:")) {
             return buildAgentDescription(node);
         } else if (nodeId.startsWith("mcp:")) {
-            return buildStepDescription(node, tenantId);
+            return buildStepDescription(node, tenantId, orgId);
         } else if (nodeId.startsWith("core:")) {
             return buildCoreDescription(node);
         } else if (nodeId.startsWith("interface:")) {
@@ -256,7 +264,7 @@ public class NodeDescriptionBuilder {
         return new DescriptionResult(config, modifiableFields, "agent", null);
     }
 
-    private DescriptionResult buildStepDescription(Map<String, Object> node, String tenantId) {
+    private DescriptionResult buildStepDescription(Map<String, Object> node, String tenantId, String orgId) {
         Map<String, Object> config = new LinkedHashMap<>();
         Map<String, ModifiableField> modifiableFields = new LinkedHashMap<>();
         String warning = null;
@@ -318,7 +326,7 @@ public class NodeDescriptionBuilder {
             modifiableFields.put("dataSourceId", new ModifiableField(dsId, "dataSourceId", "Table ID for CRUD operations"));
 
             // Check if datasource still exists
-            DataSourceDto ds = dataSourceClient.getDataSource(dsId, tenantId);
+            DataSourceDto ds = dataSourceClient.getDataSource(dsId, tenantId, orgId);
             if (ds != null) {
                 config.put("table_name", ds.name());
                 config.put("table_status", "ACTIVE");

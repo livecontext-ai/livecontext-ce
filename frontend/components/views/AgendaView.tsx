@@ -540,6 +540,13 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
     [createScheduledWorkflow],
   );
 
+  // A click on an empty slot of the grid: the start of "schedule something here".
+  const openNewSlot = useCallback((slot: NewScheduleSlot) => {
+    track('agenda_slot_opened', { view });
+    setCreateError(null);
+    setNewSlot(slot);
+  }, [view]);
+
   const confirmMove = useCallback(
     async (startAt: Date, scope: MoveScope) => {
       if (!moveTarget?.occurrence.scheduleId) return;
@@ -556,6 +563,7 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
         );
         setMoveTarget(null);
         setSelected(null);
+        track('agenda_schedule_moved', { scope: scope === 'ALL' ? 'all' : 'next' });
         addToast({
           type: 'success',
           title: t('toasts.movedTitle'),
@@ -578,6 +586,7 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
       setBusy(true);
       try {
         await agendaService.runNow(occurrence.scheduleId, true);
+        track('agenda_run_now');
         setSelected(null);
         addToast({ type: 'success', title: t('toasts.ranTitle'), message: t('toasts.ranMessage') });
         reload();
@@ -596,10 +605,15 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
   );
 
   const togglePause = useCallback(
-    async (scheduleId: string, enabled: boolean) => {
+    async (scheduleId: string, enabled: boolean, resourceType?: string) => {
       setBusy(true);
       try {
         await agendaService.toggle(scheduleId, enabled);
+        track('agenda_schedule_paused', {
+          paused: !enabled,
+          scope: 'schedule',
+          resource_type: resourceType?.toLowerCase(),
+        });
         setSelected(null);
         addToast({
           type: 'success',
@@ -627,6 +641,11 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
     try {
       const paused = !resource.resourcePaused;
       await setProductionResourcePaused(resource, paused);
+      track('agenda_schedule_paused', {
+        paused,
+        scope: 'resource',
+        resource_type: String(resource.resourceType).toLowerCase(),
+      });
       setSelected(null);
       addToast({
         type: 'success',
@@ -832,7 +851,7 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
                 focusScheduleId={focusScheduleId}
                 canMutate={canMutate}
                 onSelect={handleSelect}
-                onCreate={canMutate ? (day) => { setCreateError(null); setNewSlot({ day, hour: null }); } : undefined}
+                onCreate={canMutate ? (day) => openNewSlot({ day, hour: null }) : undefined}
               />
             )}
             {(view === 'week' || view === 'day') && (
@@ -855,7 +874,7 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
                 focusScheduleId={focusScheduleId}
                 canMutate={canMutate}
                 onSelect={handleSelect}
-                onCreate={canMutate ? (day, hour) => { setCreateError(null); setNewSlot({ day, hour }); } : undefined}
+                onCreate={canMutate ? (day, hour) => openNewSlot({ day, hour }) : undefined}
               />
             )}
             {view === 'list' && (
@@ -896,7 +915,7 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
           onTogglePause={(occurrence) => {
             // Always a pause: an occurrence is only ever drawn for an armed schedule.
             // Resuming is offered on the rail's greyed marker.
-            if (occurrence.scheduleId) void togglePause(occurrence.scheduleId, false);
+            if (occurrence.scheduleId) void togglePause(occurrence.scheduleId, false, occurrence.resourceType);
           }}
           onToggleResourcePause={(occurrence) => void toggleResourcePause(occurrence)}
           onOpenResource={openResource}

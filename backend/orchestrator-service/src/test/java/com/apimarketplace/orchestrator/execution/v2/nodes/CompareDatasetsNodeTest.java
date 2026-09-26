@@ -65,8 +65,8 @@ class CompareDatasetsNodeTest {
             Map.of("id", "3", "name", "Katherine")
         );
         when(mockTemplateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
-            .thenReturn(Map.of("__expr__", datasetA))
-            .thenReturn(Map.of("__expr__", datasetB));
+            .thenAnswer(TemplateResolutionStubs.templatesResolveTo(datasetA))
+            .thenAnswer(TemplateResolutionStubs.templatesResolveTo(datasetB));
 
         Core.CompareDatasetsConfig config = new Core.CompareDatasetsConfig(
             "{{core:extract.output.items}}",
@@ -87,6 +87,48 @@ class CompareDatasetsNodeTest {
         assertEquals(1, result.output().get("onlyInBCount"));
         assertEquals(2, result.output().get("totalA"));
         assertEquals(2, result.output().get("totalB"));
+    }
+
+    @Test
+    @DisplayName("a reference that resolves to JSON TEXT is that dataset, not a step-output key that finds nothing")
+    void jsonTextInputIsParsedAsTheDataset() {
+        when(mockTemplateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
+            .thenAnswer(TemplateResolutionStubs.templatesResolveTo("[{\"id\":\"1\"},{\"id\":\"2\"}]"))
+            .thenAnswer(TemplateResolutionStubs.templatesResolveTo("[{\"id\":\"2\"}]"));
+        Core.CompareDatasetsConfig config = new Core.CompareDatasetsConfig(
+            "{{core:http.output.body}}", "{{core:code.output.result}}", List.of("id"), true, true, true);
+        CompareDatasetsNode node = new CompareDatasetsNode("core:compare", config);
+        node.setTemplateAdapter(mockTemplateAdapter);
+
+        NodeExecutionResult result = node.execute(baseContext);
+
+        assertTrue(result.isSuccess());
+        assertEquals(2, result.output().get("totalA"));
+        assertEquals(1, result.output().get("totalB"));
+        assertEquals(1, result.output().get("matchedCount"));
+    }
+
+    @Test
+    @DisplayName("a {{...}} match field is resolved before rows are keyed, not compared as its text")
+    void templatedMatchFieldIsResolved() {
+        List<Map<String, Object>> datasetA = List.of(Map.of("sku", "A1"), Map.of("sku", "B2"));
+        List<Map<String, Object>> datasetB = List.of(Map.of("sku", "B2"));
+        when(mockTemplateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
+            .thenAnswer(TemplateResolutionStubs.templatesResolveTo(datasetA))
+            .thenAnswer(TemplateResolutionStubs.templatesResolveTo(datasetB))
+            .thenAnswer(TemplateResolutionStubs.templatesResolveTo("sku"));
+        Core.CompareDatasetsConfig config = new Core.CompareDatasetsConfig(
+            "{{core:a.output.items}}", "{{core:b.output.items}}",
+            List.of("{{trigger:start.output.key_field}}"), true, true, true);
+        CompareDatasetsNode node = new CompareDatasetsNode("core:compare", config);
+        node.setTemplateAdapter(mockTemplateAdapter);
+
+        NodeExecutionResult result = node.execute(baseContext);
+
+        assertTrue(result.isSuccess());
+        assertEquals(List.of("sku"), result.output().get("matchFields"));
+        assertEquals(1, result.output().get("matchedCount"));
+        assertEquals(1, result.output().get("onlyInACount"));
     }
 
     /**
@@ -969,5 +1011,46 @@ class CompareDatasetsNodeTest {
                 return NodeExecutionResult.success(nodeId, Map.of());
             }
         };
+    }
+
+    @org.junit.jupiter.api.Nested
+    @DisplayName("templated return flags")
+    class TemplatedReturnFlags {
+
+        private CompareDatasetsNode templatedNode(Object resolvedFlag) {
+            Map<String, Object> values = new java.util.HashMap<>();
+            values.put("{{core:a.output.items}}", List.of(Map.of("id", "1"), Map.of("id", "2")));
+            values.put("{{core:b.output.items}}", List.of(Map.of("id", "2")));
+            values.put("{{core:x.output.flag}}", resolvedFlag);
+            when(mockTemplateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
+                .thenAnswer(TemplateResolutionStubs.resolving(values));
+            Core.CompareDatasetsConfig config = new Core.CompareDatasetsConfig(
+                "{{core:a.output.items}}", "{{core:b.output.items}}", List.of("id"), true, true, true);
+            CompareDatasetsNode node = new CompareDatasetsNode("core:compare", config);
+            node.setTemplateAdapter(mockTemplateAdapter);
+            node.setDeferredScalars(Map.of("compareDatasets", Map.of("returnMatched", "{{core:x.output.flag}}")));
+            return node;
+        }
+
+        @Test
+        @DisplayName("regression: a {{...}} returnMatched is resolved; it used to drop the whole compareDatasets config")
+        @SuppressWarnings("unchecked")
+        void templatedFlagIsResolved() {
+            NodeExecutionResult result = templatedNode(false).execute(baseContext);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            assertEquals(0, result.output().get("matchedCount"), "matched rows not returned: the flag resolved to false");
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(false, params.get("returnMatched"));
+        }
+
+        @Test
+        @DisplayName("a {{...}} returnMatched resolving to a non-boolean fails, naming the config")
+        void templatedFlagNotABooleanFails() {
+            NodeExecutionResult result = templatedNode("sometimes").execute(baseContext);
+
+            assertFalse(result.isSuccess());
+            assertTrue(result.errorMessage().orElse("").contains("compareDatasets"), result.errorMessage().orElse(""));
+        }
     }
 }

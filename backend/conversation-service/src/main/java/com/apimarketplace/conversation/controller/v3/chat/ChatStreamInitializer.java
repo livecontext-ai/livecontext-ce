@@ -72,8 +72,6 @@ public class ChatStreamInitializer {
                             if (!isTransientStreamStoreFailure(error)) {
                                 return Mono.error(error);
                             }
-                            log.warn("Transient stream-store failure while creating chat stream for conversation {}: {}",
-                                    conversationId, error.getMessage());
                             return Mono.just(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                                     .body(Map.of(
                                             "code", "STREAM_INIT_TEMPORARILY_UNAVAILABLE",
@@ -89,7 +87,14 @@ public class ChatStreamInitializer {
                 .retryWhen(Retry.backoff(2, Duration.ofMillis(150))
                         .maxBackoff(Duration.ofMillis(500))
                         .filter(this::isTransientStreamStoreFailure)
-                        .onRetryExhaustedThrow((spec, signal) -> signal.failure()));
+                        .onRetryExhaustedThrow((spec, signal) -> signal.failure()))
+                // The ONE ERROR for a stream that could not be created: reached only once the
+                // retries are exhausted (or the failure is not one we retry). Each attempt is
+                // logged at WARN by the state service, so a failure a retry absorbed stays WARN.
+                .doOnError(error -> log.error("Could not create chat stream for conversation {} ({}): {}",
+                        conversationId,
+                        isTransientStreamStoreFailure(error) ? "retries exhausted" : "not retryable",
+                        error.getMessage()));
     }
 
     private boolean isTransientStreamStoreFailure(Throwable error) {

@@ -15,6 +15,8 @@ import org.springframework.beans.factory.annotation.Value;
 import com.apimarketplace.orchestrator.tools.application.ApplicationShowcaseResolver;
 import com.apimarketplace.orchestrator.repository.OffsetLimitPageable;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
+import com.apimarketplace.orchestrator.repository.WorkflowRunSummaryProjection;
+import com.apimarketplace.orchestrator.services.WorkflowPlanVersionService.RunPlan;
 import com.apimarketplace.orchestrator.services.NodeTypeFilters;
 import com.apimarketplace.orchestrator.services.WorkflowManagementService;
 import com.apimarketplace.orchestrator.services.WorkflowPinService;
@@ -830,6 +832,8 @@ public class WorkflowCrudModule implements ToolModule {
                     workflowId, OffsetLimitPageable.of(bounds.offset(), bounds.limit()));
 
             Integer pinnedVersion = workflow.getPinnedVersion();
+            Map<String, Long> epochCounts = agentWorkflowFireService.countEpochsByRunIds(page.getContent().stream()
+                    .map(WorkflowRunSummaryProjection::getRunIdPublic).toList());
 
             List<Map<String, Object>> runs = page.getContent().stream().map(r -> {
                 Map<String, Object> m = new LinkedHashMap<>();
@@ -843,6 +847,11 @@ public class WorkflowCrudModule implements ToolModule {
                 m.put("ended_at", r.getEndedAt() != null ? r.getEndedAt().toString() : null);
                 m.put("duration_ms", r.getDurationMs());
                 m.put("total_nodes", r.getTotalNodes());
+                // One epoch per trigger fire: a reusable run (schedule, webhook, form) accumulates
+                // its fires here, so counting epochs no longer takes one get_run per run.
+                if (epochCounts != null) {
+                    m.put("epoch_count", epochCounts.getOrDefault(r.getRunIdPublic(), 0L));
+                }
                 m.put("execution_mode", r.getExecutionMode() != null ? r.getExecutionMode().name() : null);
                 return m;
             }).toList();
@@ -889,16 +898,16 @@ public class WorkflowCrudModule implements ToolModule {
             var workflowDenied = denyIfWorkflowNotAllowed(context,
                     workflow != null && workflow.getId() != null ? workflow.getId().toString() : null);
             if (workflowDenied.isPresent()) return workflowDenied.get();
-            WorkflowPlan plan = resolvePlanForRun(run, workflow, tenantId);
+            RunPlan runPlan = planVersionService.resolvePlanForRun(workflow.getId(), run.getPlanVersion(), tenantId);
 
             // Phase 1 (no epoch): macro overview. Phase 2 (epoch=N): detailed node report.
             Integer epoch = getIntParam(parameters, "epoch");
             if (epoch != null) {
-                return ToolExecutionResult.success(
-                        agentWorkflowFireService.buildEpochDetailReport(run, plan, epoch, tenantId));
+                return ToolExecutionResult.success(runPlan.annotate(
+                        agentWorkflowFireService.buildEpochDetailReport(run, runPlan.plan(), epoch, tenantId)));
             } else {
-                return ToolExecutionResult.success(
-                        agentWorkflowFireService.buildRunMacroReport(run, plan, tenantId));
+                return ToolExecutionResult.success(runPlan.annotate(
+                        agentWorkflowFireService.buildRunMacroReport(run, runPlan.plan(), tenantId)));
             }
         } catch (Exception e) {
             log.error("Failed to get run {}: {}", runId, e.getMessage(), e);
@@ -983,7 +992,7 @@ public class WorkflowCrudModule implements ToolModule {
             boolean timedOut = !cancelled && isInFlight(run.getStatus());
             long waitedSeconds = Math.round((System.currentTimeMillis() - waitStartMs) / 1000.0);
 
-            WorkflowPlan plan = resolvePlanForRun(run, run.getWorkflow(), tenantId);
+            RunPlan runPlan = planVersionService.resolvePlanForRun(run.getWorkflow().getId(), run.getPlanVersion(), tenantId);
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("status", run.getStatus() != null ? run.getStatus().toWireValue() : "unknown");
             out.put("waited_seconds", waitedSeconds);
@@ -995,7 +1004,7 @@ public class WorkflowCrudModule implements ToolModule {
                 out.put("next_action", "The run is still in progress after " + waitedSeconds + "s. "
                     + "Call wait_run again to keep waiting, or get_run for a snapshot without blocking.");
             }
-            out.put("run", agentWorkflowFireService.buildRunMacroReport(run, plan, tenantId));
+            out.put("run", runPlan.annotate(agentWorkflowFireService.buildRunMacroReport(run, runPlan.plan(), tenantId)));
             return ToolExecutionResult.success(out);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -1226,32 +1235,16 @@ public class WorkflowCrudModule implements ToolModule {
             var workflowDenied = denyIfWorkflowNotAllowed(context,
                     workflow != null && workflow.getId() != null ? workflow.getId().toString() : null);
             if (workflowDenied.isPresent()) return workflowDenied.get();
-            WorkflowPlan plan = resolvePlanForRun(run, workflow, tenantId);
+            RunPlan runPlan = planVersionService.resolvePlanForRun(workflow.getId(), run.getPlanVersion(), tenantId);
 
-            return ToolExecutionResult.success(
+            return ToolExecutionResult.success(runPlan.annotate(
                     agentWorkflowFireService.buildNodeOutputReport(
-                            run, plan, epoch, nodeId, tenantId, itemIndex, iteration, spawn,
-                            expandField, fieldOffset, fieldMaxBytes));
+                            run, runPlan.plan(), epoch, nodeId, tenantId, itemIndex, iteration, spawn,
+                            expandField, fieldOffset, fieldMaxBytes)));
         } catch (Exception e) {
             log.error("Failed to get node output for run {}, node {}: {}", runId, nodeId, e.getMessage(), e);
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to get node output: " + e.getMessage());
         }
-    }
-
-    /**
-     * Resolve the plan for a specific run: prefer the versioned plan, fallback to current workflow plan.
-     */
-    private WorkflowPlan resolvePlanForRun(WorkflowRunEntity run, WorkflowEntity workflow, String tenantId) {
-        // Try versioned plan first (matches exact plan used at execution time)
-        if (run.getPlanVersion() != null && workflow.getId() != null) {
-            var versionOpt = planVersionService.getVersion(workflow.getId(), run.getPlanVersion());
-            if (versionOpt.isPresent()) {
-                return WorkflowPlan.fromMap(versionOpt.get().getPlan(),
-                        workflow.getId().toString(), tenantId);
-            }
-        }
-        // Fallback to current workflow plan
-        return WorkflowPlan.fromMap(workflow.getPlan(), workflow.getId().toString(), tenantId);
     }
 
     // ==================== Helpers ====================

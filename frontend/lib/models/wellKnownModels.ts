@@ -17,7 +17,7 @@
  * the same discipline the integrations fallback follows.
  *
  * <p>All entries point at the models documentation. There is no per-model public page today
- * (unlike `/integrations/{slug}`), and inventing one URL per family would be eight soft
+ * (unlike `/integrations/{slug}`), and inventing one URL per family would be one soft
  * 404s; the docs page is where BYOK keys, the CLI bridges and the catalogue are explained.
  */
 export interface WellKnownModel {
@@ -27,14 +27,14 @@ export interface WellKnownModel {
   provider: string;
 }
 
-/** Eight, the same width as the integrations column beside it. */
+/**
+ * Only the families the platform actually runs. There were eight (Grok, Mistral, Qwen and Kimi
+ * too) until 2026-09-25, when the catalogue stopped carrying every model that is not enabled:
+ * those four providers left the seed, and advertising them would name models nobody can select.
+ */
 export const WELL_KNOWN_MODELS: readonly WellKnownModel[] = [
   { label: 'Claude', provider: 'anthropic' },
   { label: 'GPT', provider: 'openai' },
   { label: 'Gemini', provider: 'google' },
-  { label: 'Grok', provider: 'xai' },
-  { label: 'Mistral', provider: 'mistral' },
   { label: 'DeepSeek', provider: 'deepseek' },
-  { label: 'Qwen', provider: 'qwen' },
-  { label: 'Kimi', provider: 'moonshot' },
 ];

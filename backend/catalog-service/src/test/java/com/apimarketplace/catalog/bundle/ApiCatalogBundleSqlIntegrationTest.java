@@ -129,18 +129,18 @@ class ApiCatalogBundleSqlIntegrationTest {
                 cloudSnapshot.apis(), cloudSnapshot.credentialTemplates());
         byte[] wire = ApiCatalogBundlePayload.gzip(canonical);
 
-        // CE side: gunzip + parse exactly like ApiCatalogBundleApplier.
-        Map<String, Object> root =
-                objectMapper.readValue(ApiCatalogBundlePayload.gunzip(wire), JSON_MAP);
-        List<Map<String, Object>> apiMaps = listOfMaps(root.get("apis"));
-        List<Map<String, Object>> templateMaps = listOfMaps(root.get("credentialTemplates"));
-        assertThat(apiMaps).hasSize(2);
+        // CE side: read the payload exactly like ApiCatalogBundleApplier does, i.e. STREAMED:
+        // one validating scan, then the APIs fed to the real merge one at a time.
+        ApiCatalogPayloadStream payload = new ApiCatalogPayloadStream(objectMapper, wire);
+        ApiCatalogPayloadStream.Scan scan = payload.scan();
+        assertThat(scan.apiCount()).isEqualTo(2);
+        List<Map<String, Object>> templateMaps = scan.templates();
         assertThat(templateMaps).extracting(t -> t.get("credentialName"))
                 .containsExactlyInAnyOrder("slack", "smtp"); // unrelated-cred filtered out
 
         // Fresh CE database.
         cleanTables();
-        ApiCatalogMergeService.MergeResult merge = mergeService.merge(apiMaps, templateMaps);
+        ApiCatalogMergeService.MergeResult merge = mergeService.merge(payload.apis(), templateMaps);
         assertThat(merge.failedApis()).isZero();
         assertThat(merge.skippedCustom()).isZero();
         assertThat(merge.upsertedApis()).isEqualTo(2);
@@ -168,7 +168,7 @@ class ApiCatalogBundleSqlIntegrationTest {
 
         // Re-applying the same payload re-resolves the tool-credential link
         // against the now-present local template (and stays idempotent).
-        ApiCatalogMergeService.MergeResult again = mergeService.merge(apiMaps, templateMaps);
+        ApiCatalogMergeService.MergeResult again = mergeService.merge(payload.apis(), templateMaps);
         assertThat(again.failedApis()).isZero();
         assertThat(count("catalog.apis")).isEqualTo(2);
         assertThat(count("catalog.api_tools")).isEqualTo(2);

@@ -64,6 +64,62 @@ export interface AdminVerifiedAccountResponse {
   profileWithdrawn?: boolean;
 }
 
+/**
+ * Body of PUT /users/profile/context: what the app knows about the signed-in person's
+ * context (display locale, time zone, first-touch acquisition). Every field is optional.
+ * `localeExplicit` is true only when the person picked a language in the UI; the backend
+ * then lets it win over any locale the app merely displayed.
+ */
+export interface ProfileContextPayload {
+  locale?: string;
+  localeExplicit?: boolean;
+  timeZone?: string;
+  acquisition?: {
+    utmSource?: string;
+    utmMedium?: string;
+    utmCampaign?: string;
+    utmContent?: string;
+    utmTerm?: string;
+    referrer?: string;
+    landingPath?: string;
+    firstSeenAt?: string;
+  };
+}
+
+/** GET /users/profile/marketing-consent. `updatedAt` is null until the person first chooses. */
+export interface MarketingConsent {
+  consent: boolean;
+  updatedAt: string | null;
+}
+
+/** One authenticator app registered on the account (GET /me/mfa). */
+export interface TotpDevice {
+  id: string;
+  label: string | null;
+  createdAt: string | null;
+}
+
+/** The account's single-use recovery codes; counts are null when they could not be read. */
+export interface RecoveryCodesStatus {
+  remaining: number | null;
+  total: number | null;
+}
+
+/**
+ * GET /me/mfa. `available` is false where the account cannot hold a TOTP factor (CE today).
+ * `required`: the account may not go without one (platform admin). `setupPending`: the
+ * next sign-in will make the user enroll.
+ */
+export interface MfaStatus {
+  available: boolean;
+  totpEnabled: boolean;
+  devices: TotpDevice[];
+  required: boolean;
+  setupPending: boolean;
+  /** null when the account has no recovery codes. */
+  recoveryCodes: RecoveryCodesStatus | null;
+}
+
 export class UserApiService {
   constructor() {}
 
@@ -151,6 +207,36 @@ export class UserApiService {
    */
   async restoreAccount(): Promise<AccountDeletionStatus & { restored: boolean }> {
     return await apiClient.post<AccountDeletionStatus & { restored: boolean }>('/users/profile/restore');
+  }
+
+  /** Report the signed-in person's context (locale, time zone, acquisition). Answers 204. */
+  async reportProfileContext(payload: ProfileContextPayload): Promise<void> {
+    await apiClient.put('/users/profile/context', payload);
+  }
+
+  /**
+   * Record a language the person explicitly picked in the UI. Best-effort: switching the
+   * language must never wait on, or fail because of, this call.
+   */
+  async reportExplicitLocale(locale: string): Promise<void> {
+    try {
+      await apiClient.put('/users/profile/context', { locale, localeExplicit: true });
+    } catch {
+      // Ignored on purpose: the next session's context report does not overwrite an
+      // explicit choice, so the only cost of a lost call is the stored locale lagging.
+    }
+  }
+
+  async getMarketingConsent(): Promise<MarketingConsent> {
+    return apiClient.get<MarketingConsent>('/users/profile/marketing-consent');
+  }
+
+  async setMarketingConsent(consent: boolean): Promise<void> {
+    await apiClient.put('/users/profile/marketing-consent', { consent });
+  }
+
+  async getMfaStatus(): Promise<MfaStatus> {
+    return apiClient.get<MfaStatus>('/me/mfa');
   }
 
   /**

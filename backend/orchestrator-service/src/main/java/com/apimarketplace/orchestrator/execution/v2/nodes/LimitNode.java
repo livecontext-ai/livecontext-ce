@@ -60,9 +60,10 @@ public class LimitNode extends BaseNode {
 
         // Build resolved_params early so every exit path can include it
         Map<String, Object> earlyInputData = new LinkedHashMap<>();
-        earlyInputData.put("count", count);
+        // A field the plan wrote as {{...}} is reported as that template until it resolves.
+        earlyInputData.put("count", configuredOr("count", count));
         earlyInputData.put("from", from);
-        earlyInputData.put("offset", offset);
+        earlyInputData.put("offset", configuredOr("offset", offset));
         // `input` keeps the plan's name and the shape V167 documents for the `config`
         // output field, which shares this map. A FAILED row needs no companion key saying the
         // expression was never evaluated: the row is already FAILED and carries its error, so
@@ -78,6 +79,15 @@ public class LimitNode extends BaseNode {
         }
 
         try {
+            // The count / offset this execution runs with: a templated one is resolved here,
+            // never replaced by the default the typed config fell back to.
+            Core.LimitConfig cfg = withDeferredScalars("limit",
+                new Core.LimitConfig(count, from, offset, inputExpression), Core.LimitConfig.class, context);
+            int count = cfg.count();
+            int offset = cfg.offset();
+            earlyInputData.put("count", reported("count", count));
+            earlyInputData.put("offset", reported("offset", offset));
+
             // Resolve the input expression
             if (templateAdapter == null) {
                 Map<String, Object> failOutput = buildFailureOutput(earlyInputData);
@@ -132,9 +142,9 @@ public class LimitNode extends BaseNode {
             Map<String, Object> resolvedParams = new LinkedHashMap<>();
             resolvedParams.put("input", ReportedParams.reportValue(inputItems));
             resolvedParams.put("input_count", inputItems.size());
-            resolvedParams.put("count", count);
+            resolvedParams.put("count", reported("count", count));
             resolvedParams.put("from", from);
-            resolvedParams.put("offset", offset);
+            resolvedParams.put("offset", reported("offset", offset));
             result.put("resolved_params", resolvedParams);
 
             // config mirrors resolved_params so runtime shape == persisted shape == doc shape
@@ -150,6 +160,18 @@ public class LimitNode extends BaseNode {
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(),
                 failOutput, System.currentTimeMillis() - startTime);
         }
+    }
+
+    /** The configured template for {@code field} when the plan wrote one, else {@code value}. */
+    private Object configuredOr(String field, Object value) {
+        String template = deferredScalar("limit", field);
+        return template != null ? template : value;
+    }
+
+    /** A resolved value as reported: through the workspace-variable rule when it came from a template. */
+    private Object reported(String field, Object value) {
+        String template = deferredScalar("limit", field);
+        return template != null ? ReportedParams.valueFrom(template, value) : value;
     }
 
     /**

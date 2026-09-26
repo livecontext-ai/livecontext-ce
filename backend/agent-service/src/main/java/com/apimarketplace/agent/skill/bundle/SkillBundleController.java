@@ -5,6 +5,7 @@ import com.apimarketplace.agent.domain.SkillBundleEntity;
 import com.apimarketplace.agent.domain.SkillBundleSyncStatusEntity;
 import com.apimarketplace.agent.repository.SkillBundleSyncStatusRepository;
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.common.plan.CeLinkRefusal;
 import com.apimarketplace.common.web.AdminRoleGuard;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -26,8 +27,9 @@ import java.util.Optional;
  * {@link AdminRoleGuard} via {@code X-User-Roles}; routed by the existing
  * {@code agent-model-config} gateway rule). CE downloads under {@code /api/skill-bundles/*}
  * are GATED behind an active cloud link (gateway validates the cloud-link bearer ->
- * {@code X-User-ID}; the handler checks {@code authClient.userOwnsActiveCeLink} on
- * {@code X-LiveContext-Install-Id}). Only {@code /api/skill-bundles/signing-key} is public
+ * {@code X-User-ID}; the handler checks {@code authClient.ceLinkAccess} on
+ * {@code X-LiveContext-Install-Id}: linked AND on a paid plan, else 403 CE_LINK_NOT_ACTIVE
+ * or CLOUD_LINK_PLAN_REQUIRED). Only {@code /api/skill-bundles/signing-key} is public
  * (trust bootstrap); signature verification stays as defence-in-depth.
  */
 @Slf4j
@@ -62,11 +64,9 @@ public class SkillBundleController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("error", "AUTHENTICATION_REQUIRED"));
         }
-        if (!authClient.userOwnsActiveCeLink(cloudUserId, installId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("error", "CE_LINK_NOT_ACTIVE"));
-        }
-        return null;
+        // Linked AND paid (shared refusal bodies): a suspended link answers
+        // CLOUD_LINK_PLAN_REQUIRED, an unlinked one CE_LINK_NOT_ACTIVE.
+        return CeLinkRefusal.response(authClient.ceLinkAccess(cloudUserId, installId));
     }
 
     /** Admin: build a new bundle (is_active=false) from the current global skills. */

@@ -37,6 +37,7 @@ import { getProviderIconSlug, getProviderDisplayName } from '@/lib/ai-providers/
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { AgentFamilyAccessSection } from './AgentFamilyAccessSection';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 // ─── Fleet resource icon fallbacks (same map as FlowNode.tsx) ───
 const FLEET_RESOURCE_ICONS: Record<string, { icon: React.ComponentType<{ className?: string }>; bg: string }> = {
@@ -133,7 +134,7 @@ function ServiceIcon({ iconSlug, size = 16, className }: { iconSlug: string; siz
   const [error, setError] = useState(false);
   if (error) return null;
   return (
-    <Image
+    <ServiceLogo as={Image}
       src={`/icons/services/${iconSlug}.svg`}
       alt={iconSlug}
       width={size}

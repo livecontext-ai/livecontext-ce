@@ -11,6 +11,7 @@
  */
 
 import React, { useRef, useEffect, useCallback, useState, useMemo } from 'react';
+import { isEscapeOwnedByOverlay } from '@/lib/ui/escapeOwnership';
 import { Sparkles } from 'lucide-react';
 import { MessageHistory } from '@/components/chat/MessageHistory';
 import { MessageComposer } from '@/components/chat/MessageComposer';
@@ -122,6 +123,9 @@ export interface ChatCoreProps {
   // Preferred over deriving it from `conversation` so the composer matches the header even
   // before the full conversation object has loaded (the caller can read a sidebar cache).
   linkedAgentId?: string | null;
+  // Perch Orbi, the general chat's mascot, on the composer (see MessageComposer.showOrbi).
+  // Only the caller knows whether this conversation is Orbi, so it decides.
+  showOrbi?: boolean | 'compact';
 }
 
 export function ChatCore({
@@ -158,11 +162,13 @@ export function ChatCore({
   onDeleteVisualization: onDeleteVisualizationProp,
   leadingControl,
   linkedAgentId,
+  showOrbi = false,
 }: ChatCoreProps) {
   const t = useTranslations();
   const streaming = useStreaming();
   const { toasts, addToast, removeToast } = useToast();
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const chatRootRef = useRef<HTMLDivElement>(null);
 
   // Input state
   const [inputValue, setInputValue] = useState('');
@@ -498,6 +504,15 @@ export function ChatCore({
 
     const handleEscapeStop = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.repeat || event.defaultPrevented) return;
+      // An Escape that closes an overlay is that overlay's, not a request to stop the answer.
+      // Radix layers already mark it (defaultPrevented, above); a hand-rolled one does not, so the
+      // open overlay is looked up too (same rule as the side panel).
+      if (isEscapeOwnedByOverlay(chatRootRef.current)) return;
+      // While a side panel is full screen, Escape leaves full screen: the panel listens on window,
+      // after this document listener, so its preventDefault cannot be read here. Checked on the
+      // whole page, not only around this chat: a chat BEHIND the full-screen panel must not stop
+      // its answer either. The next Escape, once the panel is back, stops as usual.
+      if (document.querySelector('[data-side-panel-maximized]')) return;
       event.preventDefault();
       handleStopStream();
     };
@@ -734,6 +749,14 @@ export function ChatCore({
     }
     // Only a recorded answer takes the card away.
     askUserInFlightRef.current.delete(toolCallId);
+    // Counts and flags only: the questions and the answers are user content and stay here.
+    track('ask_user_answered', {
+      question_count: pending?.questions.length ?? answers.length,
+      answer_count: answers.filter(a => a.selected.length > 0 || Boolean(a.freeText?.trim())).length,
+      blocking: Boolean(pending?.blocking),
+      released: Boolean(gateKey && released),
+      free_text_used: answers.some(a => Boolean(a.freeText?.trim())),
+    });
     dismissKey(key);
     streaming.clearAskUserQuestion(conversationId, key);
     if ((gateKey && released) || continuationVersion !== questionContinuationVersionRef.current) {
@@ -761,6 +784,13 @@ export function ChatCore({
     const gateKey = pending?.blocking ? pending.gateKey : undefined;
     try {
       const released = await conversationApi.dismissAskUser(conversationId, toolCallId, gateKey);
+      track('ask_user_dismissed', {
+        question_count: pending?.questions.length ?? 0,
+        answer_count: 0,
+        blocking: Boolean(pending?.blocking),
+        released: Boolean(gateKey && released),
+        free_text_used: false,
+      });
       dismissKey(key);
       streaming.clearAskUserQuestion(conversationId, key);
       // An expired park has no running call to receive the dismissal. Resume through
@@ -1107,11 +1137,12 @@ export function ChatCore({
       onReorderQueue={handleReorderQueue}
       leadingControl={leadingControl}
       linkedAgentId={linkedAgentId ?? conversation?.agentId ?? null}
+      showOrbi={showOrbi}
     />
   );
 
   return (
-    <div className={`flex flex-col h-full min-h-0 overflow-hidden ${className}`}>
+    <div ref={chatRootRef} className={`flex flex-col h-full min-h-0 overflow-hidden ${className}`}>
       {/* Messages area */}
       <div
         ref={messagesContainerRef}

@@ -280,7 +280,7 @@ describe('priceMultiplierFor - the ceiling', () => {
     // This compared the constant to a literal 100 and called that "asserted rather than assumed",
     // which is a tautology: raising the Java ceiling would leave it green while the client kept
     // clamping at the old one. Read the Java file instead, the way quoteKeyCallSites.test.ts reads
-    // call sites and StudioLookContrast.test.ts reads globals.css.
+    // call sites.
     const java = readFileSync(join(
       process.cwd(), '..', 'backend', 'common-lib', 'src', 'main', 'java', 'com',
       'apimarketplace', 'common', 'web', 'BillingContextHeaders.java',

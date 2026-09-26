@@ -232,11 +232,13 @@ class ConversationEventPublisherTest {
         }
 
         @Test
-        @DisplayName("should finalize stream as ERROR")
-        void shouldFinalizeStreamOnError() {
+        @DisplayName("should finalize stream as ERROR carrying the real error, not a placeholder")
+        void shouldFinalizeStreamOnErrorWithItsReason() {
             publisher.publishError("conv-1", "stream-1", "Agent timed out");
 
-            verify(conversationClient).finalizeStream("stream-1", "ERROR");
+            // Regression: the finalize carried no reason, so conversation-service stored and
+            // logged a fixed "Agent execution error" while the cause lived only here.
+            verify(conversationClient).finalizeStream("stream-1", "ERROR", "Agent timed out");
         }
     }
 

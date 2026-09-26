@@ -22,7 +22,9 @@ export type SubjectType =
   | 'APPLICATION'
   | 'TRIGGER'
   | 'ORG_INVITATION'
-  | 'BADGE';
+  | 'BADGE'
+  | 'AGENT'
+  | 'BILLING';
 
 /**
  * Single notification item - aggregated per (subjectId, category).

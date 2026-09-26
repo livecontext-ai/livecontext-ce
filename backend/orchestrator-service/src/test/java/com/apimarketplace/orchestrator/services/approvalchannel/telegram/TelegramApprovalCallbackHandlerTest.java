@@ -68,8 +68,13 @@ class TelegramApprovalCallbackHandlerTest {
     @BeforeEach
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
+        // The decision moved into WorkflowApprovalPressService so every chat provider shares it.
+        // Built from the same mocks, these tests keep exercising the whole Telegram path, the
+        // decision included, exactly as before the extraction.
         handler = new TelegramApprovalCallbackHandler(
-                deliveryRepository, runSignalResolutionService, notifier, meterRegistry);
+                new com.apimarketplace.orchestrator.services.approvalchannel.WorkflowApprovalPressService(
+                        deliveryRepository, runSignalResolutionService, meterRegistry),
+                notifier, meterRegistry);
     }
 
     private Map<String, Object> callbackPayload(String data, Object fromId) {

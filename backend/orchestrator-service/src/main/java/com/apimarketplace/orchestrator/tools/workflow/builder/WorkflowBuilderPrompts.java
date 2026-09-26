@@ -413,31 +413,56 @@ public final class WorkflowBuilderPrompts {
                   immediately (use it to process each approved item without waiting for the rest of
                   the batch); the first cross-item node (merge, aggregate, loop, fork, nested split)
                   still waits for all items. Outside a split the setting has no effect.
-                Optional delegation (external channel): params.delegation={channel: 'telegram',
-                  chatId: '<chat id, {{...}} allowed>', credentialId: <optional numeric id to pin a
-                  specific Telegram bot credential; omit it and the send uses the user's own Telegram
-                  credential automatically>, messageTemplate: '<optional body, {{...}} allowed;
+                Optional delegation (external channel), simplest form: params.delegation={linkId: 'default'}
+                  sends to the workspace's default destination, and params.delegation={linkId: '<linkId from
+                  channel(action='list')>'} to that destination; either decides the service, the account and
+                  the chat, so channel/chatId/credentialId are not needed (and are ignored if given). If that
+                  destination is later disconnected, the approval is NOT sent elsewhere: it stays decidable in
+                  the app. Older form, to name a chat yourself: params.delegation={channel: 'telegram' |
+                  'slack' | 'discord' | 'whatsapp' | 'teams', chatId: '<optional destination, {{...}}
+                  allowed; omit it to use the destination the workspace connected on that service with
+                  channel(action='connect')>', credentialId: <optional numeric id to pin a specific
+                  account; omit it to use the connected one>, messageTemplate: '<optional body, {{...}} allowed;
                   defaults to the resolved contextTemplate>', image: '<optional image, {{...}} allowed;
                   a file output from an earlier node, e.g. an interface node screenshot
                   ({{interface:card.output.screenshot}}), or an HTTP image URL>', allowedUserIds:
-                  ['<telegram user id>', ...], approveLabel: '<optional custom approve-button text,
-                  {{...}} allowed; default "✅ Approve">', rejectLabel: '<optional custom reject-button
-                  text, {{...}} allowed; default "❌ Reject">'}. The channel message shows Approve/Reject
+                  ['<user id on that service>', ...], approveLabel: '<optional custom approve-button text,
+                  {{...}} allowed; default "✅ Approve" on Telegram, "Approve" elsewhere>', rejectLabel:
+                  '<optional custom reject-button text, {{...}} allowed; default "❌ Reject" on Telegram,
+                  "Reject" elsewhere>'}. The channel message shows Approve/Reject
                   buttons; a tap resolves this approval exactly like an in-app decision (you can still
                   resolve it with workflow(action='resolve_approval')). approveLabel/rejectLabel only
                   change the button text - the approve/reject outcome is unaffected; leave them out to
                   keep the defaults. When image is set the Telegram
                   message becomes a single photo: the image, the message text as its caption and the
-                  same buttons; omit image for a plain text message. Empty allowedUserIds = anyone in
-                  the chat can decide. Only channel 'telegram' exists. Output delegated_channel is
-                  set when delegation is configured.
+                  same buttons; omit image for a plain text message (image is Telegram only; the other
+                  services send the text). Empty allowedUserIds = anyone in the chat can decide. On
+                  'teams' the buttons are links, which do not say who opened them, so leave
+                  allowedUserIds empty there. When nothing is connected on the chosen service yet, set
+                  it up first with channel(action='help'). With no allowedUserIds, the destination's own
+                  restriction (set when it was connected) applies. On 'teams' messages go out as the person
+                  who connected, so they reach the other people in that chat, not that person. Output
+                  delegated_channel is set when delegation is configured.
                 Ports: approved, rejected, timeout. Connect: from='Manager Review:approved', to='Next Step'.
                 """;
             case "add_guardrail", "guardrail" -> """
                 workflow(action='add_node', type='guardrail', label='Check PII', params={input: '{{trigger:form.output.message}}', rules: {pii: 'Block emails and phones', toxicity: 'Block offensive content'}}, connect_after='Contact Form')
-                Guardrail = 1:1 AI content validation. Passes or fails the input based on rules.
-                Required: input (text to validate, use {{...}} refs), rules (object: {ruleId: 'description'}).
-                Optional: action ('flag'|'block'|'redact', default 'flag'), provider, model, temperature.
+                workflow(action='add_node', type='guardrail', label='Screen Reply', params={input: '{{agent:writer.output.response}}', rules: [{type: 'keyword_filter', action: 'block', config: {keywordsExpression: 'refund, chargeback'}}, {type: 'pii_detection', action: 'sanitize', config: {piiTypes: ['email', 'phone']}}]}, connect_after='Writer')
+                Guardrail = 1:1 content validation. Passes or fails the input based on rules.
+                Required: input (text to validate, use {{...}} refs), rules, as EITHER:
+                - an object {ruleId: 'description'}: every rule is judged by the model;
+                - an array of typed rules [{type, action, config}]. Checked exactly, without a model or tokens:
+                  keyword_filter (config.keywordsExpression, config.mode block|allow), regex_pattern (config.pattern,
+                  config.mode require (default, the content must match) | block), length_check (config.minLength /
+                  maxLength, characters), pii_detection (config.piiTypes among email, phone, ssn, credit_card; address is
+                  judged by the model), custom (config.expression, #input = the content, true = valid), competitor_mention
+                  (config.topicsExpression = names). Judged by the model: toxic_language, prompt_injection, topic_restriction
+                  (config.topicsExpression = topics). Config values accept {{...}} references.
+                Any violated rule routes to fail (passed=false), whatever its action. Per-rule action: block (default) and
+                flag only list the violation; sanitize also replaces the match by [REDACTED] in output.sanitized.
+                A missing or invalid config (no keywords, a regex that does not compile) fails the node naming the rule.
+                Optional: action ('flag'|'block'|'redact', default 'flag', applies to model-judged rules without their own action), prompt, provider, model, temperature.
+                Output: passed, violations (rule ids), details (per rule id), sanitized.
                 Ports: pass, fail. Connect: from='Check PII:pass', to='Next Step'.
                 """;
             case "add_classify", "classify" -> """

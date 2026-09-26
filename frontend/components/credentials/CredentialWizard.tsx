@@ -6,18 +6,18 @@ import { getClientLocale } from "@/lib/utils/locale";
 import { generationQuoteKey } from "@/lib/generation/quoteKey";
 import {
   Dialog,
+  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { StudioDialogContent } from "@/components/studio/StudioDialogContent";
-import { StudioSelectContent } from "@/components/studio/StudioSelectContent";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
+  SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -40,13 +40,15 @@ import {
   orchestratorApi,
 } from '@/lib/api/orchestrator';
 import { credentialService } from '@/lib/api/orchestrator/credential.service';
+import type { MyOAuthApp } from '@/lib/api/orchestrator/types';
+import { MY_OAUTH_APPS_QUERY_KEY } from '@/hooks/credentials/useMyOAuthApps';
+import { useOrgScopedQuery } from '@/lib/hooks/useOrgScopedQuery';
+import { useCurrentOrgStore } from '@/lib/stores/current-org-store';
+import { Checkbox } from '@/components/ui/checkbox';
 import { normalizeIconSlug } from "@/lib/credentials/iconSlug";
 import { invalidateCredentialCaches } from "@/lib/credentials/invalidateCredentialCaches";
 import { IS_CE } from "@/lib/edition";
-import {
-  extractIconSlugFromUrl,
-  monoDarkInvertClass,
-} from "@/lib/credentials/monoIconSlugs";
+import { ServiceLogo } from "@/components/ui/service-logo";
 import { useTranslations } from "next-intl";
 import { track } from "@/lib/analytics/analytics";
 
@@ -339,6 +341,28 @@ export function resolveByokOnlyScopeList(template: CredentialTemplate | null | u
 }
 
 /**
+ * Every scope an own OAuth client (BYOK, or the CE install's client) can ask for: the catalog
+ * platform scopes followed by the byokOnlyScopes, de-duplicated, catalog order kept. These are
+ * the boxes of the BYOK scope picker. Independent of the edition on purpose, unlike
+ * {@link resolvePlatformScopeList}: the picker lists the same set in Cloud and CE.
+ */
+export function resolveByokScopeChoices(template: CredentialTemplate | null | undefined): string[] {
+  const defaults = resolveOAuth2Defaults(template);
+  const platform = defaults.scopes ? defaults.scopes.split(/\s+/).filter(Boolean) : [];
+  return [...new Set([...platform, ...resolveByokOnlyScopeList(template)])];
+}
+
+/**
+ * The V513 `selectedScopes` a BYOK save sends. Ticking every box sends an empty list, which
+ * the backend stores as "no selection" so a scope the catalog adds later is requested too;
+ * anything narrower is sent as-is, in catalog order.
+ */
+export function toSelectedScopesPayload(choices: string[], selected: string[]): string[] {
+  const kept = choices.filter((scope) => selected.includes(scope));
+  return kept.length === choices.length ? [] : kept;
+}
+
+/**
  * The platform scopes a template's shared OAuth client actually requests
  * (catalog `oauth2Config.scopes`). A Standard reconnect can only grant scopes in
  * this set - so any required scope NOT in it (whether or not it's declared in
@@ -545,6 +569,10 @@ export function CredentialWizard({
   const [oauthAuthUrl, setOauthAuthUrl] = useState("");
   const [oauthTokenUrl, setOauthTokenUrl] = useState("");
   const [oauthScopes, setOauthScopes] = useState("");
+  // V513 BYOK scope picker: which catalog scopes the own OAuth client requests.
+  // Providers such as TikTok and Figma refuse the whole connection over one scope
+  // the app was not given, so the user unticks what their app does not have.
+  const [selectedByokScopes, setSelectedByokScopes] = useState<string[]>([]);
 
   // V166 BYOK: snapshot of `initialMode` taken at dialog-open time. Decoupled
   // from the prop so a parent state flip mid-flow (e.g. close-then-reopen
@@ -601,6 +629,48 @@ export function CredentialWizard({
   const hideOAuthUrls = activeMode === 'advanced'
     && !!oauthDefaults?.authUrl
     && !!oauthDefaults?.tokenUrl;
+
+  // V513 BYOK scope picker. Shown on the catalog path only (hideOAuthUrls): a custom
+  // API has no catalog scope list, its scopes stay in the free-text input.
+  const byokScopeChoices = hideOAuthUrls ? resolveByokScopeChoices(template) : [];
+  const byokScopeChoicesKey = byokScopeChoices.join(' ');
+  const currentOrgId = useCurrentOrgStore((st) => st.currentOrgId);
+  const { data: myOAuthApps } = useOrgScopedQuery<MyOAuthApp[]>({
+    queryKey: MY_OAUTH_APPS_QUERY_KEY,
+    queryFn: () => orchestratorApi.getMyOAuthApps(),
+    enabled: open && step === 'oauth-config' && byokScopeChoices.length > 0,
+    staleTime: 30_000,
+  });
+  // The selection this connection already saved, so re-opening shows the boxes as they
+  // were left. Matched on the icon slug the save sends, this workspace's row first.
+  const savedByokSelection = (() => {
+    if (!template || !Array.isArray(myOAuthApps)) return '';
+    const sameIntegration = myOAuthApps.filter((app) =>
+      (template.icon_slug && app.iconSlug === template.icon_slug)
+      || app.integrationName?.toLowerCase() === (template.credential_name || '').toLowerCase());
+    const row = sameIntegration.find((app) => app.organizationId === currentOrgId)
+      ?? sameIntegration.find((app) => app.organizationId === null);
+    return (row?.selectedScopes ?? []).join(' ');
+  })();
+  // Seeds the boxes until the user touches one. The saved selection can arrive (or be
+  // refetched on window focus) AFTER the user started unticking, and must not overwrite
+  // what they are about to save. Re-armed when the scope list changes or the wizard closes.
+  const byokScopesTouchedRef = useRef<{ key: string; touched: boolean }>({ key: '', touched: false });
+  useEffect(() => {
+    if (!open) {
+      byokScopesTouchedRef.current = { key: '', touched: false };
+      return;
+    }
+    if (!byokScopeChoicesKey) return;
+    if (byokScopesTouchedRef.current.key !== byokScopeChoicesKey) {
+      byokScopesTouchedRef.current = { key: byokScopeChoicesKey, touched: false };
+    }
+    if (byokScopesTouchedRef.current.touched) return;
+    const choices = byokScopeChoicesKey.split(' ');
+    const saved = savedByokSelection ? savedByokSelection.split(' ').filter((v) => choices.includes(v)) : [];
+    // Default: every box ticked, which requests exactly what a BYOK connect requested before V513.
+    setSelectedByokScopes(saved.length > 0 ? saved : choices);
+  }, [open, byokScopeChoicesKey, savedByokSelection]);
 
   // Get effective auth type (normalized)
   const authType: AuthType = (template?.auth_type || "oauth2").toLowerCase();
@@ -1289,6 +1359,10 @@ export function CredentialWizard({
       setError(t("errors.oauthUrlsRequired"));
       return;
     }
+    if (byokScopeChoices.length > 0 && selectedByokScopes.length === 0) {
+      setError(t("errors.byokScopesRequired"));
+      return;
+    }
 
     setIsSubmitting(true);
     setError(null);
@@ -1305,9 +1379,23 @@ export function CredentialWizard({
         tokenUrl: oauthTokenUrl.trim(),
         defaultScopes: oauthScopes.trim() || undefined,
         iconSlug: template.icon_slug || undefined,
+        // Catalog path only; a custom API sends nothing and keeps whatever was stored.
+        selectedScopes: byokScopeChoices.length > 0
+          ? toSelectedScopesPayload(byokScopeChoices, selectedByokScopes)
+          : undefined,
       });
 
-      // Platform credential saved.
+      // Platform credential saved. The scope choice is reported only where the picker was
+      // offered (a catalog integration); counts only, never the scope strings themselves.
+      if (byokScopeChoices.length > 0) {
+        const chosen = byokScopeChoices.filter((scope) => selectedByokScopes.includes(scope)).length;
+        track('oauth_scopes_chosen', {
+          integration: template.icon_slug ?? null,
+          available_count: byokScopeChoices.length,
+          selected_count: chosen,
+          all_selected: chosen === byokScopeChoices.length,
+        });
+      }
       setHasPlatformCredentials(true);
       // V166 BYOK: when the user came in via "Switch to Advanced" on an integration
       // whose OAuth URLs we already know (hideOAuthUrls is true - provider-canonical
@@ -1461,12 +1549,13 @@ export function CredentialWizard({
               `}
             >
               {!imageErrors[iconSlug] ? (
-                <Image
+                <ServiceLogo
+                  as={Image}
                   src={`/icons/services/${iconSlug}.svg`}
                   alt=""
                   width={14}
                   height={14}
-                  className={`rounded-sm ${monoDarkInvertClass(iconSlug)}`}
+                  className="rounded-sm"
                   onError={() => handleImageError(iconSlug)}
                 />
               ) : (
@@ -1512,16 +1601,13 @@ export function CredentialWizard({
             <SelectTrigger className="rounded-xl border border-theme bg-transparent mt-2">
               <SelectValue placeholder={prop.placeholder || prop.displayName || prop.name} />
             </SelectTrigger>
-            {/* PORTALLED like the dialog around it, and out of a DIFFERENT portal, so the
-                dialog being themed does not theme this. On the darkroom ground it came back
-                bright, inside a correctly dark dialog, inside a correctly dark menu. */}
-            <StudioSelectContent>
+            <SelectContent>
               {prop.options!.map((opt) => (
                 <SelectItem key={opt.value} value={opt.value}>
                   {opt.name}
                 </SelectItem>
               ))}
-            </StudioSelectContent>
+            </SelectContent>
           </Select>
         ) : (
           <div className="relative">
@@ -1725,10 +1811,7 @@ export function CredentialWizard({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* PORTALLED, so on a studio surface it lands outside the element carrying the studio's
-          colour tokens and came back in the application's theme: a bright panel over a dark
-          page, opened from a menu that was correctly dark. Inert everywhere else. */}
-      <StudioDialogContent className="max-w-md border border-theme bg-theme-primary text-theme-primary rounded-3xl">
+      <DialogContent className="max-w-md border border-theme bg-theme-primary text-theme-primary rounded-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
             {/* Use one canonical key for the URL, the imageErrors lookup, and
@@ -1743,22 +1826,23 @@ export function CredentialWizard({
                 : "";
               if (slug && !imageErrors[slug]) {
                 return (
-                  <Image
+                  <ServiceLogo
+                    as={Image}
                     src={`/icons/services/${slug}.svg`}
                     alt=""
                     width={32}
                     height={32}
-                    className={`rounded ${monoDarkInvertClass(slug)}`}
+                    className="rounded"
                     onError={() => handleImageError(slug)}
                   />
                 );
               }
               if (template?.icon_url) {
                 return (
-                  <img
+                  <ServiceLogo
                     src={template.icon_url}
                     alt=""
-                    className={`h-8 w-8 rounded ${monoDarkInvertClass(extractIconSlugFromUrl(template.icon_url))}`}
+                    className="h-8 w-8 rounded"
                     onError={(e) => {
                       (e.target as HTMLImageElement).style.display = "none";
                     }}
@@ -2049,6 +2133,38 @@ export function CredentialWizard({
                 </button>
               </div>
             </div>
+
+            {byokScopeChoices.length > 0 && (
+              <fieldset className="space-y-2" data-testid="byok-scope-picker">
+                <legend className="text-sm font-semibold text-slate-500 dark:text-slate-400">
+                  {t("oauthConfig.scopePickerTitle")}
+                </legend>
+                <p className="text-sm text-theme-secondary">{t("oauthConfig.scopePickerHint")}</p>
+                <div className="space-y-1.5">
+                  {byokScopeChoices.map((scope) => {
+                    const id = `byok-scope-${scope}`;
+                    return (
+                      <div key={scope} className="flex items-center gap-2">
+                        <Checkbox
+                          id={id}
+                          checked={selectedByokScopes.includes(scope)}
+                          onCheckedChange={(checked) => {
+                            byokScopesTouchedRef.current.touched = true;
+                            setSelectedByokScopes((prev) =>
+                              checked === true
+                                ? [...prev.filter((v) => v !== scope), scope]
+                                : prev.filter((v) => v !== scope));
+                          }}
+                        />
+                        <label htmlFor={id} className="text-sm font-mono break-all text-theme-primary cursor-pointer">
+                          {scope}
+                        </label>
+                      </div>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            )}
 
             {/* V166 BYOK: optional credential name when we'll auto-fire OAuth
                 after save (hideOAuthUrls = provider-canonical URLs resolved, so
@@ -2403,7 +2519,7 @@ export function CredentialWizard({
             </DialogFooter>
           </div>
         )}
-      </StudioDialogContent>
+      </DialogContent>
     </Dialog>
   );
 }

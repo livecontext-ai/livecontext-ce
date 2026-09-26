@@ -1,11 +1,11 @@
-import { Workflow, Bot, GitBranch, Table2 } from 'lucide-react';
+import { Workflow, Globe, CalendarClock, PlayCircle } from 'lucide-react';
 import { docsMetadata } from '../_meta';
-import { DocsHero, DocsProse, DocsTable, Callout, CodeBlock, CardGrid, Card } from '../_components';
+import { DocsHero, DocsProse, DocsTable, Callout, CodeBlock, CardGrid, Card, Steps, Step } from '../_components';
 
 export const metadata = docsMetadata({
   title: 'Triggers',
   description:
-    'The eight ways a LiveContext run starts: webhook, schedule, manual, chat, form, table (row change), workflow chain, and error - the parameters each accepts, the outputs it exposes, and how pinning, epochs, and reusable triggers work.',
+    'The eight ways a LiveContext run starts, what each trigger hands your workflow, and how pinning a production version decides which triggers are allowed to fire.',
   path: '/docs/triggers',
 });
 
@@ -15,67 +15,31 @@ export default function TriggersPage() {
       <DocsHero
         eyebrow="Build"
         title="Triggers"
-        lead="A trigger is what starts a run. A workflow can carry several, each firing its own graph (its own per-trigger epoch state). This page covers all eight trigger types, exactly what data each hands your workflow, and the pinning model that governs when they're allowed to fire."
+        lead="A trigger is what starts a run. This page covers the eight trigger types, the data each one hands your workflow, which version of your workflow a trigger fires, and the limits and safeguards around them. Read it when you wire an entry point or when a trigger does not fire."
       />
 
       <DocsProse>
         <h2>The eight trigger types</h2>
         <p>
-          Every trigger uses the variable prefix <code>trigger</code>, so any output is available
-          downstream as <code>{'{{trigger:<label>.output.<field>}}'}</code>. A trigger node has no
-          inputs, it&apos;s the entry point of the graph.
+          A workflow can carry several triggers. Each one starts its own graph and keeps its own
+          history of fires. Every trigger output is available downstream as{' '}
+          <code>{'{{trigger:<label>.output.<field>}}'}</code>, where <code>&lt;label&gt;</code> is
+          the normalized trigger label. A trigger node has no inputs: it is the entry point of the
+          graph.
         </p>
         <DocsTable
-          head={['Trigger', 'Fires when...', 'Key outputs', 'Reusable']}
+          caption="Trigger types, what fires them, and their main outputs"
+          rowHeaders
+          head={['Trigger', 'Fires when', 'Key outputs']}
           rows={[
-            [
-              'Webhook',
-              'an HTTP request hits the workflow URL.',
-              <code key="o">payload · headers · query · method</code>,
-              'Yes',
-            ],
-            [
-              'Schedule',
-              'a recurring time is reached (cron + timezone).',
-              <code key="o">execution_count · next_execution</code>,
-              'Yes',
-            ],
-            [
-              'Manual',
-              'someone clicks Run.',
-              <code key="o">triggered_at · triggered_by</code>,
-              'Yes',
-            ],
-            [
-              'Chat',
-              'a message arrives on the chat endpoint (optionally matching a filter).',
-              <code key="o">message · extracted_message · matched</code>,
-              'Yes',
-            ],
-            [
-              'Form',
-              'someone submits the form.',
-              <code key="o">form_data · &lt;field&gt; · submission_id</code>,
-              'No',
-            ],
-            [
-              'Table',
-              'a row is created, updated, or deleted (internally the Datasource trigger).',
-              <code key="o">row · previous_row · event_type</code>,
-              'Yes',
-            ],
-            [
-              'Workflow',
-              'another workflow COMPLETES successfully.',
-              <code key="o">parentStatus · result</code>,
-              'No',
-            ],
-            [
-              'Error',
-              'another workflow FAILS or ends PARTIAL_SUCCESS.',
-              <code key="o">status · errorMessage · failedSteps</code>,
-              'No',
-            ],
+            ['Webhook', 'an HTTP request reaches the webhook URL.', <code key="o">payload, headers, query, method</code>],
+            ['Scheduler', 'a cron time is reached, in the timezone you pick.', <code key="o">execution_count, next_execution</code>],
+            ['Manual', 'someone runs the workflow by hand.', <code key="o">triggered_at, triggered_by</code>],
+            ['Chat', 'a message arrives, optionally only when it matches a filter.', <code key="o">message, extracted_message, matched</code>],
+            ['Form', 'someone submits the form.', <code key="o">form_data, submission_id, one field per input</code>],
+            ['Tables', 'a row is created, updated, or deleted in a table.', <code key="o">row, previous_row, event_type</code>],
+            ['Workflows', 'another workflow finishes a cycle without a failed step.', <code key="o">parentStatus, result</code>],
+            ['Error', 'a cycle of another workflow has a failed step.', <code key="o">status, errorMessage, failedSteps</code>],
           ]}
         />
         <p>Reference any of them by the trigger&apos;s label:</p>
@@ -84,353 +48,482 @@ export default function TriggersPage() {
 {{trigger:new_orders.output.row.status}}       → a column from the changed table row
 {{trigger:on_failure.output.errorMessage}}     → why the upstream workflow failed`}</CodeBlock>
         <p>
-          When adding a trigger through the builder, the accepted <code>type</code> values are{' '}
-          <code>manual, chat, webhook, schedule, table, datasource, workflow, form, error</code> (
-          <code>table</code> is just an alias, it&apos;s normalized to <code>datasource</code>{' '}
-          internally). Trigger labels must be unique within a workflow, and a trigger label can&apos;t
-          collide with a non-trigger node&apos;s label after normalization.
+          When an agent adds a trigger through the builder, the accepted <code>type</code> values
+          are <code>manual</code>, <code>chat</code>, <code>webhook</code>, <code>schedule</code>,{' '}
+          <code>table</code>, <code>datasource</code>, <code>workflow</code>, <code>form</code>, and{' '}
+          <code>error</code>. <code>table</code> is an alias of <code>datasource</code>. Trigger
+          labels must be unique within a workflow, and a trigger label cannot collide with another
+          node&apos;s label after normalization.
+        </p>
+        <Callout variant="info">
+          There is no email, IMAP, or polling trigger. To react to mail or to poll an API, run a
+          <strong>Scheduler</strong> trigger and read the source with a node. See the{' '}
+          <a href="/nodes">Node reference</a>.
+        </Callout>
+
+        <h2>Epochs: one run, many fires</h2>
+        <p>
+          Every trigger type is <strong>reusable</strong>. A fire does not start a new run: it opens
+          a new <strong>epoch</strong> on the workflow&apos;s live run, which then rests in{' '}
+          <code>WAITING_TRIGGER</code> until the next fire. Each epoch keeps its own results, so you
+          can browse every fire of a schedule or every call of a webhook on the same run. Epochs
+          are numbered per trigger. See <a href="/runs">Runs &amp; execution</a> for how to read
+          them.
         </p>
 
-        <h2>External vs internal dispatch</h2>
+        <h2>Which version a trigger fires</h2>
         <p>
-          Triggers split into two dispatch families. <strong>External</strong> triggers are fired
-          server-side by workflow lookup and are pin-gated: <code>webhook, schedule, workflow, error,
-          datasource</code>. <strong>Internal</strong> triggers are fired by the frontend with an
-          explicit run id and always work in the editor: <code>manual, chat, form</code>.
+          Every save records a new plan version. <strong>Pinning</strong> a version, labelled{' '}
+          <strong>Set as production</strong> in the version history, tells LiveContext which
+          version the outside world talks to. There is no automatic pin.
         </p>
+        <DocsTable
+          caption="Which version each kind of fire runs, and what happens without a pin"
+          rowHeaders
+          head={['Fire', 'Version it runs', 'Without a pinned version']}
+          rows={[
+            [
+              'Run from the editor (Manual, or testing a chat or form in the builder)',
+              'The version open in the editor',
+              'Works. The fire reuses the live run of that version when there is one, and opens a new epoch on it.',
+            ],
+            [
+              'Webhook, Scheduler, Tables, Workflows',
+              'The pinned version',
+              <>Refused. A webhook answers <code key="c">409</code> (<code key="s">not_active</code>), a schedule is not armed, a table event is skipped.</>,
+            ],
+            [
+              'The public chat or form URL',
+              'The pinned version, read when each message or submission arrives',
+              'Refused. The message or submission does not start anything.',
+            ],
+            [
+              'Error',
+              'The handler workflow’s newest live run (of the pinned version, when one is pinned)',
+              'Works. The pin is optional for an error handler, it only needs a live run.',
+            ],
+          ]}
+        />
+        <h3>Pin a version</h3>
+        <Steps>
+          <Step n={1} title="Open the version history">
+            Open the workflow in the builder and open its version history.
+          </Step>
+          <Step n={2} title="Choose Set as production">
+            Pick the version and choose <strong>Set as production</strong>. If you have unsaved
+            changes, <strong>Save &amp; set as production</strong> saves them as a new version first.
+          </Step>
+          <Step n={3} title="Check the triggers">
+            The Webhook, Scheduler, Tables, Chat, and Form triggers are re-synced to the pinned plan
+            straight away; a Workflows trigger reads the pinned version each time it fires. Open <a href="/public-access">Public access</a> or the{' '}
+            <a href="/agenda">Agenda</a> to see them armed.
+          </Step>
+        </Steps>
+        <p>
+          You can pin a version that has <strong>never run</strong>. If no run exists at that
+          version, pinning creates the production run itself. Nothing executes and no credits are
+          used; the run simply waits for its first fire. A plan with no trigger is pinned without a
+          run.
+        </p>
+        <p>
+          <strong>Remove from production</strong> clears the pin and suspends the workflow&apos;s
+          production triggers rather than deleting them. Pinning again arms them again. Moving
+          production to another version switches every future execution to it; a chat conversation
+          in progress runs the new version from its very next message.
+        </p>
+        <h3>When the production run ends</h3>
+        <p>
+          If the production run ends as failed, cancelled, or timed out, LiveContext points
+          production at the newest other live run of the pinned version (or, failing that, a
+          completed one). It never creates a new run for you. When no such run exists, production
+          triggers skip until you pin again (which provisions a run) or reactivate the run from the
+          run panel.
+        </p>
+        <Callout variant="warn">
+          <strong>Cancelling</strong> a run also suspends the workflow&apos;s schedules. They come
+          back when you reactivate the run. <strong>Stop</strong>, by contrast, only ends the
+          current epoch and keeps the triggers armed. See{' '}
+          <a href="/runs">Runs &amp; execution</a>.
+        </Callout>
 
         <h2>Webhook</h2>
         <p>
-          A webhook trigger listens on <code>/webhook/{'{token}'}</code>. Accepted methods are{' '}
-          <code>GET, POST, PUT, PATCH, DELETE</code> (default <code>POST</code>); a method mismatch
-          returns <code>405</code>.
+          A webhook trigger listens on a URL of the form <code>{'{base}/webhook/{token}'}</code>.
+          Accepted methods are <code>GET</code>, <code>POST</code>, <code>PUT</code>,{' '}
+          <code>PATCH</code>, and <code>DELETE</code>; a webhook accepts exactly one, and the default
+          is <code>POST</code>.
         </p>
         <DocsTable
+          caption="Webhook authentication types"
+          rowHeaders
           head={['Auth type', 'How it works']}
           rows={[
-            ['none', 'No verification, anyone with the URL can call it.'],
-            ['basic', 'HTTP Basic authentication (username + password).'],
-            [
-              'header',
-              'A custom header name and value you choose, the "API key" style of auth.',
-            ],
-            [
-              'jwt',
-              'Bearer JWT verified with an HMAC secret (HS256 by default, or HS384 / HS512).',
-            ],
+            ['none', 'No verification: anyone with the URL can call it.'],
+            ['basic', 'HTTP Basic authentication with a username and password.'],
+            ['header', 'A header name and value you choose (API-key style).'],
+            ['jwt', 'A bearer JWT verified with an HMAC secret: HS256 by default, or HS384 or HS512.'],
           ]}
         />
-        <p>An unrecognized auth type is treated as no-auth. Outputs:</p>
+        <p>
+          Authentication fails closed: a request that does not pass the configured check, or a
+          webhook configured with an auth type the platform does not recognize, gets{' '}
+          <code>401</code>.
+        </p>
         <DocsTable
+          caption="Webhook trigger outputs"
+          rowHeaders
           head={['Field', 'Notes']}
           rows={[
-            ['payload', 'Parsed JSON body (or raw). For GET requests the query params become the payload.'],
+            ['payload', 'The JSON body as an object. Query parameters are merged in for any key the body does not already have. For a GET request, the query parameters are the payload.'],
             ['headers', 'All request headers.'],
-            ['query', 'Query string params (alias queryParams).'],
+            ['query', 'The query string parameters (alias queryParams).'],
             ['method', 'The HTTP method used.'],
             ['triggered_at', 'ISO timestamp (alias triggeredAt).'],
-            [
-              'triggered_by',
-              'Display name of the workflow owner, empty when the request is unauthenticated.',
-            ],
+            ['triggered_by', 'Display name of the workflow owner, empty when the request is unauthenticated.'],
           ]}
         />
         <p>
-          For non-GET methods the body is used as the payload, with query params as a fallback. Two
-          internal metadata fields, <code>_webhookMethod</code> and <code>_webhookTimestamp</code>, are
-          also added to the payload.
+          Two metadata fields, <code>_webhookMethod</code> and <code>_webhookTimestamp</code>, are
+          added to the payload. The <code>sync</code> query parameter is removed from it.
         </p>
-        <Callout variant="info">
-          Add <code>?sync=true</code> to the URL to defer the HTTP response until a &ldquo;Respond to
-          Webhook&rdquo; node resolves it, up to 60 seconds, after which the call falls back to a plain{' '}
-          <code>202 Accepted</code>. A plain <code>GET</code> carrying{' '}
-          <code>hub.mode=subscribe&amp;hub.challenge=...</code> is also recognized as a platform
-          verification handshake (Meta WhatsApp / Facebook / Instagram) and echoes the challenge back
-          as plain text.
+        <Callout variant="info" title="Waiting for a reply">
+          Add <code>?sync=true</code> to the URL to hold the HTTP response until a{' '}
+          <strong>Respond to Webhook</strong> node answers it, for up to 60 seconds. After that the
+          caller gets a plain <code>202 Accepted</code>. A <code>GET</code> carrying{' '}
+          <code>hub.mode=subscribe&amp;hub.challenge=...</code> is treated as a Meta verification
+          handshake (WhatsApp, Facebook, Instagram) and echoes the challenge back as plain text.
         </Callout>
+        <DocsTable
+          caption="HTTP status codes a webhook caller can receive"
+          rowHeaders
+          head={['Status', 'Meaning']}
+          rows={[
+            ['202', 'Accepted: the fire was queued.'],
+            ['200', 'Completed: a synchronous call finished and returns the response.'],
+            ['401', 'Authentication failed.'],
+            ['402', 'The workspace is out of credits.'],
+            ['404', 'No webhook exists for this token (for example after the token was regenerated).'],
+            ['405', 'The request used a different HTTP method than the webhook accepts.'],
+            ['409', 'Not active: the workflow has no pinned version, its production run has ended (for example it was cancelled), or the webhook is inactive.'],
+            ['429', 'Rate limited. Retry after the delay in the Retry-After header.'],
+          ]}
+        />
         <p>
-          When a webhook trigger is built by an agent, a standalone webhook row is created immediately
-          so the URL works before the workflow is even saved. Its token is stored on that row and
-          reused on every re-pin, so the URL doesn&apos;t rotate under you as you iterate.
-        </p>
-        <p>
-          The full HTTP surface (routes, headers, and the &ldquo;Respond to Webhook&rdquo; node) is
-          covered in the <a href="/rest-api">REST API &amp; webhooks</a> reference.
+          When an agent builds a webhook trigger, the webhook endpoint is created at once, so the
+          URL works before the workflow is even saved. Its token is kept across re-pins, so the URL
+          does not change as you iterate. It only changes when you regenerate the token from{' '}
+          <a href="/public-access">Public access</a>, where you can also read the call history. The
+          full HTTP surface, including the Respond to Webhook node, is in{' '}
+          <a href="/rest-api">REST API &amp; webhooks</a>.
         </p>
 
-        <h2>Schedule</h2>
+        <h2>Scheduler</h2>
         <DocsTable
+          caption="Scheduler trigger parameters"
+          rowHeaders
           head={['Parameter', 'Default', 'Notes']}
           rows={[
-            ['schedule', '0 * * * * (hourly)', 'Standard 5-field cron: minute hour day-of-month month day-of-week.'],
-            ['timezone', 'UTC', 'Any IANA zone, e.g. America/New_York.'],
+            ['schedule', '0 * * * * (hourly)', 'Standard 5-field cron: minute, hour, day of month, month, day of week.'],
+            ['timezone', 'UTC', 'Any IANA zone, for example America/New_York.'],
             ['enabled', 'true', 'Set false to keep the trigger defined but idle.'],
-            ['maxExecutions', 'unlimited', 'Optional cap on the number of fires.'],
+            ['maxExecutions', 'unlimited', 'Optional cap on the number of fires (alias max_executions).'],
           ]}
         />
         <Callout variant="warn">
-          Only standard 5-field cron is accepted, minimum frequency is every minute (
-          <code>* * * * *</code>). Interval shorthand like <code>30s</code>, <code>5m</code>,{' '}
-          <code>1h</code>, <code>1d</code>, or <code>1w</code> is explicitly rejected, use cron
-          instead. A <code>*/N</code> step whose N exceeds the field&apos;s range (minute 59, hour 23,
-          day-of-month 31, month 12, day-of-week 7) is also rejected at build time, since it would
-          otherwise silently collapse and the schedule would never fire, use{' '}
-          <code>0 */2 * * *</code> for &ldquo;every 2 hours&rdquo;, not <code>*/120</code> in the
-          minute field.
+          Only 5-field cron is accepted, and the shortest interval is every minute (
+          <code>* * * * *</code>). Interval shorthand such as <code>30s</code>, <code>5m</code>,{' '}
+          <code>1h</code>, <code>1d</code>, or <code>1w</code> is rejected. A <code>*/N</code> step
+          larger than its field allows (minute 59, hour 23, day of month 31, month 12, day of week
+          7) is rejected too, because it would never fire. For &ldquo;every 2 hours&rdquo;, write{' '}
+          <code>0 */2 * * *</code>, not <code>*/120</code> in the minute field.
         </Callout>
         <p>
-          Outputs: <code>triggered_at</code>, <code>execution_count</code> (1-based, alias{' '}
-          <code>executionCount</code>), <code>next_execution</code> (alias{' '}
-          <code>nextExecution</code>/<code>nextScheduled</code>), and <code>triggered_by</code> (the
-          workflow owner&apos;s display name, since a schedule fires autonomously but still carries the
-          owner&apos;s identity).
+          Outputs: <code>triggered_at</code>, <code>execution_count</code> (starts at 1, alias{' '}
+          <code>executionCount</code>), <code>next_execution</code> (aliases{' '}
+          <code>nextExecution</code> and <code>nextScheduled</code>), and <code>triggered_by</code>{' '}
+          (the workflow owner&apos;s display name). A schedule is armed only while the workflow has
+          a pinned version. To see upcoming fires, move one, or run one early, use the{' '}
+          <a href="/agenda">Agenda</a>.
         </p>
 
         <h2>Manual</h2>
         <p>
-          No parameters. Every click of Run creates a brand-new run, clicks never accumulate onto an
-          existing one. Outputs: <code>triggered_at</code> and <code>triggered_by</code> (alias{' '}
-          <code>user</code>), which is the <strong>display name</strong> of whoever ran it, never the
-          raw tenant id (empty string if unknown). Custom <code>data_inputs</code> passed at execution
-          time are flattened to root-level dynamic fields.
+          No parameters. Running the workflow from the editor fires it. The fire reuses the live run
+          of the same version when one exists and opens a new epoch on it; a new run is created only
+          for a new version or when no live run exists. Outputs: <code>triggered_at</code> and{' '}
+          <code>triggered_by</code> (alias <code>user</code>), the <strong>display name</strong> of
+          whoever ran it (an empty string if unknown). Extra <code>data_inputs</code> passed when an
+          agent executes the workflow are added as top-level fields.
         </p>
 
         <h2>Chat</h2>
         <p>
-          Chat triggers fire on incoming conversation messages. No parameters are required to fire on
-          every message; outputs are:
+          A chat trigger fires on incoming messages. With no filter it fires on every message.
         </p>
         <DocsTable
+          caption="Chat trigger outputs"
+          rowHeaders
           head={['Field', 'Notes']}
           rows={[
             ['message', 'The raw message text.'],
-            ['extracted_message', 'Message with the matched prefix/suffix trimmed (alias extractedMessage).'],
+            ['extracted_message', 'The message with the matched prefix or suffix trimmed (alias extractedMessage).'],
             ['conversation_id', 'Alias conversationId.'],
-            ['attachments', 'Array of canonical file references.'],
-            ['matched', 'Boolean, whether the optional chatMatch filter matched.'],
-            ['match_type / match_value', 'Which rule matched and against what value (aliases matchType/matchValue).'],
-            ['triggered_at / triggered_by', 'ISO timestamp and the display name of the sender (never the raw tenant id).'],
-            ['trigger_id / item_id / item_index / data / count', 'Standard trigger bookkeeping fields.'],
+            ['attachments', 'An array of file references.'],
+            ['matched', 'Boolean: whether the optional chatMatch filter matched.'],
+            ['match_type, match_value', 'Which rule matched and against what value (aliases matchType, matchValue).'],
+            ['triggered_at, triggered_by', 'ISO timestamp and the display name of the sender.'],
           ]}
         />
-        <h3>ChatMatchConfig: gating which messages fire the run</h3>
-        <p>
-          An optional <code>chatMatch</code> block filters which messages actually fire the trigger.
-        </p>
+        <h3>Filter which messages fire the run</h3>
+        <p>An optional <code>chatMatch</code> block decides which messages fire the trigger.</p>
         <DocsTable
-          head={['Match type', 'Fires when...', 'Needs a value?']}
+          caption="chatMatch match types"
+          rowHeaders
+          head={['Match type', 'Fires when', 'Needs a value?']}
           rows={[
             ['ANY', 'every message (the default).', 'No'],
-            ['STARTS_WITH', 'the message starts with value.', 'Yes'],
-            ['ENDS_WITH', 'the message ends with value.', 'Yes'],
-            ['CONTAINS', 'the message contains value anywhere.', 'Yes'],
-            ['EQUALS', 'the message equals value exactly.', 'Yes'],
-            ['REGEX', 'value, compiled as a Java Pattern, finds a match anywhere in the message.', 'Yes'],
+            ['STARTS_WITH', 'the message starts with the value.', 'Yes'],
+            ['ENDS_WITH', 'the message ends with the value.', 'Yes'],
+            ['CONTAINS', 'the message contains the value anywhere.', 'Yes'],
+            ['EQUALS', 'the message equals the value exactly.', 'Yes'],
+            ['REGEX', 'the value, as a regular expression, matches anywhere in the message.', 'Yes'],
           ]}
         />
         <p>
-          Options: <code>caseSensitive</code> (default <code>false</code>),{' '}
-          <code>trimPrefix</code> (default <code>true</code>, applies to STARTS_WITH),{' '}
-          <code>trimSuffix</code> (default <code>true</code>, applies to ENDS_WITH). When trimming is
-          on, <code>extracted_message</code> drops the matched prefix/suffix so downstream nodes see
-          the message without the command token; other match types leave the message unchanged.{' '}
-          <code>REGEX</code> matches a substring (Java&apos;s <code>find()</code>), not the whole
-          string.
+          Options: <code>caseSensitive</code> (default <code>false</code>), <code>trimPrefix</code>{' '}
+          (default <code>true</code>, for STARTS_WITH) and <code>trimSuffix</code> (default{' '}
+          <code>true</code>, for ENDS_WITH). With trimming on, <code>extracted_message</code> drops
+          the matched command token. <code>REGEX</code> matches a substring, not the whole string.
         </p>
         <Callout variant="warn">
-          The camelCase aliases accepted for <code>chatMatch.type</code> are only{' '}
-          <code>startsWith</code> and <code>endsWith</code> (matching is case-insensitive on the type
-          string itself). A typo like <code>startWith</code> (missing the &ldquo;s&rdquo;) is{' '}
-          <strong>not</strong> recognized and silently falls through to <code>ANY</code>, firing on
-          every message instead of filtering.
+          The only camelCase aliases for <code>chatMatch.type</code> are <code>startsWith</code> and{' '}
+          <code>endsWith</code>. A typo such as <code>startWith</code> is not recognized and falls
+          back to <code>ANY</code>, so the trigger fires on every message instead of filtering.
         </Callout>
         <p>
-          Chat triggers built by an agent auto-create a standalone chat endpoint, so the URL is ready
-          immediately. Chat always fires the workflow&apos;s <strong>current pinned version</strong>{' '}
-          at the moment a message arrives, if you re-pin mid-conversation, the very next message in
-          that same conversation already runs the new version.
+          A chat trigger built by an agent creates its public chat endpoint at once. You manage the
+          endpoint and its share links in <a href="/public-access">Public access</a>.
         </p>
 
         <h2>Form</h2>
+        <p>The form builder offers 17 field types:</p>
         <DocsTable
-          head={['Field type', 'Notes']}
+          caption="Form field types"
+          rowHeaders
+          head={['Group', 'Types']}
           rows={[
-            [
-              'text, email, textarea, select, checkbox, number, date, datetime, time, file, phone, url, multiselect, checkboxGroup',
-              'Core set.',
-            ],
-            [
-              'password, radio, tel, hidden',
-              'Also accepted by the builder.',
-            ],
-            [
-              'Aliases',
-              'string/str → text · int/integer → number · bool/boolean → checkbox · phone → tel.',
-            ],
+            ['Text', <code key="t">text, email, password, textarea, url, tel, hidden</code>],
+            ['Numbers and dates', <code key="t">number, date, datetime, time</code>],
+            ['Choices', <code key="t">select, multiselect, checkbox, checkboxGroup, radio</code>],
+            ['Files', <code key="t">file</code>],
+            ['Accepted aliases', <>string and str become <code key="a">text</code>, int and integer become <code key="b">number</code>, bool and boolean become <code key="c">checkbox</code>, phone becomes <code key="d">tel</code></>],
           ]}
         />
         <p>
           <code>select</code>, <code>multiselect</code>, <code>radio</code>, and{' '}
-          <code>checkboxGroup</code> require an <code>options</code> list (either plain strings or{' '}
-          <code>{'{label, value}'}</code> pairs, both accepted).
+          <code>checkboxGroup</code> need an <code>options</code> list, either plain strings or{' '}
+          <code>{'{label, value}'}</code> pairs.
         </p>
         <p>
           Outputs: <code>submission_id</code>, <code>submitted_at</code> (alias{' '}
-          <code>submittedAt</code>), <code>form_data</code> (all fields as one object, alias{' '}
-          <code>formData</code>), <code>triggered_at</code>, <code>triggered_by</code>,{' '}
-          <code>trigger_id</code>, <code>item_id</code>, <code>item_index</code>, plus one dynamic
-          output per field named after that field&apos;s <code>name</code>.
+          <code>submittedAt</code>), <code>form_data</code> (every field in one object, alias{' '}
+          <code>formData</code>), <code>triggered_at</code>, <code>triggered_by</code>, plus one
+          output per field, named after the field&apos;s <code>name</code>. The hosted form page and
+          its share links are managed in <a href="/public-access">Public access</a>.
         </p>
 
-        <h2>Table (row changes)</h2>
+        <h2>Tables (row changes)</h2>
         <p>
-          The UI calls this the &ldquo;Table&rdquo; trigger; internally it&apos;s the event-driven
-          Datasource trigger. <strong>One row-level event fires one run.</strong>
+          The <strong>Tables</strong> trigger fires on changes to one of your tables.{' '}
+          <strong>One row-level event fires once.</strong>
         </p>
         <p>
-          Config: <code>table_id</code>/<code>datasource_id</code> (required),{' '}
-          <code>event_types</code> to pick which changes fire (<code>row_created</code>,{' '}
-          <code>row_updated</code>, <code>row_deleted</code>, omit it to subscribe to all three), and
-          an optional <code>filter</code> ({'{column, operator, value}'}) so the run only fires on
-          matching rows.
+          Configuration: <code>table_id</code> (or <code>datasource_id</code>, required),{' '}
+          <code>event_types</code> to choose which changes fire (<code>row_created</code>,{' '}
+          <code>row_updated</code>, <code>row_deleted</code>; omit it for all three), and an
+          optional <code>filter</code> (<code>{'{column, operator, value}'}</code>) so only
+          matching rows fire.
+        </p>
+        <p>
+          Filter operators: <code>=</code> (or <code>==</code>, <code>eq</code>), <code>!=</code>{' '}
+          (or <code>neq</code>), <code>&gt;</code> (<code>gt</code>), <code>&gt;=</code>{' '}
+          (<code>gte</code>), <code>&lt;</code> (<code>lt</code>), <code>&lt;=</code>{' '}
+          (<code>lte</code>), <code>in</code>, <code>not_in</code>, <code>contains</code>,{' '}
+          <code>starts_with</code>, <code>ends_with</code>, <code>is_null</code>, and{' '}
+          <code>is_not_null</code>. The last two take no value; every other operator needs one.
         </p>
         <DocsTable
-          head={['Filter operators']}
-          rows={[
-            ['=, ==, !=, >, >=, <, <=, in, not_in, contains, starts_with, ends_with, is_null, is_not_null'],
-          ]}
-        />
-        <p>
-          <code>is_null</code>/<code>is_not_null</code> take no value, every other operator requires
-          one (<code>=</code> and <code>==</code> are equivalent).
-        </p>
-        <p>Outputs:</p>
-        <DocsTable
+          caption="Tables trigger outputs"
+          rowHeaders
           head={['Field', 'Notes']}
           rows={[
-            ['row', 'Current row state for row_created/row_updated, last-known state for row_deleted.'],
-            ['previous_row', 'Pre-change row, populated ONLY for row_updated, null otherwise: the before/after pair.'],
-            ['event_type', 'row_created · row_updated · row_deleted.'],
-            ['row_id', 'The affected row’s primary key.'],
+            ['row', 'The row after the change, or its last known state for row_deleted.'],
+            ['previous_row', 'The row before the change. Filled only for row_updated, null otherwise.'],
+            ['event_type', 'row_created, row_updated, or row_deleted.'],
+            ['row_id', 'The primary key of the affected row.'],
             ['datasource_id', 'Which table.'],
-            ['triggered_at', 'ISO-8601 timestamp, right after the change committed.'],
-            ['triggered_by', 'Alias triggeredBy, default empty string.'],
-            ['trigger_id / item_id / item_index', 'Standard trigger bookkeeping fields.'],
+            ['triggered_at', 'ISO timestamp, right after the change was saved.'],
+            ['triggered_by', 'Alias triggeredBy, empty by default.'],
           ]}
         />
         <Callout variant="warn">
-          Dynamic row columns are also flattened to the top level so{' '}
-          <code>{'{{trigger.<column>}}'}</code> works, but a column that happens to share a name with a
-          reserved field (<code>row</code>, <code>previous_row</code>, <code>event_type</code>,{' '}
-          <code>row_id</code>, <code>datasource_id</code>, <code>triggered_at</code>,{' '}
-          <code>triggered_by</code>) never overwrites it, the structured value always wins. The safe,
-          collision-proof path is always{' '}
+          Row columns are also copied to the top level, but a column named like a reserved field (
+          <code>row</code>, <code>previous_row</code>, <code>event_type</code>, <code>row_id</code>,{' '}
+          <code>datasource_id</code>, <code>triggered_at</code>, <code>triggered_by</code>) never
+          overwrites it. The collision-proof path is always{' '}
           <code>{'{{trigger:<label>.output.row.<column>}}'}</code>.
         </Callout>
         <p>
-          When fired via <code>workflow(action=&apos;execute&apos;)</code> without a real row event
-          (a batch-scan run), the trigger instead emits <code>data</code> (an array of{' '}
-          <code>{'{id, data: {<columns>}}'}</code> rows, like <code>find_rows</code>) and{' '}
-          <code>count</code>. Chain a <a href="/workflows">Split</a> over <code>output.data</code> to
-          process every row.
+          When an agent executes the workflow without a real row event (a batch scan), the trigger
+          emits <code>data</code> (an array of <code>{'{id, data}'}</code> rows) and{' '}
+          <code>count</code> instead. Put a Split over <code>output.data</code> to process every row.
+          See <a href="/workflows">Workflows</a>.
         </p>
 
-        <h2>Workflow (chaining)</h2>
+        <h2>Workflows (chaining)</h2>
         <p>
-          Fires when a parent workflow <strong>completes successfully</strong>. Config is a single{' '}
-          <code>workflow_id</code> (the parent&apos;s UUID, required).
+          Starts this workflow when a parent workflow finishes. The only setting is{' '}
+          <code>workflow_id</code>, the parent&apos;s id (required).
         </p>
-        <Callout variant="warn">
-          The dispatch hard-gates on the parent&apos;s status being exactly <code>COMPLETED</code>,
-          it does <strong>not</strong> branch on failure or cancellation. To react to a failed
-          parent, use the separate <strong>Error</strong> trigger below (it also fires for older
-          runs recorded as partially successful).
-        </Callout>
-        <p>Outputs:</p>
+        <ul>
+          <li>
+            For a parent with a reusable trigger (the usual case), the chain fires after{' '}
+            <strong>every cycle of the parent that had no failed step</strong>.
+          </li>
+          <li>
+            For a single-shot parent run, it fires when that run ends <code>COMPLETED</code>.
+          </li>
+        </ul>
+        <p>
+          It never fires on a failure. To react to one, use the <strong>Error</strong> trigger below.
+        </p>
         <DocsTable
+          caption="Workflows trigger outputs"
+          rowHeaders
           head={['Field', 'Notes']}
           rows={[
-            ['triggered_at / triggered_by', 'Standard timestamp and identity fields.'],
+            ['triggered_at, triggered_by', 'Timestamp and identity.'],
             ['parentWorkflowId', 'Alias parent_workflow_id.'],
             ['parentRunId', 'Alias parent_run_id.'],
-            ['parentStatus', 'Alias parent_status, always COMPLETED here.'],
-            ['result', "The parent's outputs as an object, also flattened to the root level."],
+            ['parentStatus', 'Alias parent_status.'],
+            ['result', 'The parent’s outputs as an object. They are also copied to the top level.'],
             ['parentStatistics', 'Alias parent_statistics.'],
-            ['trigger_id / item_id / item_index', 'Standard trigger bookkeeping fields.'],
           ]}
         />
         <p>
-          There is no <code>parent_outputs</code> field, the parent&apos;s outputs live under{' '}
-          <code>result</code> and are also flattened to the root, e.g.{' '}
-          <code>{'{{trigger:on_done.output.result}}'}</code> or{' '}
-          <code>{'{{trigger:on_done.output.<parent field>}}'}</code>.
+          Read the parent&apos;s outputs with <code>{'{{trigger:on_done.output.result}}'}</code> or
+          directly with <code>{'{{trigger:on_done.output.<parent field>}}'}</code>. There is no{' '}
+          <code>parent_outputs</code> field.
         </p>
 
         <h2>Error</h2>
         <p>
-          A system-only trigger that fires when a parent workflow <strong>fails</strong> (parent status{' '}
-          <code>FAILED</code> or <code>PARTIAL_SUCCESS</code>). Config is <code>parent_workflow_id</code>.
-          Anti-loop protection means a failing error handler cannot itself trigger other error
-          handlers.
+          Starts an error-handler workflow when a parent workflow has a step fail. The only setting
+          is <code>parent_workflow_id</code>.
         </p>
-        <Callout variant="warn">
-          The Error trigger uses the accumulation pattern: it reuses the parent&apos;s latest
-          non-terminal run (typically <code>WAITING_TRIGGER</code>) and never creates its own. After
-          adding one, run <code>workflow(action=&apos;execute&apos;)</code> once to bootstrap a seed
-          run (it returns <code>BOOTSTRAPPED</code>), otherwise the dispatcher has no active run to
-          accumulate into and silently drops the parent&apos;s failures.
+        <ul>
+          <li>
+            For a parent with a reusable trigger, it fires on <strong>any cycle with a failed
+            step</strong>, whatever the run&apos;s own status.
+          </li>
+          <li>
+            For a single-shot parent run, it fires when that run ends <code>FAILED</code> (or with
+            the older <code>PARTIAL_SUCCESS</code> status).
+          </li>
+        </ul>
+        <Callout variant="warn" title="The handler needs a live run">
+          The Error trigger never creates a run: it opens an epoch on the handler workflow&apos;s
+          newest live run. Pin the handler, which provisions a run for you, or execute it once. With
+          no live run, the parent&apos;s failures are dropped. Anti-loop protection stops a failing
+          error handler from firing other error handlers.
         </Callout>
-        <p>Outputs:</p>
         <DocsTable
+          caption="Error trigger outputs"
+          rowHeaders
           head={['Field', 'Notes']}
           rows={[
-            ['parentWorkflowId / parentRunId', 'Which parent run failed.'],
-            ['status', 'FAILED or PARTIAL_SUCCESS.'],
+            ['parentWorkflowId, parentRunId', 'Which parent workflow and run failed.'],
+            ['status', 'The parent run’s status when the failure was reported.'],
             ['errorMessage', 'What went wrong.'],
-            ['triggeredAt', 'ISO timestamp.'],
-            ['failedSteps / completedSteps / totalSteps / skippedSteps', 'Per-run step counts.'],
-            ['triggered_by', 'Standard identity field.'],
+            ['triggered_at', 'ISO timestamp (alias triggeredAt).'],
+            ['failedSteps, completedSteps, totalSteps, skippedSteps', 'Step counts, present when the parent recorded them.'],
+            ['triggered_by', 'Identity field.'],
           ]}
         />
 
-        <h2>Multiple triggers, epochs &amp; reusable triggers</h2>
+        <h2>Limits and safeguards</h2>
+        <h3>Endpoint limits per plan</h3>
         <p>
-          A workflow can carry several triggers, each running its own graph. The run view exposes
-          per-trigger DAG state as{' '}
-          <code>{'dags: { <trigger_id>: { current_epoch, fire_count, current_spawn } }'}</code>.
+          On the cloud, the number of webhooks, schedules, chat endpoints, and form endpoints you can
+          hold depends on your plan. Each kind has its own quota, shown as a gauge on its tab in{' '}
+          <a href="/public-access">Public access</a>. Creating one past the limit is refused.
+        </p>
+        <DocsTable
+          caption="Maximum endpoints of each kind, per plan"
+          rowHeaders
+          head={['Plan', 'Per kind']}
+          rows={[
+            ['Free', '3'],
+            ['Starter', '10'],
+            ['Pro', '50'],
+            ['Team, Enterprise', '100'],
+            ['Self-hosted Community Edition', 'Unlimited'],
+          ]}
+        />
+        <h3>Chains and error handlers</h3>
+        <ul>
+          <li>
+            A <strong>Workflows</strong> or <strong>Error</strong> trigger is skipped when the target workflow already has 5 runs
+            executing at once.
+          </li>
+          <li>Chains and error handlers never fire across workspaces.</li>
+        </ul>
+        <h3>Credits and spending caps</h3>
+        <p>
+          When the workspace is out of credits, a fire is not silently dropped: the trigger node
+          fails with the error code <code>CREDIT_EXHAUSTED</code> and every downstream node is
+          skipped. The run stays reusable, so the next fire after a top-up works with no action from
+          you. A webhook caller may receive <code>402</code>.
         </p>
         <p>
-          <strong>Reusable</strong> triggers (webhook, manual, chat, datasource, schedule) can fire many
-          times against the same run: each fire increments the epoch counter and accumulates a new
-          epoch onto the same live (typically <code>WAITING_TRIGGER</code>) run rather than starting a
-          fresh one. Workflow and Error triggers are not in that reusable set.
+          A workflow or application can also carry a <strong>Cost budget</strong> (set in the{' '}
+          <strong>Advanced</strong> section when you create or edit it), which{' '}
+          <strong>Resets</strong> every month, every week, or never. It counts agent spend on every
+          run except a test fire from the builder. Once the period&apos;s spend reaches it, no new
+          epoch opens until the allowance starts again. See <a href="/billing">Plans &amp; billing</a>.
         </p>
 
-        <h2>Pinning: the must-know</h2>
-        <p>
-          Every save records a new plan version. External/production triggers (webhook, schedule,
-          workflow, error, datasource) fire <strong>only</strong> the <strong>pinned</strong> version,
-          with no pin they&apos;re refused (webhooks error, schedules skip); editor runs are unaffected.
-          Pinning is explicit, there&apos;s no auto-pin, and the version must have been run at least
-          once so a <code>WAITING_TRIGGER</code> run exists to accumulate into.
-        </p>
-        <Callout variant="info">
-          Re-pinning re-syncs all webhook/schedule triggers to the new plan immediately.
-          Unpinning suspends every trigger rather than deleting it, re-pinning arms them again. If a
-          trigger &ldquo;stopped working&rdquo;, check whether the workflow is still pinned first.
-        </Callout>
-        <p>
-          After a run ends abnormally (cancelled, failed, timed out), a fresh run is auto-prepared so
-          schedules and webhooks keep firing on the next event, you don&apos;t have to restart anything.
-          A run that finishes cleanly as <em>completed</em> is not re-armed, it&apos;s done on purpose.
-        </p>
+        <h2>Troubleshooting</h2>
+        <DocsTable
+          caption="Common trigger problems and what to check"
+          rowHeaders
+          head={['Symptom', 'What to check']}
+          rows={[
+            ['A webhook answers 409', 'Set a version as production. If one is pinned, the production run has ended: reactivate it from the run panel, or pin again.'],
+            ['A webhook answers 404', 'The token was regenerated or the webhook deleted. Copy the current URL from Public access.'],
+            ['A webhook answers 401', 'The caller does not send the configured Basic, header, or JWT credentials.'],
+            ['A schedule never fires', 'The workflow is not pinned, the schedule is suspended (for example after the run was cancelled), or it reached maxExecutions. Check it in the Agenda.'],
+            ['The public chat or form does nothing', 'The workflow has no pinned version.'],
+            ['Every run fails at the trigger', 'Look for CREDIT_EXHAUSTED on the trigger node, or a spending cap reached on the run.'],
+            ['An error handler never runs', 'The handler has no live run. Pin it or execute it once.'],
+            ['A chat trigger fires on every message', 'Check the chatMatch type spelling: an unknown type falls back to ANY.'],
+          ]}
+        />
 
-        <h2>Where to go next</h2>
-        <CardGrid cols={3}>
-          <Card icon={Workflow} title="Workflows" href="/workflows">How runs execute once a trigger fires.</Card>
-          <Card icon={Table2} title="Tables &amp; data" href="/tables">Row events, filters, and CRUD nodes.</Card>
-          <Card icon={GitBranch} title="Node reference" href="/nodes">All node types at a glance.</Card>
-          <Card icon={Bot} title="Agents" href="/agents">Put AI in the loop, scoped and budgeted.</Card>
+        <h2>Related pages</h2>
+        <CardGrid cols={2}>
+          <Card icon={PlayCircle} title="Runs & execution" href="/runs">
+            What happens after a trigger fires: epochs, statuses, run controls.
+          </Card>
+          <Card icon={Globe} title="Public access & sharing" href="/public-access">
+            Manage webhook, chat, form, and schedule endpoints and share links.
+          </Card>
+          <Card icon={CalendarClock} title="Agenda" href="/agenda">
+            See every scheduled fire, move one, or run it early.
+          </Card>
+          <Card icon={Workflow} title="Workflows" href="/workflows">
+            How a run executes once its trigger fires.
+          </Card>
         </CardGrid>
       </DocsProse>
     </>

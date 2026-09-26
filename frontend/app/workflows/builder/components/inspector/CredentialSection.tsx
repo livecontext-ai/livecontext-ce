@@ -12,11 +12,7 @@ import {
   type PlatformCredentialPublicInfo,
 } from '@/lib/api/orchestrator';
 import { CredentialWizard, resolveByokConfig, resolveByokOnlyScopeList, resolvePlatformScopeList } from '@/components/credentials/CredentialWizard';
-import { Select, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
-// The list is PORTALLED, so on a studio surface it lands outside the element carrying the
-// studio's colour tokens and comes back in the application's theme. Inert everywhere else:
-// off a studio surface this renders exactly what SelectContent renders.
-import { StudioSelectContent } from '@/components/studio/StudioSelectContent';
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ToggleGroup } from '@/components/ui/toggle-group';
 import Toast, { useToast } from '@/components/Toast';
 import { useTranslations } from 'next-intl';
@@ -912,7 +908,7 @@ export function CredentialSection({
                   <SelectTrigger className="h-10 min-h-0 rounded-lg text-sm px-3 py-2.5">
                     <SelectValue placeholder={t('selectCredential')} />
                   </SelectTrigger>
-                  <StudioSelectContent>
+                  <SelectContent>
                     {status.userCredentials.map((cred) => (
                       <SelectItem key={cred.id} value={String(cred.id)} className="text-xs">
                         {cred.name}
@@ -925,7 +921,7 @@ export function CredentialSection({
                         {t('addNewCredential')}
                       </span>
                     </SelectItem>
-                  </StudioSelectContent>
+                  </SelectContent>
                 </Select>
               )}
 

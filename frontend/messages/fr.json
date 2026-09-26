@@ -280,6 +280,7 @@
     "description": "Découvrez et utilisez des outils MCP (Model Context Protocol) puissants pour vos projets de développement et d'automatisation."
   },
   "common": {
+    "infoAbout": "À propos de {label}",
     "addToFavorites": "Ajouter aux favoris",
     "removeFromFavorites": "Retirer des favoris",
     "favoriteErrorTitle": "Impossible de mettre à jour les favoris",
@@ -478,7 +479,16 @@
     "sso": {
       "redirecting": "Redirection vers votre fournisseur SSO...",
       "invalid": "Ce lien SSO est invalide.",
-      "failed": "Impossible de lancer la connexion SSO."
+      "failed": "Impossible de lancer la connexion SSO.",
+      "title": "Se connecter avec le SSO",
+      "subtitle": "Saisissez votre email professionnel, nous vous redirigeons vers la page de connexion de votre entreprise.",
+      "emailLabel": "Email professionnel",
+      "emailPlaceholder": "vous@entreprise.com",
+      "continue": "Continuer",
+      "looking": "Recherche de votre entreprise...",
+      "notFound": "Aucun SSO n'est configuré pour ce domaine email. Connectez-vous autrement ou contactez l'administrateur de votre workspace.",
+      "lookupFailed": "Impossible de vérifier le SSO pour le moment. Réessayez dans un instant.",
+      "ceUnavailable": "La connexion SSO n'est disponible que sur LiveContext Cloud."
     },
     "register": {
       "title": "Créer votre compte",
@@ -776,11 +786,11 @@
       "samplePreview": "Exemple"
     },
     "home": {
-      "title1": "Comment puis-je vous aider ?",
-      "title2": "Qu'est-ce qu'on automatise aujourd'hui ?",
-      "title3": "Une idée ? On la construit ensemble.",
-      "title4": "Besoin d'un workflow qui marche tout seul ?",
-      "title5": "Qu'est-ce qui vous prend trop de temps ?",
+      "title1": "Bonjour, moi c'est Orbi. Comment puis-je vous aider ?",
+      "title2": "Qu'est-ce qu'Orbi automatise pour vous aujourd'hui ?",
+      "title3": "Une idée ? Orbi la construit avec vous.",
+      "title4": "Besoin d'un workflow qui marche tout seul ? Demandez à Orbi.",
+      "title5": "Qu'est-ce qui vous prend trop de temps ? Orbi s'en occupe.",
       "suggestions": {
         "summarizeInbox": "Résumer ma boîte mail chaque matin",
         "summarizeInboxPrompt": "Chaque matin de semaine à 8h, récupère mes mails Gmail non lus, regroupe-les par expéditeur et poste un court résumé des conversations principales dans mon canal Slack #morning.",
@@ -883,11 +893,15 @@
           "WEBHOOK_TRIGGER_DISABLED": "{count, plural, one {# déclencheur désactivé} other {# déclencheurs désactivés}}",
           "CRED_EXPIRED": "{count, plural, one {# identifiant expiré} other {# identifiants expirés}}",
           "AGENT_TASK_ASSIGNED": "{count, plural, one {# tâche assignée} other {# tâches assignées}}",
+          "AGENT_AUTHORIZATION_UNREACHABLE": "{count, plural, one {# agent sans personne à qui demander} other {# agents sans personne à qui demander}}",
           "AGENT_TASK_AWAITING_REVIEW": "{count, plural, one {# tâche en attente de votre validation} other {# tâches en attente de votre validation}}",
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# bridge à crédit faible} other {# bridges à crédit faible}}",
           "ORG_INVITATION_PENDING": "{count, plural, one {# invitation d'organisation} other {# invitations d'organisation}}",
           "BADGE_UNLOCKED": "{count, plural, one {# nouveau trophée} other {# nouveaux trophées}}",
-          "BUDGET_REACHED": "{count, plural, one {# workflow arrêté sur son plafond de dépense} other {# workflows arrêtés sur leur plafond de dépense}}"
+          "BUDGET_REACHED": "{count, plural, one {# workflow arrêté sur son plafond de dépense} other {# workflows arrêtés sur leur plafond de dépense}}",
+          "CREDIT_LOW": "{count, plural, one {Crédits bientôt épuisés} other {Crédits bientôt épuisés (#)}}",
+          "CREDIT_EXHAUSTED": "{count, plural, one {Crédits épuisés} other {Crédits épuisés (#)}}",
+          "AGENT_TASK_MENTION": "{count, plural, one {# mention dans une tâche} other {# mentions dans des tâches}}"
         },
         "approvalOpen": "Ouvrir",
         "approvalReview": "Examiner",
@@ -924,6 +938,8 @@
       }
     },
     "placeholder": "Écrivez un message...",
+    "placeholderOrbi": "Écrivez à Orbi...",
+    "orbiPoke": "Chatouiller Orbi",
     "send": "Envoyer",
     "stop": "Stop",
     "queue": {
@@ -990,7 +1006,7 @@
       "close": "Fermer"
     },
     "toolSelector": {
-      "title": "Sélectionner les outils MCP",
+      "title": "Sélectionner les outils d'intégration",
       "smartModeHint": "Mode intelligent : Les outils seront automatiquement sélectionnés selon votre demande",
       "manualModeHint": "Mode manuel : Sélectionnez les outils que vous souhaitez utiliser",
       "display": "Affichage :",
@@ -1155,8 +1171,6 @@
       "passageNumber": "Passage {number}",
       "inputData": "Données d’entrée",
       "outputData": "Données de sortie",
-      "readOnly": "Lecture seule",
-      "loadedPassages": "{loaded} / {total} passages chargés",
       "loadMore": "Charger plus de passages",
       "loading": "Chargement des logs…",
       "emptyEpoch": "Aucun nœud exécuté dans cette epoch pour le moment.",
@@ -2298,13 +2312,10 @@
       "title": "Cadeau de bienvenue",
       "subtitle": "Vous êtes sur le plan Free. Voici ce qu'il vous offre, chaque mois.",
       "features": {
-        "freeCredits": "Crédits workflow",
-        "freeCreditsDetail": "Ils font tourner vos workflows.",
-        "freeAiCredits": "Crédits IA",
-        "freeAiCreditsDetail": "Ils paient les échanges de chat et d'agent, sur les modèles ouverts au plan gratuit."
+        "freeCredits": "Crédits mensuels",
+        "freeCreditsDetail": "Ils font tourner vos workflows, ainsi que le chat et les agents sur les modèles marqués Gratuit."
       },
-      "renewal": "Les deux se rechargent automatiquement au début de chaque mois. Sans carte bancaire.",
-      "renewalSingle": "Ils se rechargent automatiquement au début de chaque mois. Sans carte bancaire.",
+      "renewal": "Ils se rechargent automatiquement au début de chaque mois. Sans carte bancaire.",
       "cta": "Commencer à explorer"
     },
     "suggestedApps": {
@@ -2317,7 +2328,7 @@
     "insufficientCredits": {
       "title": "Vous n'avez plus de crédits",
       "description": "Votre solde de crédits est insuffisant pour effectuer cette action. Mettez à niveau votre plan pour continuer.",
-      "freeScopeNote": "Avec le forfait Gratuit, vos crédits mensuels financent les workflows. Le chat et les agents puisent dans votre enveloppe IA mensuelle distincte, sur les modèles ouverts au forfait gratuit ; une fois épuisée, il faut recharger ou passer à un forfait payant.",
+      "freeScopeNote": "Avec le forfait Gratuit, vos crédits mensuels financent les workflows, ainsi que le chat et les agents sur les modèles marqués Gratuit. Les autres modèles, la recherche web et la génération d'images demandent une recharge ou un forfait payant.",
       "recommended": "Recommandé",
       "currentPlan": "Plan actuel",
       "upgrade": "Mettre à niveau",
@@ -2332,7 +2343,6 @@
       },
       "features": {
         "freeCredits": "1 000 crédits/mois",
-        "freeAiCredits": "{credits} crédits IA/mois",
         "freeConcurrent": "1 exécution simultanée",
         "freeStorage": "100 Mo de stockage",
         "creditsPerMonth": "crédits/mois",
@@ -2362,7 +2372,6 @@
       "features": {
         "freeStorage": "100 Mo de stockage",
         "freeCredits": "1 000 crédits/mois",
-        "freeAiCredits": "{credits} crédits IA/mois",
         "starterStorage": "1 Go de stockage",
         "starterCredits": "5 000 crédits/mois",
         "proStorage": "10 Go de stockage",
@@ -2639,9 +2648,19 @@
       "inactivityTimeoutLabel": "Délai d'inactivité (s)",
       "inactivityTimeoutInfo": "Durée pendant laquelle cet agent peut rester silencieux (aucun token, raisonnement, appel d'outil ou résultat) avant que la surveillance ne l'arrête. Mettez 0 pour désactiver, ou 10-7200s ; laissez 300 pour la valeur par défaut de 5 minutes. Indépendant du délai d'exécution total.",
       "advancedModeLabel": "Mode avancé",
-      "sensitiveActionsLabel": "Actions sensibles",
-      "sensitiveActionsAlwaysOn": "Toujours autorisées",
-      "sensitiveActionsLockedInfo": "Les agents exécutent les actions sensibles (installation, exécution, sous-agents, appels au catalogue) sans demander d'autorisation. C'est toujours activé pour les agents et ne peut pas être désactivé.",
+      "sensitiveActionsAskHint": "Installations, exécutions, sous-agents et appels au catalogue : la demande vous arrive sur cette destination. Sans réponse, l'action n'est pas faite.",
+      "sensitiveActionsSaveFailed": "L'agent a été enregistré, mais pas son réglage des actions sensibles.",
+      "channelCardTitle": "Me joindre hors de l'app",
+      "channelCardDescription": "Ses demandes d'autorisation et ses questions vous arrivent sur un chat quand il tourne sans vous",
+      "channelCardUnavailable": "Connectez d'abord un canal (Telegram, Slack, WhatsApp, Discord ou Teams)",
+      "channelCardConnect": "Connecter un canal",
+      "channelCardLoading": "Chargement de vos canaux...",
+      "channelCardError": "Impossible de charger vos canaux. Réessayez dans un instant.",
+      "armedWithoutChannel": "Cet agent demande la permission avant une action sensible, mais n'a aucun canal pour la demander : ces actions ne sont pas faites.",
+      "armedWithoutChannelDisarm": "Ne plus demander",
+      "sensitiveActionsAskLabel": "Demander ma permission avant une action sensible",
+      "channelDestinationLabel": "Destination",
+      "channelDestinationHint": "Quand il tourne sans vous (planifié ou via un webhook), ses demandes et ses questions sont envoyées ici.",
       "creditBudgetLabel": "Budget de crédits",
       "creditBudgetInfo": "Maximum de crédits que cet agent peut consommer. Laisser vide pour illimité.",
       "unlimited": "Illimité",
@@ -2653,7 +2672,7 @@
       "resetCredits": "Réinitialiser les crédits",
       "resetCreditsConfirm": "Êtes-vous sûr de vouloir réinitialiser les crédits consommés pour cet agent ?",
       "systemPromptInfo": "Instructions qui définissent le comportement, la personnalité et les capacités de l'agent.",
-      "toolsLabel": "Outils MCP disponibles",
+      "toolsLabel": "Outils d'intégration disponibles",
       "selectAll": "Tout sélectionner",
       "deselectAll": "Tout désélectionner",
       "grant_none": "Aucun",
@@ -2666,8 +2685,8 @@
       "noToolsAvailable": "Aucun outil disponible",
       "searchApis": "Rechercher des APIs...",
       "noSearchResults": "Aucun résultat trouvé",
-      "allTools": "Tous les outils MCP",
-      "noTools": "Aucun outil MCP",
+      "allTools": "Tous les outils d'intégration",
+      "noTools": "Aucun outil d'intégration",
       "offTools": "Aucun outil du tout",
       "customToolsOption": "Sélection personnalisée (max {max})",
       "customTools": "Personnalisé ({count}/{max})",
@@ -3199,6 +3218,10 @@
       "vectorSearch": {
         "label": "Colonnes vectorielles et recherche par similarité",
         "description": "Colonnes d'embeddings, requêtes par similarité (RAG) et installation des applications de la marketplace qui les utilisent. Les embeddings partagent la base gérée, d'où une barre à un plan payant plutôt qu'un accès libre."
+      },
+      "notificationEmail": {
+        "label": "Alertes par email",
+        "description": "Échecs de workflows, problèmes de compte et tâches par email. Les alertes de crédits partent toujours par email, sur toutes les offres, car un compte Free à court de crédits doit être prévenu. Les alertes par canal et la cloche de l'application ne sont jamais restreintes."
       }
     }
   },
@@ -3574,7 +3597,8 @@
       "hideKey": "Masquer la clé",
       "useMyKey": "Utiliser ma clé",
       "noProviders": "Aucun fournisseur de cet espace n'accepte votre propre clé pour l'instant.",
-      "requiresPlan": "Les clés personnelles sont disponibles à partir du forfait {plan}.",
+      "requiresPlan": "Les clés personnelles commencent au forfait {plan}",
+      "requiresPlanDescription": "D'ici là, vos clés enregistrées restent en lecture seule et vos agents continuent de tourner sur la clé LiveContext. Passez à {plan} pour les faire tourner sur votre propre clé.",
       "upgrade": "Passer à {plan}",
       "fees": {
         "open": "Voir le prix par tour",
@@ -3788,7 +3812,10 @@
       "bundleShipOff": "CE : inactif",
       "bundleShipTooltip": "Ce que le bundle CE livre pour ce modèle, indépendamment de l'interrupteur activé : auto le suit, actif livre le modèle activé aux installations auto-hébergées même s'il est désactivé ici, inactif le livre désactivé.",
       "freeTierChip": "Gratuit",
-      "freeTierTooltip": "Si un compte au forfait Gratuit peut dépenser son enveloppe IA mensuelle sur ce modèle. Cette enveloppe est distincte des crédits mensuels, qui financent les workflows. Inactif par défaut : un compte Gratuit doit alors recharger pour utiliser ce modèle.",
+      "freeTierTooltip": "Indique si un compte du forfait Gratuit peut dépenser ses crédits mensuels en chat et en tours d'agent avec ce modèle. Désactivé par défaut : un compte Gratuit doit alors recharger pour utiliser ce modèle.",
+      "replacedBy": "Remplacé par",
+      "replacementDefault": "Modèle par défaut de la plateforme",
+      "replacementTooltip": "Tant que ce modèle est désactivé, les agents, nœuds de workflow et conversations qui l'utilisent encore s'exécutent sur ce modèle à la place (et sont facturés pour lui). Modèle par défaut = celui que la plateforme utilise quand aucun n'est choisi.",
       "notConfigured": "Non configuré",
       "notConfiguredTooltip": "Affiché pour pouvoir le classer et le tarifer, mais pas encore utilisable : aucune clef API pour ce fournisseur (ou le relais cloud ne peut pas l'exécuter). Ajoutez une clef pour l'utiliser.",
       "custom": "personnalisé",
@@ -3800,12 +3827,45 @@
       "filterByProvider": "Filtrer par fournisseur",
       "selectAll": "Sélectionner tous les modèles affichés",
       "selectRow": "Sélectionner",
+      "rankEdit": "Changer la position",
       "bulkSelected": "{count} sélectionnés",
       "bulkEnable": "Activer",
       "bulkDisable": "Désactiver",
       "bulkTier": "Changer le palier",
       "bulkClear": "Tout désélectionner",
       "bulkPartial": "{action} : {failed} sur {total} ont échoué. {reason}",
+      "releasedOn": "Sorti le {date}",
+      "releaseUnknown": "Date de sortie inconnue",
+      "sort": {
+        "label": "Ordre de tri",
+        "rank": "Par rang",
+        "oldest": "Plus anciens d'abord",
+        "newest": "Plus récents d'abord"
+      },
+      "retire": {
+        "action": "Retirer",
+        "bulk": "Retirer la sélection ({count})",
+        "confirmOne": "Retirer « {name} » ? Il disparaît de toutes les listes et de tous les sélecteurs de modèles, n'est plus envoyé aux installations auto-hébergées, et aucune mise à jour du catalogue ne peut le faire revenir. Vous pourrez le restaurer plus tard depuis Modèles retirés.",
+        "confirmMany": "Retirer {count} modèles ? Ils disparaissent de toutes les listes et de tous les sélecteurs de modèles, ne sont plus envoyés aux installations auto-hébergées, et aucune mise à jour du catalogue ne peut les faire revenir. Vous pourrez les restaurer plus tard depuis Modèles retirés.",
+        "doneTitle": "Modèles retirés : {count}",
+        "doneMessage": "Ils ont disparu de toutes les listes de modèles. Restaurez-les depuis Modèles retirés si vous en avez de nouveau besoin.",
+        "error": "Impossible de retirer les modèles"
+      },
+      "retired": {
+        "title": "Modèles retirés",
+        "titleWithCount": "Modèles retirés ({count})",
+        "hint": "Les modèles retirés sont masqués partout et ne reviennent jamais via une mise à jour du catalogue. Un modèle restauré revient désactivé.",
+        "empty": "Aucun modèle retiré.",
+        "loadError": "Impossible de charger les modèles retirés.",
+        "restore": "Restaurer",
+        "restoreSelected": "Restaurer la sélection ({count})",
+        "selectAll": "Sélectionner tous les modèles retirés",
+        "selectRow": "Sélectionner",
+        "retiredOn": "Retiré le {date}",
+        "restoredTitle": "Modèles restaurés : {count}",
+        "restoredMessage": "Un modèle restauré revient désactivé. Activez-le dans la liste des modèles pour qu'il soit utilisable.",
+        "restoreError": "Impossible de restaurer les modèles"
+      },
       "searchPlaceholder": "Rechercher un modèle",
       "filterByTier": "Palier",
       "allTiers": "Tous les paliers",
@@ -3854,7 +3914,7 @@
           "hint": "Modèles disponibles pour le Browser Agent. Le rang définit l'ordre par défaut ; désactiver retire le modèle des exécutions du Browser Agent."
         }
       },
-      "freeTierNoneOpen": "Aucun modèle de cet onglet n'est ouvert au forfait gratuit : l'enveloppe IA mensuelle annoncée sur la page des tarifs ne peut donc pas financer ce type d'échange, et un compte Gratuit est refusé. Ouvrez au moins un modèle avec la puce Gratuit ci-dessus."
+      "freeTierNoneOpen": "Aucun modèle de cet onglet n'est ouvert au forfait gratuit : les crédits mensuels annoncés sur la page des tarifs pour le chat et les agents ne peuvent donc pas financer ce type d'échange, et un compte Gratuit est refusé. Ouvrez au moins un modèle avec la puce Gratuit ci-dessus."
     },
     "executionLinks": {
       "title": "Liens d'exécution des modèles",
@@ -3878,7 +3938,7 @@
       "sameAsBilled": "Identique au modèle facturé",
       "appliesTo": "S'applique à",
       "scopeAll": "Toutes les surfaces",
-      "scopeChat": "Chat général",
+      "scopeChat": "Orbi",
       "scopeWorkflow": "Nœud de workflow",
       "scopeWebhook": "Webhook",
       "scopeWidget": "Widget",
@@ -4308,7 +4368,8 @@
         "customFieldRequired": "{field} est requis",
         "saveFailed": "Impossible d'enregistrer les identifiants",
         "oauthConfigFailed": "Impossible d'enregistrer la configuration OAuth",
-        "oauthUrlsRequired": "L'URL d'autorisation et l'URL du token sont requises"
+        "oauthUrlsRequired": "L'URL d'autorisation et l'URL du token sont requises",
+        "byokScopesRequired": "Cochez au moins un scope."
       },
       "oauthConfig": {
         "authUrl": "URL d'autorisation",
@@ -4322,7 +4383,9 @@
         "scopes": "Scopes",
         "scopesPlaceholder": "ex. read write (séparés par des espaces)",
         "tokenUrl": "URL du token",
-        "tokenUrlPlaceholder": "https://fournisseur.com/oauth/token"
+        "tokenUrlPlaceholder": "https://fournisseur.com/oauth/token",
+        "scopePickerTitle": "Scopes à demander",
+        "scopePickerHint": "Décochez les scopes que votre application OAuth n'a pas. TikTok, Figma et LinkedIn refusent toute la connexion pour un seul scope que l'application ne possède pas. Un outil qui a besoin d'un scope décoché indique lequel manque : cochez-le ici, enregistrez, puis reconnectez-vous."
       },
       "platformKey": {
         "title": "Vous n’êtes pas obligé d’ajouter une clé",
@@ -5362,11 +5425,8 @@
         "processing": "Traitement en cours…"
       },
       "features": {
-        "creditsFree": "1 000 crédits de workflow par mois",
-        "creditsFreeTooltip": "Ces crédits font tourner vos workflows, et rien d'autre : **{nodeCredits} crédit** par nœud exécuté. Le chat et les agents n'y touchent jamais, ils puisent dans l'enveloppe IA mensuelle distincte, sur la ligne ci-dessous, et les compléments comme la recherche web ou la génération d'images demandent une recharge.",
-        "aiCreditsFree": "{credits} crédits IA par mois",
-        "aiCreditsFreeUnknown": "Crédits IA mensuels",
-        "aiCreditsFreeTooltip": "Une enveloppe mensuelle distincte pour le chat et les tours d'agent, sur les modèles ouverts au plan gratuit : environ **{exchangeCredits} crédits** pour un court échange avec un agent configuré, tout son contexte compris, sur un modèle léger comme {basisModel}. Une estimation issue de l'usage réel, pas un plafond. Elle se recharge chaque mois et ne touche jamais vos crédits de workflow.",
+        "creditsFree": "1 000 crédits par mois",
+        "creditsFreeTooltip": "Une seule enveloppe mensuelle pour vos workflows et vos agents : **{nodeCredits} crédit** par nœud exécuté, et environ **{exchangeCredits} crédits** pour un court échange avec un agent configuré sur un modèle léger comme {basisModel} (une estimation issue de l'usage réel, pas un plafond). Le chat et les agents sont couverts sur les modèles marqués Gratuit ; les autres modèles et les compléments comme la recherche web ou la génération d'images restent disponibles avec une recharge. Renouvelés chaque mois.",
         "creditsPerMonth": "{credits} crédits par mois",
         "creditsCustom": "Crédits personnalisés",
         "users1": "1 utilisateur",
@@ -5401,6 +5461,8 @@
         "cePlatformCredsTooltip": "Une installation auto-hébergée liée au cloud peut exécuter les intégrations tierces avec les identifiants de plateforme LiveContext, sans vos propres clés API. Une petite majoration en crédits s'applique à chaque appel.",
         "vectorSearch": "Recherche vectorielle et RAG sur le cloud",
         "vectorSearchTooltip": "Colonnes d'embeddings et recherche par similarité sur vos tables, pour la génération augmentée par récupération. Les embeddings partagent la base gérée : sur le cloud, ils démarrent donc au plan Pro. Une installation auto-hébergée en dispose sur tous les plans, puisqu'elle possède sa propre base.",
+        "emailAlerts": "Alertes par email",
+        "emailAlertsTooltip": "Workflows en échec, problèmes de compte et tâches assignées arrivent dans votre boîte, sans avalanche : un email quand un workflow casse, au plus un rappel par jour, un quand il remarche. Toutes les offres reçoivent ces alertes dans l'application et dans un canal de discussion connecté, et les alertes de crédits par email.",
         "browserAgent": "Nœud Agent navigateur",
         "browserAgentTooltip": "Un LLM qui pilote un vrai navigateur : naviguer, remplir des formulaires, extraire des données structurées de sites sans API. Il occupe une session de navigateur pendant toute la tâche, une ressource rare sur une infrastructure partagée : il démarre donc au plan Pro.",
         "priorityExecution": "Exécution prioritaire",
@@ -5451,8 +5513,6 @@
       },
       "dimensions": {
         "credits": "Crédits mensuels",
-        "aiCredits": "Crédits IA",
-        "aiCreditsTooltip": "Une enveloppe mensuelle distincte pour le chat et les tours d'agent, sur les modèles ouverts au plan gratuit : environ **{exchangeCredits} crédits** pour un court échange avec un agent configuré, tout son contexte compris, sur un modèle léger comme {basisModel}. Une estimation issue de l'usage réel, pas un plafond. Les plans payants n'en ont pas besoin : leurs crédits financent déjà les agents, là où ceux du plan gratuit ne font tourner que les workflows.",
         "nodes": "Nœuds et intégrations",
         "nodesTooltip": "Seule la publication est réservée : publier sur YouTube, Instagram, TikTok, X, LinkedIn et 13 autres plateformes demande une offre payante. Les lire, et tous les autres nœuds, sont sur toutes les offres.",
         "concurrent": "Exécutions simultanées",
@@ -5466,9 +5526,7 @@
         "creditsTooltip": "Environ **{exchangeCredits} crédits** pour un court échange avec un agent configuré, tout son contexte compris, sur un modèle léger comme {basisModel}. Une estimation issue de l'usage réel, pas un plafond ; un modèle haut de gamme coûte davantage."
       },
       "values": {
-        "creditsFree": "1 000 / mois (workflows)",
-        "aiCreditsFree": "{credits} / mois",
-        "aiCreditsIncluded": "Compris dans les crédits",
+        "creditsFree": "1 000 / mois",
         "creditsDynamic": "À partir de {credits} / mois",
         "creditsCustom": "Sur mesure",
         "nodesCore": "Tout sauf la publication",
@@ -5707,7 +5765,9 @@
       "title": "Utilisation du stockage",
       "usedOf": "{used} sur {total} utilisés",
       "thisWorkspace": "{used} utilisés dans cet espace de travail",
-      "accountPool": "Compte : {used} sur {total} partagés entre vos espaces de travail"
+      "accountPool": "Compte : {used} sur {total} partagés entre vos espaces de travail",
+      "available": "{free} disponibles",
+      "softLimitMarker": "Alerte à partir de 80 %"
     },
     "breakdown": {
       "title": "Répartition du stockage",
@@ -5715,7 +5775,8 @@
       "workflows": "Workflows",
       "tables": "Tables",
       "files": "Fichiers",
-      "noData": "Aucune donnée disponible. Cliquez sur recalculer pour générer."
+      "noData": "Aucune donnée disponible. Cliquez sur recalculer pour générer.",
+      "itemsAvg": "{count, plural, one {# élément} other {# éléments}}, {avg} en moyenne"
     },
     "trends": {
       "title": "Tendances d'utilisation",
@@ -5724,7 +5785,16 @@
       "period30d": "30j",
       "period90d": "90j",
       "noHistory": "Les données de tendance apparaîtront après le premier instantané quotidien.",
-      "totalItems": "{count} éléments"
+      "totalItems": "{count} éléments",
+      "growth": "Évolution sur la période",
+      "growthRange": "De {from} à {to}",
+      "perDay": "Moyenne par jour",
+      "fullIn": "Plein dans",
+      "days": "~{count, plural, one {# jour} other {# jours}}",
+      "overYear": "Plus d'un an",
+      "notFilling": "Ne se remplit pas",
+      "alreadyFull": "Déjà plein",
+      "atThisPace": "Au rythme de la période"
     },
     "categories": {
       "STEP_OUTPUTS": "Sorties d'étapes",
@@ -5758,6 +5828,12 @@
       "title": "Besoin de plus de stockage ?",
       "description": "Passez à un plan supérieur pour obtenir plus d'espace.",
       "button": "Changer de plan"
+    },
+    "largest": {
+      "title": "Éléments les plus lourds",
+      "subtitle": "Ce qui prend le plus de place dans cet espace",
+      "openFiles": "Ouvrir Fichiers",
+      "unnamed": "Sans nom"
     }
   },
   "runMode": {
@@ -5965,7 +6041,11 @@
       "noHistory": "Aucun historique d'utilisation",
       "filterAll": "Tous les types",
       "page": "Page {current} sur {total}",
-      "ownKeyBadge": "Votre clé"
+      "previousPage": "Page précédente",
+      "nextPage": "Page suivante",
+      "ownKeyBadge": "Votre clé",
+      "fullscreen": "Plein écran",
+      "exitFullscreen": "Quitter le plein écran"
     },
     "error": {
       "loadFailed": "Impossible de charger les donnees de quota"
@@ -5992,7 +6072,26 @@
       "avgDaily": "Moy. quotidienne",
       "mostActive": "Plus actif",
       "noData": "Aucune donnée d'utilisation pour cette période",
-      "credits": "Crédits"
+      "credits": "Crédits",
+      "chartMetric": "Mesure du graphique",
+      "metricCredits": "Crédits",
+      "metricCost": "Coût",
+      "metricCalls": "Appels",
+      "metricTokens": "Jetons",
+      "calls": "Appels",
+      "tokens": "Jetons",
+      "avgPerCall": "Moy. par appel",
+      "vsPrevious": "vs période précédente",
+      "peakOn": "Pic de {amount} le {date}",
+      "runway": "Solde suffisant pour",
+      "runwayDays": "~{count, plural, one {# jour} other {# jours}}",
+      "runwayOverYear": "Plus d'un an",
+      "runwayHint": "Au rythme moyen de dépense de la période",
+      "byType": "Par type",
+      "byModel": "Par modèle",
+      "filterOn": "Filtrer le graphique sur cette ligne",
+      "noModel": "Sans modèle (appels d'API et outils)",
+      "otherModels": "{count, plural, one {# autre modèle} other {# autres modèles}}"
     },
     "upgrade": {
       "title": "Analyse d'utilisation",
@@ -6020,7 +6119,41 @@
     "capExceededTokens": "Quota membre depasse : {consumed} sur {cap} tokens LLM utilises ce cycle. Demandez a votre admin d'organisation d'augmenter ce plafond.",
     "capExceededGeneric": "Quota membre depasse ({dimension}) : {consumed} sur {cap}. Demandez a votre admin d'organisation d'augmenter ce plafond."
   },
+  "twoFactorNudge": {
+    "title": "Protégez votre équipe avec la double authentification",
+    "body": "Vous êtes propriétaire de ce workspace d'équipe : ses applications connectées, ses identifiants et sa facturation. Activez la double authentification pour qu'un mot de passe volé ne suffise pas à entrer.",
+    "cta": "Activer la double authentification",
+    "dismiss": "Fermer"
+  },
   "settings": {
+    "twoFactor": {
+      "title": "Authentification à deux facteurs",
+      "description": "Demander un code issu d'une application d'authentification à chaque connexion, en plus de votre mot de passe ou de votre connexion Google ou GitHub.",
+      "stateOn": "Activée",
+      "stateOff": "Désactivée",
+      "loading": "Chargement du statut de la double authentification...",
+      "error": "Impossible de charger le statut de votre double authentification. Veuillez réessayer.",
+      "requiredForAdmins": "La double authentification est obligatoire pour les comptes administrateurs : votre dernière application d'authentification ne peut donc pas être supprimée.",
+      "requiredForAdminsPending": "La double authentification est obligatoire pour les comptes administrateurs. Activez-la maintenant, sinon elle vous sera demandée à votre prochaine connexion.",
+      "unnamedDevice": "Application d'authentification",
+      "addedOn": "Ajoutée le {date}",
+      "remove": "Supprimer",
+      "turnOn": "Activer",
+      "unavailable": "La double authentification n'est pas disponible pour ce compte.",
+      "recoveryTitle": "Codes de secours",
+      "recoveryNone": "Aucun pour l'instant. Si vous perdez votre téléphone, vous ne pourrez plus vous connecter.",
+      "recoveryLeft": "{remaining} codes restants sur {total}. Chacun sert une fois si vous perdez votre téléphone.",
+      "recoveryLow": "Plus que {remaining}. Générez-en de nouveaux avant d'en manquer.",
+      "recoverySet": "Configurés. Chaque code sert une fois si vous perdez votre téléphone.",
+      "recoveryCreate": "Créer des codes de secours",
+      "recoveryRegenerate": "Générer de nouveaux codes"
+    },
+    "emailUpdates": {
+      "title": "Mises à jour par e-mail",
+      "description": "Des nouveautés et des offres ponctuelles de LiveContext. Les e-mails liés à votre compte, comme la prise en main ou l'épuisement de vos crédits, vous sont envoyés dans tous les cas.",
+      "label": "Recevoir par e-mail les nouveautés et les offres de LiveContext. Désinscription en un clic.",
+      "error": "Votre préférence e-mail n'a pas pu être chargée ou enregistrée. Veuillez réessayer."
+    },
     "nav": {
       "scrollLeft": "Faire défiler vers la gauche",
       "scrollRight": "Faire défiler vers la droite"
@@ -6029,8 +6162,8 @@
     "mustBeLoggedIn": "Vous devez être connecté pour accéder aux paramètres.",
     "signIn": "Se connecter",
     "agentDefaults": {
-      "title": "Réglages par défaut des agents et du chat",
-      "subtitle": "Options appliquées par défaut à chaque conversation d'agent et à chaque nouveau chat général de cet espace de travail."
+      "title": "Réglages par défaut des agents et d'Orbi",
+      "subtitle": "Options appliquées par défaut à chaque conversation d'agent et à chaque nouvelle conversation avec Orbi dans cet espace de travail."
     },
     "bundles": {
       "title": "Bundles de catalogue",
@@ -6038,7 +6171,7 @@
       "adminOnly": "Seul l'administrateur de la plateforme peut gérer les bundles de catalogue.",
       "adminOnlyBadge": "Admin uniquement",
       "tabModels": "Catalogue de modèles",
-      "tabApis": "Catalogue MCP",
+      "tabApis": "Catalogue d'intégrations",
       "tabSkills": "Compétences",
       "skills": {
         "loading": "Chargement des bundles de compétences...",
@@ -6297,6 +6430,7 @@
       "email": "Email",
       "accountType": "Type de compte",
       "localAccount": "Email/Mot de passe",
+      "ssoAccount": "Authentification unique (SAML)",
       "plan": "Plan",
       "editBio": "Modifier la bio",
       "editBioDesc": "Parlez-nous de vous",
@@ -6365,7 +6499,7 @@
       "chatDefaultsLink": "Ouvrir les paramètres agents et chat",
       "savePreferences": "Enregistrer les préférences",
       "workflowLayoutDirection": "Disposition des workflows",
-      "workflowLayoutDirectionDescription": "Sens de lecture de l'éditeur de workflow : de gauche à droite, ou de haut en bas. Détermine l'emplacement des connexions et des boutons des nœuds, ainsi que l'organisation du graphe par la disposition automatique.",
+      "workflowLayoutDirectionDescription": "Sens dans lequel démarre un nouveau workflow : de gauche à droite, ou de haut en bas. Un workflow enregistré garde son propre sens, que vous changez depuis les réglages de son canevas, et la marketplace affiche chaque workflow comme son auteur l'a disposé.",
       "workflowLayoutDirectionHorizontal": "De gauche à droite",
       "workflowLayoutDirectionVertical": "De haut en bas",
       "inspectorDock": "Inspecteur de nœud",
@@ -6378,15 +6512,60 @@
       "inspectorOpenModeAdvanced": "Les réglages, l'entrée et la sortie"
     },
     "notifications": {
-      "title": "Préférences de notifications",
-      "description": "Gérez la façon dont nous vous contactons",
-      "email": "Notifications par email",
-      "emailDescription": "Recevoir les notifications importantes par email",
-      "comingSoon": "Bientôt disponible",
-      "push": "Notifications push",
-      "pushDescription": "Recevoir les notifications push dans le navigateur",
-      "marketing": "Emails marketing",
-      "marketingDescription": "Recevoir des informations sur les nouveaux outils et fonctionnalités"
+      "title": "Notifications",
+      "description": "Choisissez où chaque type d'alerte vous parvient dans cet espace de travail. La cloche de l'application reçoit toujours tout.",
+      "antiSpamInfo": "Comment les alertes sont limitées",
+      "antiSpamTitle": "Pas d'avalanche de messages",
+      "antiSpamBreaks": "Un message quand un workflow tombe en échec.",
+      "antiSpamReminder": "Au plus un rappel par jour tant qu'il reste en échec.",
+      "antiSpamRecovered": "Un message quand il fonctionne de nouveau.",
+      "antiSpamDigest": "Les mises à jour de compte et de tâches arrivent ensemble dans un résumé quotidien.",
+      "antiSpamCap": "Une boîte de réception ne reçoit jamais plus de 10 alertes par jour.",
+      "loading": "Chargement de vos réglages de notifications...",
+      "loadFailed": "Vos réglages de notifications n'ont pas pu être chargés.",
+      "retry": "Réessayer",
+      "saveFailed": "Ce changement n'a pas été enregistré. Réessayez.",
+      "channelTitle": "Destination des alertes par canal",
+      "channelIntro": "Les alertes par canal sont envoyées dans la conversation par défaut de cet espace de travail.",
+      "channelPrivacy": "Tous les membres de cette conversation peuvent lire ces alertes.",
+      "channelLoading": "Chargement des conversations connectées...",
+      "channelLoadFailed": "Les conversations connectées n'ont pas pu être chargées.",
+      "noDefault": "Des conversations sont connectées à cet espace de travail, mais aucune n'est définie par défaut : les alertes par canal ne sont donc pas envoyées.",
+      "defaultOff": "La conversation par défaut de cet espace de travail est désactivée : les alertes par canal ne sont donc pas envoyées.",
+      "changeLabel": "Envoyer les alertes dans une autre conversation",
+      "changeHint": "La conversation que vous choisissez devient celle par défaut de cet espace de travail : les approbations et les questions des agents qui suivent le défaut y arriveront aussi.",
+      "changeFailed": "La conversation par défaut n'a pas été changée. Réessayez.",
+      "changeReadOnly": "Votre rôle dans cet espace de travail est en lecture seule : seul un membre qui peut le modifier peut choisir une autre conversation.",
+      "manageChannels": "Gérer les canaux",
+      "noChannel": "Aucun canal de discussion n'est connecté à cet espace de travail, les options par canal ne sont donc pas encore disponibles.",
+      "connectChannel": "Connecter un canal",
+      "emailNeedsPlan": "Les alertes par email sont incluses à partir de l'offre {plan}.",
+      "personScoped": "S'applique dans tous vos espaces de travail. Les alertes par canal vont au canal de votre espace personnel.",
+      "deliversNothing": "Avec ce choix, rien ne sort de l'application : la cloche l'affiche toujours.",
+      "topics": {
+        "failures": {
+          "title": "Échecs de workflows",
+          "description": "Un workflow de production qui vous appartient a échoué ou s'est arrêté sur son plafond de dépense."
+        },
+        "credits": {
+          "title": "Crédits",
+          "description": "Vos crédits sont bas ou épuisés."
+        },
+        "account": {
+          "title": "Problèmes de compte",
+          "description": "Un identifiant a expiré ou un déclencheur a été désactivé. Envoyé dans le résumé quotidien."
+        },
+        "tasks": {
+          "title": "Tâches",
+          "description": "Une tâche vous a été assignée, vous mentionne ou attend votre relecture. Envoyé dans le résumé quotidien."
+        }
+      },
+      "delivery": {
+        "both": "Email et canal",
+        "email": "Email",
+        "channel": "Canal",
+        "off": "Cloche uniquement"
+      }
     },
     "advanced": {
       "deleteTitle": "Supprimer le compte",
@@ -6583,6 +6762,27 @@
           "ACTIVE": "Actif",
           "ERROR": "Erreur",
           "DISABLED": "Désactivé"
+        },
+        "domains": {
+          "title": "Domaines email vérifiés",
+          "description": "La connexion SSO ne fonctionne que pour les adresses d'un domaine dont ce workspace a prouvé la propriété. « Se connecter avec le SSO » envoie ces adresses vers votre fournisseur d'identité.",
+          "noneVerified": "Aucun domaine vérifié pour l'instant : personne ne peut se connecter en SSO tant qu'un domaine n'est pas vérifié.",
+          "verified": "Vérifié",
+          "pending": "En attente",
+          "verify": "Vérifier",
+          "remove": "Retirer {domain}",
+          "verifiedAt": "Vérifié le {date}",
+          "instructions": "Ajoutez cet enregistrement TXT chez votre fournisseur DNS, puis cliquez sur Vérifier. La propagation DNS peut prendre quelques minutes.",
+          "recordName": "Nom",
+          "recordValue": "Valeur",
+          "copy": "Copier",
+          "copied": "Copié",
+          "lastChecked": "Dernière vérification le {date}",
+          "placeholder": "entreprise.com",
+          "add": "Ajouter le domaine",
+          "verifiedNotice": "{domain} est vérifié.",
+          "notFoundYet": "L'enregistrement TXT de {domain} est introuvable pour l'instant. Vérifiez-le et réessayez dans quelques minutes.",
+          "error": "Une erreur est survenue. Réessayez."
         }
       },
       "cancel": "Annuler",
@@ -6936,7 +7136,6 @@
       "loopOutput": "Sortie de boucle",
       "previousIterationExplanation": "Cette sortie provient de l'itération de boucle précédente. Vous pouvez l'utiliser pour construire une logique qui accumule ou dépend des résultats des itérations précédentes.",
       "loopOutputExplanation": "Cette sortie provient de ce nœud dans la boucle. Après la fin de la boucle, elle contient le résultat de la dernière itération.",
-      "clickForInfo": "Cliquez pour plus d'infos",
       "goToNode": "Aller à {label}",
       "downloadFile": "Télécharger le fichier",
       "clickToExpand": "Cliquez pour agrandir",
@@ -6992,7 +7191,7 @@
         "signalBrowserTakeover": "Reprise du navigateur",
         "signalExpiresAt": "expire {date}",
         "noResolvedParams": "Aucun paramètre résolu",
-        "configuredParamsTitle": "Lancé avec"
+        "configuredParamsTitle": "Valeurs configurées (non résolues)"
       },
       "moreActions": "Plus d'actions",
       "tablesTrigger": {
@@ -7624,6 +7823,7 @@
       "scopeLatestEpoch": "Dernière époque de cette étape"
     },
     "canvas": {
+      "validationSummary": "{errors, plural, one {# erreur} other {# erreurs}}, {warnings, plural, one {# avertissement} other {# avertissements}}",
       "portSingleTargetHint": "Cette sortie est déjà connectée. Un port mène à un seul nœud - ajoutez un nœud Fork pour en exécuter plusieurs en parallèle.",
       "loadErrorTitle": "Impossible de charger ce workflow",
       "loadErrorMessage": "Le workflow n'a pas pu être chargé. Vérifiez votre connexion et réessayez.",
@@ -7658,6 +7858,8 @@
       "mockRun": "Exécution simulée",
       "followRunningNode": "Suivre l'étape en cours",
       "stopFollowingRunningNode": "Ne plus suivre l'étape en cours",
+      "followAgentBuild": "Suivre les nœuds ajoutés par l'agent",
+      "stopFollowingAgentBuild": "Ne plus suivre les nœuds ajoutés par l'agent",
       "runWorkflow": "Lancer le workflow",
       "runAuto": "Lancer (auto)",
       "runStepByStep": "Pas à pas (debug)",
@@ -7666,6 +7868,7 @@
       "runsHistory": "Historique des exécutions",
       "backToHome": "Retour à l'accueil",
       "searchPlaceholder": "Rechercher {context}...",
+      "searchIntegrations": "Rechercher des intégrations...",
       "frequentlyUsed": "Fréquemment utilisés",
       "coreTriggers": "Déclencheurs principaux",
       "appTriggerShortcuts": "Déclencheurs d'applications",
@@ -7682,7 +7885,7 @@
       "paletteCategories": "Catégories",
       "paletteNodes": "Nœuds",
       "paletteIntegrations": "Intégrations",
-      "mcp": "MCP",
+      "mcp": "Intégrations",
       "noApiFound": "Aucune API trouvée",
       "noToolFound": "Aucun outil trouvé",
       "createTable": "Créer une table",
@@ -8288,7 +8491,6 @@
       },
       "manual": {
         "configuration": "Configuration manuelle",
-        "moreInfo": "Cliquez pour plus d'infos",
         "title": "Déclencheur manuel",
         "description": "Déclenchez le workflow manuellement en cliquant sur le bouton play.",
         "availableOutputs": "Sorties disponibles :",
@@ -8297,7 +8499,6 @@
       },
       "workflowTrigger": {
         "configuration": "Configuration du workflow",
-        "moreInfo": "Cliquez pour plus d'infos",
         "title": "Déclencheur Workflow",
         "description": "Ce workflow est déclenché lorsqu'un autre workflow se termine et l'appelle.",
         "availableOutputs": "Sorties disponibles :",
@@ -8307,7 +8508,6 @@
       },
       "errorTrigger": {
         "configuration": "Configuration du déclencheur d'erreur",
-        "moreInfo": "Cliquez pour plus d'infos",
         "title": "Déclencheur Erreur",
         "description": "Se déclenche lorsque le run du workflow surveillé se termine en FAILED ou PARTIAL_SUCCESS. Cela couvre tout type d'échec : exception non capturée d'un node (erreur HTTP, crash de code, throw d'un outil), node stop_on_error, timeout, ou partial-success quand certaines branches ont échoué mais d'autres ont réussi. Utilisez-le pour alerter l'équipe ops, journaliser les échecs, réessayer ou prévoir un repli. Anti-boucle : si ce handler échoue à son tour, aucun autre handler d'erreur n'est déclenché.",
         "availableOutputs": "Sorties disponibles :",
@@ -8318,7 +8518,6 @@
       },
       "chat": {
         "configuration": "Configuration du chat",
-        "moreInfo": "Cliquez pour plus d'infos",
         "title": "Déclencheur Chat",
         "description": "Déclenchez le workflow depuis une entrée de conversation dans le panneau chat.",
         "availableOutputs": "Sorties disponibles :",
@@ -8375,7 +8574,7 @@
         "promptPlaceholder": "Que voulez-vous que l'agent fasse ?",
         "tools": "Outils",
         "allTools": "Tous les outils",
-        "connectToolsHint": "Connectez des outils MCP pour restreindre les outils que l'agent peut utiliser",
+        "connectToolsHint": "Connectez des outils d'intégration pour restreindre les outils que l'agent peut utiliser",
         "systemPrompt": "Prompt système",
         "systemPromptPlaceholder": "Vous êtes un assistant utile...",
         "systemPromptInfo": "Instructions qui définissent le comportement et la personnalité de l'agent.",
@@ -8390,9 +8589,32 @@
         "addRule": "Ajouter une règle",
         "inputToValidate": "Entrée à valider",
         "validationRules": "Règles de validation",
-        "rulesDescription": "Définissez les règles de validation pour la garde-fou.",
+        "rulesDescription": "Les règles de mots-clés, regex, longueur, données personnelles (hors adresses), concurrents et personnalisées sont vérifiées exactement, sans appel à l'IA. Les autres règles sont évaluées par le modèle d'IA.",
         "temperatureDescription": "Contrôle le caractère aléatoire de la validation.",
-        "maxTokensDescription": "Nombre maximum de tokens pour la réponse de validation IA."
+        "maxTokensDescription": "Nombre maximum de tokens pour la réponse de validation IA.",
+        "mode": "Mode",
+        "keywordModeBlock": "Bloquer ces mots-clés",
+        "keywordModeAllow": "Autoriser seulement si l'un de ces mots-clés apparaît",
+        "regexModeRequire": "Le contenu doit correspondre",
+        "regexModeBlock": "Le contenu ne doit contenir aucune correspondance",
+        "engineDeterministic": "Vérifiée exactement, sans appel à l'IA",
+        "engineModel": "Évaluée par le modèle d'IA",
+        "typeDescriptions": {
+          "pii_detection": "Détecte exactement e-mails, numéros de téléphone, numéros de sécurité sociale et numéros de carte ; les adresses sont évaluées par l'IA",
+          "toxic_language": "Évaluée par l'IA : contenu offensant ou nuisible",
+          "prompt_injection": "Évaluée par l'IA : tentatives de contourner les instructions",
+          "keyword_filter": "Bloque, ou exige, des mots-clés entiers",
+          "regex_pattern": "Le contenu doit correspondre à une regex, ou ne pas en contenir",
+          "length_check": "Longueur minimale et maximale en caractères",
+          "topic_restriction": "Évaluée par l'IA : sujets que le contenu ne doit pas aborder",
+          "competitor_mention": "Bloque les noms listés (mots entiers)",
+          "custom": "Expression booléenne : #input est le contenu, true signifie valide"
+        },
+        "actionDescriptions": {
+          "block": "Échouer la vérification et envoyer vers la sortie Fail",
+          "sanitize": "Échouer la vérification et remplacer le texte trouvé par [REDACTED] dans la sortie nettoyée",
+          "flag": "Échouer la vérification et lister la violation, sans masquer"
+        }
       },
       "approval": {
         "contextLabel": "Contexte d'approbation",
@@ -8410,24 +8632,31 @@
         "delegation": {
           "title": "Déléguer via un canal externe",
           "infoTitle": "Délégation via un canal externe",
-          "infoBody": "Envoie l'approbation en attente dans un chat Telegram sous forme de message avec des boutons approuver et rejeter. Un appui sur un bouton résout l'approbation, en plus de la décision dans l'application.",
+          "infoBody": "Envoie l'approbation en attente sur Telegram, Slack, Discord, WhatsApp ou Microsoft Teams sous forme de message avec des boutons approuver et rejeter. Un appui sur un bouton résout l'approbation, en plus de la décision dans l'application.",
           "infoOptional": "Optionnel. L'approbation reste aussi disponible dans l'application.",
           "enableAria": "Activer la délégation via un canal externe",
           "channelLabel": "Canal",
-          "credentialHint": "Optionnel. Laissez vide pour envoyer avec votre identifiant Telegram par défaut, ou sélectionnez-en un pour utiliser un bot spécifique.",
-          "chatIdLabel": "ID du chat",
-          "chatIdHint": "ID du chat ou du groupe de destination. Prend en charge les expressions '{{...}}'.",
+          "credentialHint": "Optionnel. Laissez vide pour utiliser le compte {channel} connecté dans Paramètres > Canaux, ou sélectionnez-en un pour utiliser un compte précis.",
+          "chatIdLabel": "Destination",
+          "chatIdHint": "Optionnel. Laissez vide pour envoyer vers la destination {channel} connectée dans Paramètres > Canaux. Prend en charge les expressions.",
           "messageLabel": "Modèle de message",
           "messagePlaceholder": "Par défaut, le contexte d'approbation",
           "imageLabel": "Image",
           "imageHint": "Optionnel. Une sortie fichier d'un autre nœud (par exemple une capture d'écran d'interface) ou une URL d'image. Si défini, le message est envoyé comme photo avec le texte en légende. Prend en charge les expressions '{{...}}'.",
           "allowedUserIdsLabel": "IDs d'utilisateurs autorisés",
-          "allowedUserIdsHint": "IDs d'utilisateurs Telegram séparés par des virgules. Laissez vide pour permettre à quiconque dans le chat de décider.",
+          "allowedUserIdsHint": "IDs d'utilisateurs {channel} séparés par des virgules. Laissez vide pour permettre à quiconque dans le chat de décider.",
           "approveLabelLabel": "Bouton Approuver",
           "approveLabelPlaceholder": "✅ Approuver",
           "rejectLabelLabel": "Bouton Rejeter",
           "rejectLabelPlaceholder": "❌ Rejeter",
-          "buttonLabelsHint": "Facultatif. Texte personnalisé des boutons approuver et rejeter. Laissez vide pour conserver les valeurs par défaut. Seul le texte du bouton change. Prend en charge les expressions '{{...}}'."
+          "buttonLabelsHint": "Facultatif. Texte personnalisé des boutons approuver et rejeter. Laissez vide pour conserver les valeurs par défaut. Seul le texte du bouton change. Prend en charge les expressions '{{...}}'.",
+          "channelHint": "Connectez un service une fois, et les approbations peuvent l'atteindre sans autre réglage.",
+          "manageChannels": "Gérer les canaux",
+          "destinationLabel": "Destination",
+          "destinationHint": "Choisie comme un identifiant : le défaut de l'espace, une destination connectée, ou un autre chat saisi à la main.",
+          "customDestination": "Autre chat (avancé)",
+          "credentialDescription": "Compte {channel} utilisé pour envoyer le message d'approbation",
+          "anonymousPressNote": "Sur {channel}, les boutons sont des liens vers une page de confirmation, qui ne peut pas savoir qui les a ouverts : n'importe qui dans le chat peut donc décider."
         }
       }
     },
@@ -8655,7 +8884,6 @@
     },
     "availableOutputs": "Sorties disponibles :",
     "manageInSettings": "Gérer dans les paramètres",
-    "moreInfo": "Plus d'infos",
     "loadingEndpoint": "Chargement du point d'accès...",
     "formUrl": "URL du formulaire",
     "copyUrl": "Copier l'URL",
@@ -8786,16 +9014,17 @@
       "description": "Créez votre première table pour commencer, ou consultez nos tutoriels guidés ci-dessous"
     },
     "mcp": {
-      "title": "MCPs",
-      "searchPlaceholder": "Rechercher des MCPs par nom, description...",
-      "addButton": "Ajouter un MCP",
-      "noMCPsFound": "Aucun MCP trouvé",
-      "addFirstMCP": "Ajoutez votre premier MCP depuis le marketplace",
-      "noMatchingMCPs": "Aucun MCP ne correspond à vos critères de recherche",
+      "title": "Intégrations",
+      "count": "{count, plural, one {# intégration} other {# intégrations}}",
+      "searchPlaceholder": "Rechercher des intégrations par nom, description...",
+      "addButton": "Ajouter une intégration",
+      "noMCPsFound": "Aucune intégration trouvée",
+      "addFirstMCP": "Ajoutez votre première intégration depuis la marketplace",
+      "noMatchingMCPs": "Aucune intégration ne correspond à vos critères de recherche",
       "deleteCount": "Supprimer ({count})",
-      "deleteTitle": "Supprimer les MCPs",
-      "deleteConfirmation": "Êtes-vous sûr de vouloir supprimer {count} MCP(s) ? Cette action est irréversible.",
-      "deleteFailed": "Impossible de supprimer les MCPs selectionnes.",
+      "deleteTitle": "Supprimer des intégrations",
+      "deleteConfirmation": "Voulez-vous vraiment supprimer {count} intégration(s) ? Cette action est irréversible.",
+      "deleteFailed": "Impossible de supprimer les intégrations sélectionnées.",
       "tools": "Outils",
       "added": "Ajouté"
     }
@@ -8979,9 +9208,9 @@
     "error": "Erreur",
     "repeat": "répétition",
     "overview": "Vue d'ensemble",
-    "overviewDesc": "Métriques combinées de tous les agents et du chat général",
-    "generalChat": "Chat général",
-    "generalChatDesc": "Métriques des conversations sans agent sélectionné",
+    "overviewDesc": "Métriques combinées de tous les agents et d'Orbi",
+    "generalChat": "Orbi",
+    "generalChatDesc": "Conversations avec Orbi, sans agent sélectionné",
     "agentPerformanceDesc": "Statistiques d'exécution par agent",
     "toolStatsDesc": "Utilisation et performance des outils des agents",
     "dailyActivity": "Activité quotidienne",
@@ -9115,6 +9344,7 @@
     "noAnswer": "Pas encore de réponse"
   },
   "onboarding": {
+    "marketingConsent": "Recevoir par e-mail les nouveautés et les offres de LiveContext. Désinscription en un clic.",
     "emailVerification": {
       "title": "Vérifiez votre email",
       "description": "Nous avons envoyé un code à 6 chiffres à {email}",
@@ -9127,7 +9357,8 @@
       "tooManyAttempts": "Trop de tentatives, veuillez demander un nouveau code",
       "rateLimited": "Trop de requêtes, veuillez patienter",
       "codeSent": "Code envoyé !",
-      "verified": "Email vérifié !"
+      "verified": "Email vérifié !",
+      "wrongEmail": "Ce n'est pas votre adresse ? Se déconnecter"
     },
     "step": "Étape",
     "of": "sur",
@@ -9143,7 +9374,7 @@
     "displayNameHint": "Lettres, chiffres, espaces et tirets uniquement. Visible par les autres utilisateurs.",
     "displayNameRequired": "Le nom d'affichage est requis",
     "displayNameTaken": "Ce nom d'affichage est déjà pris",
-    "displayNameCheckError": "Impossible de vérifier la disponibilité du nom",
+    "displayNameCheckError": "Impossible de vérifier la disponibilité du nom. Vous pouvez continuer quand même.",
     "role": "Quel est votre rôle ?",
     "customRolePlaceholder": "Entrez votre rôle...",
     "companySize": "Taille de l'entreprise",
@@ -9156,10 +9387,13 @@
     "step3Required": "Répondez aux deux questions pour terminer",
     "loginRequired": "Connexion requise",
     "loginRequiredDescription": "Veuillez vous connecter pour compléter votre profil",
+    "ceLinkLoginRequiredDescription": "Connectez-vous ou créez un compte LiveContext Cloud pour connecter votre installation auto-hébergée.",
     "signIn": "Se connecter",
     "errorTitle": "Une erreur est survenue",
     "errorDescription": "Impossible de charger la page d'onboarding. Veuillez réessayer.",
     "retry": "Réessayer",
+    "signOut": "Se déconnecter",
+    "signOutFailed": "Impossible de se déconnecter. Veuillez réessayer.",
     "ce": {
       "role": "Votre rôle CE",
       "teamSize": "Taille de l'équipe locale",
@@ -9619,8 +9853,6 @@
       "breakdown": {
         "sub": "Abonnement",
         "payg": "Recharge PAYG",
-        "ai": "Enveloppe IA",
-        "aiHint": "Pour les agents et le chat, sur les modèles ouverts au forfait gratuit. Se recharge chaque mois.",
         "paygHintPersists": "Conservés d'un cycle à l'autre."
       },
       "monthlyCycle": {
@@ -9653,8 +9885,7 @@
     "freeTier": {
       "label": "Gratuit",
       "srLabel": "inclus dans votre offre",
-      "tooltip": "Inclus dans votre plan Free : votre allocation IA mensuelle paie vos échanges en chat et avec les agents sur ce modèle.",
-      "tooltipWithCredits": "Inclus dans votre plan Free : {credits} crédits IA par mois, qui paient vos échanges en chat et avec les agents sur ce modèle."
+      "tooltip": "Inclus dans votre plan Free : vos crédits mensuels paient vos échanges en chat et avec les agents sur ce modèle."
     },
     "upgradeRequired": {
       "label": "Crédits payants requis",
@@ -9663,6 +9894,7 @@
       "cta": "Voir les offres ou recharger"
     },
     "planLocked": {
+      "infoLabel": "Pourquoi ce nœud nécessite le plan {plan}",
       "nodeNotice": "Ce nœud est disponible à partir du plan {plan}. Il échouera à l'exécution du workflow tant que le plan n'est pas mis à niveau."
     }
   },
@@ -10704,9 +10936,9 @@
     "dismiss": "J'ai compris",
     "learnMore": "Voir toutes les mises à jour",
     "latest": {
-      "title": "Un classifieur typé, et vos propres clés de modèle",
-      "body": "Le nœud Classify tourne désormais sur un modèle de décision : TypeSafe Jev choisit l'une de vos catégories et attribue une probabilité à chacune, au lieu de demander à un modèle de conversation d'en écrire le nom. Mêmes catégories, mêmes branches, un simple changement de fournisseur. Et vos propres clés de fournisseur alimentent tout, agents, conversations et nœuds : chaque exécution est rattachée à la clé qu'elle a réellement utilisée, et si un fournisseur refuse votre clé en cours de route, vous lisez ses mots, pas les nôtres.",
-      "mediaAlt": "Deux icônes côte à côte : la marque TypeSafe, légendée comme moteur typé pour Classify, et une clé, légendée comme vos propres clés pour les agents, les conversations et les nœuds"
+      "title": "Vos agents vous joignent dans votre messagerie",
+      "body": "Les agents, les étapes d'approbation et les exécutions sans surveillance n'attendent plus sur une carte que personne ne voit. Connectez Telegram, Slack, Discord, WhatsApp ou Microsoft Teams depuis la page Channels de vos paramètres : une question ou une demande d'approbation arrive dans la conversation que vous lisez déjà, vous répondez depuis celle-ci et l'exécution reprend. Les alertes peuvent aussi sortir de l'application, sur un canal ou par e-mail, dans votre langue (sur le cloud, les alertes par e-mail commencent avec le forfait Starter). Un canal se connecte aussi à la main, sans l'assistant et sans dépenser de crédits.",
+      "mediaAlt": "Deux icônes côte à côte : une bulle de discussion, légendée comme canaux de discussion pour Telegram, Slack, Discord, WhatsApp et Teams, et une cloche, légendée comme alertes par e-mail ou sur un canal"
     }
   },
   "optionalComponents": {
@@ -11444,7 +11676,10 @@
       "NIGHT_OWL": "Travail de nuit",
       "PUBLISHER": "Publication",
       "SHARER": "Partage",
-      "POPULARITY": "Audience"
+      "POPULARITY": "Audience",
+      "REACHABLE": "Joignable",
+      "MULTICHANNEL": "Multicanal",
+      "REMOTE_CONTROL": "Pilotage à distance"
     },
     "tier": {
       "BRONZE": "Bronze",
@@ -11465,7 +11700,10 @@
       "PUBLICATIONS_PUBLISHED": "Publier {count} éléments sur la marketplace",
       "PUBLICATIONS_PUBLIC": "Rendre {count} publications publiques",
       "PUBLICATION_USES": "Faire installer vos publications {count} fois",
-      "DAYS_UNTIL_JOIN_CUTOFF": "Rejoindre LiveContext tôt"
+      "DAYS_UNTIL_JOIN_CUTOFF": "Rejoindre LiveContext tôt",
+      "CHANNELS_CONNECTED": "Connecter {count} destinations de chat qui reçoivent vos messages",
+      "CHANNEL_SERVICES": "Être joignable sur {count} services de chat différents",
+      "REMOTE_DECISIONS": "Obtenir {count} réponses à vos demandes depuis un chat plutôt que depuis l'app"
     },
     "item": {
       "founder_2026": {
@@ -11615,6 +11853,30 @@
       },
       "popularity_50000": {
         "name": "Nom connu de tous"
+      },
+      "reachable_1": {
+        "name": "À portée de main"
+      },
+      "reachable_5": {
+        "name": "Partout à la fois"
+      },
+      "multichannel_2": {
+        "name": "Deux lignes ouvertes"
+      },
+      "multichannel_4": {
+        "name": "Standard téléphonique"
+      },
+      "remote_1": {
+        "name": "Premier appel"
+      },
+      "remote_25": {
+        "name": "Pilote de poche"
+      },
+      "remote_250": {
+        "name": "Salle de contrôle"
+      },
+      "remote_2500": {
+        "name": "Centre de commandement"
       }
     }
   },
@@ -11720,10 +11982,6 @@
       "clear": "Effacer"
     },
     "untitled": "Création sans titre",
-    "look": {
-      "toDarkroom": "Passer à la vue chambre noire",
-      "toApp": "Revenir à la vue de l'application"
-    },
     "thread": {
       "loading": "Chargement de ce fil studio"
     },
@@ -12002,9 +12260,9 @@
       },
       "hero": {
         "eyebrow": "La plateforme d’automatisation par IA",
-        "titleLineOne": "Un message <u>en entrée</u>.",
-        "titleLineTwo": "Une automatisation qui tourne <u>en sortie</u>.",
-        "lead": "{integrations} intégrations et tous les grands LLM, dans le cloud ou auto-hébergé. Créez, déployez et exécutez vos agents visuellement, dans le chat ou avec du code, et ajoutez une validation humaine où vous le voulez.",
+        "titleLineOne": "Dites-le <u>une fois</u>.",
+        "titleLineTwo": "Ne le refaites <u>plus jamais</u>.",
+        "lead": "Un message suffit à créer votre automatisation, et vous gardez le contrôle : chaque étape tracée et auditable, vos secrets chiffrés, une validation humaine où vous le voulez. L’IA n’intervient que là où elle est rentable, vous payez donc moins qu’avec un agent qui tâtonne à chaque étape.",
         "startFree": "Commencer gratuitement"
       },
       "integrations": {
@@ -12049,8 +12307,8 @@
         "lead": "Choisissez une formule, choisissez votre palier de crédits et fixez pour chaque agent un budget qu’il ne peut pas dépasser. Vous ne payez que ce que vous exécutez, sans frais cachés ni dépassement surprise."
       },
       "finalCta": {
-        "titleLineOne": "Arrêtez de jongler entre les outils.",
-        "titleLineTwo": "Commencez avec un seul.",
+        "titleLineOne": "Build prod.",
+        "titleLineTwo": "Not god.",
         "lead": "Discutez avec. Construisez avec. Livrez avec. Envoyez-le faire le travail à votre place."
       }
     },
@@ -15023,6 +15281,254 @@
       "running": "En cours",
       "waiting": "En attente",
       "completed": "Terminé"
+    }
+  },
+  "channelsSettings": {
+    "title": "Canaux",
+    "subtitle": "Là où vos approbations et les questions de vos agents vous parviennent quand vous n'êtes pas dans l'application.",
+    "loading": "Chargement...",
+    "error": "Une erreur est survenue",
+    "connectedTitle": "Destinations connectées",
+    "emptyTitle": "Aucun canal connecté pour l'instant",
+    "emptyHint": "Choisissez un service ci-dessous et l'assistant vous guidera pendant la configuration.",
+    "defaultBadge": "Par défaut",
+    "statusWorking": "Fonctionne : un message a été livré ici.",
+    "statusNotDelivered": "Pas encore fonctionnel : rien n'a été livré ici.",
+    "sentByBot": "Envoyé par le bot @{bot}",
+    "restricted": "{count, plural, one {# personne peut décider} other {# personnes peuvent décider}}",
+    "troubleshoot": "Réparer avec l'assistant",
+    "makeDefault": "Définir par défaut",
+    "disconnect": "Déconnecter",
+    "disconnectTitle": "Déconnecter cette destination ?",
+    "disconnectMessage": "Les approbations et les questions n'arriveront plus dans {chat}. S'il s'agit de la destination par défaut, le défaut passe à une autre destination qui fonctionne.",
+    "servicesTitle": "Ajouter un canal",
+    "servicesHint": "Chaque service demande quelques étapes dans sa propre console. L'assistant vous les fait faire une par une, et vous pouvez lui poser n'importe quelle question en chemin.",
+    "setUpWithAssistant": "Configurer avec l'assistant",
+    "setUpManually": "Configurer manuellement",
+    "readOnly": "Votre rôle dans cet espace est en lecture seule : vous voyez où il est joint, sans pouvoir le modifier.",
+    "manual": {
+      "title": "Connecter {channel}",
+      "intro": "Les mêmes étapes que l'assistant, sous forme de formulaire. Aucun crédit n'est utilisé.",
+      "stepAccount": "Votre compte {channel}",
+      "stepHello": "Dites bonjour à votre bot",
+      "stepDestination": "Où arrivent les messages",
+      "accountSetting": {
+        "publicKey": {
+          "label": "Clé publique de l'application",
+          "placeholder": "64 caractères hexadécimaux",
+          "hint": "Developer Portal, votre application, General Information, Public Key."
+        },
+        "phoneNumberId": {
+          "label": "ID du numéro de téléphone",
+          "placeholder": "106540352242922",
+          "hint": "App Meta, WhatsApp, API Setup, Phone number ID (pas le numéro lui-même)."
+        }
+      },
+      "findChats": "Trouver mes conversations",
+      "findChatsHint": {
+        "telegram": "Liste les conversations qui ont récemment écrit à votre bot. Ne fonctionne qu'avant que le bot soit connecté : ensuite, saisissez l'identifiant ci-dessous.",
+        "slack": "Liste les canaux où l'application a été invitée, et vos messages directs.",
+        "discord": "Liste les salons des serveurs où votre bot a été ajouté.",
+        "teams": "Liste vos conversations Teams."
+      },
+      "chatIdLabel": "Identifiant du chat",
+      "noChats": {
+        "telegram": "Aucune conversation : envoyez un message à votre bot (ou ajoutez-le au groupe), puis relancez la recherche.",
+        "slack": "Aucun canal : invitez l'application dans un canal avec /invite, puis relancez la recherche.",
+        "discord": "Aucun salon : ajoutez le bot à votre serveur, puis relancez la recherche.",
+        "teams": "Aucune conversation : démarrez une conversation dans Teams, puis relancez la recherche."
+      },
+      "phoneLabel": "Numéro de téléphone",
+      "phoneHint": "Au format international. La personne doit avoir envoyé un message à votre numéro WhatsApp dans les dernières 24 heures.",
+      "connect": "Connecter et envoyer un message de test",
+      "close": "Fermer",
+      "delivered": "Connecté : le message de test est arrivé.",
+      "notDelivered": "Enregistré, mais le message de test n'est pas arrivé.",
+      "remaining": "Encore une étape dans le service",
+      "typeChatLabel": "Ou saisissez l'identifiant du chat",
+      "typeChatHint": {
+        "telegram": "Pour un groupe : son identifiant, qui commence par -100. Pour une chaîne publique : @nom. Jamais le @nom de votre propre bot.",
+        "slack": "Pour un canal absent de la liste : son identifiant (clic droit sur le canal, Afficher les détails du canal, tout en bas).",
+        "discord": "Pour un salon absent de la liste : son identifiant (Mode développeur activé, clic droit sur le salon, Copier l'identifiant du salon).",
+        "teams": "Pour un chat absent de la liste : l'identifiant de sa conversation."
+      },
+      "chatIdPlaceholder": {
+        "telegram": "123456789, -1001234567890 ou @machaine",
+        "slack": "C0123456789",
+        "discord": "123456789012345678",
+        "whatsapp": "+33612345678",
+        "teams": "19:abc123@thread.v2"
+      },
+      "accountSettingKept": "Ce compte est déjà connecté : laissez vide pour garder la valeur enregistrée.",
+      "details": "Détails :",
+      "copy": "Copier",
+      "copied": "Copié",
+      "tryAgain": "Réessayer",
+      "listUnavailable": {
+        "telegram": "Telegram ne peut pas lister les conversations d'un bot déjà connecté. Saisissez la destination ci-dessous : pour vous, le numéro que @userinfobot vous envoie quand vous lui écrivez."
+      },
+      "botItself": "C'est votre bot (@{bot}) : un bot ne peut pas s'envoyer de messages à lui-même. Indiquez la conversation qui doit les recevoir, par exemple votre identifiant numérique donné par @userinfobot.",
+      "guide": {
+        "openBot": "Ouvrir @{bot} dans Telegram",
+        "askAssistant": "Laisser Orbi me guider",
+        "links": {
+          "botFather": "Ouvrir @BotFather",
+          "userInfoBot": "Obtenir mon identifiant (@userinfobot)",
+          "discordPortal": "Discord Developer Portal",
+          "metaApps": "Meta for Developers"
+        },
+        "telegram": {
+          "1": "Dans Telegram, ouvrez @BotFather, envoyez /newbot et copiez le jeton qu'il vous donne.",
+          "2": "Puis connectez ce jeton ci-dessous.",
+          "3": "Ouvrez votre bot et appuyez sur Démarrer (pour un groupe : ajoutez le bot au groupe et envoyez-y un message). Un bot ne peut pas écrire à quelqu'un qui ne lui a jamais écrit.",
+          "4": "Indiquez la conversation où écrire : pour vous, votre identifiant numérique, que @userinfobot vous envoie quand vous lui écrivez."
+        },
+        "slack": {
+          "1": "Connectez Slack ci-dessous et approuvez l'application dans votre espace de travail.",
+          "2": "Pour un canal, tapez /invite suivi du nom de l'application dans ce canal. Un message direct ne demande rien.",
+          "3": "Choisissez le canal ou la conversation avec Trouver mes conversations."
+        },
+        "discord": {
+          "1": "Dans le Discord Developer Portal, créez une application, ouvrez Bot et copiez son jeton.",
+          "2": "Dans OAuth2, URL Generator, cochez bot et Send Messages, ouvrez le lien et ajoutez le bot à votre serveur.",
+          "3": "Collez le jeton ci-dessous, et la Public Key (page General Information) dans le champ en dessous.",
+          "4": "Choisissez le salon, puis collez l'Interactions Endpoint URL affichée après la connexion sur la page General Information."
+        },
+        "whatsapp": {
+          "1": "Dans votre application Meta avec WhatsApp, API Setup : notez le Phone number ID et créez un jeton System User permanent.",
+          "2": "Collez le jeton ci-dessous, et le Phone number ID dans le champ en dessous.",
+          "3": "Depuis le téléphone qui répondra, envoyez un message à votre numéro professionnel (WhatsApp n'autorise une réponse que dans les 24 heures).",
+          "4": "Saisissez ce numéro de téléphone, puis configurez l'URL de rappel et le jeton de vérification affichés après la connexion."
+        },
+        "teams": {
+          "1": "Connectez-vous avec Microsoft ci-dessous.",
+          "2": "Choisissez la conversation avec Trouver mes conversations.",
+          "3": "Les messages sont publiés en votre nom, et Teams ne vous notifie pas de vos propres messages : choisissez une conversation lue par d'autres, ou un autre service pour être notifié vous-même."
+        }
+      }
+    },
+    "assistantUnavailable": "L'assistant ne peut pas être ouvert ici. Ouvrez le chat et demandez-lui de configurer le canal.",
+    "setupPrompt": "Je veux que mes approbations et les questions de mes agents m'arrivent sur {channel}. Guide-moi pas à pas dans la configuration (canal : {id}), et vérifie avec moi après chaque étape.",
+    "troubleshootPrompt": "Mon canal {channel} \"{chat}\" ne fonctionne pas. Dernière erreur : {error}. Aide-moi à comprendre pourquoi et à le réparer.",
+    "services": {
+      "telegram": {
+        "needs": "Votre propre bot, créé en deux minutes avec BotFather.",
+        "time": "Environ 3 minutes"
+      },
+      "slack": {
+        "needs": "Rien à créer : autorisez l'application dans votre espace de travail et choisissez un canal.",
+        "time": "Environ 1 minute"
+      },
+      "discord": {
+        "needs": "Votre propre application et bot Discord, plus une URL à coller dans son portail.",
+        "time": "Environ 5 minutes"
+      },
+      "whatsapp": {
+        "needs": "Une application Meta business avec WhatsApp, son ID de numéro de téléphone et un jeton d'accès.",
+        "time": "Environ 10 minutes"
+      },
+      "teams": {
+        "needs": "Rien à créer : connectez-vous avec Microsoft et choisissez une conversation. Les messages partent en votre nom : ils notifient les autres personnes de la conversation, pas vous.",
+        "time": "Environ 1 minute"
+      }
+    }
+  },
+  "channelPicker": {
+    "loading": "Chargement des destinations...",
+    "error": "Impossible de charger les destinations.",
+    "empty": "Aucun canal connecté pour le moment.",
+    "connect": "Connecter un canal",
+    "defaultOf": "Défaut de l'espace ({destination})",
+    "defaultNone": "Défaut de l'espace (aucun pour l'instant)",
+    "defaultNoneHint": "Cet espace n'a pas encore de destination par défaut : rien n'est envoyé tant qu'aucune n'est connectée.",
+    "notWorking": "{destination} (aucun message reçu)",
+    "gone": "Destination déconnectée",
+    "goneHint": "La destination choisie ici n'est plus connectée : rien n'est envoyé tant qu'une autre n'est pas choisie.",
+    "manage": "Gérer les canaux"
+  },
+  "setupChecklist": {
+    "pill": "{done}/{total}",
+    "pillAria": "{done}/{total} étapes de configuration faites",
+    "title": "Bien démarrer",
+    "subtitle": "{done} sur {total} faites. Chaque étape se coche toute seule une fois faite.",
+    "statusDone": "fait",
+    "statusTodo": "à faire",
+    "tasks": {
+      "integration": {
+        "title": "Connecter une app",
+        "why": "Vos agents peuvent alors y lire et y agir (Gmail, Notion, Slack...)."
+      },
+      "chat": {
+        "title": "Parler à Orbi",
+        "why": "Demandez ce que vous voulez : il crée agents, workflows et apps pour vous."
+      },
+      "build": {
+        "title": "Créer un agent ou un workflow",
+        "why": "Quelque chose qui travaille pour vous, même en votre absence."
+      },
+      "channel": {
+        "title": "Être joint hors de l'app",
+        "why": "Les approbations et les questions arrivent sur Telegram, Slack, WhatsApp, Discord ou Teams."
+      }
+    }
+  },
+  "toolHealth": {
+    "title": "Santé des outils",
+    "subtitle": "Outils en échec sur toute la plateforme. L'étalement sur les tenants sépare une entrée de catalogue cassée d'un credential client.",
+    "loading": "Chargement...",
+    "window": "Fenêtre",
+    "windowAll": "Tout l’historique",
+    "windowDays": "{days} derniers jours",
+    "minCalls": "Appels min",
+    "refresh": "Rafraîchir",
+    "summary": "{tools} outils en échec, {suspects} défauts de catalogue suspectés",
+    "errorTitle": "Impossible de charger la santé des outils",
+    "empty": "Aucun outil n’a échoué assez souvent pour apparaître dans cette fenêtre.",
+    "tenantsOf": "{affected} sur {calling}",
+    "scopeNote": "Les compteurs couvrent les appels faits par un agent. Les appels faits par un nœud de workflow ne sont pas tracés par outil et n’apparaissent pas ici.",
+    "col": {
+      "tool": "Outil",
+      "failures": "Échecs",
+      "rate": "Taux",
+      "tenants": "Tenants touchés",
+      "lastUsed": "Dernier appel",
+      "error": "Dernière erreur"
+    },
+    "verdict": {
+      "ALL_TENANTS": "Tous les tenants",
+      "WIDESPREAD": "Étendu",
+      "ISOLATED": "Isolé",
+      "SINGLE_TENANT": "Un seul tenant"
+    },
+    "verdictHint": {
+      "ALL_TENANTS": "échoue chez tous les tenants qui l’appellent, regarder d’abord l’entrée de catalogue",
+      "WIDESPREAD": "échoue chez au moins la moitié des tenants concernés",
+      "ISOLATED": "une minorité de tenants, très probablement leurs credentials",
+      "SINGLE_TENANT": "un seul tenant l’appelle, rien ne peut être conclu sur le catalogue"
+    }
+  },
+  "ceCloudLink": {
+    "expired": "La connexion a expiré, cliquez à nouveau sur Connecter.",
+    "planRequired": {
+      "title": "Votre liaison LiveContext Cloud nécessite un forfait payant",
+      "body": "Lier une installation auto-hébergée à LiveContext Cloud nécessite un forfait payant sur le compte cloud. Choisissez un forfait et cette installation se reconnecte automatiquement, sans rien avoir à relier.",
+      "cta": "Voir les forfaits cloud",
+      "sidebarBadge": "Forfait payant requis"
+    },
+    "planRequiredModal": {
+      "title": "Forfait payant requis",
+      "description": "Cette installation est liée à un compte LiveContext Cloud qui n'a pas de forfait payant, le cloud a donc refusé la requête. Choisissez un forfait sur LiveContext Cloud et cette installation se reconnecte automatiquement.",
+      "cta": "Voir les forfaits cloud",
+      "close": "Fermer"
+    },
+    "cloud": {
+      "returning": "Retour vers votre installation auto-hébergée.",
+      "pricingBannerTitle": "Lier votre installation auto-hébergée nécessite un forfait payant",
+      "pricingBannerBody": "Choisissez un forfait ci-dessous. Une fois votre abonnement actif, vous revenez sur votre installation pour terminer la connexion.",
+      "pricingBannerContinue": "J'ai un forfait payant, continuer",
+      "pricingBannerStillRequired": "Votre forfait actuel n'est pas encore un forfait payant. Choisissez un forfait pour continuer.",
+      "pricingBannerNoPending": "Cette demande de connexion n'est plus disponible. Cliquez à nouveau sur Connecter depuis votre installation auto-hébergée.",
+      "pricingBannerError": "Impossible de vérifier votre forfait. Veuillez réessayer."
     }
   }
 }

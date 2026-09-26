@@ -30,10 +30,10 @@ const FILES = [
   // than assuming a file has one. Skipping this file is what would have let the
   // memory access-mode keys go missing.
   'components/chat/CreateAgentModal.tsx',
-  // The agent & chat defaults panel, hosted by the Agents page "Settings" tab and by
-  // Settings > Agents & Chat. Same exposure as the Memory tab above: its own header text
-  // comes from a namespace no other surface uses, and its component test mocks `t` to the
-  // identity function - so this is the only unit-level guard that the keys exist at all.
+  // The agent & chat defaults panel, hosted by the Agents page "Settings" tab. Same
+  // exposure as the Memory tab above: its own header text comes from a namespace no
+  // other surface uses, and its component test mocks `t` to the identity function - so
+  // this is the only unit-level guard that the keys exist at all.
   'components/settings/AgentChatDefaults.tsx',
 ];
 

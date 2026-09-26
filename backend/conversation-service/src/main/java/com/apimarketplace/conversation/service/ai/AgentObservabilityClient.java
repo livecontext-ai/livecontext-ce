@@ -78,6 +78,17 @@ public class AgentObservabilityClient {
             if (keyRoute instanceof String route && !route.isBlank()) {
                 body.put("keyRoute", route);
             }
+            // Whether agent-service ran the turn on an admin replacement because the chosen
+            // model is disabled (analytics only: agent_run_stopped.model_replaced). Absent
+            // when the resolver did not run, so nothing is guessed.
+            Object modelReplaced = response.metrics() != null ? response.metrics().get("modelReplaced") : null;
+            if (modelReplaced instanceof Boolean replaced) {
+                body.put("modelReplaced", replaced);
+                Object replacedModel = response.metrics().get("replacedModel");
+                if (replaced && replacedModel instanceof String rm && !rm.isBlank()) {
+                    body.put("replacedModel", rm);
+                }
+            }
             if (taskId != null && !taskId.isBlank()) {
                 body.put("taskId", taskId);
             }
@@ -121,10 +132,12 @@ public class AgentObservabilityClient {
                 // bills at the legacy full input rate, which errs on the expensive side -
                 // the primary path (agent-service recordFromChat) is the cache-aware one.
                 String fallbackSource = (source != null && !source.isBlank()) ? source : "CHAT_CONVERSATION";
+                // Computed ONCE: the async consume retries and dead-letters with this same string.
+                String fallbackKey = fallbackBillingKey(executionId);
                 Runnable fallbackDebit = () -> creditClient.consumeCreditsAsync(
                     tenantId,
                     fallbackSource,
-                    conversationId != null ? conversationId : (agentId != null ? agentId : "unknown"),
+                    fallbackKey,
                     response.provider(),
                     response.model(),
                     promptTok,
@@ -142,6 +155,31 @@ public class AgentObservabilityClient {
                         tenantId, fallbackError.getMessage());
             }
         }
+    }
+
+    /**
+     * The {@code source_id} the fallback debit is billed under.
+     *
+     * <p>It used to be the conversation id, else the agent id, else the literal "unknown": the
+     * first two repeat on every turn, the last is shared by every tenant. auth-service answers a
+     * debit whose key already holds the same payer's charge of the same type as "already paid", so
+     * every later fallback turn of a conversation was never billed.
+     *
+     * <p>The dispatcher-minted execution id is the key agent-service bills the same turn under when
+     * the observability POST does reach it, so a POST that timed out AFTER agent-service billed and
+     * this fallback now land on one key and the second is answered as the replay it is, instead of
+     * a second charge. With no execution id, a UUID minted per call: unique per charge, and stable
+     * for the only retries of it that exist (the async consume and its dead-letter reuse it).
+     */
+    static String fallbackBillingKey(String executionId) {
+        if (executionId != null && !executionId.isBlank()) {
+            try {
+                return UUID.fromString(executionId.trim()).toString();
+            } catch (IllegalArgumentException malformed) {
+                // agent-service ignores a malformed id too, so it is not the key it billed under.
+            }
+        }
+        return UUID.randomUUID().toString();
     }
 
     private int toInt(Object val) {
@@ -180,6 +218,29 @@ public class AgentObservabilityClient {
                                     String stopReason, String errorMessage,
                                     String userPrompt, String assistantContent,
                                     String provider, String model) {
+        recordFailure(tenantId, orgId, agentId, source, conversationId, stopReason, errorMessage,
+                userPrompt, assistantContent, provider, model, null);
+    }
+
+    /**
+     * Same, recorded under {@code executionId} when the run already has one (a task locks itself
+     * to an id before dispatching): a failed task run is then the run the task points at.
+     */
+    @Async
+    public void recordFailureAsync(String tenantId, String orgId, String agentId,
+                                    String source, String conversationId,
+                                    String stopReason, String errorMessage,
+                                    String userPrompt, String assistantContent,
+                                    String provider, String model, String executionId) {
+        recordFailure(tenantId, orgId, agentId, source, conversationId, stopReason, errorMessage,
+                userPrompt, assistantContent, provider, model, executionId);
+    }
+
+    private void recordFailure(String tenantId, String orgId, String agentId,
+                               String source, String conversationId,
+                               String stopReason, String errorMessage,
+                               String userPrompt, String assistantContent,
+                               String provider, String model, String executionId) {
         if (tenantId == null || tenantId.isBlank() || agentId == null || agentId.isBlank()) {
             log.debug("Skipping failure-only observability record: tenantId={}, agentId={}", tenantId, agentId);
             return;
@@ -193,6 +254,9 @@ public class AgentObservabilityClient {
             body.put("durationMs", 0L);
             body.put("iterationCount", 0);
             body.put("conversationId", conversationId);
+            if (executionId != null && !executionId.isBlank()) {
+                body.put("executionId", executionId);
+            }
             if (source != null && !source.isBlank()) {
                 body.put("source", source);
             }

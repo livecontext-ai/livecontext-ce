@@ -486,6 +486,76 @@ class SendEmailNodeTest {
         }
     }
 
+    @Nested
+    @DisplayName("Recipient list references")
+    class RecipientListTests {
+
+        private SendEmailNode templatedHtmlNode(Object resolvedFlag) {
+            Core.SendEmailConfig config = new Core.SendEmailConfig(
+                null, 587, null, null, true,
+                null, null, "to@example.com", null, null,
+                "Subject", "Body", false, null
+            , null, null, null);
+            SendEmailNode node = new SendEmailNode("core:send_email", config);
+            wireCredentialClient(node, validSmtpCredentialData());
+            node.setTemplateAdapter(mockTemplateAdapter);
+            node.setDeferredScalars(Map.of("sendEmail", Map.of("isHtml", "{{core:x.output.html}}")));
+            when(mockTemplateAdapter.resolveTemplates(any(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:x.output.html}}", resolvedFlag)));
+            return node;
+        }
+
+        @Test
+        @DisplayName("regression: a {{...}} isHtml is resolved and reported; it used to drop the whole sendEmail config")
+        @SuppressWarnings("unchecked")
+        void templatedIsHtmlIsResolved() {
+            // Fails at Transport.send (no SMTP server); isHtml is resolved and reported before that.
+            NodeExecutionResult result = templatedHtmlNode(true).execute(context);
+
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(true, params.get("isHtml"));
+            assertEquals("to@example.com", params.get("toEmail"), "the rest of the config survives");
+        }
+
+        @Test
+        @DisplayName("a {{...}} isHtml resolving to a non-boolean fails, naming the config")
+        void templatedIsHtmlNotABooleanFails() {
+            NodeExecutionResult result = templatedHtmlNode("fancy").execute(context);
+
+            assertFalse(result.isSuccess());
+            assertTrue(result.errorMessage().orElse("").contains("sendEmail"), result.errorMessage().orElse(""));
+        }
+
+        @Test
+        @DisplayName("a to/cc reference resolving to a LIST of addresses is joined with ', '; it used to become \"[a, b]\", which no mail server parses")
+        @SuppressWarnings("unchecked")
+        void listRecipientsAreJoined() {
+            Core.SendEmailConfig config = new Core.SendEmailConfig(
+                null, 587, null, null, true,
+                null, null, "{{core:contacts.output.emails}}", "{{core:contacts.output.cc}}", null,
+                "Subject", "Body", false, null
+            , null, null, null);
+            SendEmailNode node = new SendEmailNode("core:send_email", config);
+            wireCredentialClient(node, validSmtpCredentialData());
+            // After acceptServices, which would otherwise replace the adapter with the registry's.
+            node.setTemplateAdapter(mockTemplateAdapter);
+            Map<String, Object> values = new HashMap<>();
+            values.put("{{core:contacts.output.emails}}", java.util.List.of("a@example.com", "b@example.com"));
+            values.put("{{core:contacts.output.cc}}", java.util.List.of("c@example.com"));
+            when(mockTemplateAdapter.resolveTemplates(any(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(values));
+
+            // Fails at Transport.send (no SMTP server); the recipients are resolved before that.
+            NodeExecutionResult result = node.execute(context);
+
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("a@example.com, b@example.com", params.get("toEmail"));
+            assertEquals("c@example.com", params.get("ccEmail"));
+            assertFalse(result.errorMessage().orElse("").contains("Illegal"),
+                "the joined list must parse as addresses, got: " + result.errorMessage().orElse(""));
+        }
+    }
+
     // ===============================================================
     // Credential loading tests
     // ===============================================================
@@ -1128,5 +1198,28 @@ class SendEmailNodeTest {
                         .contains("SendEmail refused");
                 });
         }
+    }
+
+    @Test
+    @DisplayName("regression: a templated credentialId that is not found fails naming the field, no other sender used")
+    void templatedCredentialNotFoundFailsNamingTheField() {
+        Core.SendEmailConfig config = new Core.SendEmailConfig(
+            null, 587, null, null, true, null, null, "a@example.com", null, null,
+            "Subject", "Body", false, null, null, null, null);
+        SendEmailNode node = new SendEmailNode("core:send_email", config);
+        node.acceptServices(mockServiceRegistry);
+        V2TemplateAdapter adapter = org.mockito.Mockito.mock(V2TemplateAdapter.class);
+        when(adapter.resolveTemplates(any(), any()))
+            .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:pick.output.id}}", 404L)));
+        node.setTemplateAdapter(adapter);
+        node.setDeferredScalars(Map.of("sendEmail", Map.of("credentialId", "{{core:pick.output.id}}")));
+        when(mockCredentialClient.getCredentialById(anyString(), org.mockito.ArgumentMatchers.anyLong()))
+            .thenReturn(Optional.empty());
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertTrue(result.isFailure());
+        assertTrue(result.errorMessage().orElse("").contains("sendEmail.credentialId"), result.errorMessage().orElse(""));
+        org.mockito.Mockito.verify(mockCredentialClient, org.mockito.Mockito.never()).getDefaultCredential(anyString(), anyString());
     }
 }

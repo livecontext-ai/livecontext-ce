@@ -9,6 +9,9 @@ import { IS_CE } from '@/lib/edition';
 import { track } from '@/lib/analytics/analytics';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import { unifiedApiService } from '@/lib/api/unified-api-service';
+import { MARKETING_CONSENT_QUERY_KEY } from '@/components/settings/MarketingConsentSetting';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import {
   User,
@@ -21,10 +24,19 @@ import {
   ArrowLeft,
   Building2,
   Rocket,
+  LogOut,
   Mail
 } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { APP_SUGGESTIONS_FLAG, armWelcomeGift } from '@/lib/onboarding/welcomeGiftHandoff';
+import { leaveForChat } from '@/lib/navigation/leaveForChat';
+import { assignLocation } from '@/lib/navigation/assignLocation';
+import {
+  captureCeLinkFromSearch,
+  ceLinkPricingPath,
+  continuePendingCeLink,
+  hasPendingCeLink,
+} from '@/lib/cloud-link/pendingCeLink';
 
 /**
  * Ask the app tree to show the suggested applications on the next screen.
@@ -214,8 +226,14 @@ const TOOL_VALUES = valuesOf(TOOLS);
 const PREVIOUS_TOOL_VALUES = valuesOf(PREVIOUS_TOOLS);
 const REFERRAL_SOURCE_VALUES = valuesOf(REFERRAL_SOURCES);
 
-const ONBOARDING_STEPS = 3; // Steps 1-3 (profile, first goal + tools, previous tool + referral)
+// Steps 1-3 (profile, first goal + tools, previous tool + referral), then the chat. Connecting
+// apps is not part of onboarding: the setup checklist in the sidebar carries it ("Connect an
+// app"), so onboarding stays short. It had been a panel shown after completion; it was removed
+// because the checklist made it a second place asking the same thing.
+const ONBOARDING_STEPS = 3;
 const RESEND_COOLDOWN_SECONDS = 60;
+/** When the last verification code was sent, so a refresh respects the cooldown. */
+const EMAIL_CODE_LAST_SENT_KEY = 'email_verification_last_sent';
 
 type PageState = 'loading' | 'needs_auth' | 'ready' | 'completed' | 'error';
 
@@ -234,8 +252,9 @@ const sanitizeDisplayName = (value: string): string => {
 
 export default function OnboardingPage() {
   const locale = useLocale();
-  const { user, isLoading: authLoading, isAuthenticated, loginWithRedirect } = useAuth();
+  const { user, isLoading: authLoading, isAuthenticated, loginWithRedirect, logout } = useAuth();
   const t = useTranslations('onboarding');
+
   const queryClient = useQueryClient();
 
   const [pageState, setPageState] = useState<PageState>('loading');
@@ -245,6 +264,8 @@ export default function OnboardingPage() {
   const [displayNameError, setDisplayNameError] = useState<string | null>(null);
   const [checkingDisplayName, setCheckingDisplayName] = useState(false);
   const [displayNameAvailable, setDisplayNameAvailable] = useState(false);
+  // The availability check itself failed (no answer), as opposed to "taken".
+  const [displayNameCheckFailed, setDisplayNameCheckFailed] = useState(false);
   const [customRole, setCustomRole] = useState('');
   const initRef = useRef(false);
 
@@ -257,6 +278,22 @@ export default function OnboardingPage() {
   const [emailVerificationSuccess, setEmailVerificationSuccess] = useState(false);
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const codeSentOnMountRef = useRef(false);
+  // Sign-out: the ref blocks a second click in the same frame, the state drives the UI.
+  const signingOutRef = useRef(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  // The departure event is sent once, even if a failed redirect is retried.
+  const departureCountedRef = useRef(false);
+  // Only the newest availability check may write its result.
+  const checkTicketRef = useRef(0);
+  // A save or skip was refused and has not succeeded since: shows the form sign-out.
+  const [submitFailed, setSubmitFailed] = useState(false);
+  // Marketing e-mails, cloud only. Unchecked by default: consent is opt-in. Sent when the
+  // person leaves step 1 (advance or skip), not on every click.
+  const [marketingConsent, setMarketingConsent] = useState(false);
+  // What the server holds as far as this page knows. It defaults to false, so an untouched
+  // box sends nothing.
+  const marketingConsentSentRef = useRef(false);
 
   const [data, setData] = useState<OnboardingData>({
     displayName: '',
@@ -278,7 +315,10 @@ export default function OnboardingPage() {
   const goalValues = IS_CE ? CE_GOAL_VALUES : GOAL_VALUES;
 
   // Per-step completion rules (skip stays possible at any step)
-  const step1Valid = Boolean(data.displayName.trim()) && displayNameAvailable;
+  // A name the check could not answer for is usable: an outage must not disable
+  // both Skip and Next. Uniqueness is re-checked server-side on save and skip.
+  const displayNameUsable = displayNameAvailable || displayNameCheckFailed;
+  const step1Valid = Boolean(data.displayName.trim()) && displayNameUsable;
   const step2Valid = Boolean(data.primaryGoal);
   const step3Valid = Boolean(data.previousTool) && Boolean(data.referralSource);
 
@@ -287,9 +327,10 @@ export default function OnboardingPage() {
   const totalSteps = emailCodeFlowEnabled && emailVerified === false ? ONBOARDING_STEPS + 1 : ONBOARDING_STEPS;
   const progressSteps = Array.from({ length: totalSteps }, (_, i) => i + firstStep);
 
-  const navigateToChat = useCallback(() => {
-    window.location.href = `/${locale}/app/chat`;
-  }, [locale]);
+  // Through a module, not an inline window.location assignment: jsdom no-ops that, so a stray
+  // call is invisible to every test. One shipped, and the panel it navigated away from was the
+  // whole point of the change that introduced it.
+  const navigateToChat = useCallback(() => leaveForChat(locale), [locale]);
 
   // Resend cooldown timer
   useEffect(() => {
@@ -305,6 +346,18 @@ export default function OnboardingPage() {
     }, 1000);
     return () => clearInterval(timer);
   }, [resendCooldown]);
+
+  // Cloud only: a self-hosted install asked to be linked (?ce_link=1&...). Captured on arrival,
+  // before anything else can navigate, into sessionStorage, which is what carries it across the
+  // sign-in redirect, the email-verification step and reloads (the sign-in returnTo stays the
+  // bare onboarding path on purpose: its own OIDC callback brings a `state` of its own).
+  const [ceLinkPending, setCeLinkPending] = useState(false);
+  const ceLinkContinuationStartedRef = useRef(false);
+  useEffect(() => {
+    if (IS_CE) return;
+    captureCeLinkFromSearch(window.location.search);
+    setCeLinkPending(hasPendingCeLink());
+  }, []);
 
   // Initialize - use cached data from FirstLoginGuard if available
   useEffect(() => {
@@ -357,8 +410,9 @@ export default function OnboardingPage() {
         }
 
         if (!response.needsOnboarding) {
+          // Already onboarded: straight to the chat. Setting 'completed' is enough: its effect is
+          // the one navigation (calling navigateToChat here as well left the page twice).
           setPageState('completed');
-          navigateToChat();
           return;
         }
 
@@ -420,9 +474,12 @@ export default function OnboardingPage() {
     if (currentStep !== 0 || codeSentOnMountRef.current || pageState !== 'ready') return;
     codeSentOnMountRef.current = true;
 
-    // Check sessionStorage for recent code send to avoid duplicate emails on refresh
-    const STORAGE_KEY = 'email_verification_last_sent';
-    const lastSentStr = sessionStorage.getItem(STORAGE_KEY);
+    // Check sessionStorage for recent code send to avoid duplicate emails on refresh.
+    // Guarded: a blocked store throws here, inside the effect that draws the step.
+    let lastSentStr: string | null = null;
+    try {
+      lastSentStr = sessionStorage.getItem(EMAIL_CODE_LAST_SENT_KEY);
+    } catch { /* storage unavailable: treat as never sent */ }
     if (lastSentStr) {
       const elapsed = Math.floor((Date.now() - parseInt(lastSentStr, 10)) / 1000);
       if (elapsed < RESEND_COOLDOWN_SECONDS) {
@@ -437,18 +494,36 @@ export default function OnboardingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStep, pageState]);
 
-  // Redirect on completion
+  // Redirect on completion. A pending CE link (cloud only) takes precedence over the chat:
+  // eligible -> Keycloak, which returns to the self-hosted install; no paid plan (or the check
+  // failed) -> the pricing page, whose banner explains why and can re-check.
   useEffect(() => {
-    if (pageState === 'completed') {
+    if (pageState !== 'completed') return;
+    if (IS_CE || !hasPendingCeLink()) {
       navigateToChat();
+      return;
     }
-  }, [pageState, navigateToChat]);
+    // Once per page: the eligibility answer decides a full-page navigation either way.
+    if (ceLinkContinuationStartedRef.current) return;
+    ceLinkContinuationStartedRef.current = true;
+    continuePendingCeLink().then((outcome) => {
+      if (outcome === 'plan_required' || outcome === 'error') {
+        assignLocation(ceLinkPricingPath(locale));
+      } else if (outcome === 'none') {
+        navigateToChat();
+      }
+    });
+  }, [pageState, navigateToChat, locale]);
 
   // Check display name
   const checkDisplayName = useCallback(async (name: string) => {
+    const ticket = ++checkTicketRef.current;
+    const isCurrent = () => ticket === checkTicketRef.current;
+
     if (!name || name.trim().length < 3) {
       setDisplayNameError(null);
       setDisplayNameAvailable(false);
+      setDisplayNameCheckFailed(false);
       return;
     }
 
@@ -457,6 +532,8 @@ export default function OnboardingPage() {
       const response = await apiClient.get<{ available: boolean; message: string }>(
         `/auth-service/api/onboarding/check-display-name?displayName=${encodeURIComponent(name)}`
       );
+      if (!isCurrent()) return;
+      setDisplayNameCheckFailed(false);
 
       if (!response.available) {
         setDisplayNameError(response.message || t('displayNameTaken'));
@@ -466,10 +543,12 @@ export default function OnboardingPage() {
         setDisplayNameAvailable(true);
       }
     } catch {
+      if (!isCurrent()) return;
       setDisplayNameError(t('displayNameCheckError'));
       setDisplayNameAvailable(false);
+      setDisplayNameCheckFailed(true);
     } finally {
-      setCheckingDisplayName(false);
+      if (isCurrent()) setCheckingDisplayName(false);
     }
   }, [t]);
 
@@ -486,6 +565,43 @@ export default function OnboardingPage() {
     return () => clearTimeout(timer);
   }, [data.displayName, checkDisplayName, pageState]);
 
+  /**
+   * Sign out from onboarding. Offered where nothing else lets the person leave:
+   * the email step (the code goes to the address they want to leave, and there
+   * is no change-email endpoint), the error card, and a save or skip that keeps
+   * failing. This page has no sidebar or user menu, and FirstLoginGuard sends
+   * app routes back here while the email is unverified.
+   */
+  const handleSignOut = (from: 'email_verification' | 'form_error' | 'error') => {
+    if (signingOutRef.current) return;
+    signingOutRef.current = true;
+    setSigningOut(true);
+    setSignOutError(null);
+    // Before logout(), which resets the analytics identity.
+    if (!departureCountedRef.current) {
+      departureCountedRef.current = true;
+      track('onboarding_signed_out', { signed_out_from: from });
+    }
+    // The cooldown belongs to the address being left: kept, the next account's
+    // step 0 would show "Code sent!" without sending anything. Restored if the
+    // sign-out fails, since the same account stays on the page.
+    let stamp: string | null = null;
+    try {
+      stamp = sessionStorage.getItem(EMAIL_CODE_LAST_SENT_KEY);
+      sessionStorage.removeItem(EMAIL_CODE_LAST_SENT_KEY);
+    } catch { /* storage unavailable */ }
+    logout().catch(() => {
+      if (stamp) {
+        try {
+          sessionStorage.setItem(EMAIL_CODE_LAST_SENT_KEY, stamp);
+        } catch { /* storage unavailable */ }
+      }
+      signingOutRef.current = false;
+      setSigningOut(false);
+      setSignOutError(t('signOutFailed'));
+    });
+  };
+
   // Email verification handlers
   const handleSendCode = async () => {
     setError(null);
@@ -495,8 +611,11 @@ export default function OnboardingPage() {
       setResendCooldown(RESEND_COOLDOWN_SECONDS);
       setOtpDigits(['', '', '', '', '', '']);
       otpInputRefs.current[0]?.focus();
-      // Persist send timestamp so page refresh respects the cooldown
-      sessionStorage.setItem('email_verification_last_sent', Date.now().toString());
+      // Persist send timestamp so page refresh respects the cooldown. Guarded on
+      // its own so a storage failure is not reported as a failed send.
+      try {
+        sessionStorage.setItem(EMAIL_CODE_LAST_SENT_KEY, Date.now().toString());
+      } catch { /* storage unavailable */ }
     } catch (err: any) {
       if (err?.status === 429) {
         setError(t('emailVerification.rateLimited'));
@@ -562,8 +681,11 @@ export default function OnboardingPage() {
       await apiClient.post('/auth/email/verify-code', { code });
       setEmailVerificationSuccess(true);
       setEmailVerified(true);
-      // Clean up cooldown storage after successful verification
-      sessionStorage.removeItem('email_verification_last_sent');
+      // Clean up cooldown storage after successful verification. Guarded: a throw
+      // here would skip the timer below and strand a correct code on this screen.
+      try {
+        sessionStorage.removeItem(EMAIL_CODE_LAST_SENT_KEY);
+      } catch { /* storage unavailable */ }
       // Brief delay to show success animation, then advance
       setTimeout(() => {
         setCurrentStep(1);
@@ -589,7 +711,15 @@ export default function OnboardingPage() {
   };
 
   // Save progress
-  const saveProgress = async (complete = false) => {
+  /**
+   * Persist what has been answered so far.
+   *
+   * @return true when the server took it. The caller must not advance on false: a step that
+   *   moves on from a failed save walks the person forward on answers nobody stored, and the
+   *   last one is the step that leaves the page for an OAuth screen, so they come back to a
+   *   session the server has never heard of.
+   */
+  const saveProgress = async (complete = false): Promise<boolean> => {
     setSaving(true);
     setError(null);
 
@@ -632,6 +762,7 @@ export default function OnboardingPage() {
         }));
         // Also invalidate to trigger a background refetch with complete server data
         queryClient.invalidateQueries({ queryKey: ['user', 'profile'] });
+        // 'completed' is what navigates to the chat (the effect watching it).
         setPageState('completed');
         track('onboarding_completed', {
           // Bounded option values only ('other' when the role is custom) - never
@@ -642,25 +773,50 @@ export default function OnboardingPage() {
           previous_tool: data.previousTool || null,
           referral_source: data.referralSource || null,
         });
-        // What a new account sees first: the two figures it already has
-        // (monthly workflow credits, and the separate AI allowance that funds
-        // chat and agent turns), then the applications it can start from. The
+        // What a new account sees first: the monthly credits it already has
+        // (workflows, plus chat and agent turns on the models marked Free),
+        // then the applications it can start from. The
         // order matters and is enforced by the hand-off, not by luck - see
         // welcomeGiftHandoff.
         armWelcomeGift();
         armAppSuggestions();
-        navigateToChat();
+        // Not navigating here: the effect watching pageState === 'completed' is the one
+        // navigation, so the welcome hand-offs above are armed before the page is left.
       }
-    } catch (err: any) {
-      setError(err?.message || t('saveError'));
+      setSubmitFailed(false);
+      return true;
+    } catch {
+      // The step's translated message, never the raw one: these endpoints answer
+      // an empty 400 for several reasons, and the client's own fallbacks
+      // ("Request timeout", "Failed to fetch") are untranslated English.
+      setError(t('saveError'));
+      setSubmitFailed(true);
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
+  /**
+   * Persist the marketing consent when it differs from what was last sent. Best-effort and
+   * never awaited by the step change: a lost write must not hold the person on this screen,
+   * and Settings can change it later.
+   */
+  const persistMarketingConsent = () => {
+    if (IS_CE || marketingConsent === marketingConsentSentRef.current) return;
+    const value = marketingConsent;
+    marketingConsentSentRef.current = value;
+    unifiedApiService.setMarketingConsent(value).then(
+      () => queryClient.invalidateQueries({ queryKey: MARKETING_CONSENT_QUERY_KEY }),
+    ).catch(() => {
+      // Allow a later step change to try again.
+      marketingConsentSentRef.current = !value;
+    });
+  };
+
   // Skip
   const handleSkip = async () => {
-    if (!data.displayName.trim() || !displayNameAvailable) {
+    if (!data.displayName.trim() || !displayNameUsable) {
       setError(t('displayNameRequired'));
       return;
     }
@@ -687,15 +843,19 @@ export default function OnboardingPage() {
       // Also invalidate to trigger a background refetch with complete server data
       queryClient.invalidateQueries({ queryKey: ['user', 'profile'] });
       setPageState('completed');
+      persistMarketingConsent();
       track('onboarding_skipped', { skipped_at_step: currentStep });
       // Shown on the skip path too, and deliberately: what the plan grants does
       // not depend on how much the user chose to tell us, and someone who
       // skipped the questions is if anything likelier not to know it yet.
       armWelcomeGift();
       armAppSuggestions();
-      navigateToChat();
-    } catch (err: any) {
-      setError(err?.message || t('skipError'));
+      // Not navigating here: the effect watching pageState === 'completed' is the one
+      // navigation, as on the completion path. It is also what continues a pending CE
+      // link instead of leaving for the chat; a direct call here skipped that and left twice.
+    } catch {
+      setError(t('skipError'));
+      setSubmitFailed(true);
     } finally {
       setSaving(false);
     }
@@ -714,6 +874,7 @@ export default function OnboardingPage() {
       setError(t('primaryGoalRequired'));
       return;
     }
+    // Three steps, and step 3 is the last.
     if (currentStep === 3 && !step3Valid) {
       setError(t('step3Required'));
       return;
@@ -721,7 +882,9 @@ export default function OnboardingPage() {
 
     const lastStep = firstStep + totalSteps - 1;
     if (currentStep < lastStep) {
-      await saveProgress();
+      // Stay on this step if the save was refused.
+      if (!await saveProgress()) return;
+      if (currentStep === 1) persistMarketingConsent();
       setCurrentStep(prev => prev + 1);
       // onboarding_step_completed is emitted server-side by the save endpoint
       // (single producer, so the funnel is not double-counted).
@@ -777,7 +940,9 @@ export default function OnboardingPage() {
             </div>
             <div>
               <CardTitle className="text-xl">{t('loginRequired')}</CardTitle>
-              <CardDescription className="mt-1">{t('loginRequiredDescription')}</CardDescription>
+              <CardDescription className="mt-1">
+                {ceLinkPending ? t('ceLinkLoginRequiredDescription') : t('loginRequiredDescription')}
+              </CardDescription>
             </div>
           </CardHeader>
           <CardContent className="flex justify-center pb-6">
@@ -802,10 +967,23 @@ export default function OnboardingPage() {
               <CardDescription className="mt-1">{error || t('errorDescription')}</CardDescription>
             </div>
           </CardHeader>
-          <CardContent className="flex justify-center pb-6">
+          <CardContent className="flex flex-col items-center gap-3 pb-6">
             <Button variant="outline" onClick={() => window.location.reload()}>
               {t('retry')}
             </Button>
+            <button
+              type="button"
+              onClick={() => handleSignOut('error')}
+              disabled={signingOut}
+              aria-busy={signingOut}
+              className="inline-flex items-center gap-1.5 text-sm text-theme-muted hover:text-theme-secondary disabled:opacity-50 transition-colors"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              {t('signOut')}
+            </button>
+            {signOutError && (
+              <p className="text-sm text-red-600 dark:text-red-400">{signOutError}</p>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -845,7 +1023,7 @@ export default function OnboardingPage() {
             {currentStep > 0 && (
               <button
                 onClick={handleSkip}
-                disabled={saving || !data.displayName.trim() || !displayNameAvailable}
+                disabled={saving || !data.displayName.trim() || !displayNameUsable}
                 className="text-sm text-theme-muted hover:text-theme-secondary transition-colors disabled:opacity-50"
               >
                 {t('skipForNow')}
@@ -930,6 +1108,24 @@ export default function OnboardingPage() {
                       }
                     </button>
                   </div>
+
+                  {/* Step 0 only. Disabled while a code is being checked, so a click
+                      cannot drop a session that is about to become valid. */}
+                  <div className="flex flex-col items-center gap-1 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => handleSignOut('email_verification')}
+                      disabled={verifying || signingOut}
+                      aria-busy={signingOut}
+                      className="inline-flex items-center gap-1.5 text-sm text-theme-muted hover:text-theme-secondary disabled:opacity-50 transition-colors"
+                    >
+                      <LogOut className="h-3.5 w-3.5" />
+                      {t('emailVerification.wrongEmail')}
+                    </button>
+                    {signOutError && (
+                      <p className="text-sm text-red-600 dark:text-red-400">{signOutError}</p>
+                    )}
+                  </div>
                 </>
               )}
             </CardContent>
@@ -963,6 +1159,8 @@ export default function OnboardingPage() {
                     onChange={(e) => {
                       const sanitized = sanitizeDisplayName(e.target.value);
                       setData(prev => ({ ...prev, displayName: sanitized }));
+                      // Until the debounced check runs, a failed check belongs to the previous name.
+                      setDisplayNameCheckFailed(false);
                     }}
                     placeholder={t('displayNamePlaceholder')}
                     className={`pr-10 ${
@@ -1055,6 +1253,24 @@ export default function OnboardingPage() {
                   ))}
                 </div>
               </div>
+
+              {/* Marketing e-mails: cloud only, unchecked by default (opt-in). */}
+              {!IS_CE && (
+                <div className="flex items-start gap-2 pt-1">
+                  <Checkbox
+                    id="onboarding-marketing-consent"
+                    checked={marketingConsent}
+                    onCheckedChange={(checked) => setMarketingConsent(checked === true)}
+                    className="mt-0.5"
+                  />
+                  <label
+                    htmlFor="onboarding-marketing-consent"
+                    className="text-sm text-theme-secondary cursor-pointer"
+                  >
+                    {t('marketingConsent')}
+                  </label>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -1183,6 +1399,27 @@ export default function OnboardingPage() {
               <AlertCircle className="h-4 w-4" />
               {error}
             </p>
+          </div>
+        )}
+
+        {/* Driven by submitFailed, not by error: a retry clears error and disables
+            Skip and Next while it runs, and the way out must stay reachable then.
+            submitFailed is only ever set by a save or skip, so never on step 0. */}
+        {submitFailed && currentStep > 0 && (
+          <div className="mt-3 flex flex-col items-start gap-1">
+            <button
+              type="button"
+              onClick={() => handleSignOut('form_error')}
+              disabled={signingOut}
+              aria-busy={signingOut}
+              className="inline-flex items-center gap-1.5 text-sm text-theme-muted hover:text-theme-secondary disabled:opacity-50 transition-colors"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              {t('signOut')}
+            </button>
+            {signOutError && (
+              <p className="text-sm text-red-600 dark:text-red-400">{signOutError}</p>
+            )}
           </div>
         )}
 

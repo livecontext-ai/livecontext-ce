@@ -84,6 +84,19 @@ public class CeCloudLinkEntity implements OrgScopedEntity {
     @Column(name = "catalog_source", nullable = false, length = 16)
     private String catalogSource = "BYOK";
 
+    /**
+     * Set when the cloud refused register or heartbeat with 403 CLOUD_LINK_PLAN_REQUIRED (the bound
+     * cloud account is not on a paid plan). The link itself is KEPT (tokens, registeredAt, sources):
+     * this only marks it suspended, and the next 2xx from the cloud clears it, so paying again
+     * restores the link with no re-link (V534).
+     */
+    @Column(name = "plan_required_at")
+    private Instant planRequiredAt;
+
+    /** Plan code the cloud reported with the refusal (e.g. FREE); null when not suspended. */
+    @Column(name = "plan_required_plan_code", length = 50)
+    private String planRequiredPlanCode;
+
     public CeCloudLinkEntity() {}
 
     @PrePersist
@@ -138,4 +151,10 @@ public class CeCloudLinkEntity implements OrgScopedEntity {
 
     public String getCatalogSource() { return catalogSource; }
     public void setCatalogSource(String catalogSource) { this.catalogSource = catalogSource; }
+
+    public Instant getPlanRequiredAt() { return planRequiredAt; }
+    public void setPlanRequiredAt(Instant planRequiredAt) { this.planRequiredAt = planRequiredAt; }
+
+    public String getPlanRequiredPlanCode() { return planRequiredPlanCode; }
+    public void setPlanRequiredPlanCode(String planRequiredPlanCode) { this.planRequiredPlanCode = planRequiredPlanCode; }
 }

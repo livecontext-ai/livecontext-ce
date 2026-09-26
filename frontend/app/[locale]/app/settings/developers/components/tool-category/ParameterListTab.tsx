@@ -1,5 +1,6 @@
 import React from 'react';
-import { Plus, X, Info } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { ParameterListTabProps } from './types';
@@ -35,9 +36,7 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
   onToolUpdate,
   parameterType,
   title,
-  infoText,
-  showTabInfo,
-  onToggleTabInfo
+  infoText
 }) => {
   const t = useTranslations('developers');
   const parameters = tool[parameterType] || [];
@@ -268,14 +267,9 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center space-x-2">
           {infoText && (
-            <button
-              type="button"
-              onClick={onToggleTabInfo}
-              className="p-1 rounded transition-colors duration-200 text-theme-muted hover:text-blue-500"
-              title={t('parameterList.showInformation')}
-            >
-              <Info className="w-4 h-4" />
-            </button>
+            <InfoPopover label={title} side="bottom" align="start" contentClassName="w-80">
+              {infoText}
+            </InfoPopover>
           )}
           <label className="block text-sm font-medium text-theme-primary">
             {title}
@@ -293,16 +287,6 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
         </Button>
       </div>
 
-      {showTabInfo && infoText && (
-        <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-700">
-          <div className="flex items-start space-x-3">
-            <Info className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
-            <div className="text-sm text-blue-700 dark:text-blue-300">
-              {infoText}
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="space-y-3">
         {parameters.length === 0 ? (

@@ -208,6 +208,54 @@ class AgentLoopExecutorToolDeadlineTest {
     }
 
     @Test
+    @DisplayName("A grant scoped to one ask is read here too, exactly as the remote gate reads it")
+    void askScopedGrantIsRecognisedByTheLoopAsWell() {
+        // This class and RemoteToolExecutionService are two readers of the same grant list,
+        // for two execution paths: a direct-API agent never goes through the remote one. A
+        // grant written by a chat button has to mean the same thing on both, or a permission
+        // applies or does not depending on which provider the agent happens to run on.
+        Map<String, Object> args = Map.of("action", "execute");
+        Map<String, Object> credentials = new HashMap<>();
+        credentials.put("conversationId", "conv-1");
+        credentials.put("__streamId__", "stream-1");
+        credentials.put("__approvedToolActions__", List.of(
+                com.apimarketplace.agent.tools.authz.AuthorizationAsk.scopedGrant("workflow:execute",
+                        com.apimarketplace.agent.tools.authz.AuthorizationAsk.fingerprintOfCall(
+                                "workflow:execute", "workflow", args))));
+        AgentLoopContext granted = AgentLoopContext.builder()
+                .provider("openai").model("gpt-4").tenantId("tenant-1").credentials(credentials).build();
+
+        long before = System.currentTimeMillis();
+        executor.executeSingleToolCall(call("workflow", "execute"), List.of(tool("workflow")), granted);
+
+        // Authorized, so no card is coming and there is nothing to wait for: same outcome as
+        // the bare rule and the wildcard above.
+        assertThat(deadlineHandedToTheTool()).isLessThan(before + GATE_BUDGET_MS);
+    }
+
+    @Test
+    @DisplayName("...and a scoped grant for a DIFFERENT ask still leaves the park budget on")
+    void askScopedGrantForAnotherCallKeepsTheParkBudget() {
+        Map<String, Object> credentials = new HashMap<>();
+        credentials.put("conversationId", "conv-1");
+        credentials.put("__streamId__", "stream-1");
+        credentials.put("__approvedToolActions__", List.of(
+                com.apimarketplace.agent.tools.authz.AuthorizationAsk.scopedGrant("workflow:execute",
+                        com.apimarketplace.agent.tools.authz.AuthorizationAsk.fingerprintOfCall(
+                                "workflow:execute", "workflow", Map.of("action", "execute", "id", "wf-9")))));
+        AgentLoopContext granted = AgentLoopContext.builder()
+                .provider("openai").model("gpt-4").tenantId("tenant-1").credentials(credentials).build();
+
+        long before = System.currentTimeMillis();
+        executor.executeSingleToolCall(call("workflow", "execute"), List.of(tool("workflow")), granted);
+
+        // Not covered, so a card IS coming and the call must be held long enough for somebody
+        // to answer it. Reading the grant too loosely here would not authorize anything by
+        // itself, but it would withdraw the budget and drop the card back to a two-turn flow.
+        assertThat(deadlineHandedToTheTool()).isGreaterThanOrEqualTo(before + GATE_BUDGET_MS);
+    }
+
+    @Test
     @DisplayName("application:acquire gets no park budget - it raises a card but never waits on one")
     void userPerformedRuleGetsNoParkBudget() {
         long before = System.currentTimeMillis();

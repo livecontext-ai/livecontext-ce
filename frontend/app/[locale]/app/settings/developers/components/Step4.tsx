@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Info, DollarSign, CreditCard, Gift, Zap, MessageSquare } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { Step4Props, MonetizationConfig } from '../types';
 import { useTheme } from '@/components/ThemeProvider';
 import { useTranslations } from 'next-intl';
@@ -10,7 +11,6 @@ import {
   FormSelect,
   FormGrid,
   ActionButton,
-  InfoBox,
   PricingCard
 } from './common';
 import PricingSections from './common/PricingSections';
@@ -26,10 +26,6 @@ const Step4: React.FC<Step4Props> = ({
   const { theme } = useTheme();
   const isDarkmode = theme === 'dark';
 
-  const [showPricingInfo, setShowPricingInfo] = useState(false);
-  const [showRateLimitInfo, setShowRateLimitInfo] = useState(false);
-  const [showPlansInfo, setShowPlansInfo] = useState(false);
-  const [showFreeRequestsInfo, setShowFreeRequestsInfo] = useState(false);
 
   // States to manage section expansion
   const [sectionsExpanded, setSectionsExpanded] = useState({
@@ -359,20 +355,8 @@ const Step4: React.FC<Step4Props> = ({
             <DollarSign className="w-6 h-6 text-green-500 flex-shrink-0" />
             <h3 className="text-xl font-semibold text-theme-primary">{t('pricingModel.title')}</h3>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowPricingInfo(!showPricingInfo)}
-            className="text-theme-muted hover:text-theme-primary transition-colors"
-          >
-            <Info className="w-5 h-5" />
-          </button>
-        </div>
-
-        {showPricingInfo && (
-          <InfoBox
-            type="info"
-            title={t('pricingModel.infoTitle')}
-          >
+          <InfoPopover label={t('pricingModel.infoTitle')} size="lg" side="bottom" align="start" contentClassName="w-96">
+            <p className="mb-2 font-medium text-theme-primary">{t('pricingModel.infoTitle')}</p>
             <div className="space-y-3">
               <div className="p-3 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700 rounded-lg">
                 <p className="font-medium text-purple-800 dark:text-purple-200"><strong>{t('pricingModel.aiIntegration.title')}</strong></p>
@@ -383,8 +367,8 @@ const Step4: React.FC<Step4Props> = ({
                 <p className="text-orange-700 dark:text-orange-300">{t('pricingModel.apiMarketplace.description')}</p>
               </div>
             </div>
-          </InfoBox>
-        )}
+          </InfoPopover>
+        </div>
 
         {/* Two distinct business models: MCP Chat vs Traditional API */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
@@ -453,12 +437,6 @@ const Step4: React.FC<Step4Props> = ({
         monetizationConfig={monetizationConfig}
         setMonetizationConfig={setMonetizationConfig}
         mcpTools={mcpTools}
-        showRateLimitInfo={showRateLimitInfo}
-        setShowRateLimitInfo={setShowRateLimitInfo}
-        showPlansInfo={showPlansInfo}
-        setShowPlansInfo={setShowPlansInfo}
-        showFreeRequestsInfo={showFreeRequestsInfo}
-        setShowFreeRequestsInfo={setShowFreeRequestsInfo}
         sectionsExpanded={sectionsExpanded}
         toggleSection={toggleSection}
         rateLimitPeriodOptions={rateLimitPeriodOptions}

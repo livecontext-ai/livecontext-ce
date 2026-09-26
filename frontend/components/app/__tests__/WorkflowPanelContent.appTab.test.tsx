@@ -127,7 +127,7 @@ vi.mock('@/components/workflow/run-panel/runPanelBus', () => ({
   OPEN_RUN_PANEL_EVENT: 'workflowOpenRunPanel',
 }));
 
-import { WorkflowPanelContent } from '@/components/app/WorkflowPanelContent';
+import { WorkflowPanelContent, requestPresentApplication, APP_TAB_ID, PRESENT_REQUEST_TTL_MS } from '@/components/app/WorkflowPanelContent';
 import { WORKFLOW_PANEL_OPEN_LOGS_EVENT } from '@/lib/sidePanel/workflowLogsNavigation';
 
 function dispatchAppConfigs() {
@@ -412,5 +412,138 @@ describe('WorkflowPanelContent - Application sub-tab (side-panel workflow)', () 
     });
 
     expect(screen.getByTestId('logs-child')).toBeInTheDocument();
+  });
+});
+
+function dispatchAppConfigsFor(workflowId: string) {
+  act(() => {
+    window.dispatchEvent(new CustomEvent('workflowPanelApplicationConfigsChange', {
+      detail: { workflowId, configs: [{ interfaceId: 'iface-1', label: 'Search Page', actionMapping: {} }] },
+    }));
+  });
+}
+
+const EDITING = { runId: null, runInfo: null, isPreviewOnly: false };
+
+describe('WorkflowPanelContent - Application sub-tab only exists in run mode', () => {
+  afterEach(() => {
+    cleanup();
+    runPanelState.current = {
+      runId: 'run-1',
+      runInfo: { runId: 'run-1', status: 'COMPLETED' },
+      isPreviewOnly: false,
+    };
+    runPanelState.subscribers.clear();
+  });
+
+  // Bug: another surface of the same workflow in run mode (a keepMounted run tab)
+  // broadcasts its interfaces per workflowId, and the EDITING panel showed them.
+  it('hides the Application tab in edit mode even when interfaces are broadcast for this workflow', () => {
+    runPanelState.current = EDITING;
+    render(<WorkflowPanelContent workflowId="wf-edit" workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+    dispatchAppConfigsFor('wf-edit');
+
+    expect(screen.queryByText('common.application')).toBeNull();
+    expect(screen.queryByTestId('app-carousel')).toBeNull();
+  });
+
+  // Interfaces held while editing must still read as "just became available" when a
+  // run binds, or the panel never focuses the Application of that run.
+  it('focuses the Application when a run binds on interfaces already held in edit mode', () => {
+    runPanelState.current = EDITING;
+    render(<WorkflowPanelContent workflowId="wf-edit-3" />);
+    dispatchAppConfigsFor('wf-edit-3');
+    expect(screen.queryByTestId('app-carousel')).toBeNull();
+
+    act(() => {
+      runPanelState.subscribers.forEach(({ listener }) => listener({
+        workflowId: 'wf-edit-3', runId: 'run-9', runInfo: { runId: 'run-9', status: 'RUNNING' }, isPreviewOnly: false,
+      }));
+    });
+
+    expect(screen.getByTestId('app-carousel')).toBeInTheDocument();
+  });
+
+  it('refuses a request to activate the Application tab while editing', () => {
+    runPanelState.current = EDITING;
+    render(<WorkflowPanelContent workflowId="wf-edit-2" />);
+    dispatchAppConfigsFor('wf-edit-2');
+    act(() => {
+      window.dispatchEvent(new CustomEvent('workflowPanelActivateTab', {
+        detail: { tabId: APP_TAB_ID, workflowId: 'wf-edit-2' },
+      }));
+    });
+
+    expect(screen.queryByTestId('app-carousel')).toBeNull();
+  });
+});
+
+describe('WorkflowPanelContent - the agent presents the Application (workflow(action=present))', () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  const renderRunPanel = (workflowId: string, runId = 'run-1') =>
+    render(<WorkflowPanelContent workflowId={workflowId} runId={runId} workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+
+  // The agent presents right after a run, often before the panel has the run's
+  // interfaces: the request waits for them instead of being undone by the fallback.
+  it('holds the request until the run has an interface, then shows it', () => {
+    requestPresentApplication('wf-present', 'run-1');
+    renderRunPanel('wf-present');
+    expect(screen.queryByTestId('app-carousel')).toBeNull();
+
+    dispatchAppConfigsFor('wf-present');
+
+    expect(screen.getByTestId('app-carousel')).toBeInTheDocument();
+  });
+
+  it('switches a mounted panel that already shows the run and its interfaces', () => {
+    renderRunPanel('wf-present-2');
+    dispatchAppConfigsFor('wf-present-2');
+    expect(screen.queryByTestId('app-carousel')).toBeNull(); // the canvas keeps focus by default
+
+    act(() => requestPresentApplication('wf-present-2', 'run-1'));
+
+    expect(screen.getByTestId('app-carousel')).toBeInTheDocument();
+  });
+
+  // Race: the page still shows an older run (with interfaces) while it rebinds to
+  // the presented one. Switching on the OLD run's data, then losing it, was the bug.
+  it('does not switch while the panel still shows another run', () => {
+    renderRunPanel('wf-present-3', 'run-old');
+    dispatchAppConfigsFor('wf-present-3');
+
+    act(() => requestPresentApplication('wf-present-3', 'run-new'));
+
+    expect(screen.queryByTestId('app-carousel')).toBeNull();
+  });
+
+  // A request the panel could never honour must not pull the user onto the tab
+  // much later, when some unrelated run of the workflow gets interfaces.
+  it('drops a request older than the time limit', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-25T10:00:00Z'));
+    requestPresentApplication('wf-present-4', 'run-1');
+    vi.setSystemTime(new Date(Date.parse('2026-09-25T10:00:00Z') + PRESENT_REQUEST_TTL_MS + 1));
+
+    renderRunPanel('wf-present-4');
+    dispatchAppConfigsFor('wf-present-4');
+
+    expect(screen.queryByTestId('app-carousel')).toBeNull();
+  });
+
+  it('never honours the request in edit mode', () => {
+    runPanelState.current = EDITING;
+    try {
+      requestPresentApplication('wf-present-5', 'run-1');
+      render(<WorkflowPanelContent workflowId="wf-present-5" />);
+      dispatchAppConfigsFor('wf-present-5');
+
+      expect(screen.queryByTestId('app-carousel')).toBeNull();
+    } finally {
+      runPanelState.current = { runId: 'run-1', runInfo: { runId: 'run-1', status: 'COMPLETED' }, isPreviewOnly: false };
+    }
   });
 });

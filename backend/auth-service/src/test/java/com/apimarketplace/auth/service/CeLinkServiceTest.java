@@ -8,6 +8,8 @@ import com.apimarketplace.auth.dto.CeLinkSummary;
 import com.apimarketplace.auth.repository.CeLinkHeartbeatRepository;
 import com.apimarketplace.auth.repository.CeLinkRepository;
 import com.apimarketplace.auth.repository.UserRepository;
+import com.apimarketplace.common.plan.CeLinkAccess;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -20,6 +22,11 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.util.List;
 import java.util.Map;
@@ -27,9 +34,12 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -45,6 +55,7 @@ class CeLinkServiceTest {
     @Mock private CeLinkActiveRowCache activeRowCache;
     @Mock private CeLinkActiveRowCachePublisher cachePublisher;
     @Mock private org.springframework.context.ApplicationEventPublisher eventPublisher;
+    @Mock private PlanResolutionService planResolutionService;
 
     private CeLinkService service;
 
@@ -59,8 +70,204 @@ class CeLinkServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new CeLinkService(repository, heartbeatRepository, userRepository,
-                auditService, activeRowCache, cachePublisher, eventPublisher);
+        service = newService(0);
+        // Default: the governing plan of the caller is paid, so the pre-existing register tests
+        // keep exercising the link logic. Lenient: collision / revoked paths never consult it.
+        lenient().when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID))
+                .thenReturn(entitlement("PRO"));
+    }
+
+    private CeLinkService newService(long planCacheTtlSeconds) {
+        return new CeLinkService(repository, heartbeatRepository, userRepository,
+                auditService, activeRowCache, cachePublisher, eventPublisher,
+                planResolutionService, planCacheTtlSeconds);
+    }
+
+    private static PlanResolutionService.DefaultWorkspacePlan entitlement(String planCode) {
+        return PlanResolutionService.DefaultWorkspacePlan.of(planCode);
+    }
+
+    // ===== paid-plan gate: register + linkAccess =====
+
+    @Nested
+    @DisplayName("paid-plan gate")
+    class PaidPlanGate {
+
+        @Test
+        @DisplayName("regression: a FREE account can no longer register a new install (403 plan required, nothing written)")
+        void freeAccountCannotRegisterNewInstall() {
+            when(repository.findById(INSTALL)).thenReturn(Optional.empty());
+            when(userRepository.lockExistingForKeyShare(CALLER_ID)).thenReturn(Optional.of(CALLER_ID));
+            when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID)).thenReturn(entitlement("FREE"));
+
+            CeLinkRegisterResponse response = service.register(CALLER_ID, INSTALL, CE_VERSION, "Mine", AUDIT);
+
+            assertThat(response.registered()).isFalse();
+            assertThat(response.isPlanRequired()).isTrue();
+            assertThat(response.error()).isEqualTo("CLOUD_LINK_PLAN_REQUIRED");
+            assertThat(response.planCode()).isEqualTo("FREE");
+            verify(repository, never()).save(any());
+            verifyNoInteractions(auditService, activeRowCache, cachePublisher);
+        }
+
+        @Test
+        @DisplayName("CREDIT_PACK and an unknown plan code are not paid: register refused (fails closed)")
+        void creditPackAndUnknownPlanAreRefused() {
+            when(repository.findById(INSTALL)).thenReturn(Optional.empty());
+            when(userRepository.lockExistingForKeyShare(CALLER_ID)).thenReturn(Optional.of(CALLER_ID));
+            when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID))
+                    .thenReturn(entitlement("CREDIT_PACK"), entitlement("PLATINUM"));
+
+            CeLinkRegisterResponse creditPack = service.register(CALLER_ID, INSTALL, CE_VERSION, "Mine", AUDIT);
+            CeLinkRegisterResponse unknown = service.register(CALLER_ID, INSTALL, CE_VERSION, "Mine", AUDIT);
+
+            assertThat(creditPack.isPlanRequired()).isTrue();
+            assertThat(creditPack.planCode()).isEqualTo("CREDIT_PACK");
+            assertThat(unknown.isPlanRequired()).isTrue();
+            assertThat(unknown.planCode()).isEqualTo("PLATINUM");
+            verify(repository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("regression: an idempotent re-register by a FREE owner answers plan required, and the link is kept (not revoked)")
+        void idempotentReRegisterRefusedWhenFree() {
+            CeLink existing = new CeLink(INSTALL, CALLER_ID, "My laptop");
+            when(repository.findById(INSTALL)).thenReturn(Optional.of(existing));
+            when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID)).thenReturn(entitlement("FREE"));
+
+            CeLinkRegisterResponse response = service.register(CALLER_ID, INSTALL, CE_VERSION, "My laptop", AUDIT);
+
+            assertThat(response.isPlanRequired()).isTrue();
+            assertThat(existing.getStatus()).isEqualTo(CeLink.Status.ACTIVE);
+            verify(repository, never()).save(any());
+            verifyNoInteractions(auditService, eventPublisher);
+        }
+
+        @Test
+        @DisplayName("a cross-user collision is still reported as ALREADY_BOUND + squat audit whatever the plan")
+        void collisionTakesPrecedenceOverPlan() {
+            when(repository.findById(INSTALL)).thenReturn(Optional.of(new CeLink(INSTALL, OTHER_ID, "Theirs")));
+
+            CeLinkRegisterResponse response = service.register(CALLER_ID, INSTALL, CE_VERSION, "Mine", AUDIT);
+
+            assertThat(response.error()).isEqualTo("ALREADY_BOUND");
+            verifyNoInteractions(planResolutionService);
+        }
+
+        @Test
+        @DisplayName("linkAccess: no active link row is NOT_LINKED and the plan is never consulted")
+        void notLinkedDoesNotConsultPlan() {
+            when(repository.findByInstallIdAndUserId(INSTALL, CALLER_ID)).thenReturn(Optional.empty());
+
+            assertThat(service.linkAccess(CALLER_ID, INSTALL)).isEqualTo(CeLinkAccessResult.notLinked());
+            assertThat(service.linkAccess(null, INSTALL)).isEqualTo(CeLinkAccessResult.notLinked());
+            verifyNoInteractions(planResolutionService);
+        }
+
+        @Test
+        @DisplayName("linkAccess: a revoked link is NOT_LINKED")
+        void revokedLinkIsNotLinked() {
+            CeLink revoked = new CeLink(INSTALL, CALLER_ID, "X");
+            revoked.revoke(CeLink.RevokeReason.USER, CALLER_ID);
+            when(repository.findByInstallIdAndUserId(INSTALL, CALLER_ID)).thenReturn(Optional.of(revoked));
+
+            assertThat(service.linkAccess(CALLER_ID, INSTALL).access()).isEqualTo(CeLinkAccess.NOT_LINKED);
+        }
+
+        @Test
+        @DisplayName("linkAccess: an active link on a paid plan is ACTIVE with that plan (a TEAM workspace member too)")
+        void activeLinkOnPaidPlan() {
+            when(repository.findByInstallIdAndUserId(INSTALL, CALLER_ID))
+                    .thenReturn(Optional.of(new CeLink(INSTALL, CALLER_ID, "L")));
+            // The resolver answers with the plan of the current workspace OWNER: a member of a
+            // paid TEAM workspace gets TEAM here, which is what decides.
+            when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID)).thenReturn(entitlement("TEAM"));
+
+            assertThat(service.linkAccess(CALLER_ID, INSTALL)).isEqualTo(CeLinkAccessResult.active("TEAM"));
+        }
+
+        @Test
+        @DisplayName("linkAccess: suspended while FREE, restored by itself once the account pays (no re-link)")
+        void suspendedThenRestoredAfterUpgrade() {
+            when(repository.findByInstallIdAndUserId(INSTALL, CALLER_ID))
+                    .thenReturn(Optional.of(new CeLink(INSTALL, CALLER_ID, "L")));
+            when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID))
+                    .thenReturn(entitlement("FREE"), entitlement("STARTER"));
+
+            assertThat(service.linkAccess(CALLER_ID, INSTALL)).isEqualTo(CeLinkAccessResult.planRequired("FREE"));
+            assertThat(service.linkAccess(CALLER_ID, INSTALL)).isEqualTo(CeLinkAccessResult.active("STARTER"));
+            verify(repository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("a blank plan code from the resolver reads as FREE (plan required)")
+        void blankPlanReadsAsFree() {
+            when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID)).thenReturn(entitlement(null));
+
+            assertThat(service.planAccess(CALLER_ID)).isEqualTo(CeLinkAccessResult.planRequired("FREE"));
+        }
+
+        @Test
+        @DisplayName("the plan cache serves a repeat call without resolving again")
+        void planCacheServesRepeatCalls() {
+            CeLinkService cached = newService(30);
+
+            cached.planAccess(CALLER_ID);
+            cached.planAccess(CALLER_ID);
+
+            verify(planResolutionService, times(1)).resolveDefaultWorkspacePlan(CALLER_ID);
+        }
+
+        @Test
+        @DisplayName("regression: the decision ignores the request workspace - a paid non-default X-Organization-ID does not change it, one cache entry per user")
+        void decisionIgnoresRequestWorkspace() {
+            CeLinkService cached = newService(30);
+            try {
+                withWorkspace("11111111-0000-0000-0000-000000000001");
+                cached.planAccess(CALLER_ID);
+                withWorkspace("11111111-0000-0000-0000-000000000002");
+                cached.planAccess(CALLER_ID);
+            } finally {
+                RequestContextHolder.resetRequestAttributes();
+            }
+
+            // Old code keyed the cache by (user, workspace) and resolved the request workspace:
+            // two lookups. The default-workspace rule makes the user the whole key.
+            verify(planResolutionService, times(1)).resolveDefaultWorkspacePlan(CALLER_ID);
+            verify(planResolutionService, never()).resolveActiveOrgEntitlement(any());
+        }
+
+        @Test
+        @DisplayName("regression: a failed plan lookup refuses THIS call but is never cached - the next call is re-read and passes")
+        void failedLookupIsRefusedButNotCached() {
+            CeLinkService cached = newService(30);
+            when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID))
+                    .thenReturn(PlanResolutionService.DefaultWorkspacePlan.failed(), entitlement("PRO"));
+
+            CeLinkAccessResult first = cached.planAccess(CALLER_ID);
+            CeLinkAccessResult second = cached.planAccess(CALLER_ID);
+
+            assertThat(first.access()).isEqualTo(CeLinkAccess.PLAN_REQUIRED);
+            assertThat(first.planCode()).isNull();
+            assertThat(second).isEqualTo(CeLinkAccessResult.active("PRO"));
+        }
+
+        @Test
+        @DisplayName("regression: an unpaid answer is never cached, so paying lands on the very next call (pay then continue)")
+        void unpaidAnswerIsNotCachedSoPaymentLandsImmediately() {
+            CeLinkService cached = newService(30);
+            when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID))
+                    .thenReturn(entitlement("FREE"), entitlement("PRO"));
+
+            assertThat(cached.planAccess(CALLER_ID)).isEqualTo(CeLinkAccessResult.planRequired("FREE"));
+            assertThat(cached.planAccess(CALLER_ID)).isEqualTo(CeLinkAccessResult.active("PRO"));
+        }
+
+        private void withWorkspace(String orgId) {
+            MockHttpServletRequest request = new MockHttpServletRequest();
+            request.addHeader("X-Organization-ID", orgId);
+            RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        }
     }
 
     // ===== register() =====
@@ -73,6 +280,7 @@ class CeLinkServiceTest {
         @DisplayName("inserts a new row + emits REGISTER audit when install_id is free")
         void inserts_new_link_when_free() {
             when(repository.findById(INSTALL)).thenReturn(Optional.empty());
+            when(userRepository.lockExistingForKeyShare(CALLER_ID)).thenReturn(Optional.of(CALLER_ID));
 
             CeLinkRegisterResponse response = service.register(CALLER_ID, INSTALL, CE_VERSION, "My laptop", AUDIT);
 
@@ -97,9 +305,28 @@ class CeLinkServiceTest {
         }
 
         @Test
+        @DisplayName("ce-link register for a deleted user: 401, nothing written, no audit, not a foreign-key 500")
+        void register_for_deleted_user_is_unauthorized_and_writes_nothing() {
+            // Same defect as POST /api/changelog/seen (prod 2026-09-22): the gateway's cached user
+            // resolution outlives the account, the header names an id with no auth.users row, and
+            // the insert trips ce_link's foreign key.
+            when(repository.findById(INSTALL)).thenReturn(Optional.empty());
+            when(userRepository.lockExistingForKeyShare(CALLER_ID)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.register(CALLER_ID, INSTALL, CE_VERSION, "My laptop", AUDIT))
+                    .isInstanceOfSatisfying(ResponseStatusException.class,
+                            e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED));
+
+            verify(repository, never()).save(any());
+            verifyNoInteractions(auditService);
+            verifyNoInteractions(activeRowCache);
+        }
+
+        @Test
         @DisplayName("falls back to default label when caller sends blank")
         void default_label_when_blank() {
             when(repository.findById(INSTALL)).thenReturn(Optional.empty());
+            when(userRepository.lockExistingForKeyShare(CALLER_ID)).thenReturn(Optional.of(CALLER_ID));
 
             service.register(CALLER_ID, INSTALL, CE_VERSION, "  ", AUDIT);
 

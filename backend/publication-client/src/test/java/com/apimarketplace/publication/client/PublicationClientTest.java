@@ -400,4 +400,29 @@ class PublicationClientTest {
             assertThat(vis).isEmpty();
         }
     }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("Regression 2026-09-25: a failed by-token lookup logs a token preview, never the token")
+    void failedLookupNeverLogsToken() {
+        String token = "sl_FAKEshareToken0123456789abcdef";
+        String url = BASE_URL + "/api/internal/shared-links/by-token/" + token;
+        when(restTemplate.exchange(eq(url), eq(HttpMethod.GET), any(HttpEntity.class),
+                any(org.springframework.core.ParameterizedTypeReference.class)))
+                .thenThrow(new org.springframework.web.client.ResourceAccessException(
+                        "I/O error on GET request for \"" + url + "\": Connection refused"));
+        ch.qos.logback.classic.Logger log = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(PublicationClient.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs =
+                new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        log.addAppender(logs);
+        try {
+            assertThat(publicationClient.resolveSharedLinkByToken(token)).isNull();
+
+            assertThat(logs.list).isNotEmpty();
+            logs.list.forEach(e -> assertThat(e.getFormattedMessage()).doesNotContain(token).contains("sl_FAK***"));
+        } finally {
+            log.detachAppender(logs);
+        }
+    }
 }

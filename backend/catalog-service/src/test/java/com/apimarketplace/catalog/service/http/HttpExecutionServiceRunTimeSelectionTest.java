@@ -20,6 +20,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -296,6 +297,79 @@ class HttpExecutionServiceRunTimeSelectionTest {
                     .isInstanceOf(CredentialSelectionException.class)
                     .hasMessageContaining("11");
 
+            verify(userCredentialService, never()).getAccessToken(anyString(), anyString());
+        }
+
+        /**
+         * Prod regression 2026-09-23: every Telegram chat channel was refused. A Telegram bot
+         * credential keeps its key under {@code token} (injected into the URL by
+         * {@code bot_token_in_url}), which the access-token lookup does not know, so it answered
+         * empty and the strict refusal called a perfectly good credential "unusable".
+         */
+        @Test
+        @DisplayName("a chosen account whose key is not an access token (Telegram's token) is neither refused nor swapped for the default")
+        void keyOfAnotherKindIsNotRefused() {
+            CredentialModeContext.setSelectedCredentialId(40L);
+            CredentialModeContext.setSelectionStrict(true);
+            when(userCredentialService.getCredentialScopesById(USER, 40L))
+                    .thenReturn(Optional.of(scopesOf("instagram", "Ops bot")));
+            when(userCredentialService.getAccessTokenInfoById(USER, 40L)).thenReturn(Optional.empty());
+            when(userCredentialService.getCredentialDataMapById(USER, 40L)).thenReturn(Map.of("token", "123:abc"));
+
+            Optional<HttpExecutionService.CredentialResolution> resolved = resolve();
+
+            // Empty here, read later through the data map of THIS credential.
+            assertThat(resolved).isEmpty();
+            verify(userCredentialService, never()).getAccessToken(anyString(), anyString());
+            verify(userCredentialService, never()).getAccessTokenInfo(anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("the variant lookup, reached first by every real call, lets the Telegram account through without asking for the default")
+        void variantLookupLetsKeyOfAnotherKindThrough() {
+            CredentialModeContext.setSelectedCredentialId(40L);
+            CredentialModeContext.setSelectionStrict(true);
+            when(userCredentialService.getCredentialScopesById(USER, 40L))
+                    .thenReturn(Optional.of(scopesOf("instagram", "Ops bot")));
+            when(userCredentialService.getAccessTokenInfoById(USER, 40L)).thenReturn(Optional.empty());
+            when(userCredentialService.getCredentialDataMapById(USER, 40L)).thenReturn(Map.of("token", "123:abc"));
+
+            // No variant to project from a non-token key: no filter, and above all no refusal.
+            assertThat(service.resolveCredentialVariant(USER, REQUIREMENT, api())).isNull();
+            verify(userCredentialService, never()).getAccessTokenInfo(anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("the variant lookup still refuses an OAuth account that never finished authorising")
+        void variantLookupRefusesUnfinishedOAuth() {
+            CredentialModeContext.setSelectedCredentialId(40L);
+            CredentialModeContext.setSelectionStrict(true);
+            when(userCredentialService.getCredentialScopesById(USER, 40L))
+                    .thenReturn(Optional.of(scopesOf("instagram", "Client B")));
+            when(userCredentialService.getAccessTokenInfoById(USER, 40L)).thenReturn(Optional.empty());
+            when(userCredentialService.getCredentialDataMapById(USER, 40L))
+                    .thenReturn(Map.of("client_id", "id", "client_secret", "secret"));
+
+            assertThatThrownBy(() -> service.resolveCredentialVariant(USER, REQUIREMENT, api()))
+                    .isInstanceOf(CredentialSelectionException.class)
+                    .hasMessageContaining("40");
+            verify(userCredentialService, never()).getAccessTokenInfo(anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("an OAuth account that never finished authorising still refuses: client id and secret are not a key")
+        void unfinishedOAuthStillRefuses() {
+            CredentialModeContext.setSelectedCredentialId(40L);
+            CredentialModeContext.setSelectionStrict(true);
+            when(userCredentialService.getCredentialScopesById(USER, 40L))
+                    .thenReturn(Optional.of(scopesOf("instagram", "Client B")));
+            when(userCredentialService.getAccessTokenInfoById(USER, 40L)).thenReturn(Optional.empty());
+            when(userCredentialService.getCredentialDataMapById(USER, 40L))
+                    .thenReturn(Map.of("client_id", "id", "client_secret", "secret"));
+
+            assertThatThrownBy(HttpExecutionServiceRunTimeSelectionTest.this::resolve)
+                    .isInstanceOf(CredentialSelectionException.class)
+                    .hasMessageContaining("40");
             verify(userCredentialService, never()).getAccessToken(anyString(), anyString());
         }
 

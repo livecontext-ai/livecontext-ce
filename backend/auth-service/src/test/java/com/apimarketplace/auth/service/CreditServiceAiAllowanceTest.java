@@ -28,17 +28,19 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 /**
- * The separate monthly AI allowance (V494).
+ * The per-plan monthly AI allowance (V494), a third bucket drained BEFORE the wallet.
  *
- * <p>Before it, the Free plan's 1000-credit grant was workflow-scoped, so an agent or
- * chat turn fell through to a PAYG bucket that is empty on a fresh signup: a visitor
- * could not run an agent at all without topping up. The allowance is a third bucket
- * that funds exactly that, and ONLY on models a cloud admin opened to the free tier.
+ * <p>No plan grants one since V512: the Free plan's 100-credit pot was merged into its
+ * 1000 monthly credits, which now fund free-tier chat/agent turns directly (pinned in
+ * {@link CreditServiceFreePlanSinglePoolTest}). The mechanism stays, tunable through
+ * {@code plan.included_ai_credits}, so its contract is still pinned here: when a plan
+ * grants a pot it pays for the curated agent turns first, and it refuses everything
+ * else - another model, a workflow node, a flat-cost add-on, a plan that configures no
+ * allowance.
  *
- * <p>Both halves of the contract are pinned here. The pot must pay for the curated
- * agent turns (otherwise the feature does not exist), and it must refuse everything
- * else - another model, a workflow node, a flat-cost add-on, a paid plan - otherwise
- * it is just a bigger grant with extra steps.
+ * <p>The fixtures still use the FREE plan code, because that is the plan whose monthly
+ * credits are scoped; what falls through after the pot is therefore the V512 routing
+ * (monthly pool on a free-tier model, PAYG alone otherwise).
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -142,27 +144,24 @@ class CreditServiceAiAllowanceTest {
             agentTurn(s, OPEN_MODEL, "exec-partial");
 
             // cost 2.00: 1.50 from the pot, 0.50 left to the normal routing, which on
-            // FREE is PAYG alone.
+            // FREE (V512) is the monthly pool for a free-tier model.
             assertThat(s.getAiRemainingCredits())
                     .as("the allowance is spent to the last credit rather than wasted")
                     .isEqualByComparingTo("0.00");
-            assertThat(s.getPaygRemainingCredits()).isEqualByComparingTo("49.50");
-            assertThat(s.getRemainingCredits()).isEqualByComparingTo("1000.00");
+            assertThat(s.getRemainingCredits()).isEqualByComparingTo("999.50");
+            assertThat(s.getPaygRemainingCredits())
+                    .as("the top-up is only reached once the monthly pool is empty")
+                    .isEqualByComparingTo("50.00");
         }
 
         @Test
-        @DisplayName("a chat overshoot floors the pot at zero and creates NO PAYG debt")
+        @DisplayName("a chat overshoot floors the pot at zero and books the tail on the monthly pool, never on PAYG")
         void chatOvershootFloorsThePot() {
             // Chat debits post-flight (allowNegative): the LLM has already streamed, so
-            // the movement must be recorded even though the cost exceeds what the
-            // account holds.
-            //
-            // The workflow bucket is EMPTY here on purpose. An earlier version of this
-            // test used 1000.00, which kept the total positive and never reached the
-            // "total went negative" arm of the delinquency check - so it asserted
-            // "the account is not bricked" while proving only the case where it could
-            // not be. Zero is also the ordinary state: a free account that used its
-            // workflow credits at all.
+            // the movement is recorded even though the cost exceeds what the account holds.
+            // Since V512 a free-tier turn may draw the monthly pool, so the uncovered tail
+            // is an ordinary debt on it (cleared by the next monthly reset or a top-up),
+            // exactly as on a paid plan, and the PAYG bucket is never driven negative.
             Subscription s = sub("FREE", "0.00", "0.00", "0.50");
             active(s);
 
@@ -172,28 +171,20 @@ class CreditServiceAiAllowanceTest {
             assertThat(s.getAiRemainingCredits())
                     .as("the allowance can be emptied but never driven negative")
                     .isEqualByComparingTo("0.00");
-            assertThat(s.getPaygRemainingCredits())
-                    .as("the 1.50 tail is ABSORBED, not booked: a negative PAYG on this plan "
-                            + "shape is unclearable (clearDelinquentIfPositive refuses while it "
-                            + "is negative, and no renewal resets PAYG), so booking it would "
-                            + "leave the row permanently poisoned even when nothing latches today")
-                    .isEqualByComparingTo("0.00");
+            assertThat(s.getRemainingCredits()).isEqualByComparingTo("-1.50");
+            assertThat(s.getPaygRemainingCredits()).isEqualByComparingTo("0.00");
             assertThat(s.getDelinquent())
-                    .as("and spending the pot to its last credit must NOT brick the account, "
-                            + "which is the normal end of every month")
-                    .isFalse();
-            assertThat(s.getRemainingCredits())
-                    .as("and the workflow grant is untouched either way - it was already empty here, "
-                            + "which is exactly why nothing masked the total going negative")
-                    .isEqualByComparingTo("0.00");
+                    .as("a negative total gates new spend until the reset or a top-up")
+                    .isTrue();
         }
 
         @Test
         @DisplayName("an agent turn the pot cannot cover is refused outright, leaving the allowance untouched")
         void underfundedAgentTurnIsRefusedWithoutSpending() {
             // Agent executions gate pre-flight (allowNegative=false), so an unaffordable
-            // turn must not nibble the pot on its way to being refused.
-            Subscription s = sub("FREE", "1000.00", "0.00", "0.50");
+            // turn must not nibble the pot on its way to being refused. The monthly pool is
+            // empty: since V512 it would otherwise fund the free-tier rest.
+            Subscription s = sub("FREE", "0.00", "0.00", "0.50");
 
             CreditConsumeResult result = agentTurn(s, OPEN_MODEL, "exec-underfunded");
 
@@ -271,47 +262,6 @@ class CreditServiceAiAllowanceTest {
 
 
         @Test
-        @DisplayName("the ledger states what was actually taken, so the absorbed tail is not drift")
-        void absorbedTailIsNotBookedInTheLedger() {
-            // Reconciliation compares the balances against the ledger sum. Recording the
-            // full 2.00 while the buckets only gave up 0.50 would read as 1.50 of drift
-            // every time a free account finishes its pot.
-            Subscription s = sub("FREE", "0.00", "0.00", "0.50");
-            active(s);
-
-            cloud.consumeForChat(USER_ID, "conv-ledger-absorbed", PROVIDER, OPEN_MODEL,
-                    LlmTokenBreakdown.of(1000, 500));
-
-            ArgumentCaptor<CreditLedgerEntry> captor = ArgumentCaptor.forClass(CreditLedgerEntry.class);
-            org.mockito.Mockito.verify(ledgerRepository, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
-            CreditLedgerEntry row = captor.getValue();
-            assertThat(row.getAmount())
-                    .as("the movement, not the intent")
-                    .isEqualByComparingTo("-0.50");
-            assertThat(row.getAiPortion())
-                    .as("all of which came from the pot")
-                    .isEqualByComparingTo("0.50");
-            assertThat(row.getBalanceAfter()).isEqualByComparingTo("0.00");
-        }
-
-        @Test
-        @DisplayName("a partly-funded turn still spends the PAYG the account really has")
-        void theTailIsCappedAtWhatPaygHolds() {
-            // Absorbing must not turn into "free once the pot is empty": PAYG is drained
-            // to exactly zero first, and only what is left over is absorbed.
-            Subscription s = sub("FREE", "0.00", "1.00", "0.50");
-            active(s);
-
-            cloud.consumeForChat(USER_ID, "conv-partial-cap", PROVIDER, OPEN_MODEL,
-                    LlmTokenBreakdown.of(1000, 500));
-
-            assertThat(s.getAiRemainingCredits()).isEqualByComparingTo("0.00");
-            assertThat(s.getPaygRemainingCredits())
-                    .as("the wallet paid what it could, down to zero and no further")
-                    .isEqualByComparingTo("0.00");
-        }
-
-        @Test
         @DisplayName("a FREE overshoot with NO allowance involved still marks the account delinquent")
         void nonAllowanceOvershootStillLatches() {
             // The pre-V494 behaviour, kept exactly. This account has a PAYG wallet and a
@@ -331,25 +281,6 @@ class CreditServiceAiAllowanceTest {
             assertThat(s.getDelinquent()).isTrue();
         }
 
-        @Test
-        @DisplayName("once the pot is spent the NEXT turn is refused, so absorbing cannot repeat")
-        void absorbingCannotRepeat() {
-            // What bounds the absorbed cost to one turn's estimate error: with an empty
-            // pot and an empty PAYG, the eligible balance is zero for every source type
-            // the workflow grant cannot fund, so the pre-flight gate refuses the next
-            // turn rather than letting the account keep overshooting for free.
-            Subscription s = sub("FREE", "1000.00", "0.00", "0.50");
-            active(s);
-            cloud.consumeForChat(USER_ID, "conv-overshoot-2", PROVIDER, OPEN_MODEL,
-                    LlmTokenBreakdown.of(1000, 500));
-
-            assertThat(cloud.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION", PROVIDER, OPEN_MODEL))
-                    .as("the next chat turn is refused up-front")
-                    .isFalse();
-            assertThat(cloud.hasSufficientCredits(USER_ID, "IMAGE_GENERATION", PROVIDER, OPEN_MODEL))
-                    .as("and so is anything else the workflow grant cannot fund")
-                    .isFalse();
-        }
         @Test
         @DisplayName("a workflow node keeps drawing the workflow grant, never the AI pot")
         void workflowNodeIgnoresThePot() {
@@ -554,9 +485,9 @@ class CreditServiceAiAllowanceTest {
         }
 
         @Test
-        @DisplayName("refuses once the allowance is spent")
+        @DisplayName("refuses once the allowance AND the monthly pool are spent")
         void checkGateRefusesSpentAllowance() {
-            active(sub("FREE", "1000.00", "0.00", "0.00"));
+            active(sub("FREE", "0.00", "0.00", "0.00"));
 
             assertThat(cloud.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION", PROVIDER, OPEN_MODEL))
                     .isFalse();

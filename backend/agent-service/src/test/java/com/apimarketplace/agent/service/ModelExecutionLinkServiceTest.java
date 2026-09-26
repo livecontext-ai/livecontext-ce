@@ -400,6 +400,20 @@ class ModelExecutionLinkServiceTest {
         assertThat(target.model()).isEqualTo("claude-haiku-4-5");
     }
 
+    @Test
+    @DisplayName("isLinked: true for a pair with an enabled link on any surface, false when disabled or unlinked (V515)")
+    void isLinkedAcrossSurfaces() {
+        when(repository.findAll()).thenReturn(List.of(
+            link("anthropic", "claude-opus-4-9", "claude-code", null, ModelExecutionLinkScope.WORKFLOW, true),
+            link("openai", "gpt-5", "codex", null, ModelExecutionLinkScope.ALL, false)));
+
+        // A replacement reachable only through a link counts as runnable, whatever its surface.
+        assertThat(service.isLinked("Anthropic", "claude-opus-4-9")).isTrue();
+        assertThat(service.isLinked("openai", "gpt-5")).isFalse();
+        assertThat(service.isLinked("anthropic", "claude-opus-4-8")).isFalse();
+        assertThat(service.isLinked(null, "x")).isFalse();
+    }
+
     private static ModelExecutionLinkEntity link(String billedProvider, String billedModel,
                                                  String executionProvider, String executionModel,
                                                  ModelExecutionLinkScope scope, boolean enabled) {

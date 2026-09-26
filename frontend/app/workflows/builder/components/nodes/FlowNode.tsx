@@ -21,6 +21,7 @@ import type { RenderMode } from '../../utils/interfaceHtmlUtils';
 import { Loader2, Play, Eye, Table, FileText, Zap, Workflow, Monitor, FolderOpen, Globe, ChevronRight, Wrench, Activity, Clock, Cpu, Coins, Trash2, Pencil } from 'lucide-react';
 import { type FilePanelTarget } from '@/lib/sidePanel/openFilesPanel';
 import { useInterfaceById, useInterfaceRender } from '../../hooks/useInterfaces';
+import { useInterfaceTemplateSync } from '../../hooks/useInterfaceTemplateSync';
 import { NodePlayButton, deriveNodeStatus, PANEL_TAB_BY_TRIGGER_VARIANT } from '../NodePlayButton';
 import { dispatchOpenTriggerTab } from '@/lib/workflow/triggerTabEvent';
 import { NodeBottomBar, type BottomButton } from './NodeBottomBar';
@@ -213,64 +214,15 @@ export function FlowNode({ data, selected, id, previewViewport }: NodeProps<Buil
   const runModeTotalPages = renderData?.pagination?.totalPages || 0;
 
 
-  // Auto-load template from DB when interface is loaded (only once per mount)
-  // Tracks the interfaceId we've loaded for, resets when:
-  // - Component remounts (new node)
-  // - interfaceId changes (different interface)
-  // - editorExpression becomes empty (workflow reloaded from backend)
-  const loadedTemplateForRef = React.useRef<string | null>(null);
-
-  // Reset when editorExpression becomes empty (workflow reload clears it)
-  if (!editorExpression && loadedTemplateForRef.current === interfaceId) {
-    loadedTemplateForRef.current = null;
-  }
-
-  const shouldLoadTemplate = isInterfaceNode &&
-    interfaceId &&
-    interfaceDetails &&
-    !isLoadingInterface &&
-    loadedTemplateForRef.current !== interfaceId &&
-    data.onNodeUpdate;
-
-  React.useEffect(() => {
-    if (!shouldLoadTemplate) return;
-
-    const templateFromDb = interfaceDetails!.htmlTemplate || interfaceDetails!.editorExpression || '';
-    const hasLocalTemplate = editorExpression && editorExpression.trim() !== '';
-
-    // Load template from DB if local is empty
-    if (templateFromDb && !hasLocalTemplate) {
-      loadedTemplateForRef.current = interfaceId!;
-      data.onNodeUpdate!({
-        ...data,
-        interfaceData: {
-          ...interfaceData,
-          editorExpression: templateFromDb,
-          cssTemplate: interfaceDetails!.cssTemplate ?? interfaceData.cssTemplate ?? null,
-          jsTemplate: interfaceDetails!.jsTemplate ?? interfaceData.jsTemplate ?? null,
-          dataSourceId: interfaceDetails!.dataSourceId ?? null,
-        },
-      });
-    } else if (hasLocalTemplate) {
-      // Mark as loaded, but still sync dataSourceId/cssTemplate/jsTemplate if missing
-      loadedTemplateForRef.current = interfaceId!;
-      const needsSync =
-        (interfaceDetails!.dataSourceId != null && interfaceData.dataSourceId == null) ||
-        (interfaceDetails!.cssTemplate && !interfaceData.cssTemplate) ||
-        (interfaceDetails!.jsTemplate && !interfaceData.jsTemplate);
-      if (needsSync) {
-        data.onNodeUpdate!({
-          ...data,
-          interfaceData: {
-            ...interfaceData,
-            dataSourceId: interfaceDetails!.dataSourceId ?? interfaceData.dataSourceId,
-            cssTemplate: interfaceDetails!.cssTemplate ?? interfaceData.cssTemplate ?? null,
-            jsTemplate: interfaceDetails!.jsTemplate ?? interfaceData.jsTemplate ?? null,
-          },
-        });
-      }
-    }
-  }, [shouldLoadTemplate, interfaceId, interfaceDetails, editorExpression, interfaceData, data]);
+  // Keeps the node's copy of the page in step with the stored interface (see the hook).
+  useInterfaceTemplateSync({
+    enabled: isInterfaceNode && !isRunMode,
+    interfaceId,
+    interfaceDetails,
+    isLoadingInterface,
+    data: data as Record<string, any>,
+    onNodeUpdate: data.onNodeUpdate,
+  });
 
   // Local validation errors
   // Use centralized validation context for error state

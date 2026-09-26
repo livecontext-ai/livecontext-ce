@@ -4,11 +4,12 @@ import React, { useState, useEffect, useLayoutEffect, useId, useRef, useMemo, us
 import { useTranslations } from 'next-intl';
 import { useExpandedState } from '@/hooks/useExpandedState';
 import Image from 'next/image';
-import { Check, StopCircle, AlertCircle, PauseCircle, ChevronDown, ChevronRight, Table, Monitor, Workflow, Bot, Search, HelpCircle, KeyRound, ListChecks, Eye, Code, Plug, Play, Pencil, FolderOpen, Terminal, FileText, Globe, Loader2 } from 'lucide-react';
+import { Check, StopCircle, AlertCircle, PauseCircle, ChevronDown, ChevronRight, Bot, Loader2 } from 'lucide-react';
 import { AvatarDisplay } from '@/components/agents';
 import { GroupedToolCard } from './GroupedToolCard';
 import { StepHistoryToggle, VISIBLE_STEPS } from './StepHistoryToggle';
 import { TasksPreviewBlock } from './TasksPreviewBlock';
+import { ThinkingGlyph } from './ThinkingGlyph';
 import { AskUserAnsweredBlock, parseAskUserQuestions } from './AskUserAnsweredBlock';
 import DiffView from './DiffView';
 import GitStatusView from './GitStatusView';
@@ -19,7 +20,9 @@ import { isGroupedTool, getToolDescription, getToolIconType } from '@/lib/utils/
 import { useStableGroupedActivities } from '@/hooks/useStableGroupedActivities';
 import type { ToolActivity, ToolVisualization } from '@/contexts/StreamingContext';
 import { normalizeIconSlug } from '@/lib/credentials/iconSlug';
+import { toolIcons } from './toolIcons';
 import { compactJsonForDisplay } from '@/lib/utils/compactJsonForDisplay';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 // Re-export so existing imports `from '@/components/chat/ActivityFeed'` keep
 // working. Single source of truth lives in StreamingContext (live state owns
@@ -27,30 +30,9 @@ import { compactJsonForDisplay } from '@/lib/utils/compactJsonForDisplay';
 // independently and the unions drifted. Re-exporting eliminates the divergence.
 export type { ToolActivity, ToolVisualization };
 
-// Tool icon mapping. Exported so the Conversation Activity card renders tool
-// rows with the exact same iconography without duplicating this map.
-export const toolIcons: Record<string, React.ReactNode> = {
-  table: <Table className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  interface: <Monitor className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  workflow: <Workflow className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  agent: <Bot className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  search: <Search className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  help: <HelpCircle className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  key: <KeyRound className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  tasks: <ListChecks className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  eye: <Eye className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  code: <Code className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  files: <FolderOpen className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  api: <Plug className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  play: <Play className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  pencil: <Pencil className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  // Native Claude Code tools (full agent toolset over the bridge).
-  terminal: <Terminal className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  file: <FileText className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  // 'globe' is returned by getToolIconType for web_search/WebFetch/WebSearch; it had
-  // no icon entry before, so those tools rendered without one - added here.
-  globe: <Globe className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-};
+// Tool icon mapping lives in ./toolIcons (one map for every tool renderer);
+// re-exported here for existing importers.
+export { toolIcons };
 
 // Loading skeleton component
 function LoadingSkeleton() {
@@ -265,7 +247,11 @@ export function ActivityFeed({ activities, className = '', thinkingMessage: exte
             otherwise the user sees the "Stopped" indicator below AND a still-
             running "Thinking…" shimmer above, which contradicts the stop. */}
         {hasPending && !hasStopTool && !hasErrorTool ? (
-          <span className="font-medium shimmer-text">{t('thinking')}</span>
+          <span className="font-medium shimmer-text" data-testid="activity-feed-thinking">
+            {/* Inside the shimmer element so one gradient paints the glyph and the word. */}
+            <ThinkingGlyph className="mr-1.5" />
+            {t('thinking')}
+          </span>
         ) : (
           <span className="font-medium text-slate-600 dark:text-slate-300">
             {t('duration', { duration: formatDuration(displayDuration ?? 0) })}
@@ -561,7 +547,7 @@ function TimelineItem({ activity, showLine, isStreaming = false }: TimelineItemP
         >
           {/* API icon from iconSlug (for catalog) or fallback to generic icon */}
           {hasApiIcon ? (
-            <Image
+            <ServiceLogo as={Image}
               src={`/icons/services/${normalizeIconSlug(activity.iconSlug)}.svg`}
               alt=""
               width={14}

@@ -113,6 +113,101 @@ describe('ChatCore Escape stop shortcut', () => {
     expect(mocks.streaming.stopStream).not.toHaveBeenCalled();
   });
 
+  // Escape anywhere on the page stopped the stream. Radix layers mark the Escape they use (see the
+  // "already handled" case below); a hand-rolled overlay, stood in for here by a bare role, does not.
+  it.each(['menu', 'listbox', 'dialog', 'alertdialog'])(
+    'does not stop when the Escape closes an open %s overlay',
+    (role) => {
+      mocks.streaming.isStreamingConversation.mockReturnValue(true);
+      const onStopStream = vi.fn();
+      render(
+        <ChatCore conversationId="conv-1" conversation={null} messages={[]}
+          onSendMessage={vi.fn()} onStopStream={onStopStream} />,
+      );
+      // Radix portals its layers to <body>, outside the app tree.
+      const overlay = document.createElement('div');
+      overlay.setAttribute('role', role);
+      document.body.appendChild(overlay);
+      try {
+        fireEvent.keyDown(document, { key: 'Escape' });
+      } finally {
+        overlay.remove();
+      }
+
+      expect(onStopStream).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still stops once the overlay is gone', () => {
+    mocks.streaming.isStreamingConversation.mockReturnValue(true);
+    const onStopStream = vi.fn();
+    render(
+      <ChatCore conversationId="conv-1" conversation={null} messages={[]}
+        onSendMessage={vi.fn()} onStopStream={onStopStream} />,
+    );
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(onStopStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not stop when the chat sits in a full-screen side panel: that Escape leaves full screen', () => {
+    mocks.streaming.isStreamingConversation.mockReturnValue(true);
+    const onStopStream = vi.fn();
+    const panel = document.createElement('div');
+    panel.setAttribute('data-side-panel-maximized', 'true');
+    document.body.appendChild(panel);
+    try {
+      render(
+        <ChatCore conversationId="conv-1" conversation={null} messages={[]}
+          onSendMessage={vi.fn()} onStopStream={onStopStream} />,
+        { container: panel },
+      );
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(onStopStream).not.toHaveBeenCalled();
+    } finally {
+      panel.remove();
+    }
+  });
+
+  it('does not stop a chat BEHIND a full-screen side panel either', () => {
+    mocks.streaming.isStreamingConversation.mockReturnValue(true);
+    const onStopStream = vi.fn();
+    const panel = document.createElement('div');
+    panel.setAttribute('data-side-panel-maximized', 'true');
+    document.body.appendChild(panel);
+    try {
+      // The chat is rendered in the page, not inside the panel.
+      render(
+        <ChatCore conversationId="conv-1" conversation={null} messages={[]}
+          onSendMessage={vi.fn()} onStopStream={onStopStream} />,
+      );
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(onStopStream).not.toHaveBeenCalled();
+    } finally {
+      panel.remove();
+    }
+  });
+
+  it('does not stop on an Escape another surface already handled', () => {
+    mocks.streaming.isStreamingConversation.mockReturnValue(true);
+    const onStopStream = vi.fn();
+    render(
+      <ChatCore conversationId="conv-1" conversation={null} messages={[]}
+        onSendMessage={vi.fn()} onStopStream={onStopStream} />,
+    );
+    const handled = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    handled.preventDefault();
+
+    document.dispatchEvent(handled);
+
+    expect(onStopStream).not.toHaveBeenCalled();
+  });
+
   it('falls back to streaming.stopStream when no external stop handler is provided', () => {
     mocks.streaming.isStreamingConversation.mockReturnValue(true);
 

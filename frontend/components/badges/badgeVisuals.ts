@@ -1,14 +1,17 @@
 import {
   AppWindow,
+  BellRing,
   Blocks,
   Crown,
   Flame,
   Hourglass,
   Moon,
   PackageCheck,
+  Radio,
   Rocket,
   Share2,
   ShieldCheck,
+  Smartphone,
   Store,
   TrendingUp,
   type LucideIcon,
@@ -60,6 +63,11 @@ export const FAMILY_VISUALS: Record<BadgeFamily, FamilyVisual> = {
   PUBLISHER: { icon: Store, shape: 'rosette', accent: ['#f472b6', '#be185d'] },
   SHARER: { icon: Share2, shape: 'rosette', accent: ['#22d3ee', '#0e7490'] },
   POPULARITY: { icon: TrendingUp, shape: 'rosette', accent: ['#facc15', '#a16207'] },
+  // Being reached outside the app - rosettes too: these are about people getting the message.
+  REACHABLE: { icon: BellRing, shape: 'rosette', accent: ['#34d399', '#047857'] },
+  MULTICHANNEL: { icon: Radio, shape: 'rosette', accent: ['#a3e635', '#4d7c0f'] },
+  // Deciding from a chat - a running-things hexagon, it is work done from the phone.
+  REMOTE_CONTROL: { icon: Smartphone, shape: 'hexagon', accent: ['#e879f9', '#a21caf'] },
 };
 
 export interface TierVisual {
@@ -124,6 +132,9 @@ export const FAMILY_ORDER: BadgeFamily[] = [
   'PUBLISHER',
   'SHARER',
   'POPULARITY',
+  'REACHABLE',
+  'MULTICHANNEL',
+  'REMOTE_CONTROL',
 ];
 
 /**

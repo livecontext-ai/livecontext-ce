@@ -253,6 +253,52 @@ class WorkflowPlanVersionServiceTest {
         }
 
         @Test
+        @DisplayName("A reading-direction switch is layout: the row is refreshed in place with the new direction, never a v2")
+        void shouldRefreshInPlaceOnDirectionSwitch() {
+            // The canvas toggle re-lays every node and stamps the new direction. Counted as a
+            // real edit, it minted a version and forked the next run for a workflow whose
+            // behaviour did not change.
+            Map<String, Object> stored = planAt(290, 0, "Aggregate");
+            stored.put("layoutDirection", "horizontal");
+            Map<String, Object> flipped = planAt(0, 290, "Aggregate");
+            flipped.put("layoutDirection", "vertical");
+
+            WorkflowPlanVersionEntity v1 = new WorkflowPlanVersionEntity(WORKFLOW_ID, 1, stored, USER_ID);
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(1));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 1)).thenReturn(Optional.of(v1));
+
+            int version = service.createVersion(WORKFLOW_ID, flipped, USER_ID);
+
+            assertThat(version).isEqualTo(1);
+            ArgumentCaptor<WorkflowPlanVersionEntity> captor = ArgumentCaptor.forClass(WorkflowPlanVersionEntity.class);
+            verify(versionRepository).save(captor.capture());
+            assertThat(captor.getValue().getVersion()).isEqualTo(1);
+            assertThat(captor.getValue().getPlan()).containsEntry("layoutDirection", "vertical");
+        }
+
+        @Test
+        @DisplayName("A direction switch on a PINNED workflow mints a draft and leaves the pinned row's direction alone")
+        void shouldNotOverwriteThePinnedRowOnDirectionSwitch() {
+            Map<String, Object> stored = planAt(290, 0, "Aggregate");
+            stored.put("layoutDirection", "horizontal");
+            Map<String, Object> flipped = planAt(0, 290, "Aggregate");
+            flipped.put("layoutDirection", "vertical");
+
+            WorkflowPlanVersionEntity v1 = new WorkflowPlanVersionEntity(WORKFLOW_ID, 1, stored, USER_ID);
+            WorkflowEntity pinnedWorkflow = new WorkflowEntity();
+            pinnedWorkflow.setPinnedVersion(1);
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(1));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 1)).thenReturn(Optional.of(v1));
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(pinnedWorkflow));
+            when(versionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            int version = service.createVersion(WORKFLOW_ID, flipped, USER_ID);
+
+            assertThat(version).isEqualTo(2);
+            assertThat(v1.getPlan()).containsEntry("layoutDirection", "horizontal");
+        }
+
+        @Test
         @DisplayName("Should NOT touch the PINNED row on layout drift - it mints a draft instead")
         void shouldNotOverwriteThePinnedRowOnLayoutDrift() {
             Map<String, Object> stored = planAt(290, 0, "Aggregate");
@@ -1889,6 +1935,82 @@ class WorkflowPlanVersionServiceTest {
             verify(versionRepository, never()).purgeOldVersionsExcluding(any(), anyInt(), anyInt());
             // Issue #149 - createVersion now looks up the workflow once for org plumbing.
             // The purge-protection path stays untouched (no purgeOldVersions call).
+        }
+    }
+
+    // =========================================================================
+    // resolvePlanForRun - the plan a run report is built against
+    // =========================================================================
+
+    @Nested
+    @DisplayName("resolvePlanForRun")
+    class ResolvePlanForRunTests {
+
+        private final Map<String, Object> versionPlan = Map.of("triggers", List.of(), "mcps",
+                List.of(Map.of("id", "mcp:from_version", "label", "From version")));
+        private final Map<String, Object> currentPlan = Map.of("triggers", List.of(), "mcps",
+                List.of(Map.of("id", "mcp:from_current", "label", "From current")));
+
+        @Test
+        @DisplayName("uses the run's own plan version when it is still kept, with no note")
+        void keptVersion_isUsed() {
+            WorkflowPlanVersionEntity version = mock(WorkflowPlanVersionEntity.class);
+            when(version.getPlan()).thenReturn(versionPlan);
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 30)).thenReturn(Optional.of(version));
+
+            WorkflowPlanVersionService.RunPlan runPlan = service.resolvePlanForRun(WORKFLOW_ID, 30, "t1");
+
+            assertThat(runPlan.prunedVersion()).isNull();
+            assertThat(runPlan.plan().getOriginalPlan().get("mcps")).isEqualTo(versionPlan.get("mcps"));
+            verify(workflowRepository, never()).findById(any());
+            Map<String, Object> report = Map.of("run_id", "r");
+            assertThat(runPlan.annotate(report)).isSameAs(report);
+        }
+
+        @Test
+        @DisplayName("regression: a pruned plan version falls back to the workflow LOADED BY ID and is flagged")
+        void prunedVersion_fallsBackToReloadedWorkflow() {
+            // Prod 2026-09-25: retention keeps 20 versions, 212 runs pointed at a deleted one and
+            // the old fallback read getPlan() on the run's lazy proxy outside any session.
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 2)).thenReturn(Optional.empty());
+            WorkflowEntity workflow = new WorkflowEntity();
+            workflow.setId(WORKFLOW_ID);
+            workflow.setPlan(currentPlan);
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow));
+
+            WorkflowPlanVersionService.RunPlan runPlan = service.resolvePlanForRun(WORKFLOW_ID, 2, "t1");
+
+            assertThat(runPlan.prunedVersion()).isEqualTo(2);
+            assertThat(runPlan.plan().getOriginalPlan().get("mcps")).isEqualTo(currentPlan.get("mcps"));
+            Map<String, Object> annotated = runPlan.annotate(Map.of("run_id", "r", "total_epochs", 3));
+            assertThat(annotated).containsEntry("run_id", "r").containsEntry("total_epochs", 3);
+            assertThat((String) annotated.get("plan_note")).contains("Plan version 2").contains("current plan");
+        }
+
+        @Test
+        @DisplayName("a run with no recorded plan version uses the current plan without claiming a pruned version")
+        void noPlanVersion_usesCurrentWithoutNote() {
+            WorkflowEntity workflow = new WorkflowEntity();
+            workflow.setId(WORKFLOW_ID);
+            workflow.setPlan(currentPlan);
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow));
+
+            WorkflowPlanVersionService.RunPlan runPlan = service.resolvePlanForRun(WORKFLOW_ID, null, "t1");
+
+            assertThat(runPlan.prunedVersion()).isNull();
+            assertThat(runPlan.annotate(Map.of("run_id", "r"))).doesNotContainKey("plan_note");
+            verify(versionRepository, never()).findByWorkflowIdAndVersion(any(), anyInt());
+        }
+
+        @Test
+        @DisplayName("a workflow that no longer exists is an explicit error, not a silent empty plan")
+        void missingWorkflow_throws() {
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 2)).thenReturn(Optional.empty());
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.resolvePlanForRun(WORKFLOW_ID, 2, "t1"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining(WORKFLOW_ID.toString());
         }
     }
 }

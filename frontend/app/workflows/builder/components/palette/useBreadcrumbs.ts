@@ -92,13 +92,13 @@ export function useBreadcrumbs({
 
     // MCP/APIs path
     if (navigationLevel === 'apis') {
-      items.push({ label: 'MCPs', isActive: true });
+      items.push({ label: 'Integrations', isActive: true });
     }
 
     if (navigationLevel === 'tools' && selectedApiId) {
       const api = apis.find(a => a.slug === selectedApiId);
       items.push({
-        label: 'MCPs',
+        label: 'Integrations',
         onClick: () => {
           setNavigationLevel('apis');
           setSelectedApiId(null);

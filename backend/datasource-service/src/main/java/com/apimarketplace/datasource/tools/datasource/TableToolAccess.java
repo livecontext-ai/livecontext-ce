@@ -1,6 +1,10 @@
 package com.apimarketplace.datasource.tools.datasource;
 
 import com.apimarketplace.agent.config.ToolAccessControl;
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
+import com.apimarketplace.common.scope.ScopeGuard;
+import com.apimarketplace.datasource.domain.DataSourceModels.DataSource;
+import com.apimarketplace.datasource.services.DataSourceService;
 import com.apimarketplace.agent.tools.ToolErrorCode;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
@@ -33,6 +37,72 @@ final class TableToolAccess {
     static List<String> allowedTableIds(ToolExecutionContext context) {
         return ToolAccessControl.getAllowedIds(
                 context != null ? context.credentials() : null, "table");
+    }
+
+    /**
+     * The workspace's per-member rules on ONE table, for every table-tool action that names one:
+     * the same rules the REST CRUD entry point applies ({@code CrudController.enforceReadAccess} /
+     * {@code enforceWriteAccess}), keyed on the table's own workspace and the CALLER's role.
+     * A member DENIED the table is told it does not exist (as for another workspace's table); a
+     * member who may only read it is refused any write.
+     *
+     * <p>The tool used to skip both: row and schema actions go straight to the CRUD executor, and
+     * update / delete passed no caller to the service, whose own gate then checked the table's
+     * OWNER, who is never restricted. A restricted member reached, through an agent, rows and
+     * writes the REST surface refuses them.
+     *
+     * <p>Applied only to a table inside the caller's workspace: for any other one the downstream
+     * scope check answers not-found, and answering "read-only" here would reveal that it exists.
+     * An unknown table, or one with no workspace, is also left to the downstream checks.
+     */
+    static Optional<ToolExecutionResult> denyIfMemberRestricted(DataSourceService dataSourceService,
+                                                                ToolExecutionContext context, String tenantId,
+                                                                Long tableId, boolean write) {
+        if (tableId == null || dataSourceService == null) {
+            return Optional.empty();
+        }
+        return denyIfMemberRestricted(dataSourceService, context, tenantId,
+                dataSourceService.getDataSource(tableId).orElse(null), write);
+    }
+
+    /** Same rules, for a caller that has already loaded the table (no second lookup). */
+    static Optional<ToolExecutionResult> denyIfMemberRestricted(DataSourceService dataSourceService,
+                                                                ToolExecutionContext context, String tenantId,
+                                                                DataSource ds, boolean write) {
+        if (ds == null || dataSourceService == null) {
+            return Optional.empty();
+        }
+        Long tableId = ds.id();
+        String orgId = ds.organizationId();
+        String callerOrgId = context != null ? context.orgId() : null;
+        if (orgId == null || orgId.isBlank()
+                || !ScopeGuard.isInStrictScope(tenantId, callerOrgId, ds.tenantId(), orgId)) {
+            return Optional.empty();
+        }
+        String role = context != null ? context.orgRole() : null;
+        String id = String.valueOf(tableId);
+        if (!dataSourceService.canAccessViaOrg(orgId, tenantId, id, role)) {
+            return Optional.of(ToolExecutionResult.failure(ToolErrorCode.DATASOURCE_NOT_FOUND,
+                    "Data source not found: " + tableId));
+        }
+        if (write && !dataSourceService.canWriteViaOrg(orgId, tenantId, id, role)) {
+            return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED,
+                    "You can read this table but not change it: your access to it in this workspace is read-only "
+                    + "(set by a workspace admin, or by a viewer role)."));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * The workspace role's own write block, for the one action that names no table yet: create.
+     * A VIEWER may not create a table, exactly as the REST create endpoint refuses them.
+     */
+    static Optional<ToolExecutionResult> denyIfViewer(ToolExecutionContext context) {
+        if (context != null && OrgAccessGuard.isRoleWriteBlocked(context.orgId(), context.orgRole())) {
+            return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED,
+                    "Your role in this workspace is viewer (read-only): you cannot create a table."));
+        }
+        return Optional.empty();
     }
 
     /**

@@ -48,17 +48,22 @@ public class WaitNode extends BaseNode {
 
     @Override
     public NodeExecutionResult execute(ExecutionContext context) {
-        logger.info("⏳ Wait node executing: nodeId={}, durationMs={}, itemId={}",
-            nodeId, durationMs, context.itemId());
-
+        // The configured duration, or the one its {{...}} template resolves to for this item.
+        // Until the parser set templates aside, `duration: "{{x}}"` parsed to 0 and the node
+        // did not wait at all, reporting success.
+        long durationMs = this.durationMs;
         try {
+            durationMs = effectiveDurationMs(context);
+            logger.info("⏳ Wait node executing: nodeId={}, durationMs={}, itemId={}",
+                nodeId, durationMs, context.itemId());
+
             // Short wait: inline Thread.sleep (too short for DB overhead)
             if (durationMs <= INLINE_THRESHOLD_MS || signalService == null) {
-                return executeInline(context);
+                return executeInline(context, durationMs);
             }
 
             // Long wait: register signal and YIELD (non-blocking)
-            return executeWithSignal(context);
+            return executeWithSignal(context, durationMs);
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -68,7 +73,7 @@ public class WaitNode extends BaseNode {
             failOutput.put("item_index", context.itemIndex());
             failOutput.put("itemIndex", context.itemIndex());
             failOutput.put("item_id", context.itemId());
-            failOutput.put("resolved_params", buildInputData());
+            failOutput.put("resolved_params", buildInputData(durationMs));
             failOutput.put("error", "Wait interrupted");
             return NodeExecutionResult.failureWithOutput(nodeId, "Wait interrupted", failOutput, 0L);
         } catch (Exception e) {
@@ -78,7 +83,7 @@ public class WaitNode extends BaseNode {
             failOutput.put("item_index", context.itemIndex());
             failOutput.put("itemIndex", context.itemIndex());
             failOutput.put("item_id", context.itemId());
-            failOutput.put("resolved_params", buildInputData());
+            failOutput.put("resolved_params", buildInputData(durationMs));
             failOutput.put("error", e.getMessage());
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failOutput, 0L);
         }
@@ -92,7 +97,7 @@ public class WaitNode extends BaseNode {
      * of the full duration. Without this, even short waits hold the worker
      * past the user's STOP - across a fork of N short waits, that compounds.
      */
-    private NodeExecutionResult executeInline(ExecutionContext context) throws InterruptedException {
+    private NodeExecutionResult executeInline(ExecutionContext context, long durationMs) throws InterruptedException {
         Clock clk = clock != null ? clock : Clock.systemUTC();
         Instant startedAt = clk.instant();
 
@@ -113,7 +118,7 @@ public class WaitNode extends BaseNode {
                     cancelOutput.put("item_index", context.itemIndex());
                     cancelOutput.put("itemIndex", context.itemIndex());
                     cancelOutput.put("item_id", context.itemId());
-                    cancelOutput.put("resolved_params", buildInputData());
+                    cancelOutput.put("resolved_params", buildInputData(durationMs));
                     cancelOutput.put("cancelled", true);
                     return NodeExecutionResult.failureWithOutput(nodeId,
                         "Wait cancelled (run cancel signal)", cancelOutput, durationMs - remaining);
@@ -121,7 +126,9 @@ public class WaitNode extends BaseNode {
             }
         }
 
-        Map<String, Object> result = buildOutput(context, startedAt, clk.instant());
+        Map<String, Object> result = buildWaitOutput(durationMs, startedAt, clk.instant(),
+            context.itemId(), context.itemIndex());
+        result.put("resolved_params", buildInputData(durationMs));
         logger.info("✅ Wait completed (inline): nodeId={}, durationMs={}", nodeId, durationMs);
         return NodeExecutionResult.success(nodeId, result);
     }
@@ -130,7 +137,7 @@ public class WaitNode extends BaseNode {
      * Signal-based wait: registers a timer signal and YIELDS.
      * The engine returns immediately. Execution resumes when the timer expires.
      */
-    private NodeExecutionResult executeWithSignal(ExecutionContext context) {
+    private NodeExecutionResult executeWithSignal(ExecutionContext context, long durationMs) {
         String runId = context.runId();
         String itemId = context.itemId();
 
@@ -154,7 +161,7 @@ public class WaitNode extends BaseNode {
             signalService.registerSignal(
                 runId, itemId, nodeId, effectiveDagTriggerId, effectiveEpoch,
                 SignalType.WAIT_TIMER, signalConfig, splitItemData),
-            buildInputData());
+            buildInputData(durationMs));
 
         Instant startedAt = clk.instant();
         String startedAtStr = startedAt.toString();
@@ -163,24 +170,40 @@ public class WaitNode extends BaseNode {
             nodeId, durationMs, expiresAt);
 
         Map<String, Object> signalOutput = new java.util.HashMap<>();
-        signalOutput.put("resolved_params", buildInputData());
+        signalOutput.put("resolved_params", buildInputData(durationMs));
         signalOutput.put("duration_ms", durationMs);
         signalOutput.put("started_at", startedAtStr);
         signalOutput.put("expires_at", expiresAt);
         return NodeExecutionResult.awaitingSignal(nodeId, SignalType.WAIT_TIMER, signalOutput);
     }
 
-    private Map<String, Object> buildInputData() {
+    /**
+     * The duration this execution waits: the configured one, or its {@code {{...}}} template
+     * resolved (a whole number of milliseconds, never negative).
+     */
+    private long effectiveDurationMs(ExecutionContext context) {
+        String template = deferredScalar("wait", "duration");
+        if (template == null) {
+            return durationMs;
+        }
+        long resolved = resolveDeferredLong("wait", "duration", template, context);
+        if (resolved < 0) {
+            throw new IllegalStateException("wait.duration '" + template + "' resolved to " + resolved
+                + ": a duration cannot be negative");
+        }
+        return resolved;
+    }
+
+    private Map<String, Object> buildInputData(long durationMs) {
         Map<String, Object> inputData = new java.util.LinkedHashMap<>();
-        inputData.put("duration", durationMs);
+        String template = deferredScalar("wait", "duration");
+        inputData.put("duration", template != null
+            ? com.apimarketplace.orchestrator.services.template.ReportedParams.valueFrom(template, durationMs)
+            : durationMs);
         // Through the gate like every other reported map. The content is a single number
         // today, so this changes nothing a reader sees; it means the node cannot become an
         // exception to "one gate" by someone adding a second key to it.
         return com.apimarketplace.orchestrator.services.template.ReportedParams.forReport(inputData);
-    }
-
-    private Map<String, Object> buildOutput(ExecutionContext context, Instant startedAt, Instant completedAt) {
-        return buildWaitOutput(durationMs, startedAt, completedAt, context.itemId(), context.itemIndex());
     }
 
     /**

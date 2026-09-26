@@ -65,10 +65,19 @@ public final class PlanLayoutNormalizer {
     private static final Set<String> SIZE_KEYS = Set.of(
             "width", "height", "previewWidth", "previewHeight", "dataInputWidth", "dataInputHeight");
 
+    /**
+     * The plan-level reading direction of the canvas ({@code "horizontal"} or
+     * {@code "vertical"}). Switching it re-lays every node out and changes nothing the
+     * workflow does, so it is layout exactly like the coordinates it comes with: counted
+     * as a change, flipping the direction minted a version and forked the next run.
+     */
+    private static final String LAYOUT_DIRECTION_KEY = "layoutDirection";
+
     private PlanLayoutNormalizer() {}
 
     /**
-     * Deep copy of {@code plan} with node-entry layout removed.
+     * Deep copy of {@code plan} with node-entry layout and the plan's reading direction
+     * removed.
      *
      * <p>Null-safe (null in, null out) and non-mutating: the caller's plan is never
      * touched, so this is safe to use inside a comparison.
@@ -77,6 +86,7 @@ public final class PlanLayoutNormalizer {
         if (plan == null) return null;
         Map<String, Object> out = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : plan.entrySet()) {
+            if (LAYOUT_DIRECTION_KEY.equals(entry.getKey())) continue;
             Object value = entry.getValue();
             out.put(entry.getKey(), value instanceof List<?> list ? stripNodeList(list) : value);
         }

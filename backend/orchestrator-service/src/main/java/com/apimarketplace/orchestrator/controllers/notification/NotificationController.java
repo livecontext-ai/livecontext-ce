@@ -57,6 +57,8 @@ public class NotificationController {
             "RUN_FAILED", "APPROVAL_PENDING", "CRED_EXPIRED", "WEBHOOK_TRIGGER_DISABLED",
             "AGENT_TASK_ASSIGNED", "AGENT_TASK_AWAITING_REVIEW", "AGENT_TASK_MENTION",
             "BRIDGE_LOW_CREDIT", "ORG_INVITATION_PENDING", "BUDGET_REACHED",
+            "AGENT_AUTHORIZATION_UNREACHABLE",
+            "CREDIT_LOW", "CREDIT_EXHAUSTED",
             BadgeNotificationEmitter.CATEGORY_BADGE_UNLOCKED);
 
     private final NotificationService notificationService;

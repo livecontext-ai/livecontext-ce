@@ -74,6 +74,17 @@ public class StripeBillingService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private OrganizationService organizationService;
 
+    /**
+     * Lifecycle emails (Resend): {@code checkout.started} starts the abandoned-checkout
+     * sequence. Optional, same pattern as above: null in constructor-based unit tests.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails;
+
+    /** At most one {@code checkout.started} per user and kind per 24 h, across every instance. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.lifecycle.CheckoutStartedThrottle checkoutStartedThrottle;
+
     @Value("${billing.stripe.successUrl}")
     private String checkoutSuccessUrl;
 
@@ -349,6 +360,7 @@ public class StripeBillingService {
         try {
             Session session = stripe.checkout().sessions().create(params);
             log.info("Checkout session creee (user={}, plan={}, session={})", userId, planCode, session.getId());
+            emitCheckoutStarted(userId, normalizedPlanCode, com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_SUBSCRIPTION);
             return session.getUrl();
         } catch (InvalidRequestException e) {
             if (isNoSuchCustomerError(e)) {
@@ -373,6 +385,7 @@ public class StripeBillingService {
                                                                     );
                 Session session = stripe.checkout().sessions().create(retryParams);
                 log.info("Checkout session creee apres auto-reparation (user={}, session={})", userId, session.getId());
+                emitCheckoutStarted(userId, normalizedPlanCode, com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_SUBSCRIPTION);
                 return session.getUrl();
             }
             throw e;
@@ -1354,7 +1367,54 @@ public class StripeBillingService {
         Session session = stripe.checkout().sessions().create(params);
         log.info("PAYG checkout session created (user={}, tier={}, amount={} credits, session={})",
                 userId, tier, creditAmount, session.getId());
+        emitCheckoutStarted(userId, PAYG_DISPLAY_NAME, com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_CREDITS);
         return session.getUrl();
+    }
+
+    /** {@code plan} of a PAYG top-up checkout, the name the pricing page shows for it. */
+    static final String PAYG_DISPLAY_NAME = "PAYG";
+
+    /**
+     * {@code checkout.started} for the lifecycle emails: a Stripe Checkout page now exists for
+     * this user. {@code plan} is rendered as-is in the email ({@code {{{PLAN}}}}), so it is a
+     * DISPLAY name: the plan's own name ("Pro"), never its code. Never throws, a lifecycle
+     * email must never fail a checkout. Throttled to one per user and kind per 24 h
+     * ({@link com.apimarketplace.auth.lifecycle.CheckoutStartedThrottle}), so repeated checkouts
+     * do not start parallel recovery sequences.
+     */
+    void emitCheckoutStarted(Long userId, String plan, String kind) {
+        if (lifecycleEmails == null || checkoutStartedThrottle == null) return;
+        try {
+            // Inactive (CE, or cloud without a key): no event would leave, so claim no window either.
+            if (!lifecycleEmails.isActive()) return;
+            java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+            payload.put("plan", com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_SUBSCRIPTION.equals(kind)
+                    ? planDisplayName(plan) : (plan == null ? "" : plan));
+            payload.put("kind", kind);
+            // The window is claimed on the Resend worker, after this checkout committed and the
+            // event was queued, in the throttle's own transaction: a failing claim can never roll
+            // back the checkout, and a dropped event never consumes the window.
+            com.apimarketplace.auth.lifecycle.CheckoutStartedThrottle throttle = checkoutStartedThrottle;
+            lifecycleEmails.emitIfClaimed(userId, com.apimarketplace.auth.lifecycle.LifecycleEvents.CHECKOUT_STARTED,
+                    payload, throttle.claim(userId, kind));
+        } catch (Exception e) {
+            log.debug("checkout.started not emitted for user {}: {}", userId, e.toString());
+        }
+    }
+
+    /** The plan's name ("Pro"), else its code in title case ("STARTER" -> "Starter"). */
+    String planDisplayName(String planCode) {
+        if (planCode == null || planCode.isBlank()) return "";
+        String code = planCode.trim().toUpperCase(java.util.Locale.ROOT);
+        try {
+            Optional<Plan> plan = planRepository.findByCode(code);
+            if (plan != null && plan.isPresent() && plan.get().getName() != null && !plan.get().getName().isBlank()) {
+                return plan.get().getName().trim();
+            }
+        } catch (Exception e) {
+            log.debug("plan name lookup failed for {}: {}", code, e.toString());
+        }
+        return code.charAt(0) + code.substring(1).toLowerCase(java.util.Locale.ROOT);
     }
 
     private SessionCreateParams buildSessionParams(

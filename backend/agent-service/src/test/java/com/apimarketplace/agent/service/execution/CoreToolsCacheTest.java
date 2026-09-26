@@ -384,7 +384,7 @@ class CoreToolsCacheTest {
             // orchestrator is back and advertises its tools.
             when(restTemplate.exchange(eq(ORCH), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(toolsFor()) // initial: orchestrator unreachable -> no tools
-                .thenReturn(toolsFor("workflow", "application", "web_search", "files", "mailbox", "wait"));
+                .thenReturn(toolsFor("workflow", "application", "web_search", "files", "mailbox", "wait", "channel"));
             when(restTemplate.exchange(eq(AGENT), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(toolsFor("agent", "skill", "memory", "ask_user"));
             when(restTemplate.exchange(eq(DATASOURCE), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
@@ -396,9 +396,11 @@ class CoreToolsCacheTest {
 
             cache.refreshCoreTools();
 
-            // Sanity: only orchestrator-owned tools are missing after the initial load.
+            // Sanity: only orchestrator-owned tools are missing after the initial load. The list is
+            // spelled out rather than derived, so a tool added to the core set has to be added here
+            // too; "channel" was not, and this class is in no CI -Dtest list, so it went unnoticed.
             assertThat(cache.getMissingTools())
-                .containsExactlyInAnyOrder("workflow", "application", "web_search", "files", "mailbox", "wait");
+                .containsExactlyInAnyOrder("workflow", "application", "web_search", "files", "mailbox", "wait", "channel");
             assertThat(cache.getCoreTools().stream().map(ToolDefinition::name))
                 .containsExactlyInAnyOrder("agent", "skill", "memory", "ask_user", "table", "interface", "catalog", "generation");
 
@@ -409,7 +411,7 @@ class CoreToolsCacheTest {
             assertThat(cache.getMissingTools()).isEmpty();
             assertThat(cache.getCoreTools().stream().map(ToolDefinition::name))
                 .containsExactlyInAnyOrder("catalog", "generation", "table", "interface", "agent", "skill", "memory", "ask_user",
-                    "workflow", "application", "web_search", "files", "mailbox", "wait");
+                    "workflow", "application", "web_search", "files", "mailbox", "wait", "channel");
             // ...and the originally-loaded tools were preserved (the cache was NOT cleared,
             // unlike refreshCoreTools()), so no consumer ever sees them disappear.
             assertThat(cache.getCoreTools().stream().map(ToolDefinition::name))
@@ -430,7 +432,7 @@ class CoreToolsCacheTest {
         void periodicRefreshIsNoOpWhenCacheAlreadyComplete() {
             // Given: every source loads its tools so the cache is complete.
             when(restTemplate.exchange(eq(ORCH), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
-                .thenReturn(toolsFor("workflow", "application", "web_search", "files", "mailbox", "wait"));
+                .thenReturn(toolsFor("workflow", "application", "web_search", "files", "mailbox", "wait", "channel"));
             when(restTemplate.exchange(eq(AGENT), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(toolsFor("agent", "skill", "memory", "ask_user"));
             when(restTemplate.exchange(eq(DATASOURCE), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
@@ -449,7 +451,7 @@ class CoreToolsCacheTest {
 
             // Then: no source is contacted and the cache is untouched.
             verify(restTemplate, never()).exchange(anyString(), eq(HttpMethod.GET), any(), eq(Map.class));
-            assertThat(cache.getCoreTools()).hasSize(14);
+            assertThat(cache.getCoreTools()).hasSize(15);
         }
 
         /**
@@ -462,7 +464,7 @@ class CoreToolsCacheTest {
         void periodicRefreshRecoversGenerationFromCatalogService() {
             // Given: everything loads except catalog-service, which is down at first.
             when(restTemplate.exchange(eq(ORCH), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
-                .thenReturn(toolsFor("workflow", "application", "web_search", "files", "mailbox", "wait"));
+                .thenReturn(toolsFor("workflow", "application", "web_search", "files", "mailbox", "wait", "channel"));
             when(restTemplate.exchange(eq(AGENT), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(toolsFor("agent", "skill", "memory", "ask_user"));
             when(restTemplate.exchange(eq(DATASOURCE), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))

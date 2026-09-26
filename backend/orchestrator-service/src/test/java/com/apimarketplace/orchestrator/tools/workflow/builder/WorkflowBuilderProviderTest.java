@@ -168,6 +168,113 @@ class WorkflowBuilderProviderTest {
     }
 
     // ════════════════════════════════════════════════════════════════════
+    // A save made on the builder canvas between two agent actions was put back to the
+    // session's older copy by the next auto-save (reproduced live 2026-09-23). Every
+    // action that writes the session's copy must first let the loader rebuild the
+    // session from the stored plan; pure row reads must not write at all.
+    @Nested
+    @DisplayName("stored plan re-sync before a session write")
+    class StoredPlanResync {
+
+        @Test
+        @DisplayName("a modifying action re-syncs from the stored plan BEFORE it runs and auto-saves")
+        void modifyingActionResyncsBeforeWriting() {
+            when(modifier.executeRemove(any(), any())).thenReturn(okMap());
+
+            exec(params("action", "remove", "node", "Shape"));
+
+            var order = org.mockito.Mockito.inOrder(loader, modifier, draftAutoSaver);
+            order.verify(loader).resyncWithStoredPlan(session);
+            order.verify(modifier).executeRemove(eq(session), any());
+            order.verify(draftAutoSaver).autoSaveDraft(any(), eq(TENANT), eq(null));
+        }
+
+        @Test
+        @DisplayName("an explicit save re-syncs from the stored plan before writing")
+        void explicitSaveResyncsBeforeWriting() {
+            when(loader.executeSave(any())).thenReturn(okMap());
+
+            exec(params("action", "save"));
+
+            var order = org.mockito.Mockito.inOrder(loader);
+            order.verify(loader).resyncWithStoredPlan(session);
+            order.verify(loader).executeSave(session);
+        }
+
+        @Test
+        @DisplayName("read_rows adds a table node: it re-syncs before and auto-saves after, like any node creation")
+        void readRowsIsASessionWrite() {
+            when(tableOperations.execute(any(), any(), eq(TENANT), eq("read_rows"))).thenReturn(okMap());
+
+            exec(params("action", "read_rows"));
+
+            var order = org.mockito.Mockito.inOrder(loader, tableOperations, draftAutoSaver);
+            order.verify(loader).resyncWithStoredPlan(session);
+            order.verify(tableOperations).execute(any(), any(), eq(TENANT), eq("read_rows"));
+            order.verify(draftAutoSaver).autoSaveDraft(any(), eq(TENANT), eq(null));
+        }
+
+        @Test
+        @DisplayName("a reloaded session is announced in the result, so the agent knows its undo history is gone")
+        void reloadedSessionIsAnnouncedOnSuccess() {
+            when(loader.resyncWithStoredPlan(session)).thenReturn(true);
+            when(modifier.executeRemove(any(), any())).thenReturn(okMap());
+
+            ToolExecutionResult r = exec(params("action", "remove", "node", "Shape"));
+
+            assertThat(data(r)).containsEntry("ok", true)
+                    .containsEntry("session_reloaded", WorkflowBuilderProvider.SESSION_RELOADED_NOTICE);
+        }
+
+        @Test
+        @DisplayName("a failure after a reload explains it: e.g. a connect to a node deleted in the editor")
+        void reloadedSessionIsExplainedOnFailure() {
+            when(loader.resyncWithStoredPlan(session)).thenReturn(true);
+            when(connectionManager.executeConnect(any(), any()))
+                    .thenReturn(ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "Node 'Gone' not found"));
+
+            ToolExecutionResult r = exec(params("action", "connect", "from", "A", "to", "Gone"));
+
+            assertThat(r.success()).isFalse();
+            assertThat(r.errorCode()).isEqualTo(ToolErrorCode.RESOURCE_NOT_FOUND);
+            assertThat(r.error()).startsWith("Node 'Gone' not found")
+                    .contains(WorkflowBuilderProvider.SESSION_RELOADED_NOTICE);
+        }
+
+        @Test
+        @DisplayName("no reload, no notice")
+        void noNoticeWithoutReload() {
+            when(modifier.executeRemove(any(), any())).thenReturn(okMap());
+
+            ToolExecutionResult r = exec(params("action", "remove", "node", "Shape"));
+
+            assertThat(data(r)).doesNotContainKey("session_reloaded");
+        }
+
+        @Test
+        @DisplayName("a read-only action never re-syncs: no database read, no notice")
+        void readOnlyActionDoesNotResync() {
+            when(viewer.executeValidate(any())).thenReturn(okMap());
+
+            exec(params("action", "validate"));
+
+            verify(loader, never()).resyncWithStoredPlan(any());
+        }
+
+        @Test
+        @DisplayName("a failing re-sync is logged and the action still runs, as before the check existed")
+        void failingResyncDoesNotBlockTheAction() {
+            when(loader.resyncWithStoredPlan(any())).thenThrow(new IllegalStateException("db down"));
+            when(modifier.executeRemove(any(), any())).thenReturn(okMap());
+
+            ToolExecutionResult r = exec(params("action", "remove", "node", "Shape"));
+
+            assertThat(r.success()).isTrue();
+            verify(modifier).executeRemove(eq(session), any());
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     @Nested
     @DisplayName("metadata + top-level execute() framing")
     class Framing {

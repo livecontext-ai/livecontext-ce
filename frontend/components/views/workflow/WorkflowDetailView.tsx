@@ -16,6 +16,8 @@ import { markRunAsJustExecuted } from '@/app/workflows/builder/hooks/useWorkflow
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import {
   setPendingActivateTab,
+  requestPresentApplication,
+  APP_TAB_ID,
   INSPECTOR_TAB_ID,
   NODE_CREATOR_TAB_ID,
   RUN_TAB_ID,
@@ -260,15 +262,24 @@ export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }
     if (isPreviewOnly) return;
     const handleWorkflowRunAutoOpen = (event: CustomEvent<{ type: string; id: string; runId?: string }>) => {
       const { type, id, runId: eventRunId } = event.detail;
-      if (type !== 'workflow_run' || !eventRunId) return;
+      // Other present_* views (table, file, agent...) open from AppHeader, on every page.
+      if ((type !== 'workflow_run' && type !== 'present_run' && type !== 'present_application') || !eventRunId) return;
       if (id !== workflowId) return;
-      if (effectiveRunId === eventRunId) return; // already bound to this run
-      markRunAsJustExecuted(eventRunId); // keep the current plan - overlay, don't reload
-      setRunId(eventRunId);              // bind run in place (no navigation)
+      if (effectiveRunId !== eventRunId) {
+        markRunAsJustExecuted(eventRunId); // keep the current plan - overlay, don't reload
+        setRunId(eventRunId);              // bind run in place (no navigation)
+      }
+      // workflow(action='present', view='application'): the agent shows the run's
+      // interfaces. A request, not a switch: the panel takes it once it shows that
+      // run with its interfaces (see requestPresentApplication).
+      if (type === 'present_application') {
+        requestPresentApplication(workflowId, eventRunId);
+        openWorkflowPanelOnTab(APP_TAB_ID);
+      }
     };
     window.addEventListener('sidePanelAutoOpen', handleWorkflowRunAutoOpen as EventListener);
     return () => window.removeEventListener('sidePanelAutoOpen', handleWorkflowRunAutoOpen as EventListener);
-  }, [workflowId, effectiveRunId, isPreviewOnly, setRunId]);
+  }, [workflowId, effectiveRunId, isPreviewOnly, setRunId, openWorkflowPanelOnTab]);
 
   // ── Dispatch triggerData changes to WorkflowPanelContent ──
   // Gate on `effectiveRunId`, NOT `runIdProp`: an agent-launched run is now bound

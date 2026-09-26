@@ -14,6 +14,7 @@ import { useDefaultSkills } from '@/hooks/useDefaultSkills';
 import { useMobileDetection } from '@/hooks/useMobileDetection';
 import { orchestratorApi } from '@/lib/api/orchestrator';
 import { QueuedMessageBar } from './QueuedMessageBar';
+import { OrbiMascot } from './orbi/OrbiMascot';
 // Locale-aware: a bare '/app/studio' through next/navigation lands a French reader on /en.
 import { useRouter as useLocaleRouter } from '@/i18n/navigation';
 import { menuItemClass, menuSurfaceClass } from '@/components/ui/menu';
@@ -113,6 +114,11 @@ export interface MessageComposerProps {
    *  by-conversation lookup, which misses agents whose single-valued
    *  agents.conversation_id is null (e.g. an agent owning several conversations). */
   linkedAgentId?: string | null;
+  /** Perch Orbi, the general chat's mascot, on the composer. Only the caller knows whether it
+   *  is talking to Orbi (no agent, not studio), so it decides; every other caller leaves it
+   *  off, and minimal (DM) mode never shows it. `'compact'` draws it smaller, for the side
+   *  panel, where a centered welcome title sits closer above the composer. */
+  showOrbi?: boolean | 'compact';
 }
 
 export function MessageComposer({
@@ -129,6 +135,7 @@ export function MessageComposer({
   trailingLeadingAction,
   disabled = false,
   minimal = false,
+  showOrbi = false,
   conversationId,
   queuedMessages = [],
   shouldEnqueue = false,
@@ -622,6 +629,19 @@ export function MessageComposer({
     <div className={containerClass} style={inputContainerStyle}>
       <div className={fullWidth ? "w-full" : "mx-auto max-w-4xl"}>
         <div className="relative">
+          {showOrbi && !minimal && (
+            <div
+              data-testid="orbi-perch"
+              // Shown on phones too, at the compact size there: the full-size perch is for wide composers.
+              className={`pointer-events-none absolute right-12 z-10 text-theme-primary ${
+                showOrbi === 'compact'
+                  ? 'bottom-[calc(100%-5px)] h-8 w-8'
+                  : 'bottom-[calc(100%-5px)] h-8 w-8 sm:bottom-[calc(100%-6px)] sm:h-10 sm:w-10'
+              }`}
+            >
+              <OrbiMascot isStreaming={isStreaming || isStreamStarting} inputValue={localValue} pokeLabel={t('chat.orbiPoke')} className="h-full w-full" />
+            </div>
+          )}
           {/* Composer container */}
           <div
             ref={composerRef}
@@ -700,7 +720,7 @@ export function MessageComposer({
                   value={localValue}
                   onChange={(e) => setLocalValue(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder={t('chat.placeholder')}
+                  placeholder={showOrbi && !minimal ? t('chat.placeholderOrbi') : t('chat.placeholder')}
                   disabled={disabled}
                   className="w-full bg-transparent text-theme-primary placeholder-theme-muted focus:outline-none resize-none text-base leading-6 overflow-y-auto disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{ minHeight: '52px', maxHeight: '200px' }}

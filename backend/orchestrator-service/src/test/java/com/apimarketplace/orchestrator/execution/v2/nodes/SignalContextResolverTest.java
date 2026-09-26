@@ -299,5 +299,13 @@ class SignalContextResolverTest {
             when(mockAdapter.evaluateTemplate("{{amount}}", ctx)).thenReturn(120);
             assertEquals("120", SignalContextResolver.resolveApprovalContext("{{amount}}", ctx, mockAdapter));
         }
+
+        @Test
+        @DisplayName("a pure expression resolving to an object reads as its JSON, never Java's {a=1}")
+        void objectResolvesToJson() {
+            ExecutionContext ctx = createContext(Map.of());
+            when(mockAdapter.evaluateTemplate("{{order}}", ctx)).thenReturn(Map.of("id", 7));
+            assertEquals("{\"id\":7}", SignalContextResolver.resolveApprovalContext("{{order}}", ctx, mockAdapter));
+        }
     }
 }

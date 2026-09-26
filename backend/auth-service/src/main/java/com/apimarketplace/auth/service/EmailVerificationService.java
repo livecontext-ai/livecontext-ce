@@ -58,6 +58,13 @@ public class EmailVerificationService {
     @Autowired(required = false)
     private KeycloakAdminEmailVerifier kcAdminVerifier;
 
+    /**
+     * Lifecycle emails (Resend). Optional so hand-built test instances are untouched; a null
+     * field, like an inactive client, sends nothing.
+     */
+    @Autowired(required = false)
+    private com.apimarketplace.auth.lifecycle.UserLifecycleContextService lifecycleContext;
+
     public EmailVerificationService(EmailVerificationCodeRepository codeRepository,
                                     UserRepository userRepository,
                                     JavaMailSender mailSender) {
@@ -150,8 +157,24 @@ public class EmailVerificationService {
         }
 
         // Update local User entity
+        boolean wasVerified = user.isEmailVerified();
         user.setEmailVerified(true);
         userRepository.save(user);
+
+        // Lifecycle emails skip unverified accounts, so an account created unverified has
+        // had no contact and no signup event yet: send both now, on the transition only, and
+        // through the write-once guard so no path can send the signup event a second time.
+        // recordSignup writes nothing in THIS transaction: its claim runs on the lifecycle
+        // worker after this verification commits, in its own transaction, so it can never undo
+        // a verification Keycloak has already recorded. The catch keeps an unexpected failure
+        // of the hand-off from failing the verification.
+        if (!wasVerified && lifecycleContext != null) {
+            try {
+                lifecycleContext.recordSignup(user.getId());
+            } catch (RuntimeException e) {
+                logger.warn("user.signed_up not recorded for user {}: {}", user.getId(), e.toString());
+            }
+        }
 
         logger.info("Email verified for user {} (email={})", user.getId(), user.getEmail());
     }

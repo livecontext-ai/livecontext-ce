@@ -30,6 +30,10 @@ public abstract class BaseNode implements ExecutionNode {
     // Services for node execution
     protected com.apimarketplace.orchestrator.services.interfaces.ToolsGateway toolsGateway;
     protected V2TemplateAdapter templateAdapter;
+    // Numeric / boolean config fields the plan wrote as {{...}}, by config key then field name.
+    // Set once at build time (CoreNodeBuilder), read-only afterwards: nodes are shared by
+    // concurrent items, so each execution rebuilds its OWN effective config from these.
+    private Map<String, Map<String, String>> deferredScalars = Map.of();
     // Used by file-producing nodes to resolve a sentinel epoch-0 to the run's real
     // current epoch when stamping a stored file (see resolveStorageEpoch).
     protected com.apimarketplace.orchestrator.repository.WorkflowRunRepository workflowRunRepository;
@@ -119,19 +123,222 @@ public abstract class BaseNode implements ExecutionNode {
     }
 
     /**
-     * Resolves {{template}} placeholders in a string using the current execution context.
-     * Returns the original string if templateAdapter is unavailable or resolution fails.
+     * Resolves every {@code {{...}}} in a configured value, keeping the type of what it references.
+     *
+     * <p>A field that is one whole reference comes back as that value (a map, a list, a number, a
+     * file), text around references comes back as text, and maps and lists are resolved all the way
+     * down. A reference to nothing (a skipped node, a path that does not exist) is {@code null}.
+     *
+     * <p>The configured text is never handed back IN PLACE of a value. It used to be, on a null and
+     * on any error, and the node then ran with the literal {@code {{...}}}: sent it as an email
+     * address, executed it as a query, reported it in the Params column where it read as "this
+     * field is not resolved" although its neighbours were. A resolution that throws now fails the
+     * node with the expression in the message instead.
+     *
+     * @throws IllegalStateException when the resolution itself fails
+     */
+    protected Object resolveTemplateValue(Object configured, ExecutionContext context) {
+        if (configured == null || templateAdapter == null) {
+            return configured;
+        }
+        // Structures are walked HERE and only their leaves go to the adapter. Handing it a whole
+        // map would let its template-spec rule collapse any map carrying a `template` key (an
+        // author's own field) into that one value, and would return an unordered copy.
+        if (configured instanceof Map<?, ?> map) {
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+            map.forEach((k, v) -> out.put(String.valueOf(k), resolveTemplateValue(v, context)));
+            return out;
+        }
+        if (configured instanceof java.util.Collection<?> list) {
+            List<Object> out = new ArrayList<>(list.size());
+            list.forEach(v -> out.add(resolveTemplateValue(v, context)));
+            return out;
+        }
+        if (!(configured instanceof String s) || s.isBlank()) {
+            return configured;
+        }
+        try {
+            Map<String, Object> toResolve = new java.util.HashMap<>(1);
+            toResolve.put("__v__", configured);
+            return templateAdapter.resolveTemplates(toResolve, context).get("__v__");
+        } catch (RuntimeException e) {
+            throw new IllegalStateException(
+                "Could not resolve " + describeForError(configured) + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * {@link #resolveTemplateValue} for a field the node consumes as TEXT.
+     *
+     * <p>A structured result is its JSON and a file is its URL
+     * ({@link com.apimarketplace.orchestrator.services.TemplateEngine#asText}), the same text the
+     * engine produces for a reference embedded in a sentence, never Java's {@code {a=1}}. A
+     * reference to nothing is {@code null}, never the template.
      */
     protected String resolveTemplateString(String template, ExecutionContext context) {
-        if (template == null || templateAdapter == null) return template;
-        try {
-            java.util.Map<String, Object> toResolve = java.util.Map.of("__v__", template);
-            java.util.Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-            Object value = resolved.get("__v__");
-            return value != null ? value.toString() : template;
-        } catch (Exception e) {
-            return template;
+        return com.apimarketplace.orchestrator.services.TemplateEngine.asText(
+            resolveTemplateValue(template, context));
+    }
+
+    public void setDeferredScalars(Map<String, Map<String, String>> deferredScalars) {
+        this.deferredScalars = deferredScalars == null ? Map.of() : Map.copyOf(deferredScalars);
+    }
+
+    /** The template set aside for {@code configKey.field}, or {@code null}. */
+    protected String deferredScalar(String configKey, String field) {
+        Map<String, String> fields = deferredScalars.get(configKey);
+        return fields == null ? null : fields.get(field);
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper DEFERRED_MAPPER =
+        new com.fasterxml.jackson.databind.ObjectMapper()
+            .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+    /**
+     * The typed config this execution runs with: {@code config} with every numeric / boolean field
+     * the plan wrote as a {@code {{...}}} template resolved and converted to the field's type.
+     *
+     * <p>The plan parser sets those fields aside (a template cannot live in an {@code int}), and
+     * the typed config holds the field's default until this runs. Returns {@code config} itself
+     * when nothing was set aside, so a node without templates pays nothing.
+     *
+     * @throws IllegalStateException when a template resolves to nothing, or to a value the field
+     *         cannot hold ("abc" for a number): the node fails naming the field, never runs on
+     *         the default in its place
+     */
+    @SuppressWarnings("unchecked")
+    protected <T> T withDeferredScalars(String configKey, T config, Class<T> type, ExecutionContext context) {
+        Map<String, String> fields = deferredScalars.get(configKey);
+        if (fields == null || fields.isEmpty()) {
+            return config;
         }
+        Map<String, Object> values = recordValues(config);
+        for (Map.Entry<String, String> entry : fields.entrySet()) {
+            Object value = resolveDeferredScalar(configKey, entry.getKey(), entry.getValue(), context);
+            if (isIntegralField(type, entry.getKey())) {
+                // Jackson reads 5.7 into an int as 5 without a word: refuse it instead.
+                value = resolveDeferredLong(configKey, entry.getKey(), entry.getValue(), context);
+            }
+            values.put(entry.getKey(), value);
+        }
+        try {
+            return DEFERRED_MAPPER.convertValue(values, type);
+        } catch (IllegalArgumentException e) {
+            String field = failingField(e);
+            String template = field != null ? fields.get(field) : null;
+            throw new IllegalStateException(
+                (field != null ? configKey + "." + field + (template != null ? " '" + template + "'" : "")
+                               : "A templated setting of " + configKey)
+                + " resolved to a value it cannot hold: " + rootMessage(e), e);
+        }
+    }
+
+    /**
+     * One templated scalar, resolved: the value itself when it is already a number or boolean,
+     * its trimmed text otherwise (Jackson then reads "5" as 5 and "true" as true).
+     */
+    protected Object resolveDeferredScalar(String configKey, String field, String template, ExecutionContext context) {
+        Object resolved = resolveTemplateValue(template, context);
+        if (resolved instanceof String text) {
+            resolved = text.trim();
+        }
+        if (resolved == null || (resolved instanceof String text && text.isEmpty())) {
+            throw new IllegalStateException(configKey + "." + field + " '" + template
+                + "' resolved to nothing. Check that the referenced node ran and that the path exists.");
+        }
+        if (!(resolved instanceof Number) && !(resolved instanceof Boolean) && !(resolved instanceof String)) {
+            throw new IllegalStateException(configKey + "." + field + " '" + template
+                + "' must resolve to a number or a boolean, got " + resolved.getClass().getSimpleName());
+        }
+        return resolved;
+    }
+
+    /** {@link #resolveDeferredScalar} for a field that must be an integer. */
+    protected long resolveDeferredLong(String configKey, String field, String template, ExecutionContext context) {
+        Object value = resolveDeferredScalar(configKey, field, template, context);
+        if (value instanceof Long || value instanceof Integer || value instanceof Short || value instanceof Byte) {
+            return ((Number) value).longValue();
+        }
+        try {
+            return new java.math.BigDecimal(String.valueOf(value)).longValueExact();
+        } catch (ArithmeticException | NumberFormatException e) {
+            throw new IllegalStateException(configKey + "." + field + " '" + template
+                + "' must resolve to a whole number, got '" + value + "'");
+        }
+    }
+
+    /**
+     * A config record's values by the names the plan (and so Jackson's reader) uses: the
+     * component name, or its {@code @JsonProperty}. Read by reflection rather than serialized,
+     * because the serializer names a boolean component {@code isHtml} as {@code html}, and the
+     * rebuilt config would then silently lose it whenever another field was templated.
+     */
+    private static Map<String, Object> recordValues(Object config) {
+        Map<String, Object> values = new java.util.LinkedHashMap<>();
+        if (config == null) {
+            return values;
+        }
+        if (!config.getClass().isRecord()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> converted = DEFERRED_MAPPER.convertValue(config, Map.class);
+            values.putAll(converted);
+            return values;
+        }
+        for (java.lang.reflect.RecordComponent component : config.getClass().getRecordComponents()) {
+            com.fasterxml.jackson.annotation.JsonProperty json =
+                component.getAnnotation(com.fasterxml.jackson.annotation.JsonProperty.class);
+            String name = json != null && !json.value().isEmpty() ? json.value() : component.getName();
+            try {
+                java.lang.reflect.Method accessor = component.getAccessor();
+                accessor.setAccessible(true);
+                values.put(name, accessor.invoke(config));
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException("Cannot read config field " + name, e);
+            }
+        }
+        return values;
+    }
+
+    private static boolean isIntegralField(Class<?> type, String field) {
+        if (!type.isRecord()) {
+            return false;
+        }
+        for (java.lang.reflect.RecordComponent component : type.getRecordComponents()) {
+            com.fasterxml.jackson.annotation.JsonProperty json =
+                component.getAnnotation(com.fasterxml.jackson.annotation.JsonProperty.class);
+            String name = json != null && !json.value().isEmpty() ? json.value() : component.getName();
+            if (name.equals(field)) {
+                Class<?> t = component.getType();
+                return t == int.class || t == long.class || t == short.class
+                    || t == Integer.class || t == Long.class || t == Short.class;
+            }
+        }
+        return false;
+    }
+
+    /** The config field Jackson could not convert, read from its reference path. */
+    private static String failingField(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof com.fasterxml.jackson.databind.JsonMappingException mapping
+                    && !mapping.getPath().isEmpty()) {
+                return mapping.getPath().get(mapping.getPath().size() - 1).getFieldName();
+            }
+        }
+        return null;
+    }
+
+    private static String rootMessage(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        String message = root.getMessage();
+        return message != null ? message.split("\n")[0] : root.getClass().getSimpleName();
+    }
+
+    private static String describeForError(Object configured) {
+        String text = configured instanceof String s ? s : String.valueOf(configured);
+        return "'" + (text.length() > 200 ? text.substring(0, 200) + "..." : text) + "'";
     }
 
     @Override

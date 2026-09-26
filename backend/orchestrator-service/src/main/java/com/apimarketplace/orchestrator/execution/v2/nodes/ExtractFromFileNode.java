@@ -1,5 +1,7 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
+
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
@@ -67,11 +69,19 @@ public class ExtractFromFileNode extends BaseNode {
         logger.info("ExtractFromFile node executing: nodeId={}, mode={}, format={}, itemId={}",
             nodeId, mode, format, context.itemId());
 
+        // The config this execution runs with: chunking / chunkSize / overlap written as {{...}}
+        // resolved here. Held in a one-slot array (never a field: nodes are shared by items).
+        Core.ExtractFromFileConfig[] effective = { extractFromFileConfig };
+        boolean[] scalarsResolved = { false };
         try {
+            Core.ExtractFromFileConfig cfg = withDeferredScalars(
+                "extractFromFile", extractFromFileConfig, Core.ExtractFromFileConfig.class, context);
+            effective[0] = cfg;
+            scalarsResolved[0] = true;
             if ("text".equals(mode)) {
-                return executeTextMode(format, context);
+                return executeTextMode(cfg, format, context);
             }
-            return executeStructuredMode(format, context);
+            return executeStructuredMode(cfg, format, context);
         } catch (Exception e) {
             logger.error("ExtractFromFile execution failed: nodeId={}, mode={}, format={}, error={}",
                 nodeId, mode, format, e.getMessage(), e);
@@ -80,7 +90,7 @@ public class ExtractFromFileNode extends BaseNode {
             failOutput.put("item_index", context.itemIndex());
             failOutput.put("itemIndex", context.itemIndex());
             failOutput.put("item_id", context.itemId());
-            failOutput.put("resolved_params", buildInputDataMap(null));
+            failOutput.put("resolved_params", buildInputDataMap(effective[0], scalarsResolved[0], null));
             failOutput.put("error", e.getMessage());
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failOutput, 0L);
         }
@@ -89,17 +99,22 @@ public class ExtractFromFileNode extends BaseNode {
     /**
      * Structured mode: parse CSV/XLSX/JSON into rows with column keys (original behavior).
      */
-    private NodeExecutionResult executeStructuredMode(String format, ExecutionContext context) throws Exception {
+    private NodeExecutionResult executeStructuredMode(Core.ExtractFromFileConfig cfg, String format, ExecutionContext context) throws Exception {
         String inputValue = resolveInputContent(
-            extractFromFileConfig != null ? extractFromFileConfig.value() : null, format, context);
+            cfg != null ? cfg.value() : null, format, context);
 
         if (inputValue == null || inputValue.isBlank()) {
             throw new IllegalArgumentException("Input value is required for ExtractFromFile node");
         }
 
+        // Resolved once, used to pick the sheet and reported. It used to be read configured, so
+        // a `{{trigger:in.output.month}}` sheet failed with "Sheet not found: {{...}}".
+        String sheetName = "xlsx".equals(format) && cfg != null
+            ? resolveExpression(cfg.sheetName(), context) : null;
+
         List<Map<String, Object>> items = switch (format) {
-            case "csv" -> parseCsv(inputValue);
-            case "xlsx" -> parseXlsx(inputValue);
+            case "csv" -> parseCsv(cfg, inputValue);
+            case "xlsx" -> parseXlsx(cfg, inputValue, sheetName);
             case "json" -> parseJson(inputValue);
             default -> throw new IllegalArgumentException("Unknown format: " + format);
         };
@@ -119,7 +134,12 @@ public class ExtractFromFileNode extends BaseNode {
         result.put("columns", columns);
         result.put("success", true);
         result.put("mode", "structured");
-        addMetadata(result, context, inputValue);
+        addMetadata(cfg, result, context, inputValue);
+        if (sheetName != null && result.get("resolved_params") instanceof Map<?, ?> reported) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> params = (Map<String, Object>) reported;
+            params.put("sheetName", ReportedParams.valueFrom(cfg.sheetName(), sheetName));
+        }
 
         logger.info("ExtractFromFile structured completed: nodeId={}, format={}, rowCount={}, columnCount={}",
             nodeId, format, items.size(), columnCount);
@@ -129,8 +149,8 @@ public class ExtractFromFileNode extends BaseNode {
     /**
      * Text mode: extract raw text from PDF/HTML/DOCX/TXT and optionally chunk for RAG.
      */
-    private NodeExecutionResult executeTextMode(String format, ExecutionContext context) throws Exception {
-        String expression = extractFromFileConfig != null ? extractFromFileConfig.value() : null;
+    private NodeExecutionResult executeTextMode(Core.ExtractFromFileConfig cfg, String format, ExecutionContext context) throws Exception {
+        String expression = cfg != null ? cfg.value() : null;
         byte[] rawBytes = resolveInputBytes(expression, format, context);
 
         if (rawBytes == null || rawBytes.length == 0) {
@@ -154,8 +174,8 @@ public class ExtractFromFileNode extends BaseNode {
         String sourceName = resolveSourceName(expression, context);
 
         List<Map<String, Object>> items;
-        if (extractFromFileConfig != null && extractFromFileConfig.isChunkingEnabled()) {
-            items = chunkText(extractedText, sourceName);
+        if (cfg != null && cfg.isChunkingEnabled()) {
+            items = chunkText(cfg, extractedText, sourceName);
         } else {
             items = List.of(Map.of(
                 "content", extractedText,
@@ -173,13 +193,13 @@ public class ExtractFromFileNode extends BaseNode {
         result.put("total_chunks", items.size());
         result.put("text_length", extractedText.length());
         result.put("success", true);
-        if (extractFromFileConfig != null && extractFromFileConfig.isChunkingEnabled()) {
-            result.put("chunking_strategy", extractFromFileConfig.chunkingStrategy());
-            result.put("chunk_size", extractFromFileConfig.chunkSize());
-            result.put("overlap", extractFromFileConfig.overlap());
-            result.put("chunk_unit", extractFromFileConfig.chunkUnit());
+        if (cfg != null && cfg.isChunkingEnabled()) {
+            result.put("chunking_strategy", cfg.chunkingStrategy());
+            result.put("chunk_size", cfg.chunkSize());
+            result.put("overlap", cfg.overlap());
+            result.put("chunk_unit", cfg.chunkUnit());
         }
-        addMetadata(result, context, extractedText.length() > 500
+        addMetadata(cfg, result, context, extractedText.length() > 500
             ? extractedText.substring(0, 500) + "..." : extractedText);
 
         logger.info("ExtractFromFile text completed: nodeId={}, format={}, chunks={}, textLength={}",
@@ -187,12 +207,12 @@ public class ExtractFromFileNode extends BaseNode {
         return NodeExecutionResult.success(nodeId, result);
     }
 
-    private void addMetadata(Map<String, Object> result, ExecutionContext context, String inputPreview) {
+    private void addMetadata(Core.ExtractFromFileConfig cfg, Map<String, Object> result, ExecutionContext context, String inputPreview) {
         result.put("node_type", "EXTRACT_FROM_FILE");
         result.put("item_index", context.itemIndex());
         result.put("itemIndex", context.itemIndex());
         result.put("item_id", context.itemId());
-        result.put("resolved_params", buildInputDataMap(inputPreview));
+        result.put("resolved_params", buildInputDataMap(cfg, true, inputPreview));
     }
 
     /**
@@ -200,9 +220,9 @@ public class ExtractFromFileNode extends BaseNode {
      * If hasHeaders is true, the first row is used as keys.
      * Otherwise, keys are column_0, column_1, etc.
      */
-    private List<Map<String, Object>> parseCsv(String csvContent) {
-        String delimiter = extractFromFileConfig != null ? extractFromFileConfig.delimiter() : ",";
-        boolean hasHeaders = extractFromFileConfig != null && extractFromFileConfig.includeHeaders();
+    private List<Map<String, Object>> parseCsv(Core.ExtractFromFileConfig cfg, String csvContent) {
+        String delimiter = cfg != null ? cfg.delimiter() : ",";
+        boolean hasHeaders = cfg != null && cfg.includeHeaders();
 
         String[] lines = csvContent.split("\\r?\\n");
         if (lines.length == 0) {
@@ -295,9 +315,8 @@ public class ExtractFromFileNode extends BaseNode {
      * Uses sheetName if provided, otherwise reads the first sheet.
      * If hasHeaders is true, the first row is used as column keys.
      */
-    private List<Map<String, Object>> parseXlsx(String base64Content) throws Exception {
-        boolean hasHeaders = extractFromFileConfig != null && extractFromFileConfig.includeHeaders();
-        String sheetName = extractFromFileConfig != null ? extractFromFileConfig.sheetName() : null;
+    private List<Map<String, Object>> parseXlsx(Core.ExtractFromFileConfig cfg, String base64Content, String sheetName) throws Exception {
+        boolean hasHeaders = cfg != null && cfg.includeHeaders();
 
         byte[] bytes = Base64.getDecoder().decode(base64Content);
 
@@ -449,15 +468,15 @@ public class ExtractFromFileNode extends BaseNode {
     private static final Pattern PARAGRAPH_SPLIT = Pattern.compile("\\n\\s*\\n");
     private static final Pattern SENTENCE_SPLIT = Pattern.compile("(?<=[.!?])\\s+");
 
-    private List<Map<String, Object>> chunkText(String text, String source) {
-        String strategy = extractFromFileConfig.chunkingStrategy();
-        int chunkSize = extractFromFileConfig.chunkSize();
-        int overlap = Math.min(extractFromFileConfig.overlap(), chunkSize - 1);
-        SizeMeter meter = meterFor(extractFromFileConfig.chunkUnit());
+    private List<Map<String, Object>> chunkText(Core.ExtractFromFileConfig cfg, String text, String source) {
+        String strategy = cfg.chunkingStrategy();
+        int chunkSize = cfg.chunkSize();
+        int overlap = Math.min(cfg.overlap(), chunkSize - 1);
+        SizeMeter meter = meterFor(cfg.chunkUnit());
 
         List<String> chunks = switch (strategy) {
             case "recursive"  -> chunkRecursive(text, chunkSize, overlap, meter);
-            case "separator"  -> chunkBySeparator(text, extractFromFileConfig.separator(), chunkSize, overlap, meter);
+            case "separator"  -> chunkBySeparator(text, cfg.separator(), chunkSize, overlap, meter);
             default           -> chunkFixedSize(text, chunkSize, overlap, meter); // fixed_size
         };
 
@@ -726,36 +745,38 @@ public class ExtractFromFileNode extends BaseNode {
     private byte[] resolveInputBytes(String expression, String format, ExecutionContext context) {
         if (expression == null || expression.isBlank()) return null;
 
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object result = resolved.get("__expr__");
+        Object result = resolveInputValue(expression, context);
 
-                // The file SHAPE decides, not the path. Requiring a path here sent a file-shaped
-                // value that has none - a table media cell naming a file known only by id, a link
-                // to somewhere else - down the string fallback below, where String.valueOf turned
-                // the Map into "{_type=file, id=...}" and the node COMPLETED with that as the
-                // extracted document. The download judges the path and says what is missing.
-                if (result instanceof Map<?, ?> mapResult && "file".equals(mapResult.get("_type"))) {
-                    return downloadFileRefBytes((Map<String, Object>) mapResult);
-                }
-
-                // Fallback: string content (e.g. inline text, base64)
-                String str = result != null ? String.valueOf(result) : expression;
-                if (isBinaryFormat(format) && looksLikeBase64(str)) {
-                    return Base64.getDecoder().decode(str);
-                }
-                return str.getBytes(StandardCharsets.UTF_8);
-            } catch (IllegalStateException e) {
-                throw e;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression '{}': {}", expression, e.getMessage());
-                return expression.getBytes(StandardCharsets.UTF_8);
-            }
+        // The file SHAPE decides, not the path. Requiring a path here sent a file-shaped
+        // value that has none - a table media cell naming a file known only by id, a link
+        // to somewhere else - down the string fallback below, where String.valueOf turned
+        // the Map into "{_type=file, id=...}" and the node COMPLETED with that as the
+        // extracted document. The download judges the path and says what is missing.
+        if (result instanceof Map<?, ?> mapResult && "file".equals(mapResult.get("_type"))) {
+            return downloadFileRefBytes((Map<String, Object>) mapResult);
         }
 
-        return expression.getBytes(StandardCharsets.UTF_8);
+        // Fallback: string content (e.g. inline text, base64); a structure is its JSON.
+        String str = com.apimarketplace.orchestrator.services.TemplateEngine.asText(result);
+        if (isBinaryFormat(format) && looksLikeBase64(str)) {
+            return Base64.getDecoder().decode(str);
+        }
+        return str.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * The value to extract from, typed. A reference to nothing FAILS the node: it used to fall
+     * back to the configured text, and the node then extracted the literal {@code {{...}}} as if
+     * it were the document and completed green.
+     */
+    private Object resolveInputValue(String expression, ExecutionContext context) {
+        Object result = resolveTemplateValue(expression, context);
+        if (result == null) {
+            throw new IllegalStateException(
+                "The value to extract from resolved to nothing: '" + expression
+                    + "'. Check that the referenced node ran and that the path exists.");
+        }
+        return result;
     }
 
     private byte[] downloadFileRefBytes(Map<String, Object> fileRef) {
@@ -777,9 +798,7 @@ public class ExtractFromFileNode extends BaseNode {
         if (expression == null) return "unknown";
         if (templateAdapter != null) {
             try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object result = resolved.get("__expr__");
+                Object result = resolveTemplateValue(expression, context);
                 if (result instanceof Map<?, ?> mapResult && mapResult.get("name") != null) {
                     return String.valueOf(mapResult.get("name"));
                 }
@@ -811,30 +830,14 @@ public class ExtractFromFileNode extends BaseNode {
             return null;
         }
 
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object result = resolved.get("__expr__");
+        Object result = resolveInputValue(expression, context);
 
-                // Detect FileRef map from upstream node output. Shape only: see resolveInputBytes
-                // for why a path check here silently turned a path-less ref into its toString().
-                if (result instanceof Map<?, ?> mapResult && "file".equals(mapResult.get("_type"))) {
-                    // Let FileRef download errors propagate (not a template resolution issue)
-                    return downloadFileRef((Map<String, Object>) mapResult, format);
-                }
-
-                return result != null ? String.valueOf(result) : expression;
-            } catch (IllegalStateException e) {
-                // FileRef-related errors should propagate to fail the node
-                throw e;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression '{}': {}", expression, e.getMessage());
-                return expression;
-            }
+        // Detect FileRef map from upstream node output. Shape only: see resolveInputBytes
+        // for why a path check here silently turned a path-less ref into its toString().
+        if (result instanceof Map<?, ?> mapResult && "file".equals(mapResult.get("_type"))) {
+            return downloadFileRef((Map<String, Object>) mapResult, format);
         }
-
-        return resolveExpression(expression, context);
+        return com.apimarketplace.orchestrator.services.TemplateEngine.asText(result);
     }
 
     /**
@@ -866,49 +869,51 @@ public class ExtractFromFileNode extends BaseNode {
         if (expression == null || expression.isBlank()) {
             return null;
         }
-
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object result = resolved.get("__expr__");
-                return result != null ? String.valueOf(result) : expression;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression '{}': {}", expression, e.getMessage());
-                return expression;
-            }
-        }
-
-        return expression;
+        // One resolver for every field of every node: typed, JSON for a structure, never the
+        // configured template in place of a value (BaseNode#resolveTemplateValue).
+        return resolveTemplateString(expression, context);
     }
 
-    private Map<String, Object> buildInputDataMap(String resolvedValue) {
+    private Map<String, Object> buildInputDataMap(Core.ExtractFromFileConfig cfg, boolean scalarsResolved, String resolvedValue) {
         Map<String, Object> inputData = new LinkedHashMap<>();
-        if (extractFromFileConfig != null) {
-            inputData.put("format", extractFromFileConfig.format());
-            inputData.put("mode", extractFromFileConfig.mode());
+        if (cfg != null) {
+            inputData.put("format", cfg.format());
+            inputData.put("mode", cfg.mode());
             // `separator` decides how a TEXT file is split into records. Reported only
             // in the mode that reads it: the config constructor defaults it, so a csv
             // node would otherwise show a separator it never uses next to its real
             // delimiter - telling the reader they configured something they did not.
-            if (extractFromFileConfig.isTextMode() && extractFromFileConfig.separator() != null
-                    && !extractFromFileConfig.separator().isBlank()) {
-                inputData.put("separator", extractFromFileConfig.separator());
+            if (cfg.isTextMode() && cfg.separator() != null
+                    && !cfg.separator().isBlank()) {
+                inputData.put("separator", cfg.separator());
             }
-            if (extractFromFileConfig.isTextMode()) {
-                inputData.put("chunking", extractFromFileConfig.isChunkingEnabled());
-                if (extractFromFileConfig.isChunkingEnabled()) {
-                    inputData.put("chunkingStrategy", extractFromFileConfig.chunkingStrategy());
-                    inputData.put("chunkSize", extractFromFileConfig.chunkSize());
-                    inputData.put("overlap", extractFromFileConfig.overlap());
-                    inputData.put("chunkUnit", extractFromFileConfig.chunkUnit());
+            if (cfg.isTextMode()) {
+                inputData.put("chunking", cfg.isChunkingEnabled());
+                if (cfg.isChunkingEnabled()) {
+                    inputData.put("chunkingStrategy", cfg.chunkingStrategy());
+                    inputData.put("chunkSize", cfg.chunkSize());
+                    inputData.put("overlap", cfg.overlap());
+                    inputData.put("chunkUnit", cfg.chunkUnit());
                 }
             } else {
-                inputData.put("delimiter", extractFromFileConfig.delimiter());
-                if (extractFromFileConfig.sheetName() != null) {
-                    inputData.put("sheetName", extractFromFileConfig.sheetName());
+                inputData.put("delimiter", cfg.delimiter());
+                if (cfg.sheetName() != null) {
+                    inputData.put("sheetName", cfg.sheetName());
                 }
-                inputData.put("hasHeaders", extractFromFileConfig.hasHeaders());
+                inputData.put("hasHeaders", cfg.hasHeaders());
+            }
+        }
+        // A chunking setting the plan wrote as {{...}}: the template until it resolved, then the
+        // value it resolved to (withheld when it pulled a workspace variable).
+        for (String field : List.of("chunking", "chunkSize", "overlap")) {
+            String template = deferredScalar("extractFromFile", field);
+            if (template == null) {
+                continue;
+            }
+            if (!scalarsResolved) {
+                inputData.put(field, template);
+            } else if (inputData.containsKey(field)) {
+                inputData.put(field, ReportedParams.valueFrom(template, inputData.get(field)));
             }
         }
         if (resolvedValue != null) {

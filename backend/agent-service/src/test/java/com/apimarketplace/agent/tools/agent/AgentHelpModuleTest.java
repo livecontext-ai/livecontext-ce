@@ -98,6 +98,16 @@ class AgentHelpModuleTest {
         return params instanceof Map ? (Map<String, Object>) params : Map.of();
     }
     @Test
+    @DisplayName("the execute help tells the caller to put a sub-agent's question to the person")
+    void executeHelpRelaysTheSubAgentsQuestion() {
+        String help = String.valueOf(module.execute("help", Map.of(), "u1", contextWithRoles("u1", null)).get().data());
+
+        assertThat(help).contains("put that question to them with ask_user")
+                .contains("run the sub-agent again with their answer")
+                .contains("pass the question on in your own reply or output");
+    }
+
+    @Test
     @DisplayName("canHandle accepts 'help' and 'help_models', rejects everything else")
     void canHandle() {
         assertThat(module.canHandle("help")).isTrue();

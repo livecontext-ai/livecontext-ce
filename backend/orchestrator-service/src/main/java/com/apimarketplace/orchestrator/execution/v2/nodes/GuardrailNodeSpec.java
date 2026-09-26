@@ -35,18 +35,18 @@ public class GuardrailNodeSpec implements NodeSpec {
                 OutputFieldDef.builder()
                     .key("violations")
                     .type("array")
-                    .description("List of violations found")
+                    .description("Ids of the rules the content violated (strings), including flagged and sanitized ones")
                     .defaultValue(List.of())
                     .build(),
                 OutputFieldDef.builder()
                     .key("details")
                     .type("object")
-                    .description("Detailed guardrail evaluation results")
+                    .description("Per rule id: {violated, severity, explanation, matched_content, type, action}")
                     .build(),
                 OutputFieldDef.builder()
                     .key("sanitized")
                     .type("string")
-                    .description("Sanitized version of the input if applicable")
+                    .description("The input with every sanitize-rule match replaced by [REDACTED]")
                     .build(),
                 OutputFieldDef.builder()
                     .key("tokens_used")

@@ -57,6 +57,18 @@ public class UserService {
     private final AccountDeactivationMailer deactivationMailer;
     private final VerifiedAccountService verifiedAccountService;
 
+    /**
+     * Lifecycle emails (Resend). A deactivated account's contact is deleted right away, so
+     * the running automations stop writing to someone who asked to leave; a restore re-syncs
+     * it. Optional; null sends nothing.
+     */
+    private com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setLifecycleEmails(com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails) {
+        this.lifecycleEmails = lifecycleEmails;
+    }
+
     public UserService(UserRepository userRepository,
                        UserOnboardingRepository onboardingRepository,
                        UserProfileRepository userProfileRepository,
@@ -101,6 +113,7 @@ public class UserService {
      * Utilise les validateurs injectes pour une meilleure separation des responsabilites.
      */
     public User updateProfile(User user, UserProfileUpdateRequest request) {
+        rejectIdentityChanges(user, request);
         updateBasicInfo(user, request);
         updateUsername(user, request);
         updateAge(user, request);
@@ -441,11 +454,24 @@ public class UserService {
         user.setAge(request.getAge());
     }
 
-    private void updateProfileData(User user, UserProfileUpdateRequest request) {
-        if (request.getEmail() != null && !request.getEmail().trim().isEmpty()) {
-            user.setEmail(request.getEmail().trim());
+    /**
+     * The email address and its verified flag are identity facts owned by the identity provider
+     * (Keycloak / OAuth) or by the email verification flow. A self-service profile update must
+     * never change them: accepting them let any signed-in user take an address they do not own
+     * and mark it verified. A request that repeats the current values is accepted (no change).
+     * An account with no stored email cannot add one here either: the address would be unproven.
+     */
+    private void rejectIdentityChanges(User user, UserProfileUpdateRequest request) {
+        String email = request.getEmail() == null ? null : request.getEmail().trim();
+        if (email != null && !email.isEmpty() && !email.equalsIgnoreCase(user.getEmail())) {
+            throw new IllegalArgumentException("The email address cannot be changed through the profile");
         }
+        if (request.getEmailVerified() != null && request.getEmailVerified() != user.isEmailVerified()) {
+            throw new IllegalArgumentException("The email verification status cannot be changed through the profile");
+        }
+    }
 
+    private void updateProfileData(User user, UserProfileUpdateRequest request) {
         if (request.getPicture() != null && !request.getPicture().trim().isEmpty()) {
             user.setAvatarUrl(request.getPicture().trim());
         }
@@ -456,10 +482,6 @@ public class UserService {
 
         if (request.getFamilyName() != null && !request.getFamilyName().trim().isEmpty()) {
             user.setLastName(request.getFamilyName().trim());
-        }
-
-        if (request.getEmailVerified() != null) {
-            user.setEmailVerified(request.getEmailVerified());
         }
     }
 
@@ -734,6 +756,7 @@ public class UserService {
                 .map(UserOnboarding::getDisplayName)
                 .orElse(user.getFirstName());
         deactivationMailer.sendDeactivationEmail(user.getEmail(), displayName);
+        if (lifecycleEmails != null) lifecycleEmails.deleteContact(user.getEmail());
 
         logger.info("Account deactivated for user {} ({}), 30-day grace period started",
                 user.getId(), user.getEmail());
@@ -775,6 +798,7 @@ public class UserService {
                 .map(UserOnboarding::getDisplayName)
                 .orElse(user.getFirstName());
         deactivationMailer.sendRestorationEmail(user.getEmail(), displayName);
+        if (lifecycleEmails != null) lifecycleEmails.syncContact(user.getId());
 
         logger.info("Account restored for user {} ({}), deletion scheduled at {} cancelled",
                 user.getId(), user.getEmail(), scheduledAt);

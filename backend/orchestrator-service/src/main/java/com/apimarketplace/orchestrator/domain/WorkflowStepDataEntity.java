@@ -151,6 +151,11 @@ public class WorkflowStepDataEntity implements OrgScopedEntity {
     @Column(name = "item_number")
     private Integer itemNumber;
 
+    // True when the per-node mock mode served this step (V526). The row keeps the tool's real
+    // tool_id and status, so this column is the only thing a query can tell a mock apart by.
+    @Column(name = "is_mocked", nullable = false)
+    private boolean mocked;
+
     public WorkflowStepDataEntity() {
     }
 
@@ -523,5 +528,13 @@ public class WorkflowStepDataEntity implements OrgScopedEntity {
 
     public void setItemNumber(Integer itemNumber) {
         this.itemNumber = itemNumber;
+    }
+
+    public boolean isMocked() {
+        return mocked;
+    }
+
+    public void setMocked(boolean mocked) {
+        this.mocked = mocked;
     }
 }

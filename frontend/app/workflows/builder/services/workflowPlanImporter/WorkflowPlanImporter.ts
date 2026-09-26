@@ -9,12 +9,20 @@ import { PlanParserService, type ParsedPlan } from './PlanParserService';
 import { NodeCreationService, type NodeCreationResult } from './NodeCreationService';
 import { EdgeCreationService, type EdgeCreationResult } from './EdgeCreationService';
 import { InputValidationService, type ValidationResult } from './InputValidationService';
-import { applyDagreLayout, layoutConfigForDirection, needsLayout } from '../LayoutService';
+import {
+  applyDagreLayout,
+  hasValidPosition,
+  layoutConfigForDirection,
+  placeUnpositionedNodes,
+} from '../LayoutService';
 import type { InterfaceFormatContext } from './InterfaceFormatService';
 import {
   DEFAULT_WORKFLOW_LAYOUT_DIRECTION,
   type WorkflowLayoutDirection,
 } from '@/contexts/WorkflowLayoutDirectionContext';
+import { resolvePlanLayout, type PlanLayoutOptions } from '../../utils/planLayoutDirection';
+
+export type { PlanLayoutOptions };
 
 export interface ImportResult {
   nodes: Node<BuilderNodeData>[];
@@ -22,6 +30,17 @@ export interface ImportResult {
   validation: ValidationResult;
   success: boolean;
   error?: string;
+  /**
+   * True when the plan carried no position at all and the whole graph was laid out
+   * (an agent build). False when stored positions were kept, even if a few new nodes
+   * were placed around them.
+   */
+  laidOutFromScratch?: boolean;
+  /**
+   * The direction the nodes were placed in, which the canvas MUST render in: the stored
+   * positions were kept only if they were computed in it, and re-laid out otherwise.
+   */
+  layoutDirection: WorkflowLayoutDirection;
 }
 
 export class WorkflowPlanImporter {
@@ -29,11 +48,11 @@ export class WorkflowPlanImporter {
    * Import a workflow plan from JSON string
    */
   /**
-   * @param layoutDirection reading direction to lay the imported plan out in. This is
-   *   a USER PREFERENCE living in a React context, and this importer is a plain
-   *   service, so callers (all of them hooks or components) must pass it down rather
-   *   than have the service reach for it. Defaults to horizontal, matching the
-   *   context's own default, so an un-updated caller keeps the previous behaviour.
+   * @param layout how the surface reads the plan: the viewer's default direction and, when
+   *   the surface fixes one, that direction. The direction itself is decided here, from the
+   *   plan's stamp and positions (see {@link resolvePlanLayout}), and returned as
+   *   `layoutDirection` for the canvas to render in. Those preferences live in a React
+   *   context and this importer is a plain service, so callers pass them down.
    * @param context what the surface is: its React Query client, and whether it is showing
    *   a run. Passed down for the same reason as the direction above - a plain service must
    *   not reach into a React context, and a module-level singleton would hand the wrong
@@ -42,7 +61,7 @@ export class WorkflowPlanImporter {
   static async importPlan(
     jsonString: string,
     existingNodes: Node<BuilderNodeData>[] = [],
-    layoutDirection: WorkflowLayoutDirection = DEFAULT_WORKFLOW_LAYOUT_DIRECTION,
+    layout: PlanLayoutOptions = { fallbackDirection: DEFAULT_WORKFLOW_LAYOUT_DIRECTION },
     context: InterfaceFormatContext = {}
   ): Promise<ImportResult> {
     try {
@@ -103,17 +122,21 @@ export class WorkflowPlanImporter {
         return updatedNode;
       });
 
-      // Step 5: Apply automatic layout if needed
-      // Always use Dagre (same algorithm as the toolbox auto-layout button) when any
-      // node lacks a position. The old applyMixedLayout heuristic produced poor results.
-      let layoutedNodes = updatedNodes;
-
-      if (needsLayout(updatedNodes)) {
-        console.log('[Import] Nodes without positions detected - applying Dagre layout');
-        layoutedNodes = applyDagreLayout(updatedNodes, edgeResult.edges, layoutConfigForDirection(layoutDirection));
-      } else {
-        console.log('[Import] All nodes have positions - respecting manual layout');
-      }
+      // Step 5: Decide the reading direction, then position the nodes. A stored position
+      // is kept (the user saved it, see placeUnpositionedNodes) unless it was computed in
+      // the other direction: kept, it would draw a left-to-right graph with top-to-bottom
+      // handles, so the whole graph is laid out again instead.
+      const { direction: layoutDirection, relayout } = resolvePlanLayout({
+        storedDirection: (parsedPlan.plan as { layoutDirection?: unknown }).layoutDirection,
+        hasStoredPositions: updatedNodes.some(hasValidPosition),
+        fallbackDirection: layout.fallbackDirection,
+        forcedDirection: layout.forcedDirection,
+        unstampedPositionsDirection: layout.unstampedPositionsDirection,
+      });
+      const layoutConfig = layoutConfigForDirection(layoutDirection);
+      const { nodes: layoutedNodes, laidOutFromScratch } = relayout
+        ? { nodes: applyDagreLayout(updatedNodes, edgeResult.edges, layoutConfig), laidOutFromScratch: true }
+        : placeUnpositionedNodes(updatedNodes, edgeResult.edges, layoutConfig);
 
       // Step 6: Validate inputs
       const validation = InputValidationService.validateNodes(layoutedNodes);
@@ -131,6 +154,8 @@ export class WorkflowPlanImporter {
         edges: edgeResult.edges,
         validation: combinedValidation,
         success: true,
+        laidOutFromScratch,
+        layoutDirection,
       };
     } catch (error) {
       return {
@@ -148,6 +173,7 @@ export class WorkflowPlanImporter {
         },
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
+        layoutDirection: layout.forcedDirection ?? layout.fallbackDirection,
       };
     }
   }

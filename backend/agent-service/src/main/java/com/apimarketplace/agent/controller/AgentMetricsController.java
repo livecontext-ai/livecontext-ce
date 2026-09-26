@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.controller;
 
+import com.apimarketplace.common.web.AdminRoleGuard;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.agent.domain.AgentExecutionEntity;
 import com.apimarketplace.agent.domain.AgentExecutionIterationEntity;
@@ -8,6 +9,8 @@ import com.apimarketplace.agent.domain.AgentExecutionToolCallEntity;
 import com.apimarketplace.agent.repository.AgentRepository;
 import com.apimarketplace.agent.service.AgentMetricsQueryService;
 import com.apimarketplace.agent.service.FleetStatsService;
+import com.apimarketplace.agent.service.TraceContentLoader;
+import org.springframework.beans.factory.annotation.Autowired;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -31,6 +34,17 @@ public class AgentMetricsController {
     private final AgentRepository agentRepository;
     private final TenantResolver tenantResolver;
     private final FleetStatsService fleetStatsService;
+
+    private TraceContentLoader traceContentLoader;
+
+    /**
+     * Reads a long trace row's full text back from storage. Optional so the unit tests that
+     * build this controller by hand keep compiling; without it a long row shows its excerpt.
+     */
+    @Autowired(required = false)
+    void setTraceContentLoader(TraceContentLoader traceContentLoader) {
+        this.traceContentLoader = traceContentLoader;
+    }
 
     public AgentMetricsController(
             AgentMetricsQueryService metricsQueryService,
@@ -100,8 +114,13 @@ public class AgentMetricsController {
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
 
         return metricsQueryService.getExecutionForScope(execId, tenantId, organizationId)
-            .map(exec -> ResponseEntity.ok(metricsQueryService.getConversationPaged(
-                execId, PageRequest.of(Math.max(0, page), Math.min(Math.max(1, size), 100)))))
+            .map(exec -> {
+                Page<AgentExecutionMessageEntity> messages = metricsQueryService.getConversationPaged(
+                    execId, PageRequest.of(Math.max(0, page), Math.min(Math.max(1, size), 100)));
+                // After the query's transaction ended: see TraceContentLoader.
+                if (traceContentLoader != null) traceContentLoader.readBackMessages(messages.getContent());
+                return ResponseEntity.ok(messages);
+            })
             .orElse(ResponseEntity.notFound().build());
     }
 
@@ -125,8 +144,12 @@ public class AgentMetricsController {
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
 
         return metricsQueryService.getExecutionForScope(execId, tenantId, organizationId)
-            .map(exec -> ResponseEntity.ok(metricsQueryService.getToolCallsPaged(
-                execId, PageRequest.of(Math.max(0, page), Math.min(Math.max(1, size), 100)))))
+            .map(exec -> {
+                Page<AgentExecutionToolCallEntity> calls = metricsQueryService.getToolCallsPaged(
+                    execId, PageRequest.of(Math.max(0, page), Math.min(Math.max(1, size), 100)));
+                if (traceContentLoader != null) traceContentLoader.readBackToolCalls(calls.getContent());
+                return ResponseEntity.ok(calls);
+            })
             .orElse(ResponseEntity.notFound().build());
     }
 
@@ -252,6 +275,40 @@ public class AgentMetricsController {
         // Cache-aside + parallel compute on miss (FleetStatsService). The four GROUP-BY
         // aggregations no longer run sequentially on the request thread.
         return ResponseEntity.ok(fleetStatsService.getFleetStats(tenantId, organizationId));
+    }
+
+    /**
+     * Cross-tenant tool health. ADMIN only.
+     *
+     * <p>Deliberately not tenant-scoped, unlike every other route here. A
+     * tenant-scoped view cannot answer the only question worth asking about a
+     * catalog defect: is this tool failing for EVERYONE, or did one customer paste
+     * a bad key? The response carries {@code tenantsCalling} / {@code tenantsAffected}
+     * and a {@code verdict} so the reader can tell those apart at a glance.
+     *
+     * @param minCalls  floor on total calls, so a 100% failure rate over two calls
+     *                  does not outrank a tool failing 4,000 times out of 10,000
+     * @param sinceDays window in days, 0 for all history
+     */
+    @GetMapping("/tool-health")
+    public ResponseEntity<?> getGlobalToolHealth(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles,
+            @RequestParam(defaultValue = "10") int minCalls,
+            @RequestParam(defaultValue = "30") int sinceDays,
+            @RequestParam(defaultValue = "100") int limit) {
+        var denied = AdminRoleGuard.denyIfNotAdmin(roles);
+        if (denied != null) {
+            return denied;
+        }
+        List<Map<String, Object>> rows = metricsQueryService.getGlobalToolHealth(minCalls, sinceDays, limit);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("window", Map.of("minCalls", minCalls, "sinceDays", sinceDays, "limit", limit));
+        body.put("toolsWithFailures", rows.size());
+        body.put("catalogSuspects", rows.stream()
+                .filter(r -> "ALL_TENANTS".equals(r.get("verdict")) || "WIDESPREAD".equals(r.get("verdict")))
+                .count());
+        body.put("tools", rows);
+        return ResponseEntity.ok(body);
     }
 
     /**

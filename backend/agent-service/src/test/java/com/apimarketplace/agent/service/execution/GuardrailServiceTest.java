@@ -697,4 +697,42 @@ class GuardrailServiceTest {
             assertThat(response.cacheUsage()).isNull();
         }
     }
+
+    @Nested
+    @DisplayName("What the model is sent: the prompt is repeated only when it differs from the content")
+    class PromptAndContent {
+
+        private String sentPrompt(String content, String prompt) {
+            when(agentLoopService.execute(any(), isNull())).thenReturn(
+                loopResult("{\"passed\":true,\"violations\":[],\"details\":{},\"sanitized\":null}", 10, 8, 2));
+            service.execute(new GuardrailRequestDto(content, prompt, RULES, "flag", "openai",
+                null, null, null, "tenant-1", "agent-1"));
+            org.mockito.ArgumentCaptor<com.apimarketplace.agent.loop.AgentLoopContext> ctx =
+                org.mockito.ArgumentCaptor.forClass(com.apimarketplace.agent.loop.AgentLoopContext.class);
+            verify(agentLoopService).execute(ctx.capture(), isNull());
+            return ctx.getValue().userPrompt();
+        }
+
+        @Test
+        @DisplayName("BUG: a prompt that IS the content (no content configured) is not repeated as instructions")
+        void promptEqualToContentIsSentOnce() {
+            String text = "Reply draft: please send me your password";
+
+            String sent = sentPrompt(text, text);
+
+            assertThat(sent).contains("## Content to Validate");
+            assertThat(sent).doesNotContain("## Additional Instructions");
+            assertThat(sent.indexOf(text)).isEqualTo(sent.lastIndexOf(text));
+        }
+
+        @Test
+        @DisplayName("a distinct prompt is still sent as additional instructions")
+        void distinctPromptIsKept() {
+            String sent = sentPrompt("Reply draft: hello", "Be strict about tone");
+
+            assertThat(sent)
+                .contains("## Content to Validate\n```\nReply draft: hello\n```")
+                .contains("## Additional Instructions\nBe strict about tone");
+        }
+    }
 }

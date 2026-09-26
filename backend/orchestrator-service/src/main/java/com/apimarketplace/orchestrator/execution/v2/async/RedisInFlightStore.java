@@ -17,6 +17,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -74,6 +76,15 @@ public class RedisInFlightStore {
     private final ObjectMapper objectMapper;
     private final Duration ttl;
 
+    /**
+     * Correlation ids THIS instance staged and has not cleared yet, i.e. deliveries that are
+     * running on this JVM right now. The Redis keyspace is shared by every replica (and keeps
+     * the entries a crashed replica left behind until they are replayed or expire), so
+     * {@link #size()} answers a cluster question; the shutdown drain needs the local one,
+     * because it can only wait for work this instance will actually finish.
+     */
+    private final Set<String> locallyStaged = ConcurrentHashMap.newKeySet();
+
     // @Autowired marks this as THE Spring-injection constructor - without it,
     // Spring sees TWO constructors (primary + test-only TTL override) and falls
     // back to looking for a no-arg constructor → startup crash "No default
@@ -99,6 +110,11 @@ public class RedisInFlightStore {
      */
     public void stage(PendingAgent pending, AgentResultMessage result) {
         if (pending == null || result == null) return;
+        // Tracked locally BEFORE any Redis I/O and whatever that I/O returns: the delivery is
+        // running on this instance from here until clear(), even when Redis refuses the stage.
+        if (pending.correlationId() != null) {
+            locallyStaged.add(pending.correlationId());
+        }
         try {
             String json = objectMapper.writeValueAsString(toInFlightMap(pending, result));
             // Value + index member + index TTL in ONE Redis transaction, so no observer can
@@ -165,16 +181,31 @@ public class RedisInFlightStore {
      */
     public void clear(String correlationId) {
         if (correlationId == null || correlationId.isEmpty()) return;
-        try {
-            redisTemplate.delete(KEY_PREFIX + correlationId);
-        } catch (Exception e) {
-            logger.warn("[InFlightStore] clear failed for correlationId={}: {}", correlationId, e.getMessage());
-        }
+        deleteStagedEntry(correlationId);
+        // Released only here, i.e. once the WHOLE delivery (epoch close included) is over:
+        // the shutdown drain reads localSize() and must not see this delivery as finished
+        // while it is still writing.
+        locallyStaged.remove(correlationId);
         // The per-run index member is deliberately NOT removed here. Deleting the value is what
         // makes the entry stop counting; the leftover member is pruned lazily by
         // {@link #listForRun} the next time anyone looks, and expires with the index TTL
         // regardless. Keeping clear() single-argument means every existing call site (and the
         // recovery paths that hold no runId) stays correct without threading one through.
+    }
+
+    /**
+     * Delete the Redis entry only, leaving this instance's local count untouched. For a
+     * delivery that must disappear from the per-run guards EARLY (so a sibling's "anyone still
+     * in flight?" check does not see it) while it is still running on this instance; the
+     * delivery's final {@link #clear} releases the local count.
+     */
+    public void deleteStagedEntry(String correlationId) {
+        if (correlationId == null || correlationId.isEmpty()) return;
+        try {
+            redisTemplate.delete(KEY_PREFIX + correlationId);
+        } catch (Exception e) {
+            logger.warn("[InFlightStore] clear failed for correlationId={}: {}", correlationId, e.getMessage());
+        }
     }
 
     /** Per-run reverse index, so the guards below never scan the keyspace. */
@@ -322,9 +353,22 @@ public class RedisInFlightStore {
         return entries;
     }
 
-    /** Counter for ops/test observability - number of currently-staged entries. */
+    /**
+     * Number of staged entries across the WHOLE cluster (every replica shares this keyspace),
+     * including entries a crashed replica left for the next startup replay. Observability only:
+     * do not wait on it for this instance's shutdown, use {@link #localSize()}.
+     */
     public int size() {
         return listAll().size();
+    }
+
+    /**
+     * Number of deliveries this instance staged and has not cleared yet. No Redis call. This is
+     * what a shutdown drain can wait for: every other entry belongs to another live replica, or
+     * to a dead one and is replayed by the next startup recovery.
+     */
+    public int localSize() {
+        return locallyStaged.size();
     }
 
     /**

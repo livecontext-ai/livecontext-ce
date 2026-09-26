@@ -139,13 +139,27 @@ function basename(p: string): string {
 }
 
 /**
- * Tool icon types for ActivityFeed display
+ * Tool icon types for ActivityFeed display.
+ * `toolIcons` (components/chat/toolIcons.tsx) is typed on this union, so adding a
+ * type here without drawing its icon fails the build.
  */
 export type ToolIconType =
   | 'table'
   | 'interface'
   | 'workflow'
   | 'agent'
+  | 'skill'
+  | 'application'
+  | 'channel'
+  | 'mailbox'
+  | 'memory'
+  | 'generation'
+  | 'browser'
+  | 'askUser'
+  | 'wait'
+  | 'download'
+  | 'save'
+  | 'attachment'
   | 'search'
   | 'globe'
   | 'help'
@@ -153,12 +167,88 @@ export type ToolIconType =
   | 'tasks'
   | 'eye'
   | 'code'
-  | 'api'
   | 'files'
-  | 'play'
   | 'pencil'
   | 'terminal'
-  | 'file';
+  | 'file'
+  | 'tool';
+
+/**
+ * Exact tool name (lowercased) to icon. Covers every LiveContext tool family the
+ * agent can call, plus the native tool names the CLI adapters (Claude Code, Codex,
+ * Gemini CLI) publish into the same feed. A family missing here
+ * falls back to the neutral `tool` icon, never to an icon that means something
+ * else (the fallback used to be the API plug, so `channel` showed a plug).
+ */
+const TOOL_ICON_BY_NAME: Record<string, ToolIconType> = {
+  // LiveContext tool families
+  table: 'table',
+  datasource: 'table',
+  interface: 'interface',
+  workflow: 'workflow',
+  agent: 'agent',
+  skill: 'skill',
+  application: 'application',
+  channel: 'channel',
+  mailbox: 'mailbox',
+  memory: 'memory',
+  generation: 'generation',
+  agent_browse: 'browser',
+  ask_user: 'askUser',
+  wait: 'wait',
+  download_file: 'download',
+  store_file: 'save',
+  view_attachment: 'attachment',
+  files: 'files',
+  catalog: 'search',
+  web_search: 'globe',
+  tasks: 'tasks',
+  visualize: 'eye',
+  get_tool_result: 'eye',
+  get_connected_services: 'key',
+  get_resource_schema: 'help',
+  set_conversation_title: 'pencil',
+  // Claude Code native tools
+  bash: 'terminal',
+  bashoutput: 'terminal',
+  killshell: 'terminal',
+  killbash: 'terminal',
+  monitor: 'terminal',
+  slashcommand: 'terminal',
+  sendusermessage: 'askUser',
+  lsp: 'code',
+  taskcreate: 'tasks',
+  taskupdate: 'tasks',
+  tasklist: 'tasks',
+  taskget: 'tasks',
+  taskoutput: 'tasks',
+  taskstop: 'tasks',
+  grep: 'search',
+  glob: 'search',
+  toolsearch: 'search',
+  read: 'file',
+  edit: 'pencil',
+  write: 'pencil',
+  multiedit: 'pencil',
+  notebookedit: 'pencil',
+  webfetch: 'globe',
+  websearch: 'globe',
+  task: 'agent',
+  todowrite: 'tasks',
+  // Codex (the adapter publishes command execution as `shell`)
+  shell: 'terminal',
+  // Gemini CLI native tools
+  run_shell_command: 'terminal',
+  read_file: 'file',
+  read_many_files: 'file',
+  write_file: 'pencil',
+  replace: 'pencil',
+  list_directory: 'files',
+  search_file_content: 'search',
+  web_fetch: 'globe',
+  google_web_search: 'globe',
+  save_memory: 'memory',
+};
 
 /**
  * Get the icon type for a tool based on its name.
@@ -170,63 +260,18 @@ export function getToolIconType(toolName: string): ToolIconType | null {
   // System tools - no icon
   if (normalized.startsWith('_system_')) return null;
 
-  // Table / Datasource (bridge MCP tool is named 'table', agent-service uses 'datasource')
-  if (normalized === 'datasource' || normalized === 'table') return 'table';
+  const exact = TOOL_ICON_BY_NAME[normalized];
+  if (exact) return exact;
 
-  // Interface
-  if (normalized === 'interface') return 'interface';
-
-  // Workflow
-  if (normalized === 'workflow') return 'workflow';
-
-  // Agent / Skill
-  if (normalized.startsWith('agent_') || normalized === 'agent') return 'agent';
-  if (normalized === 'skill') return 'agent';
-
-  // Application
-  if (normalized === 'application') return 'play';
-
-  // Web Search / Fetch (unified facade)
-  if (normalized === 'web_search') return 'globe';
-
-  // Catalog (unified facade)
-  if (normalized === 'catalog') return 'search';
-
-  // Help tools
-  if (normalized.includes('help') || normalized === 'list_all_tools' || normalized === 'get_tool_help' || normalized === 'get_resource_schema' || normalized === 'get_examples' || normalized === 'expression_help') return 'help';
-
-  // Credentials
-  if (normalized === 'get_connected_services' || normalized.includes('credential')) return 'key';
-
-  // Tasks
-  if (normalized === 'tasks') return 'tasks';
-
-  // Set conversation title
-  if (normalized === 'set_conversation_title' || normalized.includes('title')) return 'pencil';
-
-  // Get tool result (expand truncated results)
-  if (normalized === 'get_tool_result') return 'eye';
-
-  // Visualize
-  if (normalized === 'visualize') return 'eye';
-
-  // Schema tools
+  // Name families (help tools, credential tools, schema tools, sub-agent tools)
+  if (normalized.includes('help') || normalized === 'list_all_tools' || normalized === 'get_examples') return 'help';
+  if (normalized.includes('credential')) return 'key';
+  if (normalized.includes('title')) return 'pencil';
   if (normalized.includes('schema')) return 'code';
+  if (normalized.startsWith('agent_')) return 'agent';
 
-  // Files browser
-  if (normalized === 'files') return 'files';
-
-  // Native Claude Code tools (the bridge agent now runs with the full toolset).
-  if (normalized === 'bash') return 'terminal';
-  if (normalized === 'grep' || normalized === 'glob') return 'search';
-  if (normalized === 'read') return 'file';
-  if (normalized === 'edit' || normalized === 'write' || normalized === 'multiedit' || normalized === 'notebookedit') return 'pencil';
-  if (normalized === 'webfetch' || normalized === 'websearch') return 'globe';
-  if (normalized === 'task') return 'agent';
-  if (normalized === 'todowrite') return 'tasks';
-
-  // Default: API/tool icon for any other tool
-  return 'api';
+  // Default: a neutral tool icon, never one that means something else
+  return 'tool';
 }
 
 /**
@@ -264,6 +309,11 @@ export function getToolDescription(toolName: string, args?: string, visualizatio
       } catch { /* ignore parse errors */ }
     }
 
+    // files has no case of its own (its other actions use the generic fallback below).
+    if (normalizedToolName === 'files' && parsed.action === 'present') {
+      return vizTitle ? `Show file "${truncate(vizTitle, 20)}"` : 'Show file';
+    }
+
     switch (normalizedToolName) {
       // === TABLE (datasource) ===
       case 'datasource':
@@ -282,6 +332,8 @@ export function getToolDescription(toolName: string, args?: string, visualizatio
             return 'List all tables';
           case 'get':
             return `Get table ${tableRef}`;
+          case 'present':
+            return `Show table ${tableRef}`;
           case 'items':
             return `Get rows from ${tableRef}`;
           case 'add_items':
@@ -321,6 +373,8 @@ export function getToolDescription(toolName: string, args?: string, visualizatio
             return 'List all interfaces';
           case 'get':
             return `Get interface ${ifRef}`;
+          case 'present':
+            return `Show interface ${ifRef}`;
           case 'update':
             return `Update interface ${ifRef}`;
           case 'delete':
@@ -413,6 +467,8 @@ export function getToolDescription(toolName: string, args?: string, visualizatio
             return 'Set schedule';
           case 'execute':
             return 'Execute workflow';
+          case 'present':
+            return vizTitle ? `Show ${parsed.view || 'workflow'} "${truncate(vizTitle, 20)}"` : `Show ${parsed.view || 'workflow'}`;
           // CRUD actions (absorbed from separate tools)
           case 'get':
             return (parsed.name || resultName) ? `Get workflow "${truncate(parsed.name || resultName, 20)}"` : 'Get workflow';
@@ -514,6 +570,8 @@ export function getToolDescription(toolName: string, args?: string, visualizatio
             return `Create agent "${truncate(parsed.name, 20)}"`;
           case 'get':
             return agentName ? `Get agent "${truncate(agentName, 20)}"` : 'Get agent';
+          case 'present':
+            return vizTitle ? `Show agent "${truncate(vizTitle, 20)}"` : 'Show agent';
           case 'list':
             return 'List agents';
           case 'update':

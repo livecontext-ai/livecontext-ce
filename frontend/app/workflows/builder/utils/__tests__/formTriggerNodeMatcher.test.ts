@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Node } from 'reactflow';
 import type { BuilderNodeData } from '../../types';
-import { findLiveFormTriggerNode } from '../formTriggerNodeMatcher';
+import { findLiveFormTriggerNode, pickFormTriggerFields } from '../formTriggerNodeMatcher';
 
 // Build a form-trigger node the way TriggerNodeCreator does: data.id carries a
 // "form-trigger-<timestamp>-<rand>" suffix with NO label, and data.label holds
@@ -79,5 +79,28 @@ describe('findLiveFormTriggerNode', () => {
     // Both normalize to null; must not collapse via null === null.
     const nodes = [formNode('s1', '', 'a'), formNode('s2', '', 'b')];
     expect(findLiveFormTriggerNode(nodes, 'trigger:42', '')).toBeUndefined();
+  });
+});
+
+describe('pickFormTriggerFields', () => {
+  const planFields = [{ id: 'f1', name: 'city' }];
+
+  it('reaches the PLAN fields when the config list is the empty default (the form used to arrive fieldless)', () => {
+    // `trigger.config?.fields || []` is truthy, so the old `||` chain stopped on it.
+    expect(pickFormTriggerFields(undefined, [], planFields)).toBe(planFields);
+  });
+
+  it('prefers the live node fields, which carry unsaved builder edits', () => {
+    const live = [{ id: 'f9', name: 'zip' }];
+    expect(pickFormTriggerFields(live, [{ id: 'c' }], planFields)).toBe(live);
+  });
+
+  it('prefers the backend config fields over the plan when the live node has none', () => {
+    const config = [{ id: 'c1', name: 'country' }];
+    expect(pickFormTriggerFields([], config, planFields)).toBe(config);
+  });
+
+  it('returns an empty list when no source has any field', () => {
+    expect(pickFormTriggerFields(undefined, [], null)).toEqual([]);
   });
 });

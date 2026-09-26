@@ -206,8 +206,8 @@ export function CanvasToolbar({
           </button>
           {/* Same group as Focus on purpose: both are "put the camera somewhere
               useful". Focus frames the whole graph once, this one keeps framing
-              whatever is running. It renders nothing in edit mode, where no step
-              can be running. */}
+              what is happening: the running (or waiting) step in run mode, the
+              nodes an agent adds in edit mode. */}
           <CanvasRunFollowToggleButton />
           <button
             type="button"

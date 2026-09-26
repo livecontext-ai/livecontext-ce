@@ -218,6 +218,23 @@ class PlanLayoutNormalizerTest {
     }
 
     @Test
+    @DisplayName("Treats the plan's reading direction as layout: flipping it re-lays the nodes and changes nothing the workflow does")
+    void stripsLayoutDirection() {
+        Map<String, Object> horizontal = planWithCoreAt(290, 0);
+        horizontal.put("layoutDirection", "horizontal");
+        Map<String, Object> vertical = planWithCoreAt(0, 290);
+        vertical.put("layoutDirection", "vertical");
+
+        assertThat(PlanLayoutNormalizer.withoutLayout(vertical))
+                .doesNotContainKey("layoutDirection")
+                .isEqualTo(PlanLayoutNormalizer.withoutLayout(horizontal));
+        assertThat(PlanLayoutNormalizer.withoutLayout(planWithCoreAt(290, 0)))
+                .isEqualTo(PlanLayoutNormalizer.withoutLayout(horizontal));
+        // The caller's plan is only read.
+        assertThat(vertical).containsEntry("layoutDirection", "vertical");
+    }
+
+    @Test
     @DisplayName("Leaves edges untouched - they carry no layout")
     void leavesEdgesAlone() {
         Map<String, Object> plan = new LinkedHashMap<>();

@@ -410,7 +410,7 @@ class XmlNodeTest {
             // Primary production path: a single {{expr}} preserves its typed (Map) result.
             V2TemplateAdapter adapter = mock(V2TemplateAdapter.class);
             when(adapter.resolveTemplates(anyMap(), any()))
-                .thenReturn(Map.of("__expr__", Map.of("a", 1, "b", "two")));
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo(Map.of("a", 1, "b", "two")));
 
             Core.XmlConfig config = new Core.XmlConfig("jsonToXml", "{{mcp:previous_step.output}}", "root", false);
             XmlNode node = new XmlNode("core:xml", config);
@@ -431,7 +431,7 @@ class XmlNodeTest {
         void shouldBuildXmlFromListResolvedByTemplateAdapter() {
             V2TemplateAdapter adapter = mock(V2TemplateAdapter.class);
             when(adapter.resolveTemplates(anyMap(), any()))
-                .thenReturn(Map.of("__expr__", List.of(10, 20)));
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo(List.of(10, 20)));
 
             Core.XmlConfig config = new Core.XmlConfig("jsonToXml", "{{mcp:previous_step.output.items}}", "root", false);
             XmlNode node = new XmlNode("core:xml", config);
@@ -632,17 +632,47 @@ class XmlNodeTest {
         }
 
         @Test
-        @DisplayName("`rootElement` is the string the conversion USES, not a second resolution of it")
-        void reportsTheRootElementTheNodeUses() {
-            // executeJsonToXml names the root from the CONFIGURED string. Reporting a
-            // resolved one named an element the document does not have.
+        @DisplayName("a {{...}} rootElement is resolved: it names the document's root and is what is reported")
+        void resolvesAndReportsTheRootElement() {
+            // executeJsonToXml used to name the root from the CONFIGURED string, so a
+            // `{{trigger:start.root}}` root reached the XML builder literally and was rejected
+            // as an invalid element name, while `value` beside it resolved.
+            V2TemplateAdapter adapter = mock(V2TemplateAdapter.class);
+            when(adapter.resolveTemplates(anyMap(), any())).thenAnswer(invocation -> {
+                Map<String, Object> in = invocation.getArgument(0);
+                Map<String, Object> out = new java.util.HashMap<>();
+                in.forEach((k, v) -> out.put(k, "{{trigger:start.root}}".equals(v) ? "invoice" : v));
+                return out;
+            });
             Core.XmlConfig config = new Core.XmlConfig(
                 "jsonToXml", "{\"a\":\"1\"}", "{{trigger:start.root}}", false);
             XmlNode node = new XmlNode("core:xml", config);
+            node.setTemplateAdapter(adapter);
 
-            Map<String, Object> params = paramsOf(node.execute(context));
+            NodeExecutionResult result = node.execute(context);
 
-            assertEquals("{{trigger:start.root}}", params.get("rootElement"));
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            assertTrue(((String) result.output().get("result")).contains("<invoice>"));
+            assertEquals("invoice", paramsOf(result).get("rootElement"));
+        }
+
+        @Test
+        @DisplayName("a {{$vars.root}} rootElement names the document root but is withheld in Params")
+        void workspaceVariableRootElementIsWithheld() {
+            V2TemplateAdapter adapter = mock(V2TemplateAdapter.class);
+            when(adapter.resolveTemplates(anyMap(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{$vars.root}}", "s3cr3troot")));
+            Core.XmlConfig config = new Core.XmlConfig(
+                "jsonToXml", "{\"a\":\"1\"}", "{{$vars.root}}", false);
+            XmlNode node = new XmlNode("core:xml", config);
+            node.setTemplateAdapter(adapter);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            assertTrue(((String) result.output().get("result")).contains("<s3cr3troot>"));
+            assertEquals(com.apimarketplace.orchestrator.services.template.ReportedParams.WITHHELD_WORKSPACE_VARIABLE,
+                paramsOf(result).get("rootElement"));
         }
 
         @Test
@@ -685,6 +715,46 @@ class XmlNodeTest {
 
             assertTrue(reported.length() < 300, "persisted per step row: " + reported.length() + " chars");
             assertTrue(reported.contains("chars"), "and the reader is told what was cut: " + reported);
+        }
+    }
+
+    @Nested
+    @DisplayName("templated preserveAttributes")
+    class TemplatedPreserveAttributes {
+
+        private XmlNode templatedNode(Object resolvedFlag) {
+            Core.XmlConfig config = new Core.XmlConfig(
+                "xmlToJson", "<person id=\"123\"><name>John</name></person>", null, false);
+            XmlNode node = new XmlNode("core:xml", config);
+            V2TemplateAdapter adapter = org.mockito.Mockito.mock(V2TemplateAdapter.class);
+            org.mockito.Mockito.when(adapter.resolveTemplates(org.mockito.ArgumentMatchers.anyMap(),
+                    org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:x.output.flag}}", resolvedFlag)));
+            node.setTemplateAdapter(adapter);
+            node.setDeferredScalars(Map.of("xml", Map.of("preserveAttributes", "{{core:x.output.flag}}")));
+            return node;
+        }
+
+        @Test
+        @DisplayName("regression: a {{...}} preserveAttributes is resolved; it used to drop the whole xml config")
+        @SuppressWarnings("unchecked")
+        void templatedFlagIsResolved() {
+            NodeExecutionResult result = templatedNode(true).execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            Map<String, Object> parsed = (Map<String, Object>) result.output().get("result");
+            assertNotNull(parsed.get("@attributes"), "attributes kept because the flag resolved to true");
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(true, params.get("preserveAttributes"));
+        }
+
+        @Test
+        @DisplayName("a {{...}} preserveAttributes resolving to a non-boolean fails, naming the config")
+        void templatedFlagNotABooleanFails() {
+            NodeExecutionResult result = templatedNode("perhaps").execute(context);
+
+            assertFalse(result.isSuccess());
+            assertTrue(result.errorMessage().orElse("").contains("xml"), result.errorMessage().orElse(""));
         }
     }
 }

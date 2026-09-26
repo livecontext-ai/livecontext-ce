@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const balance = vi.hoisted(() => ({
   paygBalance: null as number | null,
-  aiBalance: null as number | null,
+  subBalance: null as number | null,
   monthlyCreditsAreWorkflowOnly: false,
   hasAnswered: true,
   isLoading: false,
@@ -34,7 +34,7 @@ function verdict() {
 
 beforeEach(() => {
   balance.paygBalance = null;
-  balance.aiBalance = null;
+  balance.subBalance = null;
   balance.monthlyCreditsAreWorkflowOnly = false;
   balance.hasAnswered = true;
   balance.isLoading = false;
@@ -98,49 +98,49 @@ describe('useMonthlyCreditsCannotPay', () => {
 });
 
 /**
- * V494 - the verdict stopped being one answer per account.
+ * The verdict is not one answer per account.
  *
- * <p>The Free plan gained a monthly AI allowance that pays for chat and agent
- * turns, but only on the models a cloud admin opened to the free tier. Left
- * account-level, the rule would have put an upgrade badge on EVERY model of an
- * account that can already pay for some of them, which is the "too eager"
- * failure the file header warns about.
+ * <p>The Free plan monthly credits are one pool that pays for workflows AND for
+ * chat and agent turns, but only on the models a cloud admin opened to the free
+ * tier. Left account-level, the rule would have put an upgrade badge on EVERY
+ * model of an account that can already pay for some of them, which is the "too
+ * eager" failure the file header warns about.
  */
-describe('useMonthlyCreditsCannotPay - per model (V494)', () => {
+describe('useMonthlyCreditsCannotPay - per model', () => {
   function verdictFor(model: { freeTierEnabled?: boolean } | null) {
     return renderHook(() => useMonthlyCreditsCannotPay()).result.current.blockedForModel(model);
   }
 
-  /** The situation the allowance exists for: a fresh Free signup, no top-up. */
-  function freeAccountWithAllowance(ai: number | null) {
+  /** The ordinary Free account: monthly credits, no top-up. */
+  function freeAccountWithMonthly(monthly: number | null) {
     balance.monthlyCreditsAreWorkflowOnly = true;
     balance.paygBalance = 0;
-    balance.aiBalance = ai;
+    balance.subBalance = monthly;
   }
 
-  it('does NOT block a model the allowance covers', () => {
-    freeAccountWithAllowance(100);
+  it('does NOT block a free-tier model while the monthly credits last', () => {
+    freeAccountWithMonthly(100);
 
     expect(verdictFor({ freeTierEnabled: true })).toBe(false);
   });
 
   it('still blocks a model outside the free tier, on the same account', () => {
-    freeAccountWithAllowance(100);
+    freeAccountWithMonthly(100);
 
     expect(verdictFor({ freeTierEnabled: false })).toBe(true);
   });
 
-  it('blocks every model once the allowance is spent', () => {
-    freeAccountWithAllowance(0);
+  it('blocks every model once the monthly credits are spent', () => {
+    freeAccountWithMonthly(0);
 
     expect(verdictFor({ freeTierEnabled: true })).toBe(true);
   });
 
-  it('treats an unanswered allowance as no allowance, so no badge is lifted on a guess', () => {
+  it('treats an unanswered monthly balance as empty, so no badge is lifted on a guess', () => {
     // Mirrors the existing "null is not empty" rule for paygBalance, in the
     // opposite direction: there the unknown must not ADD a paywall, here it must
     // not REMOVE one.
-    freeAccountWithAllowance(null);
+    freeAccountWithMonthly(null);
 
     expect(verdictFor({ freeTierEnabled: true })).toBe(true);
   });
@@ -148,23 +148,23 @@ describe('useMonthlyCreditsCannotPay - per model (V494)', () => {
   it('treats a model with no flag as outside the free tier', () => {
     // An older catalogue payload, or CE. Degrading to the account-level answer
     // withholds a benefit rather than promising one that may not apply.
-    freeAccountWithAllowance(100);
+    freeAccountWithMonthly(100);
 
     expect(verdictFor({})).toBe(true);
     expect(verdictFor(null)).toBe(true);
   });
 
-  it('never blocks a paying account, allowance or not', () => {
+  it('never blocks a paying account, whatever its balances', () => {
     balance.monthlyCreditsAreWorkflowOnly = false;
     balance.paygBalance = 0;
-    balance.aiBalance = 0;
+    balance.subBalance = 0;
 
     expect(verdictFor({ freeTierEnabled: false })).toBe(false);
   });
 
   it('offers the free-tier models first on a Free plan, even when it CAN pay', () => {
     // Ordering tracks the plan, not the balance: a Free account holding a top-up
-    // is not blocked, and should still meet the models its allowance covers
+    // is not blocked, and should still meet the models its monthly credits cover
     // before the ones that eat that top-up.
     balance.monthlyCreditsAreWorkflowOnly = true;
     balance.paygBalance = 500;
@@ -181,6 +181,69 @@ describe('useMonthlyCreditsCannotPay - per model (V494)', () => {
     edition.isCe = true;
     balance.monthlyCreditsAreWorkflowOnly = true;
     expect(renderHook(() => useMonthlyCreditsCannotPay()).result.current.prefersFreeTierModels).toBe(false);
+  });
+});
+
+describe('one Free pool - monthly credits pay for free-tier chat', () => {
+  it('regression: a Free account with monthly credits and NO separate AI pot can chat on a free-tier model', () => {
+    // The retired AI pot is gone (aiBalance is always 0). Reading it here made every
+    // Free account look unable to chat although its monthly credits now pay for it.
+    balance.monthlyCreditsAreWorkflowOnly = true;
+    balance.paygBalance = 0;
+    balance.subBalance = 1000;
+    (balance as Record<string, unknown>).aiBalance = 0;
+
+    const { result } = renderHook(() => useMonthlyCreditsCannotPay());
+    expect(result.current.blockedForModel({ freeTierEnabled: true })).toBe(false);
+    expect(result.current.freeTierForModel({ freeTierEnabled: true })).toBe(true);
+    expect(result.current.blockedForModel({ freeTierEnabled: false })).toBe(true);
+  });
+
+  it('regression: once the month is spent a top-up still pays, but the model is no longer marked free', () => {
+    // The chip's tooltip says the MONTHLY credits pay for this model. Once they are
+    // spent a free-tier turn is paid from the top-up, which is real money: marking it
+    // "free" then was a false promise. It must stay usable (not blocked), just unmarked.
+    balance.monthlyCreditsAreWorkflowOnly = true;
+    balance.paygBalance = 40;
+    balance.subBalance = 0;
+
+    const { result } = renderHook(() => useMonthlyCreditsCannotPay());
+    expect(result.current.freeTierForModel({ freeTierEnabled: true })).toBe(false);
+    expect(result.current.blockedForModel({ freeTierEnabled: true })).toBe(false);
+  });
+
+  it('a top-up does not make a monthly debt look free', () => {
+    // A negative top-up (post-flight debt) is netted against the monthly credits by the
+    // server, so 0.5 monthly with -10 top-up covers nothing.
+    balance.monthlyCreditsAreWorkflowOnly = true;
+    balance.paygBalance = -10;
+    balance.subBalance = 5;
+
+    const { result } = renderHook(() => useMonthlyCreditsCannotPay());
+    expect(result.current.freeTierForModel({ freeTierEnabled: true })).toBe(false);
+    expect(result.current.blockedForModel({ freeTierEnabled: true })).toBe(true);
+  });
+
+  it('regression: less than one credit left is "cannot pay", matching the server threshold', () => {
+    // The server refuses a turn below one credit. Showing the model as free with 0.4
+    // left promised a turn the very next request refused.
+    balance.monthlyCreditsAreWorkflowOnly = true;
+    balance.paygBalance = 0;
+    balance.subBalance = 0.4;
+
+    const { result } = renderHook(() => useMonthlyCreditsCannotPay());
+    expect(result.current.freeTierForModel({ freeTierEnabled: true })).toBe(false);
+    expect(result.current.blockedForModel({ freeTierEnabled: true })).toBe(true);
+  });
+
+  it('exactly one credit left still pays', () => {
+    balance.monthlyCreditsAreWorkflowOnly = true;
+    balance.paygBalance = 0;
+    balance.subBalance = 1;
+
+    const { result } = renderHook(() => useMonthlyCreditsCannotPay());
+    expect(result.current.freeTierForModel({ freeTierEnabled: true })).toBe(true);
+    expect(result.current.blockedForModel({ freeTierEnabled: true })).toBe(false);
   });
 });
 
@@ -233,39 +296,40 @@ describe('freeTierForModel - which model is free RIGHT NOW', () => {
     return renderHook(() => useMonthlyCreditsCannotPay()).result.current.freeTierForModel(model);
   }
 
-  it('marks a covered model while the allowance still has something in it', () => {
+  it('marks a covered model while the monthly credits still have something in them', () => {
     balance.monthlyCreditsAreWorkflowOnly = true;
     balance.paygBalance = 0;
-    balance.aiBalance = 80;
+    balance.subBalance = 80;
 
     expect(verdictFor(covered)).toBe(true);
   });
 
-  it('regression: stops marking it the moment the allowance is spent', () => {
+  it('regression: stops marking it the moment the monthly credits are spent', () => {
     // The state every active free account reaches every month, and the reason this
     // question cannot be answered from the plan and the model's flag alone. Answered
     // that way, the row said "free" beside the lock that said the opposite, with a
-    // tooltip promising an allowance that had nothing left in it.
+    // tooltip promising credits that had nothing left in them.
     balance.monthlyCreditsAreWorkflowOnly = true;
     balance.paygBalance = 0;
-    balance.aiBalance = 0;
+    balance.subBalance = 0;
 
     expect(verdictFor(covered)).toBe(false);
   });
 
   it('regression: the two markers can never appear on the same row', () => {
     // The property, not an instance of it: whatever the balances, a model the chip
-    // marks is a model the lock does not, because both read one allowanceCanPay.
+    // marks is a model the lock does not, because the monthly credits the chip reads
+    // can never exceed the pool the lock reads.
     balance.monthlyCreditsAreWorkflowOnly = true;
-    for (const payg of [null, -5, 0, 500]) {
-      for (const ai of [null, 0, 80]) {
+    for (const payg of [null, -5, 0, 0.5, 500]) {
+      for (const monthly of [null, 0, 0.5, 1, 80]) {
         balance.paygBalance = payg;
-        balance.aiBalance = ai;
+        balance.subBalance = monthly;
         const { result } = renderHook(() => useMonthlyCreditsCannotPay());
         for (const model of [covered, uncovered]) {
           const free = result.current.freeTierForModel(model);
           const blocked = result.current.blockedForModel(model);
-          expect(free && blocked, `payg=${payg} ai=${ai} free=${free} blocked=${blocked}`).toBe(false);
+          expect(free && blocked, `payg=${payg} monthly=${monthly} free=${free} blocked=${blocked}`).toBe(false);
         }
       }
     }
@@ -274,7 +338,7 @@ describe('freeTierForModel - which model is free RIGHT NOW', () => {
   it('never marks a model the free tier was not opened to', () => {
     balance.monthlyCreditsAreWorkflowOnly = true;
     balance.paygBalance = 0;
-    balance.aiBalance = 80;
+    balance.subBalance = 80;
 
     expect(verdictFor(uncovered)).toBe(false);
   });
@@ -284,28 +348,28 @@ describe('freeTierForModel - which model is free RIGHT NOW', () => {
     // from CE. Reading absence as covered would promise a free turn on every model.
     balance.monthlyCreditsAreWorkflowOnly = true;
     balance.paygBalance = 0;
-    balance.aiBalance = 80;
+    balance.subBalance = 80;
 
     expect(verdictFor({})).toBe(false);
     expect(verdictFor(undefined)).toBe(false);
     expect(verdictFor(null)).toBe(false);
   });
 
-  it('marks nothing while the allowance is still in flight', () => {
+  it('marks nothing while the monthly balance is still in flight', () => {
     // Same "null is not empty" rule the lock follows, pointing the other way: a
     // promise of a free turn must not be made before what pays for it is known.
     balance.monthlyCreditsAreWorkflowOnly = true;
     balance.paygBalance = 0;
-    balance.aiBalance = null;
+    balance.subBalance = null;
 
     expect(verdictFor(covered)).toBe(false);
   });
 
   it('marks nothing for a paid account, or on CE', () => {
     // A subscriber's own credits pay for the model; telling them it is free is false,
-    // and CE has no allowance at all.
+    // and CE has no plans at all.
     balance.monthlyCreditsAreWorkflowOnly = false;
-    balance.aiBalance = 80;
+    balance.subBalance = 80;
     expect(verdictFor(covered)).toBe(false);
 
     edition.isCe = true;
@@ -319,7 +383,7 @@ describe('freeTierForModel - which model is free RIGHT NOW', () => {
     // decoration.
     balance.monthlyCreditsAreWorkflowOnly = true;
     balance.paygBalance = 0;
-    balance.aiBalance = 80;
+    balance.subBalance = 80;
 
     const { result, rerender } = renderHook(() => useMonthlyCreditsCannotPay());
     const first = result.current.freeTierForModel;

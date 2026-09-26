@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextIntlClientProvider } from 'next-intl';
 import messages from '@/messages/en.json';
 import type { DataTableProps } from '@/components/data-table/types';
+import { createViewConfig, getFixedColumns, getRowLevelExportFields } from '@/components/data-table/viewConfig';
 
 const { table, stepData, load } = vi.hoisted(() => ({ table: vi.fn(), stepData: vi.fn(), load: vi.fn() }));
 vi.mock('@/app/workflows/builder/hooks/useStepData', () => ({ useStepData: stepData }));
@@ -41,15 +42,22 @@ describe('workflow table navigation and identity', () => {
     expect(screen.getByRole('textbox')).toHaveValue('4711');
     expect(latest().rowFilter).not.toBeNull();
   });
-  it('keeps call identity at the root but does not substitute row counters for nested data IDs', () => {
+  it('keeps the #ID lane at the root AND inside input/output', () => {
+    // Regression: nested paths turned the lane off, so the id surfaced as a plain text column
+    // (or not at all when the item had no id). The lane shows the item's own id, else 1..N.
     mount();
     expect(latest().showIdColumn).toBe(true);
     cleanup();
     mount({ jsonPath: 'output.items' });
-    expect(latest().showIdColumn).toBe(false);
+    expect(latest().showIdColumn).toBe(true);
     expect(latest().jsonPath).toBe('output.items');
-    // A nested id is now a data column, so objects, zero and long strings use the normal renderer.
     expect(latest().workflowContext).toEqual(props);
+    // What the grid builds from those props: the pinned #ID lane, not a plain `id` data column,
+    // and the export writes the same id the lane shows.
+    const view = createViewConfig(latest().workflowContext, latest().showIdColumn, latest().jsonPath);
+    expect(view.idIsRowLevel).toBe(true);
+    expect(getFixedColumns(view)).toContain('id');
+    expect(getRowLevelExportFields(view)).toContain('id');
   });
 
   it.each([2, 0, null])('forwards the enclosing epoch %s without another epoch dropdown or all-epoch request', epoch => {
@@ -76,8 +84,8 @@ describe('workflow table navigation and identity', () => {
   });
 
   it('preserves explicit ID lane overrides for other callers', () => {
-    mount({ jsonPath: 'output.items', showIdColumn: true });
-    expect(latest().showIdColumn).toBe(true);
+    mount({ jsonPath: 'output.items', showIdColumn: false });
+    expect(latest().showIdColumn).toBe(false);
   });
 
   it('retains search over nested fields without dropping the selected epoch', () => {

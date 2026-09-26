@@ -7,6 +7,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -470,14 +472,102 @@ class CoreValidatorTest {
         }
 
         @Test
+        @DisplayName("A picked destination (an id, or default) needs no channel and raises nothing")
+        void pickedDestinationIsValid() {
+            ValidationResult byId = validate(Map.of("delegation",
+                Map.of("linkId", java.util.UUID.randomUUID().toString())));
+            ValidationResult byDefault = validate(Map.of("delegation", Map.of("linkId", "default")));
+
+            assertThat(byId.getErrors()).isEmpty();
+            assertThat(byId.getWarnings()).noneMatch(w -> w.code().startsWith("APPROVAL_DELEGATION"));
+            assertThat(byDefault.getErrors()).isEmpty();
+            assertThat(byDefault.getWarnings()).noneMatch(w -> w.code().startsWith("APPROVAL_DELEGATION"));
+        }
+
+        @Test
+        @DisplayName("A destination that is neither an id nor default is an ERROR, not silently the default")
+        void malformedDestinationIsError() {
+            ValidationResult result = validate(Map.of("delegation", Map.of("linkId", "finance chat")));
+
+            assertThat(result.getErrors()).anyMatch(e -> e.code().equals("APPROVAL_DELEGATION_INVALID_DESTINATION"));
+        }
+
+        @Test
+        @DisplayName("A picked destination with its own chatId is WARNED: the destination wins")
+        void destinationOverridesChat() {
+            ValidationResult result = validate(Map.of("delegation",
+                Map.of("linkId", "default", "chatId", "-100123")));
+
+            assertThat(result.getErrors()).isEmpty();
+            assertThat(result.getWarnings()).anyMatch(w -> w.code().equals("APPROVAL_DELEGATION_DESTINATION_OVERRIDES"));
+        }
+
+        @Test
+        @DisplayName("A picked destination with several approvers is WARNED like any delegated approval")
+        void destinationMultiApprovals() {
+            ValidationResult result = validate(Map.of("requiredApprovals", 2,
+                "delegation", Map.of("linkId", "default")));
+
+            assertThat(result.getWarnings()).anyMatch(w -> w.code().equals("APPROVAL_DELEGATION_MULTI_APPROVALS"));
+        }
+
+        @Test
         @DisplayName("Unknown channel is an ERROR (the approval would silently never reach any channel)")
         void unknownChannelIsError() {
             ValidationResult result = validate(Map.of(
                 "contextTemplate", "Approve?",
-                "delegation", Map.of("channel", "slack", "credentialId", 42, "chatId", "123")));
+                "delegation", Map.of("channel", "carrier-pigeon", "credentialId", 42, "chatId", "123")));
 
             assertThat(result.getErrors()).anyMatch(e ->
                 e.code().equals("APPROVAL_DELEGATION_UNKNOWN_CHANNEL"));
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @ValueSource(strings = {"slack", "discord", "whatsapp", "teams"})
+        @DisplayName("Every connector service is a known channel, clean with no chatId or credential (the connected destination is used)")
+        void connectorChannelsAreKnownAndNeedNoDestination(String channel) {
+            ValidationResult result = validate(Map.of(
+                "contextTemplate", "Approve?",
+                "delegation", Map.of("channel", channel)));
+
+            assertThat(result.getErrors()).noneMatch(e -> DELEGATION_CODES.contains(e.code()));
+            assertThat(result.getWarnings()).noneMatch(w -> DELEGATION_CODES.contains(w.code()));
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @ValueSource(strings = {"#ops", "@alice"})
+        @DisplayName("a Slack chat given by name warns: a press comes back with the channel ID")
+        void slackNameWarns(String named) {
+            ValidationResult result = validate(Map.of(
+                "contextTemplate", "Approve?",
+                "delegation", Map.of("channel", "slack", "chatId", named)));
+
+            assertThat(result.getWarnings()).anyMatch(w -> w.code().equals("APPROVAL_DELEGATION_CHAT_NAME"));
+            assertThat(validate(Map.of("contextTemplate", "Approve?",
+                "delegation", Map.of("channel", "slack", "chatId", "C0123"))).getWarnings())
+                .noneMatch(w -> w.code().equals("APPROVAL_DELEGATION_CHAT_NAME"));
+        }
+
+        @Test
+        @DisplayName("Teams with allowedUserIds warns: a link does not say who opened it, so every press would be refused")
+        void teamsAllowListIsFlagged() {
+            ValidationResult result = validate(Map.of(
+                "contextTemplate", "Approve?",
+                "delegation", Map.of("channel", "teams", "allowedUserIds", List.of("u1"))));
+
+            assertThat(result.getWarnings()).anyMatch(w ->
+                w.code().equals("APPROVAL_DELEGATION_ALLOWLIST_UNENFORCEABLE"));
+        }
+
+        @Test
+        @DisplayName("A connector service with a non-numeric credentialId still warns")
+        void connectorChannelWithBadCredentialWarns() {
+            ValidationResult result = validate(Map.of(
+                "contextTemplate", "Approve?",
+                "delegation", Map.of("channel", "slack", "credentialId", "my-slack")));
+
+            assertThat(result.getWarnings()).anyMatch(w ->
+                w.code().equals("APPROVAL_DELEGATION_INVALID_CREDENTIAL"));
         }
 
         @Test
@@ -495,13 +585,13 @@ class CoreValidatorTest {
         }
 
         @Test
-        @DisplayName("Telegram without a chatId is a WARNING")
-        void missingChatIdIsWarning() {
+        @DisplayName("Telegram without a chatId is clean: the workspace's connected Telegram destination is used")
+        void missingChatIdIsClean() {
             ValidationResult result = validate(Map.of(
                 "contextTemplate", "Approve?",
                 "delegation", Map.of("channel", "telegram", "credentialId", 42)));
 
-            assertThat(result.getWarnings()).anyMatch(w ->
+            assertThat(result.getWarnings()).noneMatch(w ->
                 w.code().equals("APPROVAL_DELEGATION_NO_CHAT_ID"));
         }
 

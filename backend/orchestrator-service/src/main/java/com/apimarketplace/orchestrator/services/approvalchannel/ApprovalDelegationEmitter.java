@@ -53,19 +53,22 @@ public class ApprovalDelegationEmitter {
     private final ApprovalChannelDeliveryRepository deliveryRepository;
     private final ApprovalChannelNotifierRegistry registry;
     private final MeterRegistry meterRegistry;
+    private final com.apimarketplace.orchestrator.services.channel.ChatChannelService channelService;
 
     public ApprovalDelegationEmitter(SignalWaitRepository signalWaitRepository,
                                      WorkflowRunRepository workflowRunRepository,
                                      WorkflowRepository workflowRepository,
                                      ApprovalChannelDeliveryRepository deliveryRepository,
                                      ApprovalChannelNotifierRegistry registry,
-                                     MeterRegistry meterRegistry) {
+                                     MeterRegistry meterRegistry,
+                                     com.apimarketplace.orchestrator.services.channel.ChatChannelService channelService) {
         this.signalWaitRepository = signalWaitRepository;
         this.workflowRunRepository = workflowRunRepository;
         this.workflowRepository = workflowRepository;
         this.deliveryRepository = deliveryRepository;
         this.registry = registry;
         this.meterRegistry = meterRegistry;
+        this.channelService = channelService;
     }
 
     /**
@@ -84,6 +87,26 @@ public class ApprovalDelegationEmitter {
             ApprovalDelegationConfig config = ApprovalDelegationConfig.fromSignalConfig(signal.getSignalConfig());
             if (config == null) {
                 return;
+            }
+            if (config.usesDestination()) {
+                // A picked destination decides the service: route through its notifier, whatever
+                // service the node recorded when it was edited (the default may have moved since).
+                String orgId = workflowRunRepository.findByRunIdPublic(signal.getRunId())
+                        .map(WorkflowRunEntity::getOrgId).orElse(null);
+                var target = config.destinationIsMalformed() ? java.util.Optional.<com.apimarketplace.orchestrator
+                        .services.channel.ChatChannelService.ResolvedTarget>empty()
+                        : channelService.resolveFor(orgId, config.destinationId());
+                if (target.isPresent()) {
+                    config = config.withChannel(target.get().channel());
+                } else if (config.channel().isBlank()) {
+                    // Gone, and no service to record the failure under: the approval stays in-app.
+                    meterRegistry.counter("approval.delegation.errors", "type", "DestinationGone").increment();
+                    logger.warn("[approval-delegation] destination '{}' is not connected in this workspace "
+                            + "(signal {}); decide in the app", config.linkId(), signal.getId());
+                    return;
+                }
+                // Otherwise the node's service reports it: its notifier records a failed delivery
+                // saying the destination is gone, which the run shows.
             }
             Optional<ApprovalChannelNotifier> notifier = registry.forChannel(config.channel());
             if (notifier.isEmpty()) {
@@ -106,8 +129,9 @@ public class ApprovalDelegationEmitter {
             // fallback would resolve only PERSONAL credentials, silently missing an
             // org-shared Telegram credential on a workspace run. Null orgId = personal
             // scope (clean no-op binding).
+            ApprovalDelegationConfig routed = config;
             TenantResolver.runWithOrgScope(run.getOrgId(),
-                    () -> notifier.get().notifyPending(signal, config, run, workflowName));
+                    () -> notifier.get().notifyPending(signal, routed, run, workflowName));
         } catch (Exception ex) {
             meterRegistry.counter("approval.delegation.errors",
                     "type", ex.getClass().getSimpleName()).increment();

@@ -132,3 +132,11 @@ describe('AUTO_OPEN_TYPES', () => {
     expect(AUTO_OPEN_TYPES).not.toContain('web_search');
   });
 });
+
+describe('AUTO_OPEN_TYPES - workflow(action=present)', () => {
+  it('auto-opens every view the agent can present', () => {
+    for (const type of ['present_application', 'present_table', 'present_workflow', 'present_interface', 'present_agent', 'present_file']) {
+      expect(AUTO_OPEN_TYPES).toContain(type);
+    }
+  });
+});

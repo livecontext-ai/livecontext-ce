@@ -15,7 +15,7 @@
  *     fails on that implementation.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import { invalidateCredentialCaches } from '../invalidateCredentialCaches';
 
 describe('invalidateCredentialCaches', () => {
@@ -53,5 +53,25 @@ describe('invalidateCredentialCaches', () => {
     expect(allFn).toHaveBeenCalledTimes(2);
     // ...and the unrelated query was not touched.
     expect(unrelatedFn).toHaveBeenCalledTimes(1);
+  });
+  it('also refreshes the ON-SCREEN setup checklist, since saving a credential is how "connect an app" gets done', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const current = vi.fn(async () => true);
+    const otherWorkspace = vi.fn(async () => true);
+    const observer = new QueryObserver(client, {
+      queryKey: ['org', 'org-1', 'setup-checklist', 'integration'],
+      queryFn: current,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    await vi.waitFor(() => expect(current).toHaveBeenCalledTimes(1));
+    await client.prefetchQuery({ queryKey: ['org', 'org-2', 'setup-checklist', 'integration'], queryFn: otherWorkspace });
+
+    await invalidateCredentialCaches(client);
+
+    expect(current).toHaveBeenCalledTimes(2);
+    // Another workspace's cached checklist is left alone: re-read now it would go out under the
+    // CURRENT workspace's header and file this workspace's answer under that one's key.
+    expect(otherWorkspace).toHaveBeenCalledTimes(1);
+    unsubscribe();
   });
 });

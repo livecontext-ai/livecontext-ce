@@ -327,7 +327,7 @@ public interface WorkflowStepDataRepository extends JpaRepository<WorkflowStepDa
                node_type, condition_expression, condition_result, selected_branch,
                loop_id, loop_iteration, loop_exit_reason,
                merge_strategy, NULL as merge_received_branches, NULL as merge_skipped_branches,
-               item_id, trigger_id, skip_reason, skip_source_node, normalized_key, item_number
+               item_id, trigger_id, skip_reason, skip_source_node, normalized_key, item_number, is_mocked
         FROM workflow_step_data
         WHERE workflow_run_id = :workflowRunId
         ORDER BY id ASC
@@ -647,7 +647,7 @@ public interface WorkflowStepDataRepository extends JpaRepository<WorkflowStepDa
                node_type, condition_expression, condition_result, selected_branch,
                loop_id, loop_iteration, loop_exit_reason,
                merge_strategy, NULL as merge_received_branches, NULL as merge_skipped_branches,
-               item_id, trigger_id, skip_reason, skip_source_node, normalized_key, item_number
+               item_id, trigger_id, skip_reason, skip_source_node, normalized_key, item_number, is_mocked
         FROM workflow_step_data
         WHERE workflow_run_id = :workflowRunId
         ORDER BY step_alias, id DESC
@@ -673,7 +673,7 @@ public interface WorkflowStepDataRepository extends JpaRepository<WorkflowStepDa
                node_type, condition_expression, condition_result, selected_branch,
                loop_id, loop_iteration, loop_exit_reason,
                merge_strategy, NULL as merge_received_branches, NULL as merge_skipped_branches,
-               item_id, trigger_id, skip_reason, skip_source_node, normalized_key, item_number
+               item_id, trigger_id, skip_reason, skip_source_node, normalized_key, item_number, is_mocked
         FROM workflow_step_data
         WHERE workflow_run_id = :workflowRunId AND epoch = :epoch
         ORDER BY step_alias, id DESC

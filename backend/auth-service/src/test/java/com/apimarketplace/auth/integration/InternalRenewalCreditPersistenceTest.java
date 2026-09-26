@@ -58,7 +58,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest
 @DisplayName("Internal monthly renewal - the granted credits survive (real Postgres)")
-class InternalRenewalCreditPersistenceTest extends AuthPostgresIntegrationTest {
+class InternalRenewalCreditPersistenceTest extends AuthScratchPostgresSpringTest {
 
 
     @Autowired private FreeSubscriptionRenewalScheduler scheduler;

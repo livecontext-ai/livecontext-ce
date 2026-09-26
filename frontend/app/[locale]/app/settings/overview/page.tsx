@@ -17,11 +17,12 @@ import { OverviewPageSkeleton } from "@/components/skeletons";
 import { ScheduledChangeAlert } from "@/components/billing";
 import { PublicProfileSettingsCard } from "@/components/profile/PublicProfileSettingsCard";
 import { BadgeCollection } from "@/components/badges/BadgeCollection";
+import { NotificationPreferencesPanel } from "@/components/settings/NotificationPreferencesPanel";
+import { MarketingConsentSetting } from "@/components/settings/MarketingConsentSetting";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -53,24 +54,22 @@ import {
   Pencil,
   Check,
   X,
-  Info,
   CheckCircle2,
   ChevronRight,
   Trophy,
 } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { InfoPopover } from "@/components/ui/info-popover";
 import { AvatarGallery } from "@/components/settings/AvatarGallery";
 import { unifiedApiService } from "@/lib/api/unified-api-service";
-import { IS_CLOUD } from "@/lib/edition";
+import { IS_CE, IS_CLOUD } from "@/lib/edition";
+import { reportExplicitLocaleChoice } from "@/lib/lifecycle/localeChoice";
 import { embeddedChangePassword } from "@/lib/providers/embedded-auth-provider";
 import { evaluatePasswordChange } from "@/lib/auth/changePasswordOutcome";
-import { isFederatedAccount } from "@/lib/utils/userUtils";
+import { isFederatedAccount, isOrganizationSamlAccount, securityTabSections } from "@/lib/utils/userUtils";
+import { TwoFactorSettingsCard } from "@/components/settings/TwoFactorSettingsCard";
 
 interface Preferences {
   language: string;
-  emailNotifications: boolean;
-  pushNotifications: boolean;
-  marketingEmails: boolean;
 }
 
 /**
@@ -174,9 +173,6 @@ export default function SettingsOverviewPage() {
 
   const [preferences, setPreferences] = useState<Preferences>({
     language: currentLocale,
-    emailNotifications: true,
-    pushNotifications: false,
-    marketingEmails: false,
   });
 
   // Sync language preference when locale changes
@@ -287,12 +283,16 @@ export default function SettingsOverviewPage() {
   // Federated accounts (social login OR org SAML/SSO) manage their password at the
   // upstream provider, so the local Security/password tab doesn't apply to them.
   const isExternalAccount = isFederatedAccount(user);
+  // Password block and/or two-factor card (see securityTabSections for who gets which).
+  const securitySections = securityTabSections(user, IS_CLOUD);
+  const showTwoFactor = securitySections.twoFactor;
+  const showSecurityTab = securitySections.show;
 
   const tabs = [
     { id: "profile", label: t('tabs.profile'), icon: User },
-    ...(isExternalAccount
-      ? []
-      : [{ id: "security", label: t('tabs.security'), icon: Shield }]),
+    ...(showSecurityTab
+      ? [{ id: "security", label: t('tabs.security'), icon: Shield }]
+      : []),
     { id: "trophies", label: t('tabs.trophies'), icon: Trophy },
     { id: "preferences", label: t('tabs.preferences'), icon: Palette },
     { id: "notifications", label: t('tabs.notifications'), icon: Bell },
@@ -489,20 +489,11 @@ export default function SettingsOverviewPage() {
                   <div className="space-y-2">
                     <div className="flex items-center gap-1.5">
                       <Label>{t('profile.displayName')}</Label>
-                      <TooltipProvider delayDuration={0}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs">
-                            <p className="text-xs">
-                              {!canChangeDisplayName && nextChangeDate
-                                ? t('profile.displayNameCooldownMessage', { date: formatUtcDate(nextChangeDate) })
-                                : t('profile.displayNameCooldownInfo')}
-                            </p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
+                      <InfoPopover label={t('profile.displayName')}>
+                        {!canChangeDisplayName && nextChangeDate
+                          ? t('profile.displayNameCooldownMessage', { date: formatUtcDate(nextChangeDate) })
+                          : t('profile.displayNameCooldownInfo')}
+                      </InfoPopover>
                     </div>
                     {displayNameEditing ? (
                       <div className="space-y-2">
@@ -607,7 +598,9 @@ export default function SettingsOverviewPage() {
                             ? "Microsoft"
                             : user?.identity_provider === 'facebook'
                               ? "Facebook"
-                              : t('profile.localAccount')}
+                              : isOrganizationSamlAccount(user)
+                                ? t('profile.ssoAccount')
+                                : t('profile.localAccount')}
                       disabled
                       className="bg-muted/30 disabled:opacity-100 disabled:cursor-default disabled:text-foreground"
                     />
@@ -621,9 +614,12 @@ export default function SettingsOverviewPage() {
           </TabsContent>
 
           {/* Security Tab */}
-          {!isExternalAccount && (
+          {showSecurityTab && (
             <TabsContent value="security" className="space-y-6">
               <div className="space-y-6">
+                {/* The header titles the password block ("Change Password"), so a social
+                    account, whose tab holds only the two-factor card, does not get it. */}
+                {!isExternalAccount && (
                 <div className="flex items-center space-x-3">
                   <div className="w-10 h-10 bg-theme-secondary rounded-xl flex items-center justify-center">
                     <Shield className="w-5 h-5 text-theme-primary" />
@@ -633,11 +629,12 @@ export default function SettingsOverviewPage() {
                     <p className="text-sm text-theme-secondary">{t('security.description')}</p>
                   </div>
                 </div>
+                )}
 
                 {/* Cloud (Keycloak) owns the password - redirect to the
                     kc_action=UPDATE_PASSWORD Application-Initiated Action. CE wires the
                     form below to POST /api/auth/change-password. */}
-                {IS_CLOUD ? (
+                {isExternalAccount ? null : IS_CLOUD ? (
                   <div className="rounded-lg border border-theme bg-theme-tertiary p-6 space-y-4">
                     <p className="text-sm text-theme-secondary">{t('security.cloudManagedDescription')}</p>
                     <Button
@@ -773,6 +770,8 @@ export default function SettingsOverviewPage() {
                   </div>
                 </form>
                 )}
+
+                {showTwoFactor && <TwoFactorSettingsCard standalone={isExternalAccount} />}
               </div>
             </TabsContent>
           )}
@@ -813,6 +812,8 @@ export default function SettingsOverviewPage() {
                       setPreferences({ ...preferences, language: value });
                       // Persist language preference in cookie (1 year)
                       document.cookie = `NEXT_LOCALE=${value}; path=/; max-age=31536000; SameSite=Lax`;
+                      // Best-effort, never awaited: the switch must not wait on or fail because of it.
+                      reportExplicitLocaleChoice(value);
                       // Navigate to the new locale path, preserving tab parameter
                       const tab = searchParams.get('tab');
                       const path = tab ? `${pathname}?tab=${tab}` : pathname;
@@ -1009,11 +1010,10 @@ export default function SettingsOverviewPage() {
                 </div>
               </div>
 
-              {/* Chat defaults - V312 per-(user, workspace) chat options. The EDITOR now lives
-                  in Settings > Agents & Chat (and the Agents page "Settings" tab), with the
-                  agents it configures, rather than as a third copy of the same panel here. This
-                  row is the signpost for anyone who still looks for it under Preferences; it
-                  reads the same /v3/chat/defaults store on the other side. */}
+              {/* Chat defaults - V312 per-(user, workspace) chat options. The EDITOR lives only
+                  on the Agents page "Settings" tab, with the agents it configures. This row is
+                  the signpost for anyone who still looks for it under Preferences; it reads the
+                  same /v3/chat/defaults store on the other side. */}
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
                 <div className="flex items-center space-x-3">
                   <div className="w-10 h-10 rounded-xl bg-theme-secondary flex items-center justify-center">
@@ -1025,7 +1025,7 @@ export default function SettingsOverviewPage() {
                   </div>
                 </div>
                 <Link
-                  href="/app/settings/agents"
+                  href="/app/agent?view=settings"
                   className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--accent-primary)] hover:underline whitespace-nowrap"
                 >
                   {t('preferences.chatDefaultsLink')}
@@ -1037,87 +1037,9 @@ export default function SettingsOverviewPage() {
 
           {/* Notifications Tab */}
           <TabsContent value="notifications" className="space-y-6">
-            <div className="space-y-6">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-theme-secondary rounded-xl flex items-center justify-center">
-                  <Bell className="w-5 h-5 text-theme-primary" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-lg font-semibold text-theme-primary">{t('notifications.title')}</h3>
-                    <span className="text-xs font-medium px-2 py-0.5 rounded-md bg-theme-tertiary text-theme-secondary">
-                      {t('notifications.comingSoon')}
-                    </span>
-                  </div>
-                  <p className="text-sm text-theme-secondary">{t('notifications.description')}</p>
-                </div>
-              </div>
-
-              {/* These toggles are not wired to any backend yet (no persistence). Disabled
-                  by default so they don't mislead the user into thinking a choice was saved. */}
-              <div className="space-y-6 opacity-60">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="font-medium text-theme-primary">
-                      {t('notifications.email')}
-                    </h4>
-                    <p className="text-sm text-theme-secondary">
-                      {t('notifications.emailDescription')}
-                    </p>
-                  </div>
-                  <Switch
-                    disabled
-                    checked={preferences.emailNotifications}
-                    onCheckedChange={(checked) =>
-                      setPreferences({
-                        ...preferences,
-                        emailNotifications: checked,
-                      })
-                    }
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="font-medium text-theme-primary">
-                      {t('notifications.push')}
-                    </h4>
-                    <p className="text-sm text-theme-secondary">
-                      {t('notifications.pushDescription')}
-                    </p>
-                  </div>
-                  <Switch
-                    disabled
-                    checked={preferences.pushNotifications}
-                    onCheckedChange={(checked) =>
-                      setPreferences({
-                        ...preferences,
-                        pushNotifications: checked,
-                      })
-                    }
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="font-medium text-theme-primary">
-                      {t('notifications.marketing')}
-                    </h4>
-                    <p className="text-sm text-theme-secondary">
-                      {t('notifications.marketingDescription')}
-                    </p>
-                  </div>
-                  <Switch
-                    disabled
-                    checked={preferences.marketingEmails}
-                    onCheckedChange={(checked) =>
-                      setPreferences({
-                        ...preferences,
-                        marketingEmails: checked,
-                      })
-                    }
-                  />
-                </div>
-              </div>
-            </div>
+            {/* The cloud lifecycle e-mails opt-in (marketing consent), then where each alert goes. */}
+            {!IS_CE && <MarketingConsentSetting />}
+            <NotificationPreferencesPanel enabled={activeTab === "notifications"} />
           </TabsContent>
 
           {/* Advanced Tab */}

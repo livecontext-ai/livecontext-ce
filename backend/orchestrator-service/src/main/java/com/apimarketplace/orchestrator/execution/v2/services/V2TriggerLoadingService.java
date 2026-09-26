@@ -58,6 +58,17 @@ public class V2TriggerLoadingService {
         log.info("[V2TriggerLoading] Loading trigger items: runId={}, triggerId={}, nodeId={}, tenantId={}, triggerType={}",
             runId, trigger.id(), nodeId, tenantId, trigger.type());
 
+        // Every TriggerType has a resolver, so a type without one is a misconfigured plan (a
+        // typo, or 'table' where the engine expects 'datasource'). It has no items to load:
+        // cache the same empty list the old caught "Unsupported trigger type" exception
+        // produced, and say so once at WARN, without the ERROR + stack trace.
+        if (!triggerResolverService.supportsTriggerType(trigger.type())) {
+            log.warn("[V2TriggerLoading] No resolver for trigger type '{}' (trigger={}) - loading no items for runId={}",
+                trigger.type(), trigger.id(), runId);
+            contextManager.cacheTriggerItems(runId, new ArrayList<>());
+            return;
+        }
+
         try {
             // Get chat trigger input if available (for chat triggers)
             Map<String, Object> resolvedInputs = Map.of();

@@ -38,8 +38,10 @@ public final class WorkflowBuilderActionConfig {
             // impossible as soon as an application is loaded), and NOT in READ_ONLY_ACTIONS
             // (it has real side effects).
             "run_node",
-            // Visualization & validation
-            "describe", "validate", "search",
+            // Visualization & validation. `present` switches the user's view (Application
+            // tab of a run, a table); it changes nothing, and it is NOT read-only on
+            // purpose: READ_ONLY_ACTIONS strips the visualization it exists to emit.
+            "describe", "validate", "search", "present",
             // Connections
             "connect", "disconnect",
             // Modification
@@ -107,18 +109,32 @@ public final class WorkflowBuilderActionConfig {
     /**
      * Actions that modify the workflow state and trigger auto-save.
      *
-     * <p>Note: this set is the auto-save trigger set, NOT the immutability gate.
-     * It intentionally includes {@code read_rows} and {@code find_rows} because
-     * those route through {@code WorkflowBuilderTableOperations} which historically
-     * touches session state (cursor tracking, last-query memo). Do not reuse this
-     * set for the APPLICATION immutability gate - use {@link #PLAN_MUTATING_ACTIONS}
-     * instead, which excludes pure reads.
+     * <p>Note: this set is the auto-save trigger set, NOT the immutability gate
+     * ({@link #PLAN_MUTATING_ACTIONS}). Despite their names, {@code read_rows} and
+     * {@code find_rows} belong here: like the other row actions they ADD a table node
+     * to the workflow (a read-row / find-rows step), so the plan changes and must be
+     * saved.
      */
     public static final Set<String> MODIFYING_ACTIONS = Set.of(
             "add_node",
             "insert_row", "read_rows", "update_row", "delete_row", "find_rows",
             "connect", "disconnect", "modify", "remove", "undo", "set_plan"
     );
+
+    /**
+     * Actions after which the session writes its copy of the plan to the stored
+     * workflow: every auto-saved action plus the explicit saves. Before any of them
+     * runs, {@code WorkflowBuilderLoader.resyncWithStoredPlan} rebuilds the session
+     * from the stored plan if someone else saved it since the session last did, so
+     * that write never undoes their save.
+     */
+    public static final Set<String> RESYNC_BEFORE_WRITE_ACTIONS = buildResyncBeforeWriteActions();
+
+    private static Set<String> buildResyncBeforeWriteActions() {
+        Set<String> actions = new HashSet<>(MODIFYING_ACTIONS);
+        actions.addAll(Set.of("save", "finish", "create"));
+        return Set.copyOf(actions);
+    }
 
     /**
      * Actions that mutate a loaded workflow's plan (or its referenced table rows).

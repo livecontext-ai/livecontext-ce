@@ -659,6 +659,118 @@ class FilesToolsProviderTest {
         }
     }
 
+    // ==================== present ====================
+
+    @Nested
+    @DisplayName("present")
+    class PresentAction {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> viz(ToolExecutionResult r) {
+            return (Map<String, Object>) r.metadata().get("visualization");
+        }
+
+        @Test
+        @DisplayName("emits present_file named after the file, and no content, url or storage key")
+        void presentsFile() {
+            StorageEntity e = entity("S3_FILE");
+            e.setS3Key("tenant/secret-bucket/leak-key.bin");
+            when(storageService.getEntityByIdForScope(e.getId(), TENANT, ORG)).thenReturn(Optional.of(e));
+
+            ToolExecutionResult r = provider.execute("files",
+                    Map.of("action", "present", "file_id", e.getId().toString()), ctx(TENANT, ORG));
+
+            assertThat(r.success()).isTrue();
+            assertThat(viz(r)).containsEntry("type", "present_file")
+                    .containsEntry("id", e.getId().toString()).containsEntry("title", "report.txt");
+            assertThat(data(r)).containsEntry("presented", "file").containsEntry("file_id", e.getId().toString());
+            assertThat(r.toString()).doesNotContain("secret-bucket");
+        }
+
+        @Test
+        @DisplayName("a member denied the file gets NOT_FOUND and the storage row is never read")
+        void memberDeniedIsNotFound() {
+            UUID id = UUID.randomUUID();
+            when(orgAccessGuard.canAccess(ORG, TENANT, "file", id.toString(), "MEMBER")).thenReturn(false);
+
+            ToolExecutionResult r = provider.execute("files",
+                    Map.of("action", "present", "file_id", id.toString()), ctx(TENANT, ORG, "MEMBER"));
+
+            assertThat(r.errorCode()).isEqualTo(ToolErrorCode.RESOURCE_NOT_FOUND);
+            verify(storageService, never()).getEntityByIdForScope(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("an agent scoped to other files gets NOT_FOUND, like get")
+        void outsideAllowListIsNotFound() {
+            UUID id = UUID.randomUUID();
+
+            ToolExecutionResult r = provider.execute("files", Map.of("action", "present", "file_id", id.toString()),
+                    ctxAllowed(TENANT, ORG, null, List.of(UUID.randomUUID().toString())));
+
+            assertThat(r.errorCode()).isEqualTo(ToolErrorCode.RESOURCE_NOT_FOUND);
+            verify(storageService, never()).getEntityByIdForScope(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("an EMPTY file allow-list is unrestricted, as for every other files action")
+        void emptyAllowListIsUnrestricted() {
+            StorageEntity e = entity("S3_FILE");
+            when(storageService.getEntityByIdForScope(e.getId(), TENANT, ORG)).thenReturn(Optional.of(e));
+
+            ToolExecutionResult r = provider.execute("files", Map.of("action", "present", "file_id", e.getId().toString()),
+                    ctxAllowed(TENANT, ORG, null, List.of()));
+
+            assertThat(r.success()).isTrue();
+        }
+
+        @Test
+        @DisplayName("a step-output row (no file name) or an unknown id is NOT_FOUND, never a green switch")
+        void nonBrowsableIsNotFound() {
+            StorageEntity blob = entity("JSON");
+            blob.setFileName(null);
+            when(storageService.getEntityByIdForScope(blob.getId(), TENANT, ORG)).thenReturn(Optional.of(blob));
+            UUID unknown = UUID.randomUUID();
+            when(storageService.getEntityByIdForScope(unknown, TENANT, ORG)).thenReturn(Optional.empty());
+
+            assertThat(provider.execute("files", Map.of("action", "present", "file_id", blob.getId().toString()),
+                    ctx(TENANT, ORG)).errorCode()).isEqualTo(ToolErrorCode.RESOURCE_NOT_FOUND);
+            assertThat(provider.execute("files", Map.of("action", "present", "file_id", unknown.toString()),
+                    ctx(TENANT, ORG)).errorCode()).isEqualTo(ToolErrorCode.RESOURCE_NOT_FOUND);
+        }
+
+        @Test
+        @DisplayName("the agent's title wins over the file name")
+        void titleOverride() {
+            StorageEntity e = entity("S3_FILE");
+            when(storageService.getEntityByIdForScope(e.getId(), TENANT, ORG)).thenReturn(Optional.of(e));
+
+            ToolExecutionResult r = provider.execute("files",
+                    Map.of("action", "present", "file_id", e.getId().toString(), "title", "Your report"), ctx(TENANT, ORG));
+
+            assertThat(viz(r)).containsEntry("title", "Your report");
+        }
+
+        @Test
+        @DisplayName("file_id is required")
+        void requiresFileId() {
+            assertThat(provider.execute("files", Map.of("action", "present"), ctx(TENANT, ORG)).errorCode())
+                    .isEqualTo(ToolErrorCode.MISSING_PARAMETER);
+        }
+
+        @Test
+        @DisplayName("a read-only file agent may present: it changes nothing")
+        void readOnlyMayPresent() {
+            StorageEntity e = entity("S3_FILE");
+            when(storageService.getEntityByIdForScope(e.getId(), TENANT, ORG)).thenReturn(Optional.of(e));
+            ToolExecutionContext readOnly = new ToolExecutionContext(TENANT, Map.of("fileAccessMode", "read"),
+                    Map.of(), Set.of(), null, null, ORG, null);
+
+            assertThat(provider.execute("files", Map.of("action", "present", "file_id", e.getId().toString()), readOnly)
+                    .success()).isTrue();
+        }
+    }
+
     // ==================== visualize ====================
 
     @Nested

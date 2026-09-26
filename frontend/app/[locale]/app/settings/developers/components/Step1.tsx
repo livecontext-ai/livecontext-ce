@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, X, Settings, Tag, Info, Zap, CheckCircle, AlertCircle } from 'lucide-react';
+import { Plus, X, Settings, Tag, Zap, CheckCircle, AlertCircle } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { Button } from '@/components/ui/button';
 import { Step1Props, McpTool } from '../types';
 import { useTranslations } from 'next-intl';
@@ -15,8 +16,7 @@ import {
     FormTextarea,
     RichTextarea,
     FormGrid,
-    ActionButton,
-    InfoBox
+    ActionButton
 } from './common';
 
 const Step1: React.FC<Step1Props> = React.memo(({
@@ -49,7 +49,6 @@ const Step1: React.FC<Step1Props> = React.memo(({
     const [newCategory, setNewCategory] = useState('');
     const [showNewSubcategoryForm, setShowNewSubcategoryForm] = useState(false);
     const [newSubcategory, setNewSubcategory] = useState('');
-    const [showCategoriesInfo, setShowCategoriesInfo] = useState(false);
     const [showTemplateSelector, setShowTemplateSelector] = useState(false);
 
     // Use props for validation state instead of local state
@@ -313,28 +312,16 @@ const Step1: React.FC<Step1Props> = React.memo(({
                 onToggle={() => toggleSection('categories')}
             >
                 <div className="flex items-center justify-between mb-6">
-                    <button
-                        type="button"
-                        onClick={() => setShowCategoriesInfo(!showCategoriesInfo)}
-                        className="text-theme-muted hover:text-theme-primary transition-colors"
-                    >
-                        <Info className="w-5 h-5" />
-                    </button>
+                    <InfoPopover label={t('category.infoTitle')} size="lg" side="bottom" align="start" contentClassName="w-96">
+                      <p className="mb-2 font-medium text-theme-primary">{t('category.infoTitle')}</p>
+                      <p className="text-theme-secondary mb-4">
+                          {t('category.infoText1')}
+                      </p>
+                      <p>
+                          {t('category.infoText2')}
+                      </p>
+                    </InfoPopover>
                 </div>
-
-                {showCategoriesInfo && (
-                    <InfoBox
-                        type="info"
-                        title={t('category.infoTitle')}
-                    >
-                        <p className="text-theme-secondary mb-4">
-                            {t('category.infoText1')}
-                        </p>
-                        <p>
-                            {t('category.infoText2')}
-                        </p>
-                    </InfoBox>
-                )}
 
                 {/* Main category */}
                 <div className="mt-4">

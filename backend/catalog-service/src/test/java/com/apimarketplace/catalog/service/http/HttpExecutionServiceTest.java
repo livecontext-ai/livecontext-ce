@@ -737,6 +737,118 @@ class HttpExecutionServiceTest {
         }
 
         @Test
+        @DisplayName("a DECLARED Accept overrides the preset Accept: application/json (Heroku 400 missing_version, Recurly 406 invalid_api_version)")
+        void declaredAcceptOverridesThePreset() {
+            ApiToolEntity tool = createTestTool("/accounts");
+            ApiToolParameterEntity accept = new ApiToolParameterEntity();
+            accept.setName("Accept"); accept.setParameterType("header"); accept.setDataType("string");
+            accept.setDefaultValue("application/vnd.recurly.v2021-02-25");
+            when(apiToolParameterRepository.findByApiToolId(tool.getId())).thenReturn(List.of(accept));
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("Accept", "application/json"); // exactly what prepareHeadersWithCredentials presets
+
+            service.applyHeaderParameters(headers, tool, objectMapper.createArrayNode());
+
+            assertEquals("application/vnd.recurly.v2021-02-25", headers.getFirst("Accept"),
+                "the catalog declaration is the provider's requirement and must outrank our preset");
+            assertEquals(1, headers.get("Accept").size(),
+                "it must REPLACE the preset, not append - a second value would send 'application/json, ...' and Recurly rejects that too");
+        }
+
+        @Test
+        @DisplayName("a declared Content-Type default does NOT override the preset (the body branches own Content-Type)")
+        void declaredContentTypeDoesNotOverrideThePreset() {
+            ApiToolEntity tool = createTestTool("/items");
+            ApiToolParameterEntity ct = new ApiToolParameterEntity();
+            ct.setName("Content-Type"); ct.setParameterType("header"); ct.setDataType("string");
+            ct.setDefaultValue("application/vnd.api+json");
+            when(apiToolParameterRepository.findByApiToolId(tool.getId())).thenReturn(List.of(ct));
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("Content-Type", "application/json");
+
+            service.applyHeaderParameters(headers, tool, objectMapper.createArrayNode());
+
+            assertEquals("application/json", headers.getFirst("Content-Type"),
+                "Content-Type is set per bodyType AFTER this method runs; letting a default win here would fight that");
+        }
+
+        @Test
+        @DisplayName("an auth header already present is still never overridden by a declared default of the same name")
+        void authHeaderStillWinsOverDeclaredDefault() {
+            ApiToolEntity tool = createTestTool("/items");
+            ApiToolParameterEntity auth = new ApiToolParameterEntity();
+            auth.setName("Authorization"); auth.setParameterType("header"); auth.setDataType("string");
+            auth.setDefaultValue("Bearer from-the-catalog");
+            when(apiToolParameterRepository.findByApiToolId(tool.getId())).thenReturn(List.of(auth));
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", "Bearer real-user-token");
+
+            service.applyHeaderParameters(headers, tool, objectMapper.createArrayNode());
+
+            assertEquals("Bearer real-user-token", headers.getFirst("Authorization"),
+                "widening the guard must not let a catalog default shadow the resolved credential");
+        }
+
+        @Test
+        @DisplayName("a bodyless request drops Content-Type (tinybird 400 \"invalid JSON line 1, column 1\")")
+        void bodylessRequestDropsContentType() {
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("Content-Type", "application/json");
+            headers.add("Accept", "application/json");
+            headers.add("Authorization", "Bearer x");
+
+            HttpExecutionService.dropContentTypeWhenBodyless(headers, null);
+
+            assertNull(headers.getFirst("Content-Type"),
+                "a GET declares a JSON body it does not have, and some providers try to parse it");
+            assertEquals("application/json", headers.getFirst("Accept"), "only Content-Type goes");
+            assertEquals("Bearer x", headers.getFirst("Authorization"), "the credential stays");
+        }
+
+        @Test
+        @DisplayName("a request WITH a body keeps its Content-Type (60 DELETE endpoints send one)")
+        void bodiedRequestKeepsContentType() {
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("Content-Type", "application/json");
+
+            HttpExecutionService.dropContentTypeWhenBodyless(headers, java.util.Map.of("id", "1"));
+
+            assertEquals("application/json", headers.getFirst("Content-Type"),
+                "prepareRequestBody returns null only for GET, so a DELETE with a body must keep it");
+        }
+
+        @Test
+        @DisplayName("an EMPTY body is still a body: Content-Type stays")
+        void emptyBodyKeepsContentType() {
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("Content-Type", "application/json");
+
+            HttpExecutionService.dropContentTypeWhenBodyless(headers, java.util.Map.of());
+
+            assertEquals("application/json", headers.getFirst("Content-Type"),
+                "an empty map is a body the vendor asked for; only a null body is bodyless");
+        }
+
+        @Test
+        @DisplayName("a declared Accept is still injected when nothing preset it")
+        void declaredAcceptInjectedWhenNoPreset() {
+            ApiToolEntity tool = createTestTool("/books/1/thumbnail");
+            ApiToolParameterEntity accept = new ApiToolParameterEntity();
+            accept.setName("Accept"); accept.setParameterType("header"); accept.setDataType("string");
+            accept.setDefaultValue("image/*");
+            when(apiToolParameterRepository.findByApiToolId(tool.getId())).thenReturn(List.of(accept));
+
+            HttpHeaders headers = new HttpHeaders();
+
+            service.applyHeaderParameters(headers, tool, objectMapper.createArrayNode());
+
+            assertEquals("image/*", headers.getFirst("Accept"));
+        }
+
+        @Test
         @DisplayName("non-header param with a default is NOT injected as a header")
         void nonHeaderDefaultNotInjectedAsHeader() {
             ApiToolEntity tool = createTestTool("/items");
@@ -3677,6 +3789,35 @@ class HttpExecutionServiceTest {
     @Nested
     @DisplayName("preflightScopeCheck() - V166")
     class PreflightScopeCheckTests {
+
+        /**
+         * The check ships in SHADOW mode (catalog.scope-preflight.enforce=false): it logs what it
+         * WOULD block and lets the call through, because arming it over scope declarations nothing
+         * has validated at runtime could turn a working call into a refused one. A Mockito test
+         * never reads the @Value, so the field would default to false and every "throws" assertion
+         * below would silently pass by NOT running the code it means to pin. Arm it explicitly, and
+         * cover the shipped default in shadowModeLetsTheCallThrough().
+         */
+        @BeforeEach
+        void armScopeEnforcement() {
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "scopePreflightEnforce", true);
+        }
+
+        @Test
+        @DisplayName("SHADOW mode (the shipped default): a missing scope is logged, never thrown")
+        void shadowModeLetsTheCallThrough() {
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "scopePreflightEnforce", false);
+            ApiEntity api = createTestApi("https://api.example.com");
+            api.setPlatformCredentialName("gmail");
+            ApiToolEntity tool = createTestTool("/messages/send");
+            tool.setRequiredScopes(List.of("gmail.send"));
+            when(userCredentialService.getCredentialScopes("user-1", "myCred"))
+                    .thenReturn(Optional.of(new com.apimarketplace.credential.client.dto.CredentialScopesDto(
+                            "oauth2", List.of("gmail.readonly"))));
+
+            assertDoesNotThrow(() -> service.preflightScopeCheck("user-1", "myCred", api, tool),
+                "shadow mode must not block: this is what production runs until the logged lines are read");
+        }
 
         @Test
         @DisplayName("no requiredScopes: short-circuits without ever calling CredentialClient")

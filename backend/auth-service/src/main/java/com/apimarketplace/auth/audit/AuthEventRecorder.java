@@ -43,6 +43,7 @@ public class AuthEventRecorder {
             case GOOGLE -> "google";
             case GITHUB -> "github";
             case LOCAL -> "local";
+            case SAML -> "saml";
             default -> "keycloak";
         };
     }

@@ -44,6 +44,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -402,6 +403,78 @@ class EmailInboxNodeTest {
             assertTrue(result.isFailure());
             assertEquals("EMAIL_INBOX", result.output().get("node_type"));
         }
+
+        /**
+         * Regression (prod 2026-09-25): a failure in the conversation with the customer's own
+         * server was logged at ERROR with a full stack trace, about 80 lines a week for one host.
+         * A local server that greets with "* BYE" reproduces that shape through execute().
+         */
+        @Test
+        @DisplayName("customer's server answers BYE: node fails, logged WARN without stack trace, no ERROR")
+        void serverByeIsWarnWithoutStackTrace() throws Exception {
+            try (java.net.ServerSocket server = new java.net.ServerSocket(0)) {
+                Thread imap = new Thread(() -> {
+                    try (java.net.Socket client = server.accept()) {
+                        client.getOutputStream().write(
+                                "* BYE server shutting down\r\n".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+                        client.getOutputStream().flush();
+                    } catch (java.io.IOException ignored) {
+                        // the node closing its side first is fine
+                    }
+                });
+                imap.start();
+                Map<String, Object> cred = validImapCredentialData();
+                cred.put("host", "127.0.0.1");
+                cred.put("port", server.getLocalPort());
+                cred.put("use_ssl", "false");
+                EmailInboxNode node = new EmailInboxNode("core:read", config("none", null, null));
+                wireCredentialClient(node, cred);
+
+                java.util.List<ch.qos.logback.classic.spi.ILoggingEvent> events = captureLogs(() -> {
+                    NodeExecutionResult result = node.execute(context);
+                    assertTrue(result.isFailure());
+                });
+                imap.join(5_000);
+
+                assertTrue(events.stream().noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR),
+                        "a server-side refusal must not be logged at ERROR");
+                assertTrue(events.stream().anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN
+                        && e.getThrowableProxy() == null
+                        && e.getFormattedMessage().contains("mail server failure")));
+            }
+        }
+
+        @Test
+        @DisplayName("connection-level failure (nothing listening) keeps ERROR with its stack trace")
+        void connectionFailureStaysErrorWithStackTrace() {
+            Map<String, Object> cred = validImapCredentialData();
+            cred.put("host", "127.0.0.1");
+            cred.put("port", 1);
+            cred.put("use_ssl", "false");
+            EmailInboxNode node = new EmailInboxNode("core:read", config("none", null, null));
+            wireCredentialClient(node, cred);
+
+            java.util.List<ch.qos.logback.classic.spi.ILoggingEvent> events = captureLogs(() -> node.execute(context));
+
+            assertTrue(events.stream().anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR
+                    && e.getThrowableProxy() != null),
+                    "a failure that a platform network outage could cause must stay ERROR with its stack trace");
+        }
+
+        private java.util.List<ch.qos.logback.classic.spi.ILoggingEvent> captureLogs(Runnable action) {
+            ch.qos.logback.classic.Logger logger =
+                    (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(EmailInboxNode.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            try {
+                action.run();
+            } finally {
+                logger.detachAppender(appender);
+            }
+            return appender.list;
+        }
     }
 
     // ===============================================================
@@ -570,6 +643,39 @@ class EmailInboxNodeTest {
         }
 
         @Test
+        @DisplayName("a {{...}} sinceDays reaches the IMAP search resolved, not as the typed default 0")
+        void templatedSinceDaysReachesTheSearch() throws Exception {
+            EmailInboxNode node = new EmailInboxNode("core:read", config("none", null, null));
+            node.setDeferredScalars(Map.of("emailInbox", Map.of("sinceDays", "{{core:x.output.n}}")));
+            V2TemplateAdapter adapter = mock(V2TemplateAdapter.class);
+            lenient().when(adapter.resolveTemplates(any(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:x.output.n}}", 7)));
+            node.setTemplateAdapter(adapter);
+
+            SearchTerm root = invokeBuildSearchTerm(node);
+
+            assertNotNull(findTerm(root, jakarta.mail.search.ReceivedDateTerm.class),
+                "sinceDays resolved to 7 adds a received-date bound; the default 0 adds none");
+        }
+
+        @Test
+        @DisplayName("a {{...}} limit that is not a number fails the node, never reads on the default")
+        void nonNumericTemplatedLimitFails() {
+            EmailInboxNode node = new EmailInboxNode("core:read", config("none", null, null));
+            node.setDeferredScalars(Map.of("emailInbox", Map.of("limit", "{{core:x.output.n}}")));
+            V2TemplateAdapter adapter = mock(V2TemplateAdapter.class);
+            lenient().when(adapter.resolveTemplates(any(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:x.output.n}}", "abc")));
+            node.setTemplateAdapter(adapter);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isFailure());
+            String message = result.errorMessage().orElse("");
+            assertTrue(message.contains("emailInbox") && message.contains("abc"), message);
+        }
+
+        @Test
         @DisplayName("regression: a fromContains template is SpEL-resolved, not sent to IMAP literally")
         void fromContainsIsResolved() throws Exception {
             // Pre-fix only messageUid went through SpEL: a {{template}} in a search filter reached
@@ -584,6 +690,24 @@ class EmailInboxNodeTest {
             FromStringTerm term = findTerm(invokeBuildSearchTerm(node), FromStringTerm.class);
 
             assertEquals("RESOLVED", term.getPattern());
+        }
+
+        @Test
+        @DisplayName("a {{$vars.vip}} filter is withheld in Params but the IMAP search runs on its REAL value")
+        void workspaceVariableFilterSearchesOnTheRealValue() throws Exception {
+            EmailInboxNode node = new EmailInboxNode("core:read", new Core.EmailInboxConfig(
+                null, "INBOX", false, 10, false, 0, "none", null, null,
+                "{{$vars.vip}}", null, null, false, 0, false, false));
+            wireCredentialClient(node, validImapCredentialData());
+            V2TemplateAdapter adapter = mock(V2TemplateAdapter.class);
+            when(adapter.resolveTemplates(any(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{$vars.vip}}", "ceo@acme.io")));
+            when(mockServiceRegistry.getTemplateAdapter()).thenReturn(adapter);
+            node.acceptServices(mockServiceRegistry);
+
+            FromStringTerm term = findTerm(invokeBuildSearchTerm(node), FromStringTerm.class);
+
+            assertEquals("ceo@acme.io", term.getPattern(), "masking the report must never mask the search");
         }
 
         @Test
@@ -728,6 +852,73 @@ class EmailInboxNodeTest {
             // RESOLVED folder, never the raw template.
             Map<String, Object> resolved = (Map<String, Object>) result.output().get("resolved_params");
             assertEquals("INBOX.Archive", resolved.get("folder"));
+        }
+
+        @Test
+        @DisplayName("regression: the Params column reports the RESOLVED search filters, the ones IMAP searched with, not the configured {{...}}")
+        @SuppressWarnings("unchecked")
+        void reportsResolvedSearchFilters() {
+            EmailInboxNode node = new EmailInboxNode("core:read", new Core.EmailInboxConfig(
+                null, "INBOX", false, 10, false, 0, "none", null, null,
+                "{{trigger:t.output.sender}}", "{{trigger:t.output.subj}}", "{{trigger:t.output.q}}",
+                false, 0, false, false));
+            wireCredentialClient(node, validImapCredentialData());
+            wireResolvingAdapter(node);
+            node.acceptServices(mockServiceRegistry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            // Fails at connect (unreachable host); the filters are reported before the connect.
+            Map<String, Object> resolved = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("RESOLVED", resolved.get("fromContains"));
+            assertEquals("RESOLVED", resolved.get("subjectContains"));
+            assertEquals("RESOLVED", resolved.get("bodyContains"));
+        }
+
+        @Test
+        @DisplayName("regression: a search filter resolving to NOTHING fails instead of searching the whole folder")
+        @SuppressWarnings("unchecked")
+        void filterResolvingToNothingFailsInsteadOfWideningTheSearch() {
+            // A dropped filter reads every message in the folder, and with markSeen the node then
+            // marks them all as read while reporting success.
+            EmailInboxNode node = new EmailInboxNode("core:read", new Core.EmailInboxConfig(
+                null, "INBOX", false, 10, true, 0, "none", null, null,
+                "{{core:skipped.output.sender}}", null, null,
+                false, 0, false, false));
+            wireCredentialClient(node, validImapCredentialData());
+            V2TemplateAdapter adapter = mock(V2TemplateAdapter.class);
+            when(adapter.resolveTemplates(any(), any())).thenAnswer(inv -> {
+                Map<String, Object> out = new LinkedHashMap<>();
+                ((Map<String, Object>) inv.getArgument(0)).forEach((k, v) -> out.put(k, null));
+                return out;
+            });
+            when(mockServiceRegistry.getTemplateAdapter()).thenReturn(adapter);
+            node.acceptServices(mockServiceRegistry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isFailure());
+            assertTrue(result.errorMessage().orElse("").contains("fromContains filter"),
+                result.errorMessage().orElse(""));
+        }
+
+        @Test
+        @DisplayName("a search filter pulled from a workspace variable is withheld in the report")
+        @SuppressWarnings("unchecked")
+        void workspaceVariableFilterIsWithheld() {
+            EmailInboxNode node = new EmailInboxNode("core:read", new Core.EmailInboxConfig(
+                null, "INBOX", false, 10, false, 0, "none", null, null,
+                "{{$vars.vip_sender}}", null, null,
+                false, 0, false, false));
+            wireCredentialClient(node, validImapCredentialData());
+            wireResolvingAdapter(node);
+            node.acceptServices(mockServiceRegistry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            Map<String, Object> resolved = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(com.apimarketplace.orchestrator.services.template.ReportedParams.WITHHELD_WORKSPACE_VARIABLE,
+                resolved.get("fromContains"));
         }
 
         @Test
@@ -1097,10 +1288,11 @@ class EmailInboxNodeTest {
         @SuppressWarnings("unchecked")
         private Map<String, Object> invokeRead(EmailInboxNode node, Folder folder) throws Exception {
             Method m = EmailInboxNode.class.getDeclaredMethod(
-                "readMessages", Folder.class, ExecutionContext.class, Map.class);
+                "readMessages", Folder.class, ExecutionContext.class, Map.class, Map.class);
             m.setAccessible(true);
             try {
-                return (Map<String, Object>) m.invoke(node, folder, context, new LinkedHashMap<String, Object>());
+                return (Map<String, Object>) m.invoke(node, folder, context, new LinkedHashMap<String, Object>(),
+                    new LinkedHashMap<String, Object>());
             } catch (InvocationTargetException e) {
                 throw (Exception) e.getCause();
             }
@@ -1535,11 +1727,11 @@ class EmailInboxNodeTest {
             when(folder.search(any(SearchTerm.class))).thenReturn(new Message[]{});
 
             Method m = EmailInboxNode.class.getDeclaredMethod(
-                "readMessages", Folder.class, ExecutionContext.class, Map.class);
+                "readMessages", Folder.class, ExecutionContext.class, Map.class, Map.class);
             m.setAccessible(true);
             @SuppressWarnings("unchecked")
             Map<String, Object> result = (Map<String, Object>) m.invoke(
-                node, folder, context, new LinkedHashMap<String, Object>());
+                node, folder, context, new LinkedHashMap<String, Object>(), new LinkedHashMap<String, Object>());
 
             assertEquals("INBOX.Clients", result.get("folder"));
             assertEquals(0, result.get("count"));
@@ -1701,5 +1893,25 @@ class EmailInboxNodeTest {
                         .contains("EmailInbox refused");
                 });
         }
+    }
+
+    @Test
+    @DisplayName("regression: a templated credentialId that is not found fails naming the field, no other mailbox used")
+    void templatedCredentialNotFoundFailsNamingTheField() {
+        EmailInboxNode node = new EmailInboxNode("core:read", config("none", null, null));
+        node.acceptServices(mockServiceRegistry);
+        V2TemplateAdapter adapter = mock(V2TemplateAdapter.class);
+        when(adapter.resolveTemplates(any(), any()))
+            .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:pick.output.id}}", 404L)));
+        node.setTemplateAdapter(adapter);
+        node.setDeferredScalars(Map.of("emailInbox", Map.of("credentialId", "{{core:pick.output.id}}")));
+        when(mockCredentialClient.getCredentialById(anyString(), org.mockito.ArgumentMatchers.anyLong()))
+            .thenReturn(Optional.empty());
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertTrue(result.isFailure());
+        assertTrue(result.errorMessage().orElse("").contains("emailInbox.credentialId"), result.errorMessage().orElse(""));
+        org.mockito.Mockito.verify(mockCredentialClient, org.mockito.Mockito.never()).getDefaultCredential(anyString(), anyString());
     }
 }

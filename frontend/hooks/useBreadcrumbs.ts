@@ -125,7 +125,6 @@ export const AGENT_TAB_CRUMBS: Record<Exclude<AgentPageTab, 'agents'>, string> =
 
 const SETTINGS_LABELS: Record<string, string> = {
   'overview': 'Overview',
-  'agents': 'Agents & Chat',
   'subscription': 'Subscription',
   'api': 'MCPs',
   'apis': 'MCPs',

@@ -193,6 +193,10 @@ public class AgentHelpModule implements ToolModule {
         actions.put("get",
             "Fetch a single agent by agent_id. Returns full configuration + resources summary + RAW tools_config " +
             "(full id lists) + budget object + webhook info when configured.");
+        actions.put("present",
+            "Open the agent (agent_id) in the user's side panel so they see it now. Optional title (the panel " +
+            "title, default the agent name). Changes nothing. Use it once the " +
+            "agent is ready for them to look at, not after every edit. Response: presented, agent_id.");
         actions.put("list",
             "Paginated list of agents in your tenant. Returns resources summary only - use get for full details. " +
             "Accepts limit, offset.");
@@ -236,7 +240,11 @@ public class AgentHelpModule implements ToolModule {
             "authorization, and asking them happens inside your call, so it may take longer to answer. Do not " +
             "stop, do not announce that you are waiting, do not re-call: read the response. A sub-agent " +
             "response means it ran; `executed:false` means it did NOT - report that, invent nothing, and " +
-            "continue or finish.");
+            "continue or finish. A sub-agent cannot ask the person itself (nobody reads its conversation): " +
+            "when its response ends with a question meant for the person, put that question to them with " +
+            "ask_user, then run the sub-agent again with their answer. Do not just report that it could not ask. " +
+            "If ask_user is unavailable to you too (you are a workflow step or a sub-agent yourself), pass the " +
+            "question on in your own reply or output instead.");
 
         // --- Memory & sharing ---
         actions.put("get_history",
@@ -388,8 +396,14 @@ public class AgentHelpModule implements ToolModule {
             "has_more, items: [{sequence_number, iteration_number, role ('user'|'assistant'|'tool'|'system'), " +
             "tool_name (when role='tool'), tool_call_id, content, content_length}]}, tool_calls (only " +
             "when include_tool_calls=true): [{sequence_number, iteration_number, tool_call_id, tool_name, " +
-            "parallel_index, success, arguments, content}], hint (next offset or 'all returned')}. " +
+            "parallel_index, success, arguments, content, content_length}], hint (next offset or 'all returned')}. " +
             "PAGINATION: loop until has_more=false, passing offset=<previous returned + offset>. " +
+            "LONG CONTENT: a content ending with '...[truncated]' is an excerpt, its first 500 characters; " +
+            "content_length is its real size. That happens to a content over 32768 characters, and to " +
+            "long rows past the first 262144 characters read back in one response, shared by messages " +
+            "first and then tool calls (read those messages with a later offset; tool calls are not " +
+            "paginated, so a smaller limit on messages leaves more of the budget for them), and to a " +
+            "row whose full text is no longer kept. " +
             "REDACTION (always server-side, not opt-out): calls to credential/oauth2/auth tools have " +
             "their entire arguments+content replaced with the literal string '[REDACTED:credential-tool]'. " +
             "Other tool calls have specific fields (token, secret, password, api_key, authorization, " +

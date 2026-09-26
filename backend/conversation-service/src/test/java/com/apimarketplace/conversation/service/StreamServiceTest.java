@@ -233,6 +233,27 @@ class StreamServiceTest {
             assertThat(captor.getValue().getStatus()).isEqualTo(Stream.StreamStatus.ERROR);
             assertThat(captor.getValue().getErrorMessage()).isEqualTo("timeout");
         }
+
+        @Test
+        @DisplayName("marking a stream ERROR logs no ERROR line (every caller logs the cause itself)")
+        void markingErrorDoesNotLogAtError() {
+            Stream stream = new Stream("id-1", "conv-1", "stream-1", "user-1", Stream.StreamStatus.ACTIVE);
+            when(streamRepository.findByStreamId("stream-1")).thenReturn(Optional.of(stream));
+            when(streamRepository.save(any(Stream.class))).thenAnswer(inv -> inv.getArgument(0));
+            ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                    org.slf4j.LoggerFactory.getLogger(StreamService.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            try {
+                streamService.markStreamAsError("stream-1", "timeout");
+            } finally {
+                logger.detachAppender(appender);
+            }
+
+            assertThat(appender.list).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+        }
     }
 
     @Nested

@@ -32,6 +32,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import { useResourceRowsDeleted } from '@/lib/resources/resourceDeleted';
+import { OrbiLogo } from '@/components/chat/orbi/OrbiShapes';
 
 /**
  * Agent Metrics Dashboard - fleet overview + per-agent drill-down.
@@ -543,7 +544,7 @@ export function AgentMetricsDashboard() {
                 {chatSummary && chatSummary.totalExecutions > 0 && (
                   <SelectItem value="__chat__" className="text-xs rounded-md py-1.5">
                     <span className="flex items-center gap-2">
-                      <MessageSquare className="h-3.5 w-3.5" />
+                      <OrbiLogo className="h-3.5 w-3.5" />
                       {t('generalChat')}
                     </span>
                   </SelectItem>
@@ -710,7 +711,7 @@ export function AgentMetricsDashboard() {
                             <ChevronRight className="h-3.5 w-3.5 text-theme-muted flex-shrink-0" />
                           )}
                           <div className="w-8 h-8 bg-theme-tertiary rounded-xl flex items-center justify-center flex-shrink-0">
-                            <MessageSquare className="h-3.5 w-3.5 text-theme-primary" />
+                            <OrbiLogo className="h-3.5 w-3.5 text-theme-primary" />
                           </div>
                           <span className="font-medium truncate">{t('generalChat')}</span>
                         </div>
@@ -1526,7 +1527,7 @@ export function AgentMetricsDashboard() {
                 {chatSummary && chatSummary.totalExecutions > 0 && (
                   <SelectItem value="__chat__" className="text-xs rounded-md py-1.5">
                     <span className="flex items-center gap-2">
-                      <MessageSquare className="h-3.5 w-3.5" />
+                      <OrbiLogo className="h-3.5 w-3.5" />
                       {t('generalChat')}
                     </span>
                   </SelectItem>
@@ -1663,7 +1664,7 @@ export function AgentMetricsDashboard() {
                 {chatSummary && chatSummary.totalExecutions > 0 && (
                   <SelectItem value="__chat__" className="text-xs rounded-md py-1.5">
                     <span className="flex items-center gap-2">
-                      <MessageSquare className="h-3.5 w-3.5" />
+                      <OrbiLogo className="h-3.5 w-3.5" />
                       {t('generalChat')}
                     </span>
                   </SelectItem>

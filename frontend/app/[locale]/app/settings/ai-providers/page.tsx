@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { BotMessageSquare, Cloud, Key, Terminal, SlidersHorizontal, User, Shield, Info, Route } from "lucide-react";
+import { BotMessageSquare, Cloud, Key, Terminal, SlidersHorizontal, User, Shield, Route } from "lucide-react";
+import { InfoPopover } from "@/components/ui/info-popover";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { credentialService } from "@/lib/api/orchestrator/credential.service";
@@ -21,6 +22,7 @@ import type { LlmProviderStatus, LlmProviderDefinition } from "@/lib/api/orchest
 import { IS_CE, IS_CLOUD } from "@/lib/edition";
 import { isProviderHiddenInCe } from "@/lib/ai-providers/providerIcons";
 import { track } from "@/lib/analytics/analytics";
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 const PROVIDER_DEFINITIONS: LlmProviderDefinition[] = [
   {
@@ -391,12 +393,9 @@ export default function AiProvidersPage() {
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
               <h2 className="text-lg font-semibold text-theme-primary">{t("title")}</h2>
-              <div className="relative group">
-                <Info className="w-3.5 h-3.5 text-theme-secondary hover:text-theme-primary cursor-help transition-colors" />
-                <div className="absolute left-0 top-5 z-50 hidden group-hover:block w-72 max-w-[calc(100vw-2rem)] p-3 rounded-xl bg-theme-primary border border-theme shadow-lg text-xs text-theme-secondary leading-relaxed">
-                  {t("infoBanner")}
-                </div>
-              </div>
+              <InfoPopover label={t("title")} side="bottom" align="start">
+                {t("infoBanner")}
+              </InfoPopover>
             </div>
             <p className="text-sm text-theme-secondary">{t("subtitle")}</p>
           </div>
@@ -433,7 +432,7 @@ export default function AiProvidersPage() {
               )}
             >
               {tab.iconSrc ? (
-                <img src={tab.iconSrc} alt="" className="w-4 h-4 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                <ServiceLogo src={tab.iconSrc} alt="" className="w-4 h-4 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
               ) : (
                 <tab.icon className={cn("w-4 h-4 flex-shrink-0 transition-colors duration-200", connectionMode === tab.id ? "text-[var(--text-primary)]" : "text-current")} />
               )}

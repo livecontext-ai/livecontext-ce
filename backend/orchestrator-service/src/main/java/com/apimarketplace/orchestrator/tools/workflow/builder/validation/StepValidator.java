@@ -333,7 +333,9 @@ public class StepValidator implements WorkflowValidator {
 
         // Validate that the table exists for this tenant
         String tenantId = session.getTenantId();
-        DataSourceDto ds = dataSourceClient.findByIdAndTenantId(dataSourceId, tenantId);
+        // Org-aware: validate also runs off a request thread (nothing forwards X-Organization-ID
+        // there), where a tenant-only lookup reads a teammate's table as missing.
+        DataSourceDto ds = dataSourceClient.findByIdAndTenantId(dataSourceId, tenantId, session.getOrgId());
 
         if (ds == null) {
             result.addError("CRUD_INVALID_DATASOURCE", nodeId,
@@ -460,7 +462,7 @@ public class StepValidator implements WorkflowValidator {
             if (dsIdObj != null && (type == null || "datasource".equals(type))) {
                 try {
                     Long dsId = Long.parseLong(String.valueOf(dsIdObj));
-                    DataSourceDto ds = dataSourceClient.getDataSource(dsId, session.getTenantId());
+                    DataSourceDto ds = dataSourceClient.getDataSource(dsId, session.getTenantId(), session.getOrgId());
                     if (ds != null && ds.mappingSpec() != null && !ds.mappingSpec().isEmpty()) {
                         columns.add("id");
                         columns.addAll(ds.mappingSpec().keySet());

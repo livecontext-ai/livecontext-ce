@@ -20,6 +20,7 @@ import java.util.*;
 
 import static com.apimarketplace.agent.tools.common.ToolParamUtils.*;
 import com.apimarketplace.agent.tools.ToolErrorCode;
+import com.apimarketplace.agent.tools.common.PresentedView;
 
 /**
  * CRUD module for the interface tool.
@@ -50,7 +51,7 @@ public class InterfaceCrudModule implements ToolModule {
     private final ToolRateLimiter patchLimiter = new ToolRateLimiter();
     private final ToolRateLimiter createLimiter = new ToolRateLimiter();
 
-    private static final Set<String> HANDLED_ACTIONS = Set.of("create", "get", "list", "update", "patch", "delete");
+    private static final Set<String> HANDLED_ACTIONS = Set.of("create", "get", "present", "list", "update", "patch", "delete");
 
     public InterfaceCrudModule(InterfaceService interfaceService,
                                InterfaceAgentDefaultsConfig agentDefaults) {
@@ -99,6 +100,7 @@ public class InterfaceCrudModule implements ToolModule {
         return Optional.of(switch (action) {
             case "create" -> executeCreate(parameters, tenantId, context);
             case "get" -> executeGet(parameters, tenantId, context);
+            case "present" -> executePresent(parameters, tenantId, context);
             case "list" -> executeList(parameters, tenantId, context);
             case "update" -> executeUpdate(parameters, tenantId, context);
             case "patch" -> executePatch(parameters, tenantId, context);
@@ -226,7 +228,6 @@ public class InterfaceCrudModule implements ToolModule {
             if (turnId != null) {
                 String createKey = tenantId + ":" + turnId;
                 int createCount = createLimiter.getCount(createKey);
-                resultMap.put("creates_in_message", createCount + "/" + maxCreates);
                 if (createCount >= maxCreates) {
                     resultMap.put("LIMIT_REACHED", "You have reached the interface creation limit for this message. " +
                         "Use update action to modify existing interfaces instead of creating new ones.");
@@ -295,11 +296,6 @@ public class InterfaceCrudModule implements ToolModule {
             }
             resultMap.put("slide_count", slideCount);
 
-            if (turnId != null) {
-                String createKey = tenantId + ":" + turnId;
-                resultMap.put("creates_in_message", createLimiter.getCount(createKey) + "/" + maxCreates);
-            }
-
             Map<String, Object> metadata = Map.of("visualization", Map.of("type", "slide", "id", interfaceId, "title", displayTitle));
             return ToolExecutionResult.success(resultMap, metadata);
         } catch (com.apimarketplace.auth.client.entitlement.LimitExceededException e) {
@@ -326,6 +322,25 @@ public class InterfaceCrudModule implements ToolModule {
     }
 
     private ToolExecutionResult executeGet(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
+        return withReadableInterface(parameters, tenantId, context, "get", this::describeInterface);
+    }
+
+    // ==================== Present ====================
+
+    /** Opens the interface in the user's side panel. Same checks as get: it can show nothing get could not read. */
+    private ToolExecutionResult executePresent(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
+        return withReadableInterface(parameters, tenantId, context, "present", entity -> PresentedView.result(
+            "interface", "interface_id", entity.getId().toString(),
+            PresentedView.requestedTitleOr(parameters, PresentedView.titleOf(entity.getName(), "Interface"))));
+    }
+
+    /**
+     * The one read path of a single interface: id (or its exact name), the agent's allow-list,
+     * then the workspace-scoped lookup (out of scope = not found). get and present both use it.
+     */
+    private ToolExecutionResult withReadableInterface(Map<String, Object> parameters, String tenantId,
+                                                      ToolExecutionContext context, String action,
+                                                      java.util.function.Function<InterfaceEntity, ToolExecutionResult> onReadable) {
         UUID id = getUuidParam(parameters, "interface_id");
 
         // Fallback: if not a valid UUID, try resolving by name
@@ -369,45 +384,47 @@ public class InterfaceCrudModule implements ToolModule {
             String orgIdForGet = context != null ? context.orgId() : null;
             Optional<InterfaceEntity> opt = interfaceService.getInterface(id, tenantId, orgIdForGet);
             if (opt.isEmpty()) return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "Interface not found: " + id);
-            InterfaceEntity entity = opt.get();
-
-            String interfaceId = entity.getId().toString();
-
-            Map<String, Object> getResult = new LinkedHashMap<>();
-            getResult.put("id", interfaceId);
-            getResult.put("name", entity.getName());
-            getResult.put("type", entity.getInterfaceType() != null ? entity.getInterfaceType() : "html");
-            getResult.put("description", entity.getDescription() != null ? entity.getDescription() : "");
-
-            if ("slide".equals(entity.getInterfaceType())) {
-                getResult.put("slide_data", entity.getData());
-                int slideCount = 0;
-                if (entity.getData() != null && entity.getData().get("slides") instanceof List<?> slides) {
-                    slideCount = slides.size();
-                }
-                getResult.put("slide_count", slideCount);
-                getResult.put("marker", "[visualize:slide:" + interfaceId + "]");
-            } else {
-                if (entity.getFormat() != null) {
-                    getResult.put("format", entity.getFormat());
-                }
-                getResult.put("htmlTemplate", entity.getHtmlTemplate() != null ? entity.getHtmlTemplate() : "");
-                if (entity.getCssTemplate() != null && !entity.getCssTemplate().isBlank()) {
-                    getResult.put("cssTemplate", entity.getCssTemplate());
-                }
-                if (entity.getJsTemplate() != null && !entity.getJsTemplate().isBlank()) {
-                    getResult.put("jsTemplate", entity.getJsTemplate());
-                }
-                if (entity.getTargetTable() != null && !entity.getTargetTable().isBlank()) {
-                    getResult.put("targetTable", entity.getTargetTable());
-                }
-                getResult.put("marker", "[visualize:interface:" + interfaceId + "]");
-            }
-            getResult.put("isActive", entity.getIsActive());
-            return ToolExecutionResult.success(getResult);
+            return onReadable.apply(opt.get());
         } catch (Exception e) {
-            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to get interface: " + e.getMessage());
+            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to " + action + " interface: " + e.getMessage());
         }
+    }
+
+    private ToolExecutionResult describeInterface(InterfaceEntity entity) {
+        String interfaceId = entity.getId().toString();
+
+        Map<String, Object> getResult = new LinkedHashMap<>();
+        getResult.put("id", interfaceId);
+        getResult.put("name", entity.getName());
+        getResult.put("type", entity.getInterfaceType() != null ? entity.getInterfaceType() : "html");
+        getResult.put("description", entity.getDescription() != null ? entity.getDescription() : "");
+
+        if ("slide".equals(entity.getInterfaceType())) {
+            getResult.put("slide_data", entity.getData());
+            int slideCount = 0;
+            if (entity.getData() != null && entity.getData().get("slides") instanceof List<?> slides) {
+                slideCount = slides.size();
+            }
+            getResult.put("slide_count", slideCount);
+            getResult.put("marker", "[visualize:slide:" + interfaceId + "]");
+        } else {
+            if (entity.getFormat() != null) {
+                getResult.put("format", entity.getFormat());
+            }
+            getResult.put("htmlTemplate", entity.getHtmlTemplate() != null ? entity.getHtmlTemplate() : "");
+            if (entity.getCssTemplate() != null && !entity.getCssTemplate().isBlank()) {
+                getResult.put("cssTemplate", entity.getCssTemplate());
+            }
+            if (entity.getJsTemplate() != null && !entity.getJsTemplate().isBlank()) {
+                getResult.put("jsTemplate", entity.getJsTemplate());
+            }
+            if (entity.getTargetTable() != null && !entity.getTargetTable().isBlank()) {
+                getResult.put("targetTable", entity.getTargetTable());
+            }
+            getResult.put("marker", "[visualize:interface:" + interfaceId + "]");
+        }
+        getResult.put("isActive", entity.getIsActive());
+        return ToolExecutionResult.success(getResult);
     }
 
     // ==================== List ====================
@@ -543,8 +560,6 @@ public class InterfaceCrudModule implements ToolModule {
             "Instead, ask the user: 'The interface is ready. Would you like any changes?'");
         if (limitResult.isPresent()) return limitResult.get();
 
-        int currentCount = updateLimiter.getCount(updateKey);
-
         try {
             // Round-13B: thread (orgId, orgRole) so the lookup + deny-list both
             // route through the #150 strict-isolation pair. The MCP tool fleet
@@ -589,8 +604,6 @@ public class InterfaceCrudModule implements ToolModule {
             if (result.getFormat() != null) {
                 responseMap.put("format", result.getFormat());
             }
-            responseMap.put("updateCount", currentCount);
-            responseMap.put("maxUpdates", MAX_CONSECUTIVE_UPDATES);
 
             if (isSlideInterface) {
                 int slideCount = 0;
@@ -601,9 +614,9 @@ public class InterfaceCrudModule implements ToolModule {
                 responseMap.put("slide_count", slideCount);
                 responseMap.put("display", Map.of("type", "slide", "id", result.getId().toString(), "title", result.getName()));
                 responseMap.put("marker", "[visualize:slide:" + result.getId() + "]");
-                responseMap.put("message", "Slide deck '" + result.getName() + "' updated successfully (" + slideCount + " slides, update " + currentCount + "/" + MAX_CONSECUTIVE_UPDATES + ").");
+                responseMap.put("message", "Slide deck '" + result.getName() + "' updated successfully (" + slideCount + " slides).");
             } else {
-                responseMap.put("message", "Interface '" + result.getName() + "' updated successfully (update " + currentCount + "/" + MAX_CONSECUTIVE_UPDATES + ").");
+                responseMap.put("message", "Interface '" + result.getName() + "' updated successfully.");
             }
             responseMap.put("STOP", "DO NOT call interface(action='update') again unless the user explicitly requests changes.");
             responseMap.put("TASK_COMPLETE", true);
@@ -708,7 +721,6 @@ public class InterfaceCrudModule implements ToolModule {
                 "STOP: You have patched this interface " + MAX_CONSECUTIVE_PATCHES + " times. " +
                 "If it still isn't right, ask the user what they want changed rather than continuing to edit.");
             if (limitResult.isPresent()) return limitResult.get();
-            int currentCount = patchLimiter.getCount(patchKey);
 
             InterfaceEntity result = interfaceService.patchInterface(id, tenantId, orgId, orgRole,
                 normalizedTarget, edits, replaceAll);
@@ -725,12 +737,10 @@ public class InterfaceCrudModule implements ToolModule {
             responseMap.put("status", "PATCHED");
             responseMap.put("target", normalizedTarget);
             responseMap.put("edits_applied", edits.size());
-            responseMap.put("patchCount", currentCount);
-            responseMap.put("maxPatches", MAX_CONSECUTIVE_PATCHES);
             responseMap.put("display", Map.of("type", "interface", "id", interfaceId, "title", displayTitle, "name", result.getName()));
             responseMap.put("marker", "[visualize:interface:" + interfaceId + "]");
             responseMap.put("message", "Interface '" + result.getName() + "' patched (" + edits.size() +
-                " edit(s) on " + normalizedTarget + ", patch " + currentCount + "/" + MAX_CONSECUTIVE_PATCHES + ").");
+                " edit(s) on " + normalizedTarget + ").");
             responseMap.put("nextAction", "The change is displayed to the user. Patch again only if more changes are needed.");
 
             Map<String, Object> metadata = new LinkedHashMap<>();

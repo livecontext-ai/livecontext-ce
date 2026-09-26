@@ -1,5 +1,6 @@
 package com.apimarketplace.publication.client;
 
+import com.apimarketplace.common.web.LogSafePath;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
@@ -659,7 +660,8 @@ public class PublicationClient {
                     url, HttpMethod.POST, entity, new ParameterizedTypeReference<>() {});
             return response.getBody();
         } catch (Exception e) {
-            log.warn("Failed to register shared link for resourceToken={}: {}", resourceToken, e.getMessage());
+            log.warn("Failed to register shared link for resourceToken={}: {}", LogSafePath.tokenPreview(resourceToken),
+                    LogSafePath.withoutToken(e.getMessage(), resourceToken));
             return null;
         }
     }
@@ -671,7 +673,8 @@ public class PublicationClient {
         try {
             restTemplate.exchange(url, HttpMethod.POST, entity, Void.class);
         } catch (Exception e) {
-            log.warn("Failed to unregister shared link for resourceToken={}: {}", resourceToken, e.getMessage());
+            log.warn("Failed to unregister shared link for resourceToken={}: {}", LogSafePath.tokenPreview(resourceToken),
+                    LogSafePath.withoutToken(e.getMessage(), resourceToken));
         }
     }
 
@@ -684,7 +687,8 @@ public class PublicationClient {
                     url, HttpMethod.GET, entity, new ParameterizedTypeReference<>() {});
             return response.getBody();
         } catch (Exception e) {
-            log.warn("Failed to resolve shared link for token={}: {}", token, e.getMessage());
+            log.warn("Failed to resolve shared link for token={}: {}", LogSafePath.tokenPreview(token),
+                    LogSafePath.withoutToken(e.getMessage(), token));
             return null;
         }
     }
@@ -698,7 +702,8 @@ public class PublicationClient {
                     url, HttpMethod.GET, entity, new ParameterizedTypeReference<>() {});
             return response.getBody();
         } catch (Exception e) {
-            log.warn("Failed to get shared link for resourceToken={}: {}", resourceToken, e.getMessage());
+            log.warn("Failed to get shared link for resourceToken={}: {}", LogSafePath.tokenPreview(resourceToken),
+                    LogSafePath.withoutToken(e.getMessage(), resourceToken));
             return null;
         }
     }

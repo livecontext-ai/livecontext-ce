@@ -79,28 +79,10 @@ public class CatalogBundleService {
                     "CATALOG_BUNDLE_SIGNING_KEY_PEM is not configured - cannot build a signed bundle");
         }
 
-        List<ModelConfigOverrideEntity> models = modelRepository.findAllByOrderByRankingAsc();
+        List<ModelConfigOverrideEntity> models = shippableModels();
         if (models.isEmpty()) {
             throw new IllegalStateException(
-                    "model_config_overrides is empty - refusing to publish an empty catalog bundle");
-        }
-
-        // The model-catalog bundle is a CE-only distribution artifact. Exclude the
-        // CE-blocked providers (openrouter aggregator, cohere) from the snapshot so
-        // a self-hosted install never receives them via the signed catalog - cloud
-        // keeps them in its own catalog + relay fallback, only the CE-bound bundle
-        // drops them. CE also strips them defensively on apply
-        // (CatalogBundleApplier); filtering at the source means every CE (linked or
-        // not) gets a clean bundle, and CE's deprecate-missing merge self-heals any
-        // openrouter/cohere row a prior bundle already applied.
-        int ceBlockedFiltered = models.size();
-        models = models.stream()
-                .filter(m -> !com.apimarketplace.agent.cloud.CeBlockedProviders.isBlocked(m.getProvider()))
-                .toList();
-        ceBlockedFiltered -= models.size();
-        if (ceBlockedFiltered > 0) {
-            log.info("Catalog bundle: excluded {} CE-blocked model row(s) (openrouter/cohere) from the CE artifact",
-                    ceBlockedFiltered);
+                    "No model is available to CE installs - refusing to publish an empty catalog bundle");
         }
 
         // Load the V156 sidecar in the same logical snapshot. findAll() returns
@@ -222,7 +204,8 @@ public class CatalogBundleService {
      *       signed bundle's job; the seed must never wipe an admin's per-category
      *       toggles, which are cloud-authoritative in merge);</li>
      *   <li>{@code is_custom} rows (cloud-local additions, not a CE baseline);</li>
-     *   <li>deprecated rows (retired models);</li>
+     *   <li>rows not available to CE ({@link ModelConfigOverrideEntity#isAvailableToCe}: disabled,
+     *       retired or deprecated), the same rule as the signed bundle and the relay;</li>
      *   <li>{@link CeBlockedProviders} (openrouter, cohere) - the CE seed must
      *       never carry a provider a CE install hides at runtime.</li>
      * </ul>
@@ -240,7 +223,7 @@ public class CatalogBundleService {
         }
         List<ModelConfigOverrideEntity> models = modelRepository.findAllByOrderByRankingAsc().stream()
                 .filter(m -> !m.isCustom())
-                .filter(m -> m.getDeprecatedAt() == null)
+                .filter(ModelConfigOverrideEntity::isAvailableToCe)
                 .filter(m -> !CeBlockedProviders.isBlocked(m.getProvider()))
                 .toList();
         if (models.isEmpty()) {
@@ -316,6 +299,29 @@ public class CatalogBundleService {
     }
 
     /**
+     * The rows a CE bundle carries, in ranking order: only models a CE install may use
+     * ({@link ModelConfigOverrideEntity#isAvailableToCe}, the same rule the relay applies), minus
+     * the CE-blocked providers (openrouter aggregator, cohere). A CE deprecates whatever a bundle
+     * stops carrying (merge {@code deprecateMissing}), which hides it from its pickers. The
+     * bundle used to carry every row, disabled and retired included (410 rows for ~30 live
+     * models), so a linked CE listed the dead ones and the relay ran them.
+     *
+     * <p>Shared by {@link #buildBundle} and {@link #isActiveBundleStale}: both MUST checksum the
+     * same rows, or the auto-rebuild sees a difference on every tick.
+     */
+    private List<ModelConfigOverrideEntity> shippableModels() {
+        List<ModelConfigOverrideEntity> all = modelRepository.findAllByOrderByRankingAsc();
+        List<ModelConfigOverrideEntity> shipped = all.stream()
+                .filter(ModelConfigOverrideEntity::isAvailableToCe)
+                .filter(m -> !CeBlockedProviders.isBlocked(m.getProvider()))
+                .toList();
+        if (all.size() > shipped.size()) {
+            log.debug("Catalog bundle: {} of {} model row(s) ship to CE", shipped.size(), all.size());
+        }
+        return shipped;
+    }
+
+    /**
      * True when the ACTIVE bundle no longer reflects the live catalog: either
      * it predates payload persistence (V381, unservable) or the canonical
      * re-serialisation of the live table diverges from its checksum (the
@@ -330,7 +336,10 @@ public class CatalogBundleService {
         CatalogBundleEntity active = activeOpt.get();
         if (active.getPayload() == null) return true; // legacy row: replace it
 
-        List<ModelConfigOverrideEntity> models = modelRepository.findAllByOrderByRankingAsc();
+        // The SAME rows buildBundle signs. Checksumming the whole table here while the build
+        // filtered it (CE-blocked providers already before V533) made every tick "stale": prod
+        // republished an identical bundle every five minutes and every linked CE re-applied it.
+        List<ModelConfigOverrideEntity> models = shippableModels();
         List<ModelCategorySettingsEntity> categorySettings = categoryRepository.findAll();
         byte[] fresh = CatalogBundlePayload.canonicalBytes(
                 active.getVersion(), active.getSchemaVersion(),

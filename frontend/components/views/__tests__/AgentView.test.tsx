@@ -23,12 +23,10 @@ vi.mock('@/components/AgentTable', () => ({ AgentTable: () => <div data-testid="
 vi.mock('@/components/SkillTab', () => ({ SkillTab: () => <div data-testid="skill-tab" /> }));
 vi.mock('@/components/agent-fleet/AgentFleetCanvas', () => ({ AgentFleetCanvas: () => <div data-testid="fleet-canvas" /> }));
 vi.mock('@/components/agent-fleet/AgentMetricsDashboard', () => ({ AgentMetricsDashboard: () => <div data-testid="metrics-dashboard" /> }));
-// The stub reflects headingLevel back into the DOM: the Agents page must ask for the h2,
-// and a props-ignoring stub would let that call-site prop be deleted with every test green.
+// The h2 heading is AgentChatDefaults' own concern now (pinned by its test): the Agents
+// tab is its only host, so there is no call-site prop left to check here.
 vi.mock('@/components/settings/AgentChatDefaults', () => ({
-  AgentChatDefaults: ({ headingLevel }: { headingLevel?: string }) => (
-    <div data-testid="agent-chat-defaults" data-heading-level={headingLevel} />
-  ),
+  AgentChatDefaults: () => <div data-testid="agent-chat-defaults" />,
 }));
 vi.mock('@/lib/providers/smart-providers', () => ({
   useAuth: () => ({ isLoading: false, isAuthenticated: true, loginWithRedirect: vi.fn() }),
@@ -97,14 +95,6 @@ describe('AgentView - URL is the single source of truth', () => {
     render(<AgentView />);
     expect(screen.getByTestId('agent-chat-defaults')).toBeTruthy();
     expect(screen.queryByTestId('agent-table')).toBeNull();
-  });
-
-  // Sibling tabs render an h2 at most, so an h1 that shows up only on this tab moves the
-  // page heading level around as the user switches tabs. The settings PAGE keeps its h1.
-  it('asks the defaults panel for an h2 heading inside the tab', () => {
-    searchParams = new URLSearchParams('view=settings');
-    render(<AgentView />);
-    expect(screen.getByTestId('agent-chat-defaults').getAttribute('data-heading-level')).toBe('h2');
   });
 
   // Not a regression guard - the ternary chain already defaulted to Agents. It pins that

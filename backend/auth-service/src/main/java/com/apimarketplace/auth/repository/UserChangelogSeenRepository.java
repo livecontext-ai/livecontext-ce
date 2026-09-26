@@ -33,11 +33,23 @@ public interface UserChangelogSeenRepository extends JpaRepository<UserChangelog
      *
      * <p>Also the reason there is no monotonic guard: the caller acknowledges the entry it actually
      * displayed, and after a rollback that is legitimately an older key.
+     *
+     * <p><strong>Writes nothing, and raises nothing, for a user id with no {@code auth.users}
+     * row.</strong> The id comes from the request header, and the gateway caches its resolution
+     * for minutes, so a session outlives the deletion of its account. A plain {@code VALUES}
+     * insert then trips the {@code user_changelog_seen_user_id_fkey} foreign key and the request
+     * answers 500 (prod, 2026-09-22). The {@code EXISTS} makes the absent user an ordinary
+     * outcome: 0 rows. {@code FOR KEY SHARE} closes the window where the account is deleted
+     * between that check and the foreign-key check: it waits for a concurrent delete to commit,
+     * re-reads, and finds nothing, instead of racing it.
+     *
+     * @return 1 when the acknowledgement was recorded, 0 when no user has this id
      */
     @Modifying
     @Query(value = """
             INSERT INTO auth.user_changelog_seen (user_id, entry_key, seen_at)
-            VALUES (:userId, :entryKey, now())
+            SELECT :userId, :entryKey, now()
+            WHERE EXISTS (SELECT 1 FROM auth.users u WHERE u.id = :userId FOR KEY SHARE)
             ON CONFLICT (user_id) DO UPDATE
             SET entry_key = EXCLUDED.entry_key, seen_at = EXCLUDED.seen_at
             """, nativeQuery = true)

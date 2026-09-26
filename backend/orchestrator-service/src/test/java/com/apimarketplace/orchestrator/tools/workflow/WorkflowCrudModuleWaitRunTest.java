@@ -31,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -69,6 +70,9 @@ class WorkflowCrudModuleWaitRunTest {
                 mock(com.apimarketplace.orchestrator.tools.common.RunStopToolHandler.class),
                 mock(com.apimarketplace.orchestrator.services.resume.StepRerunService.class),
                 mock(com.apimarketplace.orchestrator.services.resume.AutoRestartExecutionService.class));
+        // Run reports resolve their plan through the version service (ids only, never the run's lazy workflow).
+        lenient().when(planVersionService.resolvePlanForRun(any(), any(), any()))
+                .thenReturn(new WorkflowPlanVersionService.RunPlan(null, null));
         // @Value fields are not injected outside Spring: mirror the production defaults.
         module.waitRunDefaultTimeoutSeconds = 120;
         module.waitRunMaxTimeoutSeconds = 240;
@@ -268,6 +272,31 @@ class WorkflowCrudModuleWaitRunTest {
         // No wait happened: single fetch, cancellation never probed.
         verify(workflowRunRepository, times(1)).findByRunIdPublic(RUN_ID);
         verifyNoInteractions(cancellationProbe);
+    }
+
+    @Test
+    @DisplayName("regression: a run whose plan version was pruned carries plan_note under run, never reads the lazy plan")
+    void prunedPlanVersionAnnotatesRun() {
+        UUID workflowId = UUID.randomUUID();
+        WorkflowEntity lazyWorkflow = mock(WorkflowEntity.class);
+        when(lazyWorkflow.getId()).thenReturn(workflowId);
+        WorkflowRunEntity run = runWithStatus(RunStatus.COMPLETED);
+        run.setWorkflow(lazyWorkflow);
+        run.setPlanVersion(4);
+        when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
+        when(planVersionService.resolvePlanForRun(workflowId, 4, TENANT_ID))
+                .thenReturn(new WorkflowPlanVersionService.RunPlan(null, 4));
+        when(agentWorkflowFireService.buildRunMacroReport(eq(run), any(), eq(TENANT_ID)))
+                .thenReturn(Map.of("run_id", RUN_ID));
+
+        ToolExecutionResult r = waitRun(Map.of("run_id", RUN_ID));
+
+        assertThat(r.success()).isTrue();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> runReport = (Map<String, Object>) data(r).get("run");
+        assertThat(runReport).containsEntry("run_id", RUN_ID);
+        assertThat((String) runReport.get("plan_note")).contains("Plan version 4");
+        verify(lazyWorkflow, never()).getPlan();
     }
 
     @Test

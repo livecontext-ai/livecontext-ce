@@ -47,6 +47,15 @@ export interface CloudLinkStatus {
    * the admin's cloud plan ("CE <plan>") without being able to manage the link.
    */
   installCloudPlanCode?: string;
+  /**
+   * The cloud refused this install's link because the cloud account is not on a paid plan
+   * (register or heartbeat answered 403 CLOUD_LINK_PLAN_REQUIRED). The link itself is KEPT:
+   * paying again on the cloud restores it automatically, with no re-link. Cleared on the next
+   * successful register or heartbeat.
+   */
+  planRequired?: boolean;
+  /** The refusing cloud account's plan code (e.g. FREE) when {@link planRequired}, else null. */
+  planRequiredPlanCode?: string | null;
 }
 
 /**
@@ -79,6 +88,21 @@ export function cloudSubscriptionPays(cloudPlanCode?: string | null): boolean {
 export interface AuthUrlResponse {
   authUrl: string;
   state: string;
+  /**
+   * Cloud onboarding entry that carries the same OAuth parameters
+   * ({@code <cloud web>/onboarding?ce_link=1&...}). A new cloud account completes the
+   * cloud onboarding (email verification, profile, a paid plan) there before the cloud
+   * continues to the very same Keycloak authorization. Absent on an older backend.
+   */
+  startUrl?: string;
+}
+
+/**
+ * Where "Connect to Cloud" sends the browser: the cloud onboarding entry when the backend
+ * offers one, else the bare Keycloak authorization URL (older backend).
+ */
+export function resolveConnectUrl(response: AuthUrlResponse): string {
+  return response.startUrl || response.authUrl;
 }
 
 /**
@@ -111,6 +135,15 @@ export class CloudLinkService {
     return apiClient.get<AuthUrlResponse>('/cloud-link/auth-url', {
       params: { returnPath },
     });
+  }
+
+  /**
+   * THE entry point of every "Connect to Cloud" button: asks the backend for a fresh OAuth
+   * flow and returns the URL to navigate to ({@link resolveConnectUrl}). Callers assign it to
+   * {@code window.location.href}; none of them reads {@code authUrl} directly.
+   */
+  async getConnectUrl(returnPath?: string): Promise<string> {
+    return resolveConnectUrl(await this.getAuthUrl(returnPath));
   }
 
   async connect(state: string): Promise<CloudLinkStatus> {

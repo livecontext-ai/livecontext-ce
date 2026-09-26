@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.controllers.cloud;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.common.plan.CeLinkRefusal;
 import com.apimarketplace.orchestrator.tools.websearch.BrowserAgentModule;
 import com.apimarketplace.orchestrator.tools.websearch.CeBrowseControlRequest;
 import com.apimarketplace.orchestrator.tools.websearch.CeBrowseRelayRequest;
@@ -72,13 +73,9 @@ public class CloudWebSearchRelayController {
             @RequestHeader("X-User-ID") Long cloudUserId,
             @RequestHeader(INSTALL_HEADER) String installId,
             @RequestBody CeWebSearchRelayRequest request) {
-        if (cloudUserId == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(Map.of("error", "AUTHENTICATION_REQUIRED"));
-        }
-        if (!authClient.userOwnsActiveCeLink(String.valueOf(cloudUserId), installId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("error", "CE_LINK_NOT_ACTIVE"));
+        ResponseEntity<Map<String, Object>> authFailure = authorize(cloudUserId, installId);
+        if (authFailure != null) {
+            return authFailure;
         }
         if (request == null || request.query() == null || request.query().isBlank()) {
             return ResponseEntity.badRequest()
@@ -238,9 +235,10 @@ public class CloudWebSearchRelayController {
     }
 
     /**
-     * Shared link-ownership check for the relay endpoints. Returns a populated
-     * error {@link ResponseEntity} to short-circuit, or {@code null} when the caller
-     * owns an active link to the install and the request may proceed.
+     * Shared CE-link gate for the relay endpoints. Returns a populated error
+     * {@link ResponseEntity} (401, or the shared {@link CeLinkRefusal} 403 bodies) to
+     * short-circuit, or {@code null} when the caller owns an active link to the install
+     * AND its governing plan is paid.
      */
     @Nullable
     private ResponseEntity<Map<String, Object>> authorize(Long cloudUserId, String installId) {
@@ -248,11 +246,9 @@ public class CloudWebSearchRelayController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("error", "AUTHENTICATION_REQUIRED"));
         }
-        if (!authClient.userOwnsActiveCeLink(String.valueOf(cloudUserId), installId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("error", "CE_LINK_NOT_ACTIVE"));
-        }
-        return null;
+        // Linked AND paid (shared refusal bodies): a suspended link answers
+        // CLOUD_LINK_PLAN_REQUIRED, an unlinked one CE_LINK_NOT_ACTIVE; null = proceed.
+        return CeLinkRefusal.response(authClient.ceLinkAccess(String.valueOf(cloudUserId), installId));
     }
 
     private static int clampMaxResults(int requested) {

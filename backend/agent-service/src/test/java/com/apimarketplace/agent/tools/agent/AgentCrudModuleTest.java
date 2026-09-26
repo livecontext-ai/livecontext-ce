@@ -5,6 +5,7 @@ import com.apimarketplace.agent.service.AgentService;
 import com.apimarketplace.agent.service.ModelCatalogService;
 import com.apimarketplace.agent.service.ModelCatalogService.AvailableModel;
 import com.apimarketplace.agent.service.SkillService;
+import com.apimarketplace.agent.tools.ToolErrorCode;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -83,6 +84,7 @@ class AgentCrudModuleTest {
     class CanHandle {
         @Test void handlesCreate() { assertThat(module.canHandle("create")).isTrue(); }
         @Test void handlesGet() { assertThat(module.canHandle("get")).isTrue(); }
+        @Test void handlesPresent() { assertThat(module.canHandle("present")).isTrue(); }
         @Test void handlesList() { assertThat(module.canHandle("list")).isTrue(); }
         @Test void handlesUpdate() { assertThat(module.canHandle("update")).isTrue(); }
         @Test void handlesDelete() { assertThat(module.canHandle("delete")).isTrue(); }
@@ -112,6 +114,25 @@ class AgentCrudModuleTest {
             assertThat(result).isPresent();
             assertThat(result.get().success()).isTrue();
             assertThat(result.get().toMap().toString()).contains("CREATED");
+        }
+
+        @Test
+        @DisplayName("regression: create response inside a turn carries no creates_in_window counter")
+        void createHasNoAttemptCounter() {
+            AgentEntity created = mockAgent(AGENT_ID, "My Agent");
+            when(agentService.createAgent(eq(TENANT), eq("My Agent"), isNull(), eq("You are helpful."),
+                eq("anthropic"), eq("claude-sonnet-4-6"), any(), eq(16000),
+                isNull(), isNull(), any(), isNull(), isNull(), isNull(), isNull(), isNull(),
+                eq(false), eq(true), isNull(), isNull(), isNull()))
+                .thenReturn(created);
+
+            Optional<ToolExecutionResult> result = module.execute("create",
+                Map.of("action", "create", "name", "My Agent", "system_prompt", "You are helpful."), TENANT, ctx());
+
+            assertThat(result.get().success()).isTrue();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) result.get().data();
+            assertThat(data).doesNotContainKey("creates_in_window");
         }
 
         @Test
@@ -247,6 +268,53 @@ class AgentCrudModuleTest {
         }
 
         @Test
+        @DisplayName("V523: chat_channel_link_id on create stores the agent's destination")
+        void createWithChatDestination() {
+            AgentEntity created = mockAgent(AGENT_ID, "Finance");
+            UUID link = UUID.fromString("77777777-7777-4777-8777-777777777777");
+            when(agentService.createAgent(any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(created);
+            when(agentService.setChatChannelLinkId(eq(AGENT_ID), eq(TENANT), isNull(), eq(link))).thenReturn(created);
+
+            Map<String, Object> params = new HashMap<>(Map.of(
+                "action", "create", "name", "Finance", "system_prompt", "hello",
+                "chat_channel_link_id", link.toString()));
+            Optional<ToolExecutionResult> result = module.execute("create", params, TENANT, ctx());
+
+            assertThat(result.get().success()).isTrue();
+            verify(agentService).setChatChannelLinkId(eq(AGENT_ID), eq(TENANT), isNull(), eq(link));
+        }
+
+        @Test
+        @DisplayName("V524: chat_channel_enabled on create is refused, not silently ignored (a new agent starts on)")
+        void createRefusesChannelSwitch() {
+            Map<String, Object> params = new HashMap<>(Map.of(
+                "action", "create", "name", "Finance", "system_prompt", "hello",
+                "chat_channel_enabled", false));
+            Optional<ToolExecutionResult> result = module.execute("create", params, TENANT, ctx());
+
+            assertThat(result.get().success()).isFalse();
+            assertThat(result.get().toMap().toString()).contains("action='update'").contains("Nothing was created");
+            verify(agentService, never()).createAgent(any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("V523: a chat_channel_link_id that is not an id is refused BEFORE the agent is created")
+        void createRejectsMalformedDestination() {
+            Map<String, Object> params = new HashMap<>(Map.of(
+                "action", "create", "name", "Finance", "system_prompt", "hello",
+                "chat_channel_link_id", "the finance chat"));
+            Optional<ToolExecutionResult> result = module.execute("create", params, TENANT, ctx());
+
+            assertThat(result.get().success()).isFalse();
+            assertThat(result.get().toMap().toString()).contains("channel(action='list')").contains("Nothing was created");
+            verify(agentService, never()).createAgent(any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
         @DisplayName("V340: backlog_enabled absent on create → setBacklogEnabled never called (stays default false)")
         void createWithoutBacklogEnabledLeavesDefault() {
             AgentEntity created = mockAgent(AGENT_ID, "Worker");
@@ -376,6 +444,114 @@ class AgentCrudModuleTest {
             // The sibling that DOES default is still defaulted, so this proves
             // the two are treated differently on purpose rather than by accident.
             assertThat(tc).containsEntry("webSearch", true);
+        }
+    }
+
+    @Nested
+    @DisplayName("present")
+    class Present {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> viz(ToolExecutionResult result) {
+            return (Map<String, Object>) result.metadata().get("visualization");
+        }
+
+        @Test
+        @DisplayName("present emits present_agent named after the agent, and none of get's configuration")
+        void presentsAgent() {
+            when(agentService.getAgent(AGENT_ID, TENANT)).thenReturn(Optional.of(mockAgent(AGENT_ID, "Scout")));
+
+            ToolExecutionResult res = module.execute("present", Map.of("agent_id", AGENT_ID.toString()), TENANT, ctx())
+                    .orElseThrow();
+
+            assertThat(res.success()).isTrue();
+            assertThat(viz(res)).containsEntry("type", "present_agent")
+                    .containsEntry("id", AGENT_ID.toString()).containsEntry("title", "Scout");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) res.data();
+            assertThat(data).containsEntry("presented", "agent").containsEntry("agent_id", AGENT_ID.toString())
+                    .doesNotContainKey("system_prompt");
+        }
+
+        @Test
+        @DisplayName("present looks the agent up in the caller's workspace (org and role threaded), like get")
+        void threadsWorkspace() {
+            when(agentService.getAgent(AGENT_ID, TENANT, "org-1", "MEMBER")).thenReturn(Optional.empty());
+            ToolExecutionContext inOrg = new ToolExecutionContext(TENANT, Map.of(), Map.of(), null, null, null, "org-1", "MEMBER");
+
+            ToolExecutionResult res = module.execute("present", Map.of("agent_id", AGENT_ID.toString()), TENANT, inOrg)
+                    .orElseThrow();
+
+            assertThat(res.errorCode()).isEqualTo(ToolErrorCode.AGENT_NOT_FOUND);
+            assertThat(res.metadata() == null || !res.metadata().containsKey("visualization")).isTrue();
+            verify(agentService, never()).getAgent(AGENT_ID, TENANT);
+        }
+
+        @Test
+        @DisplayName("present obeys the caller's agent allow-list and reads nothing")
+        void respectsAllowList() {
+            ToolExecutionResult res = module.execute("present", Map.of("agent_id", AGENT_ID.toString()), TENANT,
+                    ctxWithAllowedAgents(List.of(UUID.randomUUID().toString()))).orElseThrow();
+
+            assertThat(res.errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
+            verifyNoInteractions(agentService);
+        }
+
+        @Test
+        @DisplayName("the agent's title wins over the agent name")
+        void titleOverride() {
+            when(agentService.getAgent(AGENT_ID, TENANT)).thenReturn(Optional.of(mockAgent(AGENT_ID, "Scout")));
+
+            ToolExecutionResult res = module.execute("present",
+                    Map.of("agent_id", AGENT_ID.toString(), "title", "Your new scout"), TENANT, ctx()).orElseThrow();
+
+            assertThat(viz(res)).containsEntry("title", "Your new scout");
+        }
+
+        @Test
+        @DisplayName("get still returns the configuration and its plain agent visualization, never a present_* switch")
+        void getIsUnchanged() {
+            AgentEntity agent = mockAgent(AGENT_ID, "Scout");
+            agent.setSystemPrompt("Be brief");
+            when(agentService.getAgent(AGENT_ID, TENANT)).thenReturn(Optional.of(agent));
+
+            ToolExecutionResult res = module.execute("get", Map.of("agent_id", AGENT_ID.toString()), TENANT, ctx())
+                    .orElseThrow();
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) res.data();
+            assertThat(data).containsEntry("system_prompt", "Be brief");
+            assertThat(viz(res)).containsEntry("type", "agent");
+        }
+
+        @Test
+        @DisplayName("a failing lookup is reported as a failed present, not a success")
+        void lookupFailureIsReported() {
+            when(agentService.getAgent(AGENT_ID, TENANT)).thenThrow(new RuntimeException("db down"));
+
+            ToolExecutionResult res = module.execute("present", Map.of("agent_id", AGENT_ID.toString()), TENANT, ctx())
+                    .orElseThrow();
+
+            assertThat(res.errorCode()).isEqualTo(ToolErrorCode.EXECUTION_FAILED);
+            assertThat(res.error()).contains("Failed to present agent");
+        }
+
+        @Test
+        @DisplayName("present without agent_id is a missing parameter")
+        void missingId() {
+            assertThat(module.execute("present", Map.of(), TENANT, ctx()).orElseThrow().errorCode())
+                    .isEqualTo(ToolErrorCode.MISSING_PARAMETER);
+        }
+
+        @Test
+        @DisplayName("a read-only agent tool may present: it changes nothing")
+        void readOnlyMayPresent() {
+            when(agentService.getAgent(AGENT_ID, TENANT)).thenReturn(Optional.of(mockAgent(AGENT_ID, "Scout")));
+            ToolExecutionContext readOnly = new ToolExecutionContext(TENANT, Map.of("agentAccessMode", "read"), Map.of(),
+                    null, null, null, null, null);
+
+            assertThat(module.execute("present", Map.of("agent_id", AGENT_ID.toString()), TENANT, readOnly)
+                    .orElseThrow().success()).isTrue();
         }
     }
 
@@ -577,6 +753,110 @@ class AgentCrudModuleTest {
             assertThat(result).isPresent();
             assertThat(result.get().success()).isTrue();
             assertThat(result.get().toMap().toString()).contains("UPDATED");
+        }
+
+        @Test
+        @DisplayName("regression: update response carries no 'update 1/3' attempt counter")
+        void updateHasNoAttemptCounter() {
+            AgentEntity existing = mockAgent(AGENT_ID, "Old Name");
+            when(agentService.getAgent(AGENT_ID, TENANT)).thenReturn(Optional.of(existing));
+            AgentEntity updated = mockAgent(AGENT_ID, "New Name");
+            when(agentService.updateAgent(eq(AGENT_ID), eq(TENANT), eq("New Name"),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(),
+                isNull(), isNull(), isNull(), isNull(), isNull(), any(),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(),
+                isNull(), isNull()))
+                .thenReturn(updated);
+
+            Map<String, Object> params = Map.of("action", "update", "agent_id", AGENT_ID.toString(), "name", "New Name");
+            Optional<ToolExecutionResult> result = module.execute("update", params, TENANT, ctx());
+
+            assertThat(result.get().success()).isTrue();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) result.get().data();
+            assertThat(data).doesNotContainKeys("updateCount", "maxUpdates");
+            assertThat((String) data.get("message")).startsWith("Agent 'New Name' updated successfully.")
+                    .doesNotContainPattern("update \\d+/\\d+");
+        }
+
+        @Test
+        @DisplayName("V523: chat_channel_link_id '' on update goes back to the workspace default")
+        void updateBlankDestinationIsDefault() {
+            AgentEntity existing = mockAgent(AGENT_ID, "Finance");
+            when(agentService.getAgent(AGENT_ID, TENANT)).thenReturn(Optional.of(existing));
+            when(agentService.updateAgent(eq(AGENT_ID), eq(TENANT), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any()))
+                .thenReturn(existing);
+            when(agentService.setChatChannelLinkId(eq(AGENT_ID), eq(TENANT), any(), isNull())).thenReturn(existing);
+
+            Map<String, Object> params = Map.of("action", "update", "agent_id", AGENT_ID.toString(),
+                "chat_channel_link_id", "");
+            Optional<ToolExecutionResult> result = module.execute("update", params, TENANT, ctx());
+
+            assertThat(result.get().success()).isTrue();
+            verify(agentService).setChatChannelLinkId(eq(AGENT_ID), eq(TENANT), any(), isNull());
+        }
+
+        @Test
+        @DisplayName("V524: chat_channel_enabled is applied BEFORE require_tool_authorization, so on + arm works in one call")
+        void switchOnThenArm() {
+            AgentEntity existing = mockAgent(AGENT_ID, "Finance");
+            when(agentService.getAgent(AGENT_ID, TENANT)).thenReturn(Optional.of(existing));
+            when(agentService.updateAgent(eq(AGENT_ID), eq(TENANT), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any()))
+                .thenReturn(existing);
+            when(agentService.setChatChannelEnabled(eq(AGENT_ID), eq(TENANT), any(), eq(true))).thenReturn(existing);
+            when(agentService.setRequireToolAuthorization(eq(AGENT_ID), eq(TENANT), any(), eq(true))).thenReturn(existing);
+
+            Map<String, Object> params = Map.of("action", "update", "agent_id", AGENT_ID.toString(),
+                "chat_channel_enabled", true, "require_tool_authorization", true);
+            Optional<ToolExecutionResult> result = module.execute("update", params, TENANT, ctx());
+
+            assertThat(result.get().success()).isTrue();
+            org.mockito.InOrder order = org.mockito.Mockito.inOrder(agentService);
+            order.verify(agentService).setChatChannelEnabled(eq(AGENT_ID), eq(TENANT), any(), eq(true));
+            order.verify(agentService).setRequireToolAuthorization(eq(AGENT_ID), eq(TENANT), any(), eq(true));
+        }
+
+        @Test
+        @DisplayName("V524: turning the channel off and arming in the same call is refused before anything is written")
+        void offAndArmIsRefused() {
+            Map<String, Object> params = Map.of("action", "update", "agent_id", AGENT_ID.toString(),
+                "name", "Renamed", "chat_channel_enabled", false, "require_tool_authorization", true);
+            Optional<ToolExecutionResult> result = module.execute("update", params, TENANT, ctx());
+
+            assertThat(result.get().success()).isFalse();
+            assertThat(result.get().toMap().toString()).contains("nowhere to ask").contains("Nothing was changed");
+            verify(agentService, never()).updateAgent(any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any());
+            verify(agentService, never()).setChatChannelEnabled(any(), any(), any(), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("V524: a chat_channel_enabled that is not a boolean changes nothing")
+        void switchMustBeBoolean() {
+            Map<String, Object> params = Map.of("action", "update", "agent_id", AGENT_ID.toString(),
+                "chat_channel_enabled", "sometimes");
+            Optional<ToolExecutionResult> result = module.execute("update", params, TENANT, ctx());
+
+            assertThat(result.get().success()).isFalse();
+            assertThat(result.get().toMap().toString()).contains("Nothing was changed");
+            verify(agentService, never()).setChatChannelEnabled(any(), any(), any(), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("V523: a malformed chat_channel_link_id on update changes nothing")
+        void updateRejectsMalformedDestination() {
+            Map<String, Object> params = Map.of("action", "update", "agent_id", AGENT_ID.toString(),
+                "chat_channel_link_id", "slack");
+            Optional<ToolExecutionResult> result = module.execute("update", params, TENANT, ctx());
+
+            assertThat(result.get().success()).isFalse();
+            assertThat(result.get().toMap().toString()).contains("Nothing was changed");
+            verify(agentService, never()).setChatChannelLinkId(any(), any(), any(), any());
         }
 
         @Test

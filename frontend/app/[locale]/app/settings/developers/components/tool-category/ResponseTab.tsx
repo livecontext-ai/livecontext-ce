@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Info, CheckCircle, AlertCircle } from 'lucide-react';
+import React from 'react';
+import { CheckCircle, AlertCircle } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { useTranslations } from 'next-intl';
 import { ResponseTabProps } from './types';
 
@@ -9,7 +10,6 @@ const ResponseTab: React.FC<ResponseTabProps> = ({
   onToolUpdate
 }) => {
   const t = useTranslations('developers');
-  const [showInfo, setShowInfo] = useState(false);
 
   const handleDescriptionChange = (description: string) => {
     const updatedTool = {
@@ -105,34 +105,18 @@ const ResponseTab: React.FC<ResponseTabProps> = ({
       <div className="mb-4">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center space-x-2">
-            <button
-              type="button"
-              onClick={() => setShowInfo(!showInfo)}
-              className="text-theme-muted hover:text-theme-primary transition-colors duration-200"
-            >
-              <Info className="w-4 h-4" />
-            </button>
             <label className="block text-sm font-medium text-theme-primary">
               {t('responseTab.successResponse')}
             </label>
+            <InfoPopover label={t('responseTab.successResponse')} side="bottom" align="start" contentClassName="w-80">
+              <p className="mb-1">
+                <strong>{t('responseTab.autoResponseLabel')}</strong> {t('responseTab.autoResponseText')}
+              </p>
+              <p>{t('responseTab.formatDependsOnType')}</p>
+            </InfoPopover>
           </div>
         </div>
 
-        {showInfo && (
-          <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg">
-            <div className="flex items-start space-x-3">
-              <Info className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
-              <div className="text-sm text-blue-700 dark:text-blue-300">
-                <p className="mb-1">
-                  <strong>{t('responseTab.autoResponseLabel')}</strong> {t('responseTab.autoResponseText')}
-                </p>
-                <p>
-                  {t('responseTab.formatDependsOnType')}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
 
         <textarea
           value={formatTestResult()}

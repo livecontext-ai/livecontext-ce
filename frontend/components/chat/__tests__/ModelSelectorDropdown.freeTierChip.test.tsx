@@ -194,6 +194,19 @@ describe('ModelSelectorDropdown - the free chip on the composer', () => {
     expect(chip.parentElement).toHaveClass('shrink-0');
   });
 
+  it('regression: centres the chip on the model name instead of the text baseline', () => {
+    // The wrapper used to be a bare inline span: as a flex item it kept the
+    // button's taller inherited line box, and the inline-flex chip inside sat on
+    // that box's baseline, visibly lower than the model name. jsdom measures no
+    // layout, so what is pinned is the shape that centres it: a flex wrapper
+    // aligning its child on the cross axis, like the button around it.
+    renderComposer({ prefersFreeTierModels: true, ...WITH_ALLOWANCE });
+
+    const slot = screen.getByTestId('free-chip').parentElement as HTMLElement;
+    expect(slot).toHaveClass('flex', 'items-center');
+    expect(slot.parentElement).toHaveClass('items-center');
+  });
+
   it('renders nothing extra when the host injects no badge', () => {
     renderComposer({ prefersFreeTierModels: true, ...WITH_ALLOWANCE, freeTierBadge: undefined });
 
@@ -248,8 +261,12 @@ describe('ModelSelectorDropdown - the menu rows', () => {
     // inside the shared row). Asserted here because this is where the icon lives.
     renderComposer({ prefersFreeTierModels: true, ...WITH_ALLOWANCE });
 
-    expect(screen.getByTestId('icon-openai')).toHaveClass('opacity-50');
-    expect(screen.getByTestId('icon-google')).not.toHaveClass('opacity-50');
+    // OpenAI ships a dark-theme file, so its icon is drawn twice (one per theme, the
+    // other hidden by CSS): BOTH copies must fade, or the dark theme shows it full strength.
+    const openai = screen.getAllByTestId('icon-openai');
+    expect(openai).toHaveLength(2);
+    for (const icon of openai) expect(icon).toHaveClass('opacity-50');
+    for (const icon of screen.getAllByTestId('icon-google')) expect(icon).not.toHaveClass('opacity-50');
   });
 
   it('never fades the row itself, which would take its 11px meta line under AA', () => {

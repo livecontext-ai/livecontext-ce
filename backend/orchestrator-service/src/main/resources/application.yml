@@ -4,9 +4,11 @@ server:
     max-http-form-post-size: 52428800
   # Graceful shutdown - Tomcat stops accepting new HTTP requests at context-close start
   # and waits up to spring.lifecycle.timeout-per-shutdown-phase for in-flight requests
-  # to finish. Pairs with AgentDrainCoordinator @PreDestroy which waits for in-flight
-  # async work (Redis pub/sub agents, RUNNING workflow runs). Post-2026-05-22 21:01 UTC
-  # OOM hardening - see OrchestratorLifecycleGate.
+  # to finish. Pairs with AgentDrainCoordinator, which first waits for the work THIS pod
+  # owns: its pending async agents, the agent results it is delivering, and the runs
+  # executing on its queue workers or started on the common pool. Another replica's work
+  # is never waited for. Post-2026-05-22 21:01 UTC OOM hardening - see
+  # OrchestratorLifecycleGate.
   shutdown: graceful
 
 # PostHog server-side product analytics (summarized "what agents/workflows do").
@@ -24,7 +26,7 @@ posthog:
 #    skips the zombie scan - gives AgentRecoveryService.replayInFlightEntries time to
 #    re-deliver any in-flight ack records orphaned by a crash. 60 s matches the observed
 #    17 s startup-recovery time of the 2026-05-22 incident with 3× safety margin.
-#  - drain-timeout: how long AgentDrainCoordinator @PreDestroy waits for in-flight work
+#  - drain-timeout: how long AgentDrainCoordinator waits for this pod's own in-flight work
 #    to settle before logging the orphan list and exiting. 60 s pairs with the 90 s
 #    Spring lifecycle phase ceiling above.
 # Piston code execution engine

@@ -94,7 +94,7 @@ public class WorkflowStepDataBulkInserter {
                 loop_id, loop_iteration, loop_exit_reason,
                 merge_strategy, merge_received_branches, merge_skipped_branches,
                 skip_reason, skip_source_node,
-                normalized_key, item_number
+                normalized_key, item_number, is_mocked
             ) VALUES (
                 :workflow_run_id, :run_id, :step_alias, :tool_id,
                 :status, :tenant_id, :organization_id, :epoch, :spawn, :iteration, :item_index,
@@ -105,7 +105,7 @@ public class WorkflowStepDataBulkInserter {
                 :loop_id, :loop_iteration, :loop_exit_reason,
                 :merge_strategy, CAST(:merge_received_branches AS jsonb), CAST(:merge_skipped_branches AS jsonb),
                 :skip_reason, :skip_source_node,
-                :normalized_key, :item_number
+                :normalized_key, :item_number, :is_mocked
             )
             ON CONFLICT ON CONSTRAINT idx_workflow_step_data_unique_v6 DO NOTHING
             """;
@@ -246,6 +246,7 @@ public class WorkflowStepDataBulkInserter {
         // Display helpers
         p.addValue("normalized_key", e.getNormalizedKey());
         p.addValue("item_number", e.getItemNumber());
+        p.addValue("is_mocked", e.isMocked());
         return p;
     }
 

@@ -25,6 +25,7 @@ import { normalizeIconSlug, resolveIconSlug } from '@/lib/credentials/iconSlug';
 
 import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
 import { getSideAttachment } from './handleGeometry';
+import { ServiceLogo } from '@/components/ui/service-logo';
 export type IconComponent = React.ComponentType<{ className?: string; strokeWidth?: number }>;
 
 /**
@@ -358,7 +359,7 @@ export interface NodeIconProps {
   size?: NodeIconSize;
   /** Background class (overrides auto-detection) */
   bgClassName?: string;
-  /** Whether this is an MCP node (shows MCP logo as fallback) */
+  /** Whether this is an MCP-family node (shows the integration icon, or the MCP logo for protocol nodes, as fallback) */
   isMcp?: boolean;
   /** Agent avatar URL (preset or custom) - takes priority over iconSlug */
   avatarUrl?: string;
@@ -413,8 +414,8 @@ export function NodeIcon({
   // The catalog's `mcp` sentinel (COALESCE(icon_slug,'mcp')) is dropped up
   // front: it is a truthy placeholder for "this API has no icon", and taking it
   // at face value rendered /icons/services/mcp.svg - a generic "API" circle -
-  // on the SUCCESS path, so onError never fired and the MCP logo below was
-  // unreachable.
+  // on the SUCCESS path, so onError never fired and the integration icon below
+  // was unreachable.
   //
   // The separator collapse is a RETRY, not the primary lookup. Most files on
   // disk are separator-free ("googlesheets.svg"), but a handful are genuinely
@@ -422,7 +423,7 @@ export function NodeIcon({
   // "audit-tracking.svg") and are fed verbatim by getProviderIconSlug on every
   // Classify/Guardrail node. Normalizing up front would 404 those - trading one
   // missing-logo class for another. So: try the slug as given, and only if that
-  // 404s fall back to the normalized form, then to the MCP logo.
+  // 404s fall back to the normalized form, then to the integration icon.
   const rawIconSlug = React.useMemo(() => resolveIconSlug(iconSlug), [iconSlug]);
   const normalizedIconSlug = React.useMemo(() => {
     const normalized = normalizeIconSlug(rawIconSlug);
@@ -432,7 +433,7 @@ export function NodeIcon({
   // 0 = slug as given, 1 = normalized retry, 2 = exhausted (no static icon).
   // Reset DURING render (not in an effect) when the incoming slug changes: an
   // effect-based reset paints one frame with the previous node's exhausted
-  // ladder, flashing the MCP/lucide glyph over an icon that resolves fine.
+  // ladder, flashing the integration/lucide glyph over an icon that resolves fine.
   const [slugAttempt, setSlugAttempt] = React.useState(0);
   const [attemptedSlug, setAttemptedSlug] = React.useState(rawIconSlug);
   if (attemptedSlug !== rawIconSlug) {
@@ -456,7 +457,7 @@ export function NodeIcon({
   }, [bgClassName, effectiveIconSlug, iconUrl, iconUrlError, authIconUrl, resolved.iconBg, radiusClass]);
 
   // A 404 on the slug as given falls back to the normalized form once, then
-  // gives up so the dynamic icon / MCP logo / lucide glyph can take over.
+  // gives up so the dynamic icon / integration icon / lucide glyph can take over.
   const handleImageError = React.useCallback(() => {
     setSlugAttempt((attempt) => (attempt === 0 && normalizedIconSlug ? 1 : 2));
   }, [normalizedIconSlug]);
@@ -480,8 +481,13 @@ export function NodeIcon({
   // Render dynamic icon URL (custom API icons from S3) - fallback when static SVG not found
   const shouldShowDynamicIcon = !shouldShowServiceIcon && authIconUrl && !iconUrlError;
 
-  // Render MCP logo (when MCP node and no service/dynamic icon)
+  // Render the integration icon (when MCP-family node and no service/dynamic icon).
+  // MCP Interface / MCP Resource really are the protocol, so they keep the MCP logo.
   const shouldShowMcpFallback = isEffectivelyMcp && !shouldShowServiceIcon && !shouldShowDynamicIcon;
+  const isProtocolMcpNode = nodeId.startsWith('mcp-interface') || nodeId.startsWith('mcp-resource') || nodeFamily === 'mcp-resource';
+  const mcpFallbackSrc = isProtocolMcpNode
+    ? (isDark ? '/icons/mcp.png' : '/icons/mcp_black.png')
+    : (isDark ? '/icons/integration.svg' : '/icons/integration_black.svg');
 
   return (
     <div
@@ -493,7 +499,8 @@ export function NodeIcon({
       )}
     >
       {shouldShowServiceIcon ? (
-        <Image
+        <ServiceLogo
+          as={Image}
           // Keyed on the slug so the normalized retry actually remounts the
           // <img> and re-fires onError if that 404s too.
           key={effectiveIconSlug}
@@ -515,8 +522,8 @@ export function NodeIcon({
         />
       ) : shouldShowMcpFallback ? (
         <Image
-          src={isDark ? '/mcp.png' : '/mcp_black.png'}
-          alt="MCP"
+          src={mcpFallbackSrc}
+          alt={isProtocolMcpNode ? 'MCP' : 'Integration'}
           width={sizeConfig.image}
           height={sizeConfig.image}
           style={{ width: sizeConfig.image, height: sizeConfig.image }}

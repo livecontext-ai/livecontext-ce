@@ -145,6 +145,34 @@ class CatalogToolsGatewayRefusalLogLevelTest {
     }
 
     @Test
+    @DisplayName("a 404 TOOL_NOT_FOUND is a WARN and tells the step the tool no longer exists")
+    void toolNotFoundIsWarnWithReadableMessage() {
+        // The catalogue used to answer a stale tool id with a 500; now it answers 404 with the
+        // TOOL_NOT_FOUND code, which is a stale reference in the workflow, not an incident.
+        ExecutionResult result = callWith(HttpStatus.NOT_FOUND,
+                "{\"success\":false,\"error\":\"TOOL_NOT_FOUND\",\"message\":\"Tool not found: instagram/publish\"}");
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.errors()).singleElement().satisfies(err -> {
+            assertThat(err).containsEntry("type", "tool_not_found");
+            assertThat(err.get("message")).contains("instagram/publish").contains("no longer exists")
+                    .contains("search the catalog").contains("update the step's tool id");
+        });
+        assertThat(appender.list).noneMatch(e -> e.getLevel() == Level.ERROR);
+        assertThat(appender.list).anySatisfy(e -> assertThat(e.getLevel()).isEqualTo(Level.WARN));
+    }
+
+    @Test
+    @DisplayName("a 404 WITHOUT the TOOL_NOT_FOUND code keeps ERROR and the generic reading")
+    void other404StaysError() {
+        ExecutionResult result = callWith(HttpStatus.NOT_FOUND, "{\"error\":\"NOT_FOUND\"}");
+
+        assertThat(result.errors()).singleElement()
+                .satisfies(err -> assertThat(err).containsEntry("type", "execution_error"));
+        assertThat(appender.list).anySatisfy(e -> assertThat(e.getLevel()).isEqualTo(Level.ERROR));
+    }
+
+    @Test
     @DisplayName("a 500 from the catalogue keeps ERROR and its stack - that one is ours")
     void serverErrorStaysErrorWithStack() {
         when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(HttpEntity.class), any(Class.class)))

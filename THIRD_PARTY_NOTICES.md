@@ -13,6 +13,7 @@ does not modify the LICENSE terms.
 | DiceBear (avatar composition) | avatar generation, authoring time | MIT | https://www.dicebear.com/ |
 | Comfortaa (font) | `infra/keycloak/themes/livecontext/.../fonts/comfortaa-*.ttf` | SIL OFL 1.1 | Redistribution permitted; the OFL text must accompany the font files. |
 | Inter (font) | `infra/keycloak/themes/livecontext/.../fonts/inter-latin.woff2` | SIL OFL 1.1 | Redistribution permitted; the OFL text must accompany the font files. |
+| Outfit (font) | `frontend/public/landing/og/fonts/outfit-latin-*.woff` | SIL OFL 1.1 | Share-card renderer. The OFL text ships alongside (`OFL.txt` in the same directory). |
 
 ## Notable runtime dependencies
 

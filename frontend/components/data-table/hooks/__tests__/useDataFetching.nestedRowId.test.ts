@@ -206,6 +206,24 @@ describe('useDataFetching nested workflow rows - real id preservation', () => {
     expect(result.current.rows[1]._injectedDataKeys).toEqual(['id', 'array_index']);
   });
 
+  it('leaves the id to the fixed lane when the view builds one', async () => {
+    const { result } = setup('output.rows', true);
+    await act(async () => {
+      await result.current.fetchData(1, 100);
+    });
+
+    expect(result.current.columns.map(c => c.field)).toEqual(['id', 'email']);
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('/output/detailed')) return Promise.resolve(okJson({ rows: [{ id: 1, output: { title: 'a' } }], columns: [] }));
+      throw new Error(`unexpected url ${url}`);
+    });
+    const withLane = setup('output', true);
+    await act(async () => {
+      await withLane.result.current.fetchData(1, 100);
+    });
+    expect(withLane.result.current.columns.map(c => c.field)).toEqual(['title']);
+  });
+
   it('declares the injected id for a primitive nested value too', async () => {
     mockFetch.mockImplementation((url: string) => {
       if (url.includes('/output/detailed')) {

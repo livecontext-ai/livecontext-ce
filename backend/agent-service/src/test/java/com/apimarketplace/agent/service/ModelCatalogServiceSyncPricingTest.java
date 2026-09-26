@@ -458,13 +458,13 @@ class ModelCatalogServiceSyncPricingTest {
         open.setFreeTierEnabled(true);
         ModelConfigOverrideEntity closed = input("openai", "gpt-5",
                 new BigDecimal("2.00"), new BigDecimal("8.00"));
-        when(repository.findAllByOrderByRankingAsc()).thenReturn(java.util.List.of(open, closed));
+        when(repository.findByRetiredAtIsNull()).thenReturn(java.util.List.of(open, closed));
         mirrorAccepts();
 
         service.resetAll();
 
         verify(authPricingSyncClient).sync(eq("anthropic"), eq("haiku"), any(), any(), any(), any(), any(), eq(false));
         verify(authPricingSyncClient, never()).sync(eq("openai"), eq("gpt-5"), any(), any(), any(), any(), any(), any());
-        verify(repository).deleteAll();
+        verify(repository).deleteAll(java.util.List.of(open, closed));
     }
 }

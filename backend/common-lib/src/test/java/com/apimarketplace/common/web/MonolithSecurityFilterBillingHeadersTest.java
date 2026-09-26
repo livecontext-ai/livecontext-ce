@@ -138,6 +138,8 @@ class MonolithSecurityFilterBillingHeadersTest {
                         // calls to someone else's workflow. The sweep in the gateway's
                         // BillingContextHeadersTest had been failing on exactly this.
                         "X-Lc-Workflow-Id",
-                        "X-Lc-Node-Id");
+                        "X-Lc-Node-Id",
+                        // Shaping, added 2026-09-23: lifts the catalog text clip; only a workflow step may send it.
+                        "X-Lc-Step-Output");
     }
 }

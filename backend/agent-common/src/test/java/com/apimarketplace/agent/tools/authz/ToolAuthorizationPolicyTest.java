@@ -255,4 +255,44 @@ class ToolAuthorizationPolicyTest {
 
         assertThat(ToolAuthorizationPolicy.conditionalRuleKey("agent", "create", nested)).isNull();
     }
+
+    @Test
+    @DisplayName("Turning an agent's authorization requirement OFF has to be authorized")
+    void disarmingToolAuthorizationIsGated() {
+        // Otherwise the guard is bypassed by one ungated call: an agent required to ask
+        // before publishing simply stops being required to.
+        Map<String, Object> disarm = Map.of(
+                "action", "update", "agent_id", "a-1", "require_tool_authorization", false);
+
+        assertThat(ToolAuthorizationPolicy.conditionalRuleKey("agent", "update", disarm))
+                .isEqualTo(ToolAuthorizationPolicy.RULE_AGENT_DISARM);
+    }
+
+    @Test
+    @DisplayName("Disarming nested under params is gated too, which is the shape models send")
+    void disarmingNestedUnderParamsIsGated() {
+        Map<String, Object> nested = Map.of(
+                "action", "update",
+                "params", Map.of("agent_id", "a-1", "require_tool_authorization", "false"));
+
+        assertThat(ToolAuthorizationPolicy.conditionalRuleKey("agent", "update", nested))
+                .isEqualTo(ToolAuthorizationPolicy.RULE_AGENT_DISARM);
+    }
+
+    @Test
+    @DisplayName("Turning it ON is not gated: tightening needs nobody's permission")
+    void armingToolAuthorizationIsNotGated() {
+        Map<String, Object> arm = Map.of(
+                "action", "update", "agent_id", "a-1", "require_tool_authorization", true);
+
+        assertThat(ToolAuthorizationPolicy.conditionalRuleKey("agent", "update", arm)).isNull();
+    }
+
+    @Test
+    @DisplayName("An update that does not mention the flag gates nothing")
+    void updateWithoutTheFlagIsNotGated() {
+        Map<String, Object> rename = Map.of("action", "update", "agent_id", "a-1", "name", "New name");
+
+        assertThat(ToolAuthorizationPolicy.conditionalRuleKey("agent", "update", rename)).isNull();
+    }
 }

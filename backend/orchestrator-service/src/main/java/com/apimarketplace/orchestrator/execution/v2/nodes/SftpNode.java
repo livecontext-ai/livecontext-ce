@@ -67,13 +67,32 @@ public class SftpNode extends BaseNode {
         this.mimeTypeRegistry = mimeTypeRegistry;
     }
 
+    /** A templated port / timeout is reported through the workspace-variable rule. */
+    private void reportDeferred(Map<String, Object> resolvedParams, String field, Object value) {
+        String template = deferredScalar("sftp", field);
+        if (template != null) {
+            resolvedParams.put(field,
+                com.apimarketplace.orchestrator.services.template.ReportedParams.valueFrom(template, value));
+        }
+    }
+
     @Override
     public NodeExecutionResult execute(ExecutionContext context) {
         long startTime = System.currentTimeMillis();
 
-        if (config == null) {
+        if (this.config == null) {
             return NodeExecutionResult.failureWithOutput(nodeId,
                 "SFTP configuration is required.",
+                Map.of("node_type", "SFTP", "resolved_params", Map.of()),
+                System.currentTimeMillis() - startTime);
+        }
+        // This execution's config: a {{...}} port or timeout resolved now, never the default.
+        // A local, not the field: the node is shared by concurrent items.
+        Core.SftpConfig config;
+        try {
+            config = withDeferredScalars("sftp", this.config, Core.SftpConfig.class, context);
+        } catch (IllegalStateException e) {
+            return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(),
                 Map.of("node_type", "SFTP", "resolved_params", Map.of()),
                 System.currentTimeMillis() - startTime);
         }
@@ -86,6 +105,16 @@ public class SftpNode extends BaseNode {
         if (credentialId != null && credentialClient != null) {
             Optional<CredentialSummaryDto> cred = credentialClient.getCredentialById(context.tenantId(), credentialId);
             if (cred.isEmpty()) {
+                String credentialTemplate = deferredScalar("sftp", "credentialId");
+                if (credentialTemplate != null) {
+                    // A credential chosen by a {{...}} reference is never swapped for the default:
+                    // upstream data picked it, and running on another account would hide that.
+                    return NodeExecutionResult.failureWithOutput(nodeId,
+                        "sftp.credentialId '" + credentialTemplate + "' resolved to credential " + credentialId
+                            + ", which is not available. No other credential was used.",
+                        Map.of("node_type", "SFTP", "resolved_params", Map.of()),
+                        System.currentTimeMillis() - startTime);
+                }
                 logger.warn("SFTP credential {} not found, falling back to default", credentialId);
                 cred = credentialClient.getDefaultCredential(context.tenantId(), SFTP_INTEGRATION);
             }
@@ -114,7 +143,9 @@ public class SftpNode extends BaseNode {
 
         // Operation-specific fields always come from config
         String remotePath = resolveTemplateString(config.remotePath(), context);
-        String localContent = resolveTemplateString(config.localContent(), context);
+        // Typed: a reference to a FILE uploads that file's bytes. As a string it was the file's
+        // Java toString ("{_type=file, path=...}"), and that text was uploaded as the content.
+        Object localValue = resolveTemplateValue(config.localContent(), context);
         String newPath = resolveTemplateString(config.newPath(), context);
         int timeout = config.timeout() != null ? config.timeout() : DEFAULT_TIMEOUT;
         String operation = config.operation();
@@ -126,13 +157,30 @@ public class SftpNode extends BaseNode {
         Map<String, Object> resolvedParams = new LinkedHashMap<>();
         resolvedParams.put("host", host);
         resolvedParams.put("port", port);
+        reportDeferred(resolvedParams, "port", port);
         resolvedParams.put("username", username);
         resolvedParams.put("authMethod", authMethod);
         resolvedParams.put("operation", operation);
         resolvedParams.put("remotePath", remotePath);
         if (newPath != null && !newPath.isBlank()) resolvedParams.put("newPath", newPath);
-        if (localContent != null) resolvedParams.put("localContentSize", localContent.length());
+        byte[] uploadBytes = null;
+        if ("upload".equals(operation) && localValue != null) {
+            try {
+                uploadBytes = uploadBytesOf(localValue);
+            } catch (IllegalStateException e) {
+                resolvedParams.put("timeout", timeout);
+                reportDeferred(resolvedParams, "timeout", timeout);
+                return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(),
+                    buildErrorResult(host, operation, remotePath, startTime, resolvedParams),
+                    System.currentTimeMillis() - startTime);
+            }
+            resolvedParams.put("localContentSize", uploadBytes.length);
+        } else if (localValue != null) {
+            String localText = com.apimarketplace.orchestrator.services.TemplateEngine.asText(localValue);
+            resolvedParams.put("localContentSize", localText.length());
+        }
         resolvedParams.put("timeout", timeout);
+        reportDeferred(resolvedParams, "timeout", timeout);
 
 
         logger.info("SFTP node executing: nodeId={}, host={}, port={}, operation={}, remotePath={}, itemId={}",
@@ -179,7 +227,7 @@ public class SftpNode extends BaseNode {
             channel.connect(timeout);
 
             Map<String, Object> result = switch (operation) {
-                case "upload" -> executeUpload(channel, remotePath, localContent);
+                case "upload" -> executeUpload(channel, remotePath, uploadBytes);
                 case "download" -> executeDownload(channel, remotePath, context);
                 case "list" -> executeList(channel, remotePath);
                 case "delete" -> executeDelete(channel, remotePath);
@@ -222,18 +270,41 @@ public class SftpNode extends BaseNode {
     }
 
     @SuppressWarnings("unchecked")
-    private Map<String, Object> executeUpload(ChannelSftp channel, String remotePath, String localContent)
+    private Map<String, Object> executeUpload(ChannelSftp channel, String remotePath, byte[] data)
             throws Exception {
-        if (localContent == null || localContent.isEmpty()) {
+        if (data == null || data.length == 0) {
             throw new IllegalArgumentException("SFTP upload: 'localContent' is required.");
         }
-        byte[] data = localContent.getBytes(StandardCharsets.UTF_8);
         try (ByteArrayInputStream bais = new ByteArrayInputStream(data)) {
             channel.put(bais, remotePath);
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("uploaded_size", data.length);
         return result;
+    }
+
+    /**
+     * The bytes an upload sends. A file reference is downloaded from storage; anything else is
+     * its text (JSON for a structure).
+     *
+     * @throws IllegalStateException when the reference is a file that cannot be read, so the node
+     *         fails instead of uploading a description of the file
+     */
+    private byte[] uploadBytesOf(Object localValue) {
+        if (localValue instanceof Map<?, ?> map && "file".equals(map.get("_type"))) {
+            if (!(map.get("path") instanceof String path) || path.isBlank()) {
+                throw new IllegalStateException("SFTP upload: the file "
+                    + com.apimarketplace.orchestrator.domain.file.FileRefMessages.NO_STORAGE_PATH);
+            }
+            if (fileStorageService == null) {
+                throw new IllegalStateException(
+                    "SFTP upload: file storage is not available to read the referenced file: " + path);
+            }
+            return fileStorageService.download(path)
+                .orElseThrow(() -> new IllegalStateException("SFTP upload: file not found in storage: " + path));
+        }
+        String text = com.apimarketplace.orchestrator.services.TemplateEngine.asText(localValue);
+        return text.getBytes(StandardCharsets.UTF_8);
     }
 
     private Map<String, Object> executeDownload(ChannelSftp channel, String remotePath, ExecutionContext context)

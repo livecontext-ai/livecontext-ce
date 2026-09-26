@@ -90,20 +90,55 @@ class KeycloakSamlIdentityProviderClientTest {
         assertThat(config).containsEntry("validateSignature", "true");
 
         ArgumentCaptor<HttpEntity<Map<String, Object>>> mapperCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate, times(3)).exchange(
+        verify(restTemplate, times(13)).exchange(
                 eq(mappersUrl()),
                 eq(HttpMethod.POST),
                 mapperCaptor.capture(),
                 eq(Void.class));
         assertThat(mapperCaptor.getAllValues())
                 .extracting(entity -> entity.getBody().get("name"))
-                .containsExactly("livecontext-email", "livecontext-first-name", "livecontext-last-name");
+                .startsWith("livecontext-email", "livecontext-first-name", "livecontext-last-name")
+                .doesNotHaveDuplicates();
 
         @SuppressWarnings("unchecked")
         Map<String, String> emailMapperConfig = (Map<String, String>) mapperCaptor.getAllValues().get(0).getBody().get("config");
         assertThat(emailMapperConfig).containsEntry("user.attribute", "email");
         assertThat(emailMapperConfig)
                 .containsEntry("attribute.name", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress");
+    }
+
+    @Test
+    @DisplayName("maps the plain and OID attribute names Okta, Google and Shibboleth send, not only the ADFS URIs")
+    @SuppressWarnings("unchecked")
+    void mapsCommonNonAdfsAttributeNames() {
+        // Live test against a non-ADFS IdP (attributes email / firstName / lastName) produced a
+        // user with no first or last name: only the xmlsoap claim URIs were mapped.
+        stubTokenFetchOk();
+        when(restTemplate.exchange(eq(instanceUrl()), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenThrow(new HttpClientErrorException(HttpStatus.NOT_FOUND));
+        stubMappersFetchEmpty();
+
+        client.upsert(connection(true));
+
+        ArgumentCaptor<HttpEntity<Map<String, Object>>> mapperCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate, times(13)).exchange(eq(mappersUrl()), eq(HttpMethod.POST), mapperCaptor.capture(), eq(Void.class));
+        Map<String, String> attributeToUserField = new java.util.HashMap<>();
+        for (HttpEntity<Map<String, Object>> entity : mapperCaptor.getAllValues()) {
+            Map<String, String> config = (Map<String, String>) entity.getBody().get("config");
+            attributeToUserField.put(config.get("attribute.name"), config.get("user.attribute"));
+        }
+        assertThat(attributeToUserField)
+                .containsEntry("email", "email")
+                .containsEntry("mail", "email")
+                .containsEntry("urn:oid:0.9.2342.19200300.100.1.3", "email")
+                .containsEntry("firstName", "firstName")
+                .containsEntry("givenName", "firstName")
+                .containsEntry("urn:oid:2.5.4.42", "firstName")
+                .containsEntry("lastName", "lastName")
+                .containsEntry("sn", "lastName")
+                .containsEntry("surname", "lastName")
+                .containsEntry("urn:oid:2.5.4.4", "lastName")
+                .containsEntry("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname", "firstName");
     }
 
     @Test
@@ -129,6 +164,33 @@ class KeycloakSamlIdentityProviderClientTest {
 
         Map<String, Object> payload = entityCaptor.getValue().getBody();
         assertThat(payload).containsEntry("hideOnLogin", false);
+    }
+
+    @Test
+    @DisplayName("a connection provisioned with the 3 original mappers gets them updated in place and the 10 new ones added")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void existingOriginalMappersAreUpdatedAndNewOnesAdded() {
+        stubTokenFetchOk();
+        lenient().when(restTemplate.exchange(eq(instanceUrl()), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of("alias", ALIAS)));
+        Map[] existing = {
+                Map.of("id", "m-email", "name", "livecontext-email"),
+                Map.of("id", "m-first", "name", "livecontext-first-name"),
+                Map.of("id", "m-last", "name", "livecontext-last-name")
+        };
+        lenient().when(restTemplate.exchange(eq(mappersUrl()), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map[].class)))
+                .thenReturn(ResponseEntity.ok(existing));
+
+        client.upsert(connection(true));
+
+        for (String id : new String[]{"m-email", "m-first", "m-last"}) {
+            verify(restTemplate).exchange(eq(mappersUrl() + "/" + id), eq(HttpMethod.PUT), any(HttpEntity.class), eq(Void.class));
+        }
+        ArgumentCaptor<HttpEntity<Map<String, Object>>> created = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate, times(10)).exchange(eq(mappersUrl()), eq(HttpMethod.POST), created.capture(), eq(Void.class));
+        assertThat(created.getAllValues())
+                .extracting(entity -> entity.getBody().get("name"))
+                .doesNotContain("livecontext-email", "livecontext-first-name", "livecontext-last-name");
     }
 
     @Test

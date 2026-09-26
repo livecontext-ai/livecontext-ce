@@ -17,6 +17,8 @@ import com.apimarketplace.agent.service.cloud.CeRelayAccrualStore;
 import com.apimarketplace.agent.service.cloud.CeRelaySettlementService;
 import com.apimarketplace.agent.streaming.StreamingCallback;
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
+import com.apimarketplace.common.plan.CeLinkRefusal;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
 import com.apimarketplace.common.credit.LlmCacheTokens;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -92,7 +94,7 @@ class CloudLlmRelayControllerTest {
     void completeValidatesLinkRewritesTenantAndConsumesCredits() {
         CompletionRequest ceRequest = request(false);
         CompletionResponse llmResponse = response("done", 11, 7);
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(llmResponse);
@@ -161,7 +163,7 @@ class CloudLlmRelayControllerTest {
                         .reasoningTokens(50)
                         .build())
                 .build();
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(llmResponse);
@@ -186,7 +188,7 @@ class CloudLlmRelayControllerTest {
                 .finishReason("stop")
                 .model(MODEL)
                 .build(); // no usage - controller falls back to its estimate
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(llmResponse);
@@ -206,7 +208,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("complete refuses inactive CE links before provider dispatch")
     void completeRejectsInactiveCeLink() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(false);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.notLinked());
 
         ResponseEntity<?> response = controller.complete(
                 CLOUD_USER_ID, INSTALL_ID, new CloudLlmRelayRequest(PROVIDER, request(false)));
@@ -217,9 +219,74 @@ class CloudLlmRelayControllerTest {
     }
 
     @Test
+    @DisplayName("complete refuses a suspended link (plan not paid) with 403 CLOUD_LINK_PLAN_REQUIRED before provider dispatch")
+    void completeRejectsPlanRequired() {
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.planRequired("FREE"));
+
+        ResponseEntity<?> response = controller.complete(
+                CLOUD_USER_ID, INSTALL_ID, new CloudLlmRelayRequest(PROVIDER, request(false)));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
+        assertThat(((Map<?, ?>) response.getBody()).get("error")).isEqualTo("CLOUD_LINK_PLAN_REQUIRED");
+        verifyNoInteractions(providerFactory, creditClient);
+    }
+
+    @Test
+    @DisplayName("stream refuses a suspended link with ONE NDJSON error event CLOUD_LINK_PLAN_REQUIRED and status 403")
+    void streamRejectsPlanRequired() throws Exception {
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.planRequired("FREE"));
+
+        ResponseEntity<StreamingResponseBody> response = controller.stream(
+                CLOUD_USER_ID, INSTALL_ID, new CloudLlmRelayRequest(PROVIDER, request(true)));
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        response.getBody().writeTo(output);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        List<CloudLlmStreamEvent> events = Arrays.stream(output.toString(StandardCharsets.UTF_8).split("\\R"))
+                .filter(line -> !line.isBlank())
+                .map(this::readEvent)
+                .toList();
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).type()).isEqualTo(CloudLlmStreamEvent.Type.ERROR);
+        assertThat(events.get(0).error()).isEqualTo("CLOUD_LINK_PLAN_REQUIRED");
+        verifyNoInteractions(providerFactory, creditClient);
+    }
+
+    @Test
+    @DisplayName("stream keeps CE_LINK_NOT_ACTIVE for an install that is not linked")
+    void streamRejectsNotLinked() throws Exception {
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.notLinked());
+
+        ResponseEntity<StreamingResponseBody> response = controller.stream(
+                CLOUD_USER_ID, INSTALL_ID, new CloudLlmRelayRequest(PROVIDER, request(true)));
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        response.getBody().writeTo(output);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(readEvent(output.toString(StandardCharsets.UTF_8).trim()).error()).isEqualTo("CE_LINK_NOT_ACTIVE");
+    }
+
+    @Test
+    @DisplayName("settle and release refuse a suspended link with the shared plan-required body and touch nothing")
+    void settleAndReleaseRejectPlanRequired() {
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.planRequired("CREDIT_PACK"));
+
+        ResponseEntity<?> settle = controller.settle(CLOUD_USER_ID, INSTALL_ID, new CeRelaySettleRequest("exec-1"));
+        ResponseEntity<?> release = controller.release(CLOUD_USER_ID, INSTALL_ID,
+                new CeRelayReleaseRequest("exec-1", "no llm calls"));
+
+        assertThat(settle.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(settle.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("CREDIT_PACK"));
+        assertThat(release.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(release.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("CREDIT_PACK"));
+        verifyNoInteractions(settlementService, accrualStore);
+    }
+
+    @Test
     @DisplayName("complete fail-closes on insufficient cloud credits before model dispatch")
     void completeRejectsInsufficientCreditsBeforeModelDispatch() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
@@ -238,7 +305,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("complete rejects bridge providers explicitly because bridge execution stays local")
     void completeRejectsBridgeProviders() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
 
         ResponseEntity<?> response = controller.complete(
                 CLOUD_USER_ID, INSTALL_ID, new CloudLlmRelayRequest("codex", request(false)));
@@ -251,7 +318,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("complete rejects unsupported local providers explicitly")
     void completeRejectsUnsupportedLocalProviders() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
 
         ResponseEntity<?> response = controller.complete(
                 CLOUD_USER_ID, INSTALL_ID, new CloudLlmRelayRequest("local-openai-compatible", request(false)));
@@ -264,7 +331,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("complete rejects a model the cloud no longer curates with MODEL_NOT_SUPPORTED, before gate + dispatch")
     void completeRejectsUnmanagedModel() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         // No model_config_overrides row for "ghost-model": the CE is on a stale/foreign
@@ -284,7 +351,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("stream emits a MODEL_NOT_SUPPORTED error event (400) for a model the cloud no longer curates")
     void streamRejectsUnmanagedModel() throws Exception {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
 
@@ -306,10 +373,91 @@ class CloudLlmRelayControllerTest {
         verify(creditClient, never()).checkChatBudget(any(), any(), any(), anyInt(), anyInt(), any());
     }
 
+    private ModelConfigOverrideEntity curatedRow(String model) {
+        ModelConfigOverrideEntity row = new ModelConfigOverrideEntity();
+        row.setProvider(PROVIDER);
+        row.setModelId(model);
+        when(modelConfigRepository.findByProviderAndModelId(PROVIDER, model)).thenReturn(Optional.of(row));
+        return row;
+    }
+
+    private ResponseEntity<?> completeWith(String model) {
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
+        when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
+        when(provider.getProviderName()).thenReturn(PROVIDER);
+        return controller.complete(CLOUD_USER_ID, INSTALL_ID,
+                new CloudLlmRelayRequest(PROVIDER, requestWithModel(model, false)));
+    }
+
+    @Test
+    @DisplayName("complete refuses a model the cloud DISABLED, before gate + dispatch, so nothing is billed")
+    void completeRejectsDisabledModel() {
+        // Regression (prod 2026-09-25): the guard checked absence only, so a linked CE kept
+        // running models switched off in the cloud (gemini-3.1-flash-lite-preview,
+        // claude-sonnet-4-6) and was billed for them.
+        curatedRow("deepseek-v3").setEnabled(false);
+
+        ResponseEntity<?> response = completeWith("deepseek-v3");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isEqualTo(Map.of("error", "MODEL_NOT_SUPPORTED"));
+        verify(creditClient, never()).checkChatBudget(any(), any(), any(), anyInt(), anyInt(), any());
+        verify(provider, never()).complete(any());
+    }
+
+    @Test
+    @DisplayName("complete refuses a RETIRED model and a DEPRECATED one the same way")
+    void completeRejectsRetiredAndDeprecated() {
+        curatedRow("deepseek-v2").setRetiredAt(java.time.Instant.now());
+        curatedRow("deepseek-v1").setDeprecatedAt(java.time.Instant.now());
+
+        assertThat(completeWith("deepseek-v2").getBody()).isEqualTo(Map.of("error", "MODEL_NOT_SUPPORTED"));
+        assertThat(controller.complete(CLOUD_USER_ID, INSTALL_ID,
+                new CloudLlmRelayRequest(PROVIDER, requestWithModel("deepseek-v1", false))).getBody())
+                .isEqualTo(Map.of("error", "MODEL_NOT_SUPPORTED"));
+        verify(provider, never()).complete(any());
+    }
+
+    @Test
+    @DisplayName("complete RELAYS a model disabled in the cloud but shipped to CE (bundle_enabled=true)")
+    void completeRelaysModelShippedToCeDespiteCloudDisable() {
+        // The relay applies the bundle's rule, not the cloud's own flag: a model the admin ships
+        // to CE must run, or a CE would receive a model the relay then refuses.
+        ModelConfigOverrideEntity row = curatedRow("deepseek-ce-only");
+        row.setEnabled(false);
+        row.setBundleEnabled(true);
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq("deepseek-ce-only"), anyInt(), anyInt(),
+                eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY))).thenReturn(false);
+
+        ResponseEntity<?> response = completeWith("deepseek-ce-only");
+
+        // Reached the budget gate (refused there for the test's convenience): the model guard let it through.
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYMENT_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("stream refuses a disabled model with a MODEL_NOT_SUPPORTED error event")
+    void streamRejectsDisabledModel() throws Exception {
+        curatedRow("deepseek-v3").setEnabled(false);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
+        when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
+        when(provider.getProviderName()).thenReturn(PROVIDER);
+
+        ResponseEntity<StreamingResponseBody> response = controller.stream(
+                CLOUD_USER_ID, INSTALL_ID,
+                new CloudLlmRelayRequest(PROVIDER, requestWithModel("deepseek-v3", true)));
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        response.getBody().writeTo(output);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(output.toString(StandardCharsets.UTF_8)).contains("MODEL_NOT_SUPPORTED");
+        verify(provider, never()).completeStreaming(any(), any());
+    }
+
     @Test
     @DisplayName("complete skips the unmanaged-model guard for a blank request model (provider default is trusted)")
     void completeSkipsModelGuardForBlankModel() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.getDefaultModel()).thenReturn("provider-default");
@@ -346,7 +494,7 @@ class CloudLlmRelayControllerTest {
                         .totalTokens(18)
                         .build())
                 .build();
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
@@ -397,7 +545,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("stream propagates client disconnect to provider shouldStop and bills streamed content once")
     void streamPropagatesDisconnectAndBillsPartialContent() throws Exception {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
@@ -425,7 +573,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("stream fallback billing counts bytes without retaining the full content buffer")
     void streamFallbackBillingCountsContentWithoutRetainingFullBuffer() throws Exception {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
@@ -462,7 +610,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("centralized complete accrues usage and does NOT bill per call")
     void centralizedCompleteAccruesAndDoesNotBillPerCall() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(response("done", 11, 7));
@@ -484,7 +632,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("centralized gate checks accrued-so-far + next call against the wallet")
     void centralizedGateUsesAccruedPlusNextCall() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(response("done", 11, 7));
@@ -507,7 +655,7 @@ class CloudLlmRelayControllerTest {
                 .content("final").finishReason("stop").model(MODEL)
                 .usage(UsageInfo.builder().promptTokens(13).completionTokens(5).totalTokens(18).build())
                 .build();
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(accrualStore.snapshot("exec-1")).thenReturn(java.util.Optional.empty());
@@ -535,7 +683,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("settle delegates to the settlement service and reports settled=true when billed")
     void settleDelegatesAndReportsBilled() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(settlementService.settleFromAccrual("exec-1"))
                 .thenReturn(CeRelaySettlementService.SettleOutcome.BILLED);
 
@@ -550,7 +698,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("settle reports settled=false on a RETRY outcome (accrual kept for the reaper)")
     void settleReportsNotSettledOnRetry() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(settlementService.settleFromAccrual("exec-1"))
                 .thenReturn(CeRelaySettlementService.SettleOutcome.RETRY);
 
@@ -563,7 +711,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("settle reports settled=true on NOTHING_TO_BILL (idempotent / already settled)")
     void settleReportsSettledOnNothingToBill() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(settlementService.settleFromAccrual("exec-1"))
                 .thenReturn(CeRelaySettlementService.SettleOutcome.NOTHING_TO_BILL);
 
@@ -576,7 +724,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("settle rejects a blank executionId without touching the settlement service")
     void settleRejectsBlankExecutionId() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
 
         ResponseEntity<?> response = controller.settle(CLOUD_USER_ID, INSTALL_ID,
                 new CeRelaySettleRequest("  "));
@@ -588,7 +736,7 @@ class CloudLlmRelayControllerTest {
     @Test
     @DisplayName("release drops the accrual without billing")
     void releaseDropsAccrualWithoutBilling() {
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
 
         ResponseEntity<?> response = controller.release(CLOUD_USER_ID, INSTALL_ID,
                 new CeRelayReleaseRequest("exec-1", "no llm calls"));
@@ -606,7 +754,7 @@ class CloudLlmRelayControllerTest {
         CloudLlmRelayController legacyController = new CloudLlmRelayController(
                 authClient, creditClient, providerFactory, objectMapper, accrualStore, settlementService,
                 modelConfigRepository, false);
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(response("done", 11, 7));

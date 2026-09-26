@@ -532,7 +532,7 @@ class StepValidatorTest {
             stubBasicSession(List.of(step));
             lenient().when(session.getTenantId()).thenReturn("tenant-1");
             lenient().when(toolSchemaFetcher.fetchToolInputSchema("crud/insert")).thenReturn(Optional.empty());
-            when(dataSourceClient.findByIdAndTenantId(42L, "tenant-1")).thenReturn(null);
+            when(dataSourceClient.findByIdAndTenantId(42L, "tenant-1", null)).thenReturn(null);
 
             ValidationResult result = ValidationResult.builder().build();
             validator.validate(session, result);
@@ -556,7 +556,7 @@ class StepValidatorTest {
 
             DataSourceDto ds = new DataSourceDto(42L, "tenant-1", "Users", null, null, null,
                     null, null, null, null, null, null, null, null, null, null);
-            when(dataSourceClient.findByIdAndTenantId(42L, "tenant-1")).thenReturn(ds);
+            when(dataSourceClient.findByIdAndTenantId(42L, "tenant-1", null)).thenReturn(ds);
 
             ValidationResult result = ValidationResult.builder().build();
             validator.validate(session, result);
@@ -564,6 +564,34 @@ class StepValidatorTest {
             assertThat(result.getErrors()).noneMatch(e ->
                     e.code().equals("CRUD_INVALID_DATASOURCE") ||
                     e.code().equals("CRUD_MISSING_DATASOURCE"));
+        }
+
+        @Test
+        @DisplayName("Teammate's table read off a request thread is found through the session org (regression: false CRUD_INVALID_DATASOURCE)")
+        void crudDatasourceLookupCarriesSessionOrg() {
+            // Off a request thread nothing forwards X-Organization-ID, so a tenant-only lookup
+            // of a table another workspace member created answers 404. The validator must pass
+            // the session's org explicitly.
+            Map<String, Object> step = new HashMap<>();
+            step.put("label", "Insert Row");
+            step.put("id", "crud/insert");
+            step.put("dataSourceId", 42L);
+            step.put("params", Map.of());
+
+            stubBasicSession(List.of(step));
+            lenient().when(session.getTenantId()).thenReturn("tenant-1");
+            lenient().when(session.getOrgId()).thenReturn("org-1");
+            lenient().when(toolSchemaFetcher.fetchToolInputSchema("crud/insert")).thenReturn(Optional.empty());
+            DataSourceDto teammatesTable = new DataSourceDto(42L, "tenant-2", "Users", null, null, null,
+                    null, null, null, null, null, null, null, null, null, "org-1");
+            lenient().when(dataSourceClient.findByIdAndTenantId(42L, "tenant-1", "org-1")).thenReturn(teammatesTable);
+            lenient().when(dataSourceClient.findByIdAndTenantId(42L, "tenant-1")).thenReturn(null);
+
+            ValidationResult result = ValidationResult.builder().build();
+            validator.validate(session, result);
+
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("CRUD_INVALID_DATASOURCE"));
+            verify(dataSourceClient).findByIdAndTenantId(42L, "tenant-1", "org-1");
         }
 
         @Test
@@ -580,7 +608,7 @@ class StepValidatorTest {
 
             DataSourceDto ds = new DataSourceDto(42L, "tenant-1", "Users", null, null, null,
                     null, null, null, null, null, null, null, null, null, null);
-            when(dataSourceClient.findByIdAndTenantId(42L, "tenant-1")).thenReturn(ds);
+            when(dataSourceClient.findByIdAndTenantId(42L, "tenant-1", null)).thenReturn(ds);
 
             ValidationResult result = ValidationResult.builder().build();
             validator.validate(session, result);
@@ -603,7 +631,7 @@ class StepValidatorTest {
 
             DataSourceDto ds = new DataSourceDto(42L, "tenant-1", "Users", null, null, null,
                     null, null, null, null, null, null, null, null, null, null);
-            when(dataSourceClient.findByIdAndTenantId(42L, "tenant-1")).thenReturn(ds);
+            when(dataSourceClient.findByIdAndTenantId(42L, "tenant-1", null)).thenReturn(ds);
 
             ValidationResult result = ValidationResult.builder().build();
             validator.validate(session, result);
@@ -627,7 +655,7 @@ class StepValidatorTest {
 
             DataSourceDto ds = new DataSourceDto(42L, "tenant-1", "Users", null, null, null,
                     null, null, null, null, null, null, null, null, null, null);
-            when(dataSourceClient.findByIdAndTenantId(42L, "tenant-1")).thenReturn(ds);
+            when(dataSourceClient.findByIdAndTenantId(42L, "tenant-1", null)).thenReturn(ds);
 
             ValidationResult result = ValidationResult.builder().build();
             validator.validate(session, result);
@@ -737,7 +765,7 @@ class StepValidatorTest {
             mappingSpec.put("username", null);
             DataSourceDto ds = new DataSourceDto(10L, "t", "ds", null, null, null, null, null, null, null, null,
                     mappingSpec, null, null, null, null);
-            lenient().when(dataSourceClient.getDataSource(10L, null)).thenReturn(ds);
+            lenient().when(dataSourceClient.getDataSource(10L, null, null)).thenReturn(ds);
 
             ValidationResult result = ValidationResult.builder().build();
             validator.validate(session, result);
@@ -745,6 +773,36 @@ class StepValidatorTest {
             assertThat(result.getErrors()).anyMatch(e ->
                     e.code().equals("INVALID_SYNTAX") &&
                     e.message().contains("username"));
+        }
+
+        @Test
+        @DisplayName("Trigger table columns are read through the session org (teammate's table)")
+        void triggerColumnsLookupCarriesSessionOrg() {
+            Map<String, Object> step = new HashMap<>();
+            step.put("label", "Process");
+            step.put("id", "tool-1");
+            step.put("params", Map.of("field", "{{username}}"));
+
+            Map<String, Object> trigger = new HashMap<>();
+            trigger.put("label", "Start");
+            trigger.put("datasource_id", "10");
+
+            stubSessionWithTrigger(List.of(step), List.of(trigger));
+            lenient().when(session.getTenantId()).thenReturn("tenant-1");
+            lenient().when(session.getOrgId()).thenReturn("org-1");
+            lenient().when(toolSchemaFetcher.fetchToolInputSchema("tool-1")).thenReturn(Optional.empty());
+            Map<String, com.apimarketplace.datasource.client.dto.ColumnMappingSpecDto> mappingSpec = new HashMap<>();
+            mappingSpec.put("username", null);
+            DataSourceDto ds = new DataSourceDto(10L, "tenant-2", "ds", null, null, null, null, null, null, null, null,
+                    mappingSpec, null, null, null, "org-1");
+            lenient().when(dataSourceClient.getDataSource(10L, "tenant-1", "org-1")).thenReturn(ds);
+
+            ValidationResult result = ValidationResult.builder().build();
+            validator.validate(session, result);
+
+            verify(dataSourceClient).getDataSource(10L, "tenant-1", "org-1");
+            assertThat(result.getErrors()).anyMatch(e ->
+                    e.code().equals("INVALID_SYNTAX") && e.message().contains("username"));
         }
 
         @Test
@@ -986,7 +1044,7 @@ class StepValidatorTest {
             // Make the datasource resolve OK so CRUD_MISSING_DATASOURCE doesn't fire.
             DataSourceDto ds = new DataSourceDto(42L, "t-1", "Users", null, null, null,
                     null, null, null, null, null, null, null, null, null, null);
-            lenient().when(dataSourceClient.findByIdAndTenantId(42L, "t-1")).thenReturn(ds);
+            lenient().when(dataSourceClient.findByIdAndTenantId(42L, "t-1", null)).thenReturn(ds);
 
             NodeTypeDocumentationEntity doc = new NodeTypeDocumentationEntity();
             doc.setType(docType);

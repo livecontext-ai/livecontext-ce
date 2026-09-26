@@ -111,7 +111,9 @@ public class ConversationToolExecutionController {
             Map.entry("orgRole", "__orgRole__"),
             Map.entry("viewingWorkflowId", "__viewingWorkflowId__"),
             Map.entry("viewingWorkflowName", "__viewingWorkflowName__"),
-            Map.entry("streamId", "__streamId__")
+            Map.entry("streamId", "__streamId__"),
+            Map.entry("requireToolAuthorization", "__requireToolAuthorization__"),
+            Map.entry("unattendedRun", "__unattendedRun__")
         );
 
         // Per-resource access modes travel PLAIN, the way every other relay forwards them

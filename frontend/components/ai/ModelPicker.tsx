@@ -43,6 +43,7 @@ import type { CostProfileId } from '@/lib/billing/model-cost-estimate';
 import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { IS_CE } from '@/lib/edition';
 import { cn } from '@/lib/utils';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 export interface ModelPickerProps {
   /** Current selection - `{ provider: '', id: '' }` when unset. */
@@ -170,7 +171,7 @@ export function ModelPicker({
   // Asked ONCE for the whole list: the underlying balance is about the account,
   // and a query observer per option would be a waste of the same cached answer.
   // `blockedForModel` then refines that one answer per row without refetching,
-  // because the Free plan's AI allowance pays for some models and not others.
+  // because the Free plan's monthly credits pay for some models and not others.
   const { blockedForModel, freeTierForModel, prefersFreeTierModels } = useMonthlyCreditsCannotPay();
   // Same reasoning, same shape: one answer for the whole list, handed down to
   // the presentational rows rather than fetched behind each of them.
@@ -204,9 +205,8 @@ export function ModelPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providers, capabilityKey, excludeBridgeProviders]);
 
-  // V494: on a plan whose monthly credits are workflow-scoped, the models opened
-  // to the free tier are the ones the account's AI allowance can actually pay
-  // for, so they lead - both the provider list and each provider's models.
+  // On the Free plan, the models opened to the free tier are the ones the
+  // account's monthly credits can actually pay for, so they lead - both the provider list and each provider's models.
   //
   // A STABLE partition, not a re-sort: within each group the admin's global
   // drag-and-drop ranking is preserved exactly. The admin still decides the
@@ -231,7 +231,7 @@ export function ModelPicker({
     if (value.provider && orderedProviders.some(p => p.name === value.provider)) {
       return value.provider;
     }
-    // V494 note: this deliberately does NOT steer a free-tier account away from the
+    // Note: this deliberately does NOT steer a free-tier account away from the
     // declared default, even though the list below is ordered to put covered models
     // first. This component only DISPLAYS a fallback - it calls onChange from the two
     // change handlers and nowhere else - so a steered display would show one model
@@ -322,7 +322,7 @@ export function ModelPicker({
           <SelectTrigger className="w-full">
             <div className="flex items-center gap-2">
               {currentProvider && (
-                <Image
+                <ServiceLogo as={Image}
                   src={`/icons/services/${getProviderIconSlug(currentProvider)}.svg`}
                   alt={currentProvider}
                   width={16}
@@ -340,7 +340,7 @@ export function ModelPicker({
             {orderedProviders.map(provider => (
               <SelectItem key={provider.name} value={provider.name}>
                 <div className="flex items-center gap-2">
-                  <Image
+                  <ServiceLogo as={Image}
                     src={`/icons/services/${getProviderIconSlug(provider.name)}.svg`}
                     alt={provider.name}
                     width={16}
@@ -378,7 +378,7 @@ export function ModelPicker({
           <SelectTrigger className="w-full">
             <div className="flex items-center gap-2 min-w-0 w-full">
               {currentProvider && (
-                <Image
+                <ServiceLogo as={Image}
                   src={`/icons/services/${getProviderIconSlug(currentProvider)}.svg`}
                   alt={currentProvider}
                   width={16}
@@ -425,7 +425,7 @@ export function ModelPicker({
                       selectable, because a top-up changes the verdict and because an
                       agent's model may well be chosen here by someone about to pay
                       for precisely that. */}
-                  <Image
+                  <ServiceLogo as={Image}
                     src={`/icons/services/${getProviderIconSlug(currentProvider)}.svg`}
                     alt={currentProvider}
                     width={16}

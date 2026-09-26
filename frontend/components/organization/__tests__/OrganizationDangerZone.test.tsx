@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { NextIntlClientProvider } from 'next-intl';
+import en from '@/messages/en.json';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Organization } from '@/lib/api/organization-api';
 import { organizationApi } from '@/lib/api/organization-api';
@@ -21,6 +23,14 @@ vi.mock('@/lib/api/organization-api', () => ({
 }));
 
 import OrganizationDangerZone from '../OrganizationDangerZone';
+
+// Each danger row carries the shared "i" (InfoPopover), whose name is a message.
+const render = (ui: React.ReactElement) =>
+  rtlRender(ui, {
+    wrapper: ({ children }) => (
+      <NextIntlClientProvider locale="en" messages={en}>{children}</NextIntlClientProvider>
+    ),
+  });
 
 const org = {
   id: 'org-1',

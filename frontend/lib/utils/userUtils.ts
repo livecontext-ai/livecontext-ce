@@ -82,6 +82,31 @@ export const isFederatedAccount = (user: OidcUser | undefined): boolean => {
 };
 
 /**
+ * True when the user signed in through a workspace SAML identity provider. Keycloak
+ * names those `org-<32 hex>-saml` (auth-service `OrganizationSamlService.aliasFor`).
+ */
+export const isOrganizationSamlAccount = (user: OidcUser | undefined): boolean =>
+  /^org-[0-9a-f]{32}-saml$/i.test(user?.identity_provider ?? '');
+
+/**
+ * What the settings Security tab holds for this account, and whether it shows at all.
+ *
+ * - `password`: only a local-password account manages its password here (a federated one
+ *   does it at its provider).
+ * - `twoFactor`: the authenticator-app card, cloud only (Keycloak holds the factor), for
+ *   every account but a workspace SAML one, whose identity provider carries the second
+ *   factor. A Google/GitHub account therefore keeps a Security tab holding only this card.
+ */
+export const securityTabSections = (
+  user: OidcUser | undefined,
+  isCloud: boolean,
+): { password: boolean; twoFactor: boolean; show: boolean } => {
+  const password = !isFederatedAccount(user);
+  const twoFactor = isCloud && !isOrganizationSamlAccount(user);
+  return { password, twoFactor, show: password || twoFactor };
+};
+
+/**
  * Gets identity provider information
  */
 export const getIdentityProvider = (user: OidcUser | undefined): string | null => {

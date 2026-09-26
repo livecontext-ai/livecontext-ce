@@ -16,6 +16,7 @@ import type { ServiceApprovalInfo, PendingServiceApproval } from '@/contexts/Str
 import { normalizeIconSlug } from '@/lib/credentials/iconSlug';
 import { MissingScopesBanner } from '@/components/credentials/MissingScopesBanner';
 import { useByokCapability } from '@/lib/credentials/useByokCapability';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 /**
  * One connected account that was not granted what the failing call needed.
@@ -396,7 +397,7 @@ export function ServiceApprovalCard({
               {/* Service icon - normalize slug to match SVG filenames ([a-z0-9]+) */}
               <div className="flex items-center justify-center w-7 h-7 rounded-full bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600">
                 {service.iconSlug && !imageErrors[service.serviceType] ? (
-                  <Image
+                  <ServiceLogo as={Image}
                     src={`/icons/services/${normalizeIconSlug(service.iconSlug)}.svg`}
                     alt={service.serviceName}
                     width={18}

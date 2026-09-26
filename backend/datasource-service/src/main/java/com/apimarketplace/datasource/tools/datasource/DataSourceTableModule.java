@@ -3,6 +3,7 @@ package com.apimarketplace.datasource.tools.datasource;
 import com.apimarketplace.agent.config.ToolAccessControl;
 import com.apimarketplace.agent.registry.AgentToolDefinition;
 import com.apimarketplace.agent.tools.ToolErrorCode;
+import com.apimarketplace.agent.tools.common.PresentedView;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.agent.tools.common.ToolModule;
@@ -28,7 +29,7 @@ import static com.apimarketplace.datasource.tools.datasource.ToolParameterUtils.
 /**
  * Module handling table-level CRUD operations for DataSource tools.
  * Datasource-service native version - uses DataSourceService directly (no HTTP hop).
- * Operations: create, get, list, update, delete, help
+ * Operations: create, get, present, list, update, delete, help
  */
 @Component
 public class DataSourceTableModule implements ToolModule {
@@ -88,7 +89,7 @@ public class DataSourceTableModule implements ToolModule {
     }
 
     private static final Set<String> HANDLED_ACTIONS = Set.of(
-        "create", "get", "list", "update", "delete", "help"
+        "create", "get", "list", "update", "delete", "help", "present"
     );
 
     @Override
@@ -116,6 +117,7 @@ public class DataSourceTableModule implements ToolModule {
         return Optional.of(switch (action) {
             case "create" -> executeCreate(parameters, tenantId, context);
             case "get" -> executeGet(parameters, tenantId, context);
+            case "present" -> executePresent(parameters, tenantId, context);
             case "list" -> executeList(parameters, tenantId, context);
             case "update" -> executeUpdate(parameters, tenantId, context);
             case "delete" -> executeDelete(parameters, tenantId, context);
@@ -136,6 +138,8 @@ public class DataSourceTableModule implements ToolModule {
         if (name == null || name.isBlank()) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, MISSING_NAME_HINT);
         }
+        var viewer = TableToolAccess.denyIfViewer(context);
+        if (viewer.isPresent()) return viewer.get();
 
         // Per-turn create cap (uniform across resource types).
         String turnId = context != null
@@ -269,6 +273,34 @@ public class DataSourceTableModule implements ToolModule {
     // ==================== Get ====================
 
     private ToolExecutionResult executeGet(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
+        return withReadableTable(parameters, tenantId, context, "get", ds -> ToolExecutionResult.success(Map.of(
+            "id", ds.id(),
+            "name", ds.name(),
+            "description", ds.description() != null ? ds.description() : "",
+            "sourceType", ds.sourceType() != null ? ds.sourceType().name() : "",
+            "sourceConfig", ds.sourceConfig() != null ? ds.sourceConfig() : Map.of(),
+            "status", ds.status() != null ? ds.status().name() : "",
+            "marker", "[visualize:datasource:" + ds.id() + "]"
+        )));
+    }
+
+    // ==================== Present ====================
+
+    /** Opens the table in the user's side panel. Same checks as get: it can show nothing get could not read. */
+    private ToolExecutionResult executePresent(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
+        return withReadableTable(parameters, tenantId, context, "present", ds -> PresentedView.result(
+            "table", "table_id", String.valueOf(ds.id()),
+            PresentedView.requestedTitleOr(parameters, PresentedView.titleOf(ds.name(), "Table #" + ds.id()))));
+    }
+
+    /**
+     * The one read path of a single table: id, the agent's allow-list, the workspace scope,
+     * then the workspace member rules (a table the member is denied is as absent as one in
+     * another workspace: not found, never forbidden). get and present both go through it.
+     */
+    private ToolExecutionResult withReadableTable(Map<String, Object> parameters, String tenantId,
+                                                  ToolExecutionContext context, String action,
+                                                  java.util.function.Function<DataSource, ToolExecutionResult> onReadable) {
         Long id = getTableId(parameters);
         if (id == null) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, MISSING_TABLE_ID_HINT);
@@ -289,19 +321,12 @@ public class DataSourceTableModule implements ToolModule {
             if (isOutOfScope(ds, tenantId, context)) {
                 return outOfScopeNotFound(id);
             }
-
-            return ToolExecutionResult.success(Map.of(
-                "id", ds.id(),
-                "name", ds.name(),
-                "description", ds.description() != null ? ds.description() : "",
-                "sourceType", ds.sourceType() != null ? ds.sourceType().name() : "",
-                "sourceConfig", ds.sourceConfig() != null ? ds.sourceConfig() : Map.of(),
-                "status", ds.status() != null ? ds.status().name() : "",
-                "marker", "[visualize:datasource:" + ds.id() + "]"
-            ));
+            var restricted = TableToolAccess.denyIfMemberRestricted(dataSourceService, context, tenantId, ds, false);
+            if (restricted.isPresent()) return restricted.get();
+            return onReadable.apply(ds);
         } catch (Exception e) {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
-                "Failed to get data source: " + e.getMessage());
+                "Failed to " + action + " data source: " + e.getMessage());
         }
     }
 
@@ -423,13 +448,16 @@ public class DataSourceTableModule implements ToolModule {
             if (isOutOfScope(ds, tenantId, context)) {
                 return outOfScopeNotFound(id);
             }
+            var restricted = TableToolAccess.denyIfMemberRestricted(dataSourceService, context, tenantId, ds, true);
+            if (restricted.isPresent()) return restricted.get();
 
             String newName = (name != null && !name.isBlank()) ? name : ds.name();
             String newDescription = description != null ? description : ds.description();
 
-            // Direct service call - no HTTP hop
+            // Direct service call - no HTTP hop. The CALLER is passed so the service's own
+            // member gate judges them, not the table's owner.
             DataSource result = dataSourceService.updateDataSource(id, newName, newDescription,
-                ds.sourceConfig());
+                ds.sourceConfig(), tenantId, context != null ? context.orgRole() : null);
 
             Map<String, Object> metadata = tableVisualizationMetadata(result.id(), result.name());
 
@@ -468,9 +496,13 @@ public class DataSourceTableModule implements ToolModule {
             if (isOutOfScope(existing.get(), tenantId, context)) {
                 return outOfScopeNotFound(id);
             }
+            var restricted = TableToolAccess.denyIfMemberRestricted(dataSourceService, context, tenantId,
+                existing.get(), true);
+            if (restricted.isPresent()) return restricted.get();
 
             String deletedName = existing.get().name();
-            dataSourceService.deleteDataSource(id);
+            // The CALLER is passed so the service's own member gate judges them, not the owner.
+            dataSourceService.deleteDataSource(id, tenantId, context != null ? context.orgRole() : null);
 
             return ToolExecutionResult.success(Map.of(
                 "id", id,
@@ -497,6 +529,10 @@ public class DataSourceTableModule implements ToolModule {
             Map.entry("create", "Create table (name REQUIRED, data[] and/or columns[] - at least one). " +
                 "data=rows with keys as column names; columns=schema with types. Both together: columns define types for the data keys."),
             Map.entry("get", "Get table metadata by ID (table_id REQUIRED)"),
+            Map.entry("present", "Open the table in the user's side panel so they see it now (table_id REQUIRED). "
+                + "Optional title (the panel title, default the table name). "
+                + "Changes nothing. Use it once the table holds the result the user asked for, not after every step. "
+                + "Response: presented, table_id."),
             Map.entry("list", "List all tables (limit? default=25, offset? default=0)"),
             Map.entry("update", "Update table metadata (table_id REQUIRED, name?, description?)"),
             Map.entry("delete", "Delete a table permanently (table_id REQUIRED)"),

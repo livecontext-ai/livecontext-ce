@@ -29,6 +29,18 @@ class WorkflowBuilderActionConfigTest {
                 .containsAll(WorkflowBuilderActionConfig.ACTION_ALIASES.keySet());
     }
 
+    // ===== present - the agent chooses the user's view =====
+
+    @Test
+    @DisplayName("present is a PRIMARY action and never read-only: read-only actions have their visualization stripped, and the visualization IS what present produces")
+    void present_isPrimaryAndNotReadOnly() {
+        assertThat(WorkflowBuilderActionConfig.PRIMARY_ACTIONS).contains("present");
+        assertThat(WorkflowBuilderActionConfig.isReadOnlyAction("present")).isFalse();
+        // It changes nothing, so it must not trigger an auto-save or the application immutability gate.
+        assertThat(WorkflowBuilderActionConfig.isModifyingAction("present")).isFalse();
+        assertThat(WorkflowBuilderActionConfig.PLAN_MUTATING_ACTIONS).doesNotContain("present");
+    }
+
     // ===== stop_run - the counterpart of execute =====
 
     @Test
@@ -64,6 +76,21 @@ class WorkflowBuilderActionConfigTest {
     void stopRun_isNotAPlanMutation() {
         assertThat(WorkflowBuilderActionConfig.MODIFYING_ACTIONS).doesNotContain("stop_run");
         assertThat(WorkflowBuilderActionConfig.PLAN_MUTATING_ACTIONS).doesNotContain("stop_run");
+    }
+
+    @Test
+    @DisplayName("read_rows and find_rows are auto-saved and re-synced: they add a table node to the workflow")
+    void rowReadNodes_areSessionWrites() {
+        assertThat(WorkflowBuilderActionConfig.MODIFYING_ACTIONS).contains("read_rows", "find_rows");
+        assertThat(WorkflowBuilderActionConfig.RESYNC_BEFORE_WRITE_ACTIONS).contains("read_rows", "find_rows");
+    }
+
+    @Test
+    @DisplayName("every action that writes the session's copy re-syncs from the stored plan first")
+    void everySessionWrite_resyncsFirst() {
+        assertThat(WorkflowBuilderActionConfig.RESYNC_BEFORE_WRITE_ACTIONS)
+                .containsAll(WorkflowBuilderActionConfig.MODIFYING_ACTIONS)
+                .contains("save", "finish", "create");
     }
 
     // ===== READ_ONLY_ACTIONS - side-panel focus suppression =====

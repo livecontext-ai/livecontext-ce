@@ -1,17 +1,17 @@
 'use client';
 
 import * as React from 'react';
-import { Plus, Trash2, Info, Eye, EyeOff, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, Eye, EyeOff, ChevronDown, ChevronRight } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import type { BuilderNodeData } from '../../../types';
 import type { Connection } from '../useInspectorConnections';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 // HTTP Methods
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as const;
@@ -286,27 +286,20 @@ export function HttpRequestParametersForm({
       {/* Header with info */}
       <div className="flex items-center gap-1.5">
         <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('title')}</span>
-        <Popover>
-          <PopoverTrigger asChild>
-            <button type="button" className="p-0.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700">
-              <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-            <div className="space-y-2 text-sm">
-              <p className="font-semibold text-slate-900 dark:text-slate-100">{t('infoTitle')}</p>
-              <p className="text-slate-600 dark:text-slate-300">{t('infoDescription')}</p>
-              <div className="border-t pt-2">
-                <p className="text-xs font-semibold text-slate-500 mb-1">{t('availableOutputs')}</p>
-                <ul className="text-xs text-slate-500 space-y-0.5 font-mono">
-                  {httpOutputs.map((output) => (
-                    <li key={output}>• {output}</li>
-                  ))}
-                </ul>
-              </div>
+        <InfoPopover label={t('title')} size="sm" side="right" align="start">
+          <div className="space-y-2 text-sm">
+            <p className="font-semibold text-slate-900 dark:text-slate-100">{t('infoTitle')}</p>
+            <p className="text-slate-600 dark:text-slate-300">{t('infoDescription')}</p>
+            <div className="border-t pt-2">
+              <p className="text-xs font-semibold text-slate-500 mb-1">{t('availableOutputs')}</p>
+              <ul className="text-xs text-slate-500 space-y-0.5 font-mono">
+                {httpOutputs.map((output) => (
+                  <li key={output}>• {output}</li>
+                ))}
+              </ul>
             </div>
-          </PopoverContent>
-        </Popover>
+          </div>
+        </InfoPopover>
       </div>
 
       {/* Method */}

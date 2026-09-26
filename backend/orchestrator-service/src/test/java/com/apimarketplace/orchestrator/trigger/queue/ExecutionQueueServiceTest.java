@@ -34,10 +34,44 @@ class ExecutionQueueServiceTest {
         }
     }
 
+    private SimpleMeterRegistry registry;
+
     private void createService(int workerThreads, int timeoutSeconds) {
         triggerService = mock(ReusableTriggerService.class);
-        ExecutionQueueMetrics metrics = new ExecutionQueueMetrics(new SimpleMeterRegistry());
+        registry = new SimpleMeterRegistry();
+        ExecutionQueueMetrics metrics = new ExecutionQueueMetrics(registry);
         queueService = new ExecutionQueueService(triggerService, metrics, workerThreads, timeoutSeconds);
+    }
+
+    @Test
+    void localActiveExecutionsCountsARunningExecutionAndDropsBackToZero() throws Exception {
+        // The shutdown drain waits on this count, so it must track an execution in progress
+        // on this instance and return to zero when it ends.
+        createService(2, 30);
+        WorkflowRunEntity run = mockRun("run-active");
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(triggerService.executeTriggerInternal(run, "trigger:test", TriggerType.MANUAL, Map.of(), false))
+            .thenAnswer(inv -> {
+                started.countDown();
+                release.await(5, TimeUnit.SECONDS);
+                return TriggerExecutionResult.success("run-active", "trigger:test", TriggerType.MANUAL, Set.of(), 1);
+            });
+        assertEquals(0, queueService.getLocalActiveExecutions());
+
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        try {
+            Future<TriggerExecutionResult> pending = caller.submit(() -> queueService.enqueueAndWait(
+                run, "trigger:test", TriggerType.MANUAL, Map.of(), "PRO"));
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            assertEquals(1, queueService.getLocalActiveExecutions());
+
+            release.countDown();
+            assertTrue(pending.get(5, TimeUnit.SECONDS).success());
+            assertEquals(0, queueService.getLocalActiveExecutions());
+        } finally {
+            caller.shutdownNow();
+        }
     }
 
     @Test
@@ -106,6 +140,88 @@ class ExecutionQueueServiceTest {
         assertTrue(r2.success());
 
         executor.shutdownNow();
+    }
+
+    /**
+     * Regression (prod 2026-09-25): an item a worker STARTED must not be reported as "could not
+     * start" when it outlives the wait, and must not be cancelled: it runs to completion.
+     */
+    @Test
+    void startedItemThatOutlivesTheWaitIsReportedStillRunning() throws Exception {
+        createService(1, 2); // 1 worker, 2-second wait
+
+        CountDownLatch releaseHolder = new CountDownLatch(1);
+        CountDownLatch longRunStarted = new CountDownLatch(1);
+        CountDownLatch releaseLongRun = new CountDownLatch(1);
+        CountDownLatch longRunFinished = new CountDownLatch(1);
+        WorkflowRunEntity holderRun = mockRun("holder");
+        WorkflowRunEntity longRun = mockRun("long-run");
+        when(triggerService.executeTriggerInternal(eq(holderRun), anyString(), any(), any(), anyBoolean()))
+            .thenAnswer(inv -> {
+                releaseHolder.await(5, TimeUnit.SECONDS);
+                return TriggerExecutionResult.success("holder", "trigger:t", TriggerType.MANUAL, Set.of(), 1);
+            });
+        when(triggerService.executeTriggerInternal(eq(longRun), anyString(), any(), any(), anyBoolean()))
+            .thenAnswer(inv -> {
+                longRunStarted.countDown();
+                releaseLongRun.await(10, TimeUnit.SECONDS);
+                longRunFinished.countDown();
+                return TriggerExecutionResult.success("long-run", "trigger:t", TriggerType.MANUAL, Set.of(), 1);
+            });
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        // Holder takes the only worker on the fast path, so long-run goes through the queue.
+        executor.submit(() ->
+            queueService.enqueueAndWait(holderRun, "trigger:t", TriggerType.MANUAL, Map.of(), "ENTERPRISE"));
+        Thread.sleep(300);
+        Future<TriggerExecutionResult> waiting = executor.submit(() ->
+            queueService.enqueueAndWait(longRun, "trigger:t", TriggerType.MANUAL, Map.of(), "FREE"));
+        Thread.sleep(300);
+        releaseHolder.countDown();
+        assertTrue(longRunStarted.await(2, TimeUnit.SECONDS), "long-run should start well inside the wait");
+
+        TriggerExecutionResult result = waiting.get(5, TimeUnit.SECONDS);
+
+        assertTrue(result.success(), "a started run is not a failure");
+        assertEquals(TriggerExecutionResult.STILL_RUNNING_MESSAGE, result.message());
+        releaseLongRun.countDown();
+        assertTrue(longRunFinished.await(5, TimeUnit.SECONDS), "the started run must not be cancelled");
+        // Counted once as still_running, never as a queue timeout.
+        assertEquals(1.0, completedCount("still_running"));
+        assertEquals(0.0, completedCount("timeout"));
+        executor.shutdownNow();
+    }
+
+    @Test
+    void startedItemThatFailedRightAtTheDeadlineReportsItsFailure() {
+        createService(1, 2);
+        QueuedExecution item = new QueuedExecution(mockRun("r"), "trigger:t", TriggerType.MANUAL, Map.of(), 1);
+        assertTrue(item.tryStart());
+        item.completeExceptionally(new IllegalStateException("node blew up"));
+
+        TriggerExecutionResult result = queueService.verdictForStartedItem(
+            item, "r", "trigger:t", TriggerType.MANUAL, "FREE", "tenant-1");
+
+        assertFalse(result.success());
+        assertEquals("Execution failed: node blew up", result.message());
+        assertEquals(1.0, completedCount("failure"));
+        assertEquals(0.0, completedCount("still_running"));
+    }
+
+    @Test
+    void startedItemThatSucceededRightAtTheDeadlineReportsItsResult() {
+        createService(1, 2);
+        QueuedExecution item = new QueuedExecution(mockRun("r"), "trigger:t", TriggerType.MANUAL, Map.of(), 1);
+        assertTrue(item.tryStart());
+        TriggerExecutionResult done = TriggerExecutionResult.success("r", "trigger:t", TriggerType.MANUAL, Set.of(), 3);
+        item.complete(done);
+
+        TriggerExecutionResult result = queueService.verdictForStartedItem(
+            item, "r", "trigger:t", TriggerType.MANUAL, "FREE", "tenant-1");
+
+        assertSame(done, result);
+        assertEquals(1.0, completedCount("success"));
+        assertEquals(0.0, completedCount("still_running"));
     }
 
     @Test
@@ -729,5 +845,11 @@ class ExecutionQueueServiceTest {
             Thread.sleep(10);
         }
         assertTrue(condition.getAsBoolean(), failureMessage);
+    }
+
+    private double completedCount(String outcome) {
+        io.micrometer.core.instrument.Counter counter = registry.find(ExecutionQueueMetrics.COMPLETED_TOTAL)
+            .tags("outcome", outcome, "tenant", ExecutionQueueMetrics.AGGREGATE).counter();
+        return counter == null ? 0.0 : counter.count();
     }
 }

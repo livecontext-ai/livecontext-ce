@@ -37,17 +37,47 @@ import static org.mockito.Mockito.when;
 class AgentModelsControllerTest {
 
     @Mock private ModelCatalogService service;
+    @Mock private com.apimarketplace.agent.service.ModelReplacementResolver replacementResolver;
 
     private AgentModelsController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new AgentModelsController(service);
+        controller = new AgentModelsController(service, replacementResolver);
         // The real method mutates the catalog in place and hands back the SAME map, so the
         // pass-through stub keeps every isSameAs() assertion below meaning what it meant before
         // the filter existed. Lenient: the flat route and the rejected-category route never reach it.
         lenient().when(service.hideBridgeProviders(any()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    @Test
+    @DisplayName("/models/effective echoes an enabled pair with substituted=false")
+    void effectiveEchoesEnabledPair() {
+        when(replacementResolver.substituteIfDisabled("anthropic", "claude-opus-4-9"))
+                .thenReturn(java.util.Optional.empty());
+
+        Map<String, Object> body = controller.getEffectiveModel("anthropic", "claude-opus-4-9").getBody();
+
+        assertThat(body).containsEntry("provider", "anthropic")
+                .containsEntry("model", "claude-opus-4-9")
+                .containsEntry("substituted", false);
+    }
+
+    @Test
+    @DisplayName("/models/effective returns the replacement of a disabled pair (what a CLI chat turn runs on)")
+    void effectiveReturnsReplacement() {
+        when(replacementResolver.substituteIfDisabled("claude-code", "claude-opus-4-8"))
+                .thenReturn(java.util.Optional.of(new com.apimarketplace.agent.service.ModelReplacementResolver.Substitution(
+                        "claude-code", "claude-opus-4-9", "claude-code", "claude-opus-4-8", true)));
+
+        Map<String, Object> body = controller.getEffectiveModel("claude-code", "claude-opus-4-8").getBody();
+
+        assertThat(body).containsEntry("provider", "claude-code")
+                .containsEntry("model", "claude-opus-4-9")
+                .containsEntry("substituted", true)
+                .containsEntry("explicit", true)
+                .containsEntry("replacedModel", "claude-opus-4-8");
     }
 
     @Test

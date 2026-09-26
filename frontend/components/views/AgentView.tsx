@@ -69,7 +69,7 @@ export function AgentView() {
         {activeTab === 'skills' && <SkillTab />}
         {activeTab === 'memory' && <MemoryTab />}
         {activeTab === 'metrics' && <AgentMetricsDashboard />}
-        {activeTab === 'settings' && <AgentChatDefaults headingLevel="h2" />}
+        {activeTab === 'settings' && <AgentChatDefaults />}
       </div>
     </AuthenticatedView>
   );

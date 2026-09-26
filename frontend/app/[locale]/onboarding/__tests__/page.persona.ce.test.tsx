@@ -17,7 +17,12 @@ const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   track: vi.fn(),
+  leaveForChat: vi.fn(),
 }));
+
+// The one navigation to the chat, observed rather than inferred from a spinner that the loading
+// and saving states also show.
+vi.mock('@/lib/navigation/leaveForChat', () => ({ leaveForChat: mocks.leaveForChat }));
 
 vi.mock('next-intl', () => ({
   useTranslations: () => (key: string) => key,
@@ -30,11 +35,22 @@ vi.mock('@/lib/providers/smart-providers', () => ({
     isLoading: false,
     isAuthenticated: true,
     loginWithRedirect: vi.fn(),
+    // The page destructures logout for its sign-out hatches. Absent, the first
+    // future case here that reaches one dies on "logout is not a function".
+    logout: vi.fn(),
   }),
 }));
 
 vi.mock('@/lib/api', () => ({
   apiClient: { get: mocks.apiGet, post: mocks.apiPost },
+}));
+
+// The credential-redirect handler reads the address through next/navigation, which returns null
+// outside a router context. A real URLSearchParams over window.location keeps the test driving
+// the same code the browser does, including the history-API cleanup.
+vi.mock('next/navigation', () => ({
+  usePathname: () => window.location.pathname,
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 vi.mock('@/lib/edition', () => ({ IS_CE: true }));
@@ -109,6 +125,9 @@ const CLOUD_GOAL_LABELS = [
 
 describe('Onboarding persona questionnaire (CE edition)', () => {
   beforeEach(() => {
+    // restoreAllMocks does not clear a vi.fn call history: without this, one completing test
+    // makes every later leaveForChat assertion pass on its own.
+    mocks.leaveForChat.mockReset();
     sessionStorage.clear();
     mocks.apiGet.mockReset();
     mocks.apiPost.mockReset();
@@ -199,5 +218,23 @@ describe('Onboarding persona questionnaire (CE edition)', () => {
     expect(payload).not.toHaveProperty('experienceLevel');
 
     expect(await screen.findByText('ce.step3.title')).toBeInTheDocument();
+  });
+
+  it('goes straight to the chat after completing, self-hosted too: no apps panel in between', async () => {
+    // Connecting apps left onboarding for the setup checklist. CE completes by the same route.
+    mockStatus({ currentStep: 3, previousTool: 'n8n', referralSource: 'search' });
+    renderPage();
+
+    expect(await screen.findByText('ce.step3.title')).toBeInTheDocument();
+    const complete = screen.getByRole('button', { name: /complete/ });
+    await waitFor(() => expect(complete).toBeEnabled());
+    fireEvent.click(complete);
+
+    await waitFor(() => expect(mocks.apiPost).toHaveBeenCalledWith(
+      '/auth-service/api/onboarding/complete', expect.objectContaining({ currentStep: 3 })));
+    await waitFor(() => expect(mocks.leaveForChat).toHaveBeenCalledWith('en'));
+    expect(mocks.leaveForChat).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('ce.step3.title')).not.toBeInTheDocument();
+    expect(screen.queryByText('step4.title')).not.toBeInTheDocument();
   });
 });

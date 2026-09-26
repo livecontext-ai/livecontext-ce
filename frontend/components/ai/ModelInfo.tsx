@@ -34,11 +34,7 @@ import {
   TooltipContent,
   TooltipProvider,
 } from '@/components/ui/tooltip';
-import {
-  Popover,
-  PopoverTrigger,
-  PopoverContent,
-} from '@/components/ui/popover';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { cn } from '@/lib/utils';
 import type { AIModel } from '@/hooks/useModels';
@@ -405,13 +401,13 @@ interface ModelOptionDisplayProps {
    */
   upgradeRequired?: boolean;
   /**
-   * True when the reader's free-tier allowance pays for this model right now,
+   * True when the reader's Free monthly credits pay for this model right now,
    * which marks the row with a "Free" chip. The mirror image of
    * {@link upgradeRequired}, and passed in for the same reason: the answer
    * belongs to the whole list.
    *
    * <p><b>It must come from `useMonthlyCreditsCannotPay.freeTierForModel`</b>,
-   * the verdict that also weighs the allowance balance. That is what keeps this
+   * the verdict that also weighs the monthly balance. That is what keeps this
    * chip and {@link upgradeRequired}'s lock off the same row; the reasoning lives
    * with the verdict.
    */
@@ -516,10 +512,9 @@ export function ModelOptionDisplay({
       <div className="flex items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500 dark:text-slate-400 min-w-0 flex-wrap">
         {/* First on the meta line, ahead of tier and provider. It and the lock two
             badges along are the pair that answers "can I run this?", which is what
-            a reader on a workflow-scoped plan is reading the row for; they are
-            never both present, so the line never carries two markers however far
-            apart they sit. The figure this chip could quote is left out here - see
-            {@code FreeTierBadge.credits} for why a row must not ask for it. */}
+            a reader on the Free plan is reading the row for; they are never both
+            present, so the line never carries two markers however far apart they
+            sit. */}
         <FreeTierBadge covered={freeTier} />
         <TierBadge tier={model.tier} />
         {/* Drawn only for a caller who HAS a key of their own, where the list genuinely mixes
@@ -627,7 +622,7 @@ export function ModelInfoPopover({
 }: ModelInfoPopoverProps) {
   const t = useTranslations('modelInfo');
   // The chip's own namespace, so the card and the chip cannot drift into two
-  // different explanations of one allowance.
+  // different explanations of one rule.
   const tFreeTier = useTranslations('billing.freeTier');
   const [open, setOpen] = React.useState(false);
   // The row's estimate lives behind a hover tooltip, which a touch device can
@@ -648,42 +643,42 @@ export function ModelInfoPopover({
   const rpm = formatRateLimit(model.rateLimitRpm);
   const allCaps = collectCapabilities(model);
 
+  // The shared click-to-open "i". Its layer (z-[100001]) is the one this card
+  // established: above the composer model menu (z-[10000]), the composer Options
+  // popover (z-[99999]) and the pickers' SelectContent (z-[100000]), under the hover
+  // tooltips on its own badges (z-[100002]).
   return (
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          {trigger ?? (
-            <button
-              type="button"
-              aria-label={t('infoTooltip')}
-              title={t('infoTooltip')}
-              data-model-selector-keep-open
-              className={cn(
-                'inline-flex h-5 w-5 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 dark:hover:text-slate-200 transition-colors',
-                className,
-              )}
-              onPointerDown={e => e.stopPropagation()}
-              onMouseDown={e => e.stopPropagation()}
-              onClick={e => {
-                e.stopPropagation();
-                setOpen(o => !o);
-              }}
-            >
-              <Info className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </PopoverTrigger>
-        {/* The default PopoverContent z-50 paints this card BEHIND every host that
-            opens it: the composer model menu (z-[10000], ModelSelectorDropdown), the
-            composer Options popover (z-[99999]) and the pickers' SelectContent
-            (z-[100000]) - so it must sit above them all. */}
-        <PopoverContent
-          align="end"
-          className="w-80 p-4 text-sm bg-theme-primary border-theme z-[100001]"
-          data-model-selector-keep-open
-          onPointerDown={e => e.stopPropagation()}
-          onMouseDown={e => e.stopPropagation()}
-          onClick={e => e.stopPropagation()}
-        >
+      <InfoPopover
+        label={t('infoTooltip')}
+        open={open}
+        onOpenChange={setOpen}
+        align="end"
+        trigger={trigger ?? (
+          <button
+            type="button"
+            aria-label={t('infoTooltip')}
+            title={t('infoTooltip')}
+            data-model-selector-keep-open
+            className={cn(
+              'inline-flex h-5 w-5 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 dark:hover:text-slate-200 transition-colors',
+              className,
+            )}
+            // Stops pointerdown too, unlike the shared default trigger: the composer model
+            // menu closes on any outside pointerdown, and this button lives inside it. The
+            // cost, accepted here, is that another open "i" is not dismissed by this press.
+            onPointerDown={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => {
+              e.stopPropagation();
+              setOpen(o => !o);
+            }}
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
+        )}
+        contentClassName="w-80 p-4 text-sm leading-normal text-theme-primary border-theme"
+        contentProps={{ 'data-model-selector-keep-open': true }}
+      >
         <div className="space-y-3">
           <div>
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -849,7 +844,6 @@ export function ModelInfoPopover({
             </div>
           )}
         </div>
-      </PopoverContent>
-      </Popover>
+      </InfoPopover>
   );
 }

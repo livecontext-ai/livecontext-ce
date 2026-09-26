@@ -101,7 +101,7 @@ public class GatewayAuthenticationFilter implements Filter {
         // Reject if any required header/parameter is missing
         if (gatewaySecretHeader == null || gatewayTimestamp == null || providerId == null) {
             log.warn("Gateway headers missing for {} - secret={}, timestamp={}, providerId={}",
-                    requestPath,
+                    LogSafePath.of(requestPath),
                     gatewaySecretHeader != null ? "present" : "absent",
                     gatewayTimestamp != null ? "present" : "absent",
                     providerId != null ? "present" : "absent");
@@ -114,12 +114,12 @@ public class GatewayAuthenticationFilter implements Filter {
         String userIdHdr = httpRequest.getHeader("X-User-ID");
         String orgIdHdr = httpRequest.getHeader("X-Organization-ID");
         if (!isValidGatewaySecret(gatewaySecretHeader, providerId, gatewayTimestamp, userIdHdr, orgIdHdr)) {
-            log.warn("Invalid gateway secret for path={} providerId={}", requestPath, providerId);
+            log.warn("Invalid gateway secret for path={} providerId={}", LogSafePath.of(requestPath), providerId);
             rejectRequest(httpResponse, HttpServletResponse.SC_UNAUTHORIZED, "Invalid gateway secret");
             return;
         }
 
-        log.debug("Gateway authentication passed for path={}", requestPath);
+        log.debug("Gateway authentication passed for path={}", LogSafePath.of(requestPath));
         chain.doFilter(request, response);
     }
 

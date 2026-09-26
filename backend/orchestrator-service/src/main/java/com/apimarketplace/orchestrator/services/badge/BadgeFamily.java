@@ -33,5 +33,8 @@ public enum BadgeFamily {
     /** Publications made PUBLIC (shared with everyone). */
     SHARER,
     /** Installs other people made of the user's publications. */
-    POPULARITY
+    POPULARITY,
+    REACHABLE,
+    MULTICHANNEL,
+    REMOTE_CONTROL
 }

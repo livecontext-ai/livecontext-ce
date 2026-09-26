@@ -2,6 +2,7 @@ package com.apimarketplace.publication.controller;
 
 import com.apimarketplace.auth.client.AuthClient;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
+import com.apimarketplace.common.credit.SourceIdBuilder;
 import com.apimarketplace.publication.domain.PublicationReceiptEntity;
 import com.apimarketplace.publication.domain.WorkflowPublicationEntity;
 import com.apimarketplace.publication.service.LandingInterfaceSnapshotter;
@@ -175,7 +176,8 @@ public class CeDownloadController {
         // Deduct credits if paid. On failure roll back the reservation so a user is never left
         // owning a paid publication without payment, and a later retry can charge cleanly.
         if (creditsPerUse > 0) {
-            ResponseEntity<Map<String, Object>> creditResult = deductCredits(userId, publicationId, creditsPerUse);
+            ResponseEntity<Map<String, Object>> creditResult =
+                    deductCredits(userId, cloudOrgId, publicationId, creditsPerUse);
             if (creditResult != null) {
                 receiptRepository.delete(receipt);
                 return creditResult; // error response (402, 500)
@@ -243,10 +245,20 @@ public class CeDownloadController {
     /**
      * Deducts credits via the centralized CreditConsumptionClient.
      * Returns an error ResponseEntity if deduction fails, or null if successful.
+     *
+     * <p>The ledger key is the PURCHASE ({@link SourceIdBuilder#marketplacePurchase}, the same
+     * {@code (organization, publication)} pair the receipt is unique on), never the publication
+     * id alone: the ledger's {@code source_id} is unique across every user, so a bare publication
+     * id let only the first buyer of a paid publication ever be charged. Being deterministic, the
+     * key also makes a retry after a lost response an idempotent replay rather than a second
+     * charge (the receipt is rolled back below, the key is not).
      */
-    private ResponseEntity<Map<String, Object>> deductCredits(Long userId, UUID publicationId, int creditsPerUse) {
+    private ResponseEntity<Map<String, Object>> deductCredits(Long userId, String cloudOrgId,
+                                                              UUID publicationId, int creditsPerUse) {
         Map<String, Object> result = creditClient.consumeFixedCredits(
-                userId.toString(), publicationId.toString(), creditsPerUse);
+                userId.toString(),
+                SourceIdBuilder.marketplacePurchase(cloudOrgId, publicationId.toString()),
+                creditsPerUse);
 
         if (Boolean.TRUE.equals(result.get("success"))) {
             return null; // success

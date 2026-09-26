@@ -98,6 +98,13 @@ public class AgentRemoteExecutionService {
     private ExecutionLinkRouter executionLinkRouter;
 
     /**
+     * Swaps a disabled model for its replacement (V515). Optional for the same reason as the
+     * router: a unit test constructing this service directly leaves it null (no swap).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.agent.service.ModelReplacementResolver modelReplacementResolver;
+
+    /**
      * Pins whose API key each execution runs on (see {@link KeyRouteResolver}). Optional
      * for the same reason as the router: a unit test constructing this service directly
      * leaves it null, and the context is then unpinned (pre-pin behaviour).
@@ -112,6 +119,15 @@ public class AgentRemoteExecutionService {
      * credit debit happens.
      */
     public static final String KEY_ROUTE_METRIC = "keyRoute";
+
+    /**
+     * Keys under which the model-replacement outcome (V515) rides on the response's metrics,
+     * for the producer that builds the observability record ({@code modelReplaced} /
+     * {@code replacedModel} on {@code AgentObservabilityRequest}). Absent when the resolver is
+     * not wired (unknown); {@code false} when it ran and substituted nothing.
+     */
+    public static final String MODEL_REPLACED_METRIC = "modelReplaced";
+    public static final String REPLACED_MODEL_METRIC = "replacedModel";
 
     /**
      * Optional Prometheus metrics sink. Field-injected for the same reason as the other
@@ -146,7 +162,36 @@ public class AgentRemoteExecutionService {
      */
     public AgentExecutionResponseDto executeAgent(AgentExecutionRequestDto request, String userRoles) {
         long startTime = System.currentTimeMillis();
-        // Normalise provider against the catalog FIRST: a bridge (CLI) model
+        // A model an admin disabled runs on its replacement, before anything else reads the
+        // pair: provider normalisation, the execution link, the guards and billing all see
+        // the replacement, so a linked replacement is routed like any picked model.
+        // null = the resolver is not wired, so whether a swap happened is unknown.
+        Optional<com.apimarketplace.agent.service.ModelReplacementResolver.Substitution> replacement = null;
+        if (modelReplacementResolver != null) {
+            replacement = modelReplacementResolver.substituteIfDisabled(request.provider(), request.model());
+            var sub = replacement.orElse(null);
+            if (sub != null) {
+                request = request.withModel(sub.provider(), sub.model());
+            }
+        }
+        return withReplacementMetrics(executeResolved(request, userRoles, startTime), replacement);
+    }
+
+    /** Stamps the model-replacement outcome on the response metrics; unknown (null) stamps nothing. */
+    static AgentExecutionResponseDto withReplacementMetrics(AgentExecutionResponseDto response,
+                                                            Optional<com.apimarketplace.agent.service.ModelReplacementResolver.Substitution> replacement) {
+        if (response == null || replacement == null) {
+            return response;
+        }
+        AgentExecutionResponseDto stamped = response.withMetric(MODEL_REPLACED_METRIC, replacement.isPresent());
+        return replacement
+            .map(sub -> stamped.withMetric(REPLACED_MODEL_METRIC, sub.replacedModel()))
+            .orElse(stamped);
+    }
+
+    private AgentExecutionResponseDto executeResolved(AgentExecutionRequestDto request, String userRoles,
+                                                      long startTime) {
+        // Normalise provider against the catalog: a bridge (CLI) model
         // stored as provider="anthropic" (frontend heuristic / LLM-authored
         // plan) must resolve to its bridge slug so shouldDispatch routes it via
         // the bridge AND it passes through BridgeAccessGuard - identical to the

@@ -48,5 +48,17 @@ public enum BadgeMetric {
     PUBLICATIONS_PUBLIC,
 
     /** Total installs across the user's publications. */
-    PUBLICATION_USES
+    PUBLICATION_USES,
+
+    /** Chat destinations the user connected that received their test message. */
+    CHANNELS_CONNECTED,
+
+    /** Distinct chat services (Telegram, Slack, ...) among those destinations. */
+    CHANNEL_SERVICES,
+
+    /**
+     * Decisions made from a chat instead of the app: an agent's permission or question answered
+     * with a button or a reply, or a workflow approval decided on its channel message.
+     */
+    REMOTE_DECISIONS
 }

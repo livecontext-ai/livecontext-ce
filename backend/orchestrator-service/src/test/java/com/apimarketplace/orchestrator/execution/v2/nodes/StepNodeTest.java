@@ -340,8 +340,8 @@ class StepNodeTest {
         }
 
         @Test
-        @DisplayName("Should fallback when template resolution fails")
-        void shouldFallbackWhenTemplateResolutionFails() {
+        @DisplayName("fails when template resolution fails instead of calling the tool with the raw {{...}} params")
+        void failsWhenTemplateResolutionFails() {
             Map<String, Object> stepInput = Map.of("bad", "{{invalid}}");
             Step step = new Step("tool-123", "mcp", "API Call", null, stepInput, null, null, null);
             StepNode node = new StepNode("mcp:api_call", step);
@@ -351,13 +351,13 @@ class StepNodeTest {
             when(mockTemplateAdapter.resolveTemplates(any(), any()))
                 .thenThrow(new RuntimeException("Template error"));
 
-            ExecutionResult toolResult = new ExecutionResult(true, Map.of("result", "ok"), List.of(), List.of());
-            when(mockToolsGateway.executeTool(any(), any(), any(), any())).thenReturn(toolResult);
-
             NodeExecutionResult result = node.execute(context);
 
-            // Should still succeed, using fallback input
-            assertTrue(result.isSuccess());
+            // The step used to succeed here, having sent {"bad": "{{invalid}}"} to the tool.
+            assertTrue(result.isFailure());
+            assertTrue(result.errorMessage().orElse("").contains("Template error"),
+                "the failure must carry the resolution error");
+            verify(mockToolsGateway, never()).executeTool(any(), any(), any(), any());
         }
     }
 

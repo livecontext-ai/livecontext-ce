@@ -30,6 +30,10 @@ const run = vi.fn(async (_request: Record<string, unknown>): Promise<TurnOutcome
 const invalidateQueries = vi.fn();
 // The options the surface hands the turn hook, so the callbacks it OWNS can be exercised.
 let turnOptions: { onTurnRecorded?: (id: string, phase: 'request' | 'result') => void } = {};
+// The hook's `error`, which is the only place a turn that never reached the thread says why.
+let turnError: { code: string } | null = null;
+const track = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/analytics/analytics', () => ({ track: (...a: unknown[]) => track(...a) }));
 
 // The conversation the route was opened on, and whether reading it FAILED. Swapped per test.
 let conversation: Record<string, unknown> | undefined = { id: 'c1', title: 'A chat' };
@@ -82,7 +86,7 @@ vi.mock('@/hooks/useGenerationModels', () => ({
 vi.mock('@/hooks/useStudioTurn', () => ({
   useStudioTurn: (options: Record<string, unknown>) => {
     turnOptions = options as typeof turnOptions;
-    return { isRunning: false, error: null, run, clearError: vi.fn() };
+    return { isRunning: false, error: turnError, run, clearError: vi.fn() };
   },
 }));
 vi.mock('@/lib/stores/current-org-store', () => ({ useCanMutateInCurrentOrg: () => true }));
@@ -147,6 +151,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   conversationErrored = false;
   lastSubmit = null;
+  turnError = null;
   run.mockResolvedValue({ conversationId: 'c1', result: { success: true } });
 });
 afterEach(cleanup);
@@ -413,5 +418,71 @@ describe('StudioSurface - what survives in the composer after a turn', () => {
     run.mockResolvedValue(null);
 
     expect(await submitAndRead()).toBe(false);
+  });
+});
+
+describe('StudioSurface - analytics', () => {
+  const studio = () => { conversation = { id: 'c1', title: 'A studio', kind: 'studio' }; };
+  const submitted = () => track.mock.calls.filter(([e]) => e === 'studio_generation_submitted');
+
+  async function submit() {
+    const view = render(<StudioSurface conversationId="c1" />);
+    await waitFor(() => expect(screen.getByTestId('composer-disabled')).toHaveTextContent('false'));
+    // The surface adopts the thread's model on its own; that restore is not a reader's pick.
+    track.mockClear();
+    fireEvent.click(screen.getByTestId('switch-model'));
+    fireEvent.click(screen.getByTestId('submit'));
+    await lastSubmit;
+    return view;
+  }
+
+  it('reports the model the reader picked, and the outcome of the turn, never the prompt', async () => {
+    studio();
+    await submit();
+
+    expect(track).toHaveBeenCalledWith('studio_model_selected', {
+      model: 'flux-1', kind: 'image', provider: 'flux', entry_point: 'studio',
+    });
+    expect(submitted()).toEqual([['studio_generation_submitted', {
+      model: 'flux-1', kind: 'image', provider: 'flux', credential_source: 'platform',
+      outcome: 'success', entry_point: 'studio',
+    }]]);
+  });
+
+  it.each([
+    ['refused', { success: false, error: 'Out of credits', data: {} }],
+    ['failed', { success: false, error: 'ran, not stored', data: { asset_url: 'https://p/x' } }],
+  ])('a recorded %s answer is reported as such', async (outcome, result) => {
+    studio();
+    run.mockResolvedValue({ status: 'recorded', conversationId: 'c1', result });
+    await submit();
+
+    expect(submitted()).toEqual([['studio_generation_submitted', expect.objectContaining({ outcome })]]);
+  });
+
+  it('a lost turn is reported once, as lost', async () => {
+    studio();
+    run.mockImplementation(async () => {
+      turnError = { code: 'connection_lost' };
+      return { status: 'lost', conversationId: 'c1' };
+    });
+    const view = await submit();
+    view.rerender(<StudioSurface conversationId="c1" />);
+
+    expect(submitted()).toEqual([['studio_generation_submitted', expect.objectContaining({ outcome: 'lost' })]]);
+  });
+
+  it('a turn refused before it reached the thread is reported from the hook error', async () => {
+    studio();
+    run.mockImplementation(async () => {
+      turnError = { code: 'refused' };
+      return null;
+    });
+    const view = await submit();
+    view.rerender(<StudioSurface conversationId="c1" />);
+
+    await waitFor(() => expect(submitted()).toEqual([
+      ['studio_generation_submitted', expect.objectContaining({ outcome: 'refused', model: 'flux-1' })],
+    ]));
   });
 });

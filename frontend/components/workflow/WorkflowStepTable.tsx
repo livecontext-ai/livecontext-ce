@@ -75,7 +75,9 @@ export function WorkflowStepTable({
   stepAlias,
   jsonPath,
   onNavigate,
-  showIdColumn = !jsonPath,
+  // The #ID lane at EVERY depth: drilling into input/output derives the columns from the data,
+  // and without the lane a row whose item has no `id` of its own had no identity at all.
+  showIdColumn = true,
   epoch,
   refreshVersion = 0,
 }: WorkflowStepTableProps) {

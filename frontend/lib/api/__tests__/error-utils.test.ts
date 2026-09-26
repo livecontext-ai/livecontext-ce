@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  isCloudLinkPlanRequiredError,
   isCreditExhaustedFailure,
   isInsufficientCloudCreditError,
   isModelNotSupportedError,
@@ -90,5 +91,25 @@ describe('isCreditExhaustedFailure', () => {
     expect(isCreditExhaustedFailure(undefined, undefined)).toBe(false);
     expect(isCreditExhaustedFailure(null, null)).toBe(false);
     expect(isCreditExhaustedFailure(undefined, {})).toBe(false);
+  });
+});
+
+describe('isCloudLinkPlanRequiredError', () => {
+  it('matches the 403 JSON body the cloud answers to a FREE-plan CE link', () => {
+    expect(isCloudLinkPlanRequiredError(
+      'Cloud LLM relay returned 403: {"error":"CLOUD_LINK_PLAN_REQUIRED","planCode":"FREE","message":"..."}')).toBe(true);
+  });
+
+  it('matches an NDJSON stream error event surfaced as an Error or an object', () => {
+    expect(isCloudLinkPlanRequiredError(new Error('CLOUD_LINK_PLAN_REQUIRED'))).toBe(true);
+    expect(isCloudLinkPlanRequiredError({ error: 'CLOUD_LINK_PLAN_REQUIRED' })).toBe(true);
+  });
+
+  it('does not match the other relay tokens, the not-linked refusal, or empty inputs', () => {
+    expect(isCloudLinkPlanRequiredError('INSUFFICIENT_CREDITS')).toBe(false);
+    expect(isCloudLinkPlanRequiredError('MODEL_NOT_SUPPORTED')).toBe(false);
+    expect(isCloudLinkPlanRequiredError('CE_LINK_NOT_ACTIVE')).toBe(false);
+    expect(isCloudLinkPlanRequiredError(null)).toBe(false);
+    expect(isCloudLinkPlanRequiredError({})).toBe(false);
   });
 });

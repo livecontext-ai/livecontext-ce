@@ -53,6 +53,43 @@ class TaskVisibilityResolverTest {
         assertThat(role).isEqualTo(Role.NONE);
     }
 
+    /**
+     * Prod 2026-09-23: the person's chat assigned a task, then could not read what its run did:
+     * task_get_execution answered "Not authorized", because a caller with no agent id was refused
+     * before the unrestricted-caller rule every other caller is judged by.
+     */
+    @Test
+    @DisplayName("the person's own chat (no agent, unrestricted) may read a task of its workspace")
+    void personsChatWithoutAgentReadsTheTask() {
+        AgentTaskEntity task = taskOwnedByDifferentAgents();
+        when(taskRepository.findByIdAndOrganizationIdStrict(TASK_ID, ORG_ID)).thenReturn(Optional.of(task));
+
+        TaskVisibilityResolver.ResolvedTask resolved = resolver.resolveRoleAndTask(null, TASK_ID, TENANT_ID, context(Map.of()));
+
+        assertThat(resolved.role()).isEqualTo(Role.GOD);
+        assertThat(resolved.task()).isSameAs(task);
+        assertThat(resolver.resolveRole(null, TASK_ID, TENANT_ID, context(Map.of()))).isEqualTo(Role.GOD);
+    }
+
+    @Test
+    @DisplayName("a caller with no agent id but a restricted agent list still sees nothing")
+    void restrictedCallerWithoutAgentStillRefused() {
+        AgentTaskEntity task = taskOwnedByDifferentAgents();
+        when(taskRepository.findByIdAndOrganizationIdStrict(TASK_ID, ORG_ID)).thenReturn(Optional.of(task));
+
+        Map<String, Object> restricted = Map.of("__allowedAgentIds__", List.of());
+        assertThat(resolver.resolveRoleAndTask(null, TASK_ID, TENANT_ID, context(restricted)).role()).isEqualTo(Role.NONE);
+        assertThat(resolver.resolveRole(null, TASK_ID, TENANT_ID, context(restricted))).isEqualTo(Role.NONE);
+    }
+
+    @Test
+    @DisplayName("an unrestricted caller still cannot see a task outside its workspace")
+    void unrestrictedCallerStaysInItsWorkspace() {
+        when(taskRepository.findByIdAndOrganizationIdStrict(TASK_ID, ORG_ID)).thenReturn(Optional.empty());
+
+        assertThat(resolver.resolveRoleAndTask(null, TASK_ID, TENANT_ID, context(Map.of())).role()).isEqualTo(Role.NONE);
+    }
+
     private ToolExecutionContext context(Map<String, Object> credentials) {
         return new ToolExecutionContext(
             TENANT_ID, credentials, Map.of(), Set.of(), null, null, ORG_ID, "MEMBER");

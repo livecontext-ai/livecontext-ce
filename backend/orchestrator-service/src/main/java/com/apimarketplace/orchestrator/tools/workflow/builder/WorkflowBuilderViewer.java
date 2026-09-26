@@ -143,7 +143,7 @@ public class WorkflowBuilderViewer {
         result.put("type", type);
 
         // Build type-specific description using NodeDescriptionBuilder
-        NodeDescriptionBuilder.DescriptionResult desc = nodeDescriptionBuilder.buildDescription(nodeId, node, session.getTenantId());
+        NodeDescriptionBuilder.DescriptionResult desc = nodeDescriptionBuilder.buildDescription(nodeId, node, session.getTenantId(), session.getOrgId());
 
         // Expose node config so LLM can see current values (prompt, tool_id, conditions, mappings, etc.)
         if (!desc.config().isEmpty()) {

@@ -104,9 +104,10 @@ public class SplitNode extends BaseNode {
             }
 
             // Limit items if maxItems is set
-            if (items.size() > maxItems) {
-                logger.debug("Split limiting items from {} to {}", items.size(), maxItems);
-                items = items.subList(0, maxItems);
+            int effectiveMaxItems = getSplitMaxItems(context);
+            if (items.size() > effectiveMaxItems) {
+                logger.debug("Split limiting items from {} to {}", items.size(), effectiveMaxItems);
+                items = items.subList(0, effectiveMaxItems);
             }
 
             splitState = SplitState.create(items, maxItems, splitStrategy);
@@ -420,6 +421,25 @@ public class SplitNode extends BaseNode {
     @Override
     public int getSplitMaxItems() {
         return maxItems;
+    }
+
+    /**
+     * The cap for this execution: the configured one, or the plan's {@code {{...}}} resolved
+     * against the run. It used to be the default 100, silently, because the parser could not
+     * hold a template in an int. Must resolve to a positive whole number, or the split fails.
+     */
+    @Override
+    public int getSplitMaxItems(ExecutionContext context) {
+        String template = deferredScalar("split", "maxItems");
+        if (template == null || context == null) {
+            return maxItems;
+        }
+        long cap = resolveDeferredLong("split", "maxItems", template, context);
+        if (cap <= 0 || cap > Integer.MAX_VALUE) {
+            throw new IllegalStateException("split.maxItems '" + template + "' resolved to " + cap
+                + ": it must be a positive whole number");
+        }
+        return (int) cap;
     }
 
     public int getMaxItems() {

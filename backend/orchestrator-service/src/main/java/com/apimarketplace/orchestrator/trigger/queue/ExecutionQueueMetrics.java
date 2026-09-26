@@ -48,6 +48,8 @@ public class ExecutionQueueMetrics {
     public static final String OUTCOME_FAILURE = "failure";
     public static final String OUTCOME_TIMEOUT = "timeout";
     public static final String OUTCOME_CANCELLED = "cancelled";
+    /** The synchronous wait ran out after the run had STARTED: not a queue timeout. */
+    public static final String OUTCOME_STILL_RUNNING = "still_running";
 
     /**
      * Known plan codes - anything outside this set is normalized to {@code UNKNOWN}
@@ -127,7 +129,8 @@ public class ExecutionQueueMetrics {
      * Records a completion. Emits per-tenant + aggregate series.
      *
      * @param outcome one of {@link #OUTCOME_SUCCESS}, {@link #OUTCOME_FAILURE},
-     *                {@link #OUTCOME_TIMEOUT}, {@link #OUTCOME_CANCELLED}
+     *                {@link #OUTCOME_TIMEOUT}, {@link #OUTCOME_CANCELLED},
+     *                {@link #OUTCOME_STILL_RUNNING}
      */
     public void recordCompleted(String plan, String tenantId, String outcome) {
         String p = normalizePlan(plan);

@@ -16,7 +16,6 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -64,10 +63,17 @@ class OrchestratorPurgeFollowerTest {
     }
 
     @Test
-    @DisplayName("A USER purge deletes nothing here")
-    void userPurgeIsNoop() {
+    @DisplayName("A USER purge deletes that person's personal rows (notifications, monthly recaps), and only by their id")
+    void userPurgeDeletesOnlyNotificationRows() {
         follower.purgeUser("42");
-        verifyNoInteractions(jdbc);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc, atLeastOnce()).update(sql.capture(), eq("42"));
+        assertThat(sql.getAllValues()).hasSize(OrchestratorPurgeFollower.USER_TABLES.size());
+        for (String table : OrchestratorPurgeFollower.USER_TABLES) {
+            assertThat(sql.getAllValues()).as("declared user table %s", table)
+                    .contains("DELETE FROM " + table + " WHERE tenant_id = ?");
+        }
     }
 
     @Test

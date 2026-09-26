@@ -5,7 +5,6 @@ import PlanComparisonDialog from '@/components/pricing/PlanComparisonDialog';
 import { useSubscription } from '@/lib/hooks/smart-hooks-complete';
 import { useCeCloudLinkStatus } from '@/hooks/useCeCloudLinkStatus';
 import { CLOUD_NO_SUBSCRIPTION } from '@/lib/api/cloud-link.service';
-import { useFreeAiCredits } from '@/lib/hooks/useFreeAiCredits';
 import { IS_CE } from '@/lib/edition';
 
 /**
@@ -32,8 +31,8 @@ import { IS_CE } from '@/lib/edition';
  * </ul>
  *
  * <p><b>It opens nothing by itself.</b> This table once opened on its own right
- * after onboarding, to state the new account's two monthly pots. That moment now
- * belongs to {@code WelcomeGiftModal}, which says the same two figures without
+ * after onboarding, to state the new account's monthly credits. That moment now
+ * belongs to {@code WelcomeGiftModal}, which says the same figure without
  * putting a five-column Free-to-Enterprise matrix in front of somebody who is not
  * choosing a plan. So the comparison is back to one in-app entry point, the
  * pricing page's "Compare plans" button, which is what
@@ -42,9 +41,6 @@ import { IS_CE } from '@/lib/edition';
 export default function AppPlanComparisonDialog() {
   const { subscription } = useSubscription();
   const { status: cloudLinkStatus } = useCeCloudLinkStatus();
-  // Shares the plans query with the pricing page, so mounting this adds no
-  // request and the card and the table cannot quote two different allowances.
-  const freeAiCredits = useFreeAiCredits();
 
   const currentPlanCode = React.useMemo(() => {
     const billing = subscription as
@@ -62,5 +58,5 @@ export default function AppPlanComparisonDialog() {
     return billing?.activeOrgPlanCode ?? localPlanCode;
   }, [subscription, cloudLinkStatus]);
 
-  return <PlanComparisonDialog currentPlanCode={currentPlanCode} freeAiCredits={freeAiCredits} />;
+  return <PlanComparisonDialog currentPlanCode={currentPlanCode} />;
 }

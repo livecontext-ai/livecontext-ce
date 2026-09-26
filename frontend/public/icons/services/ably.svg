@@ -1,4 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#FF5416">
-  <path d="M12 1.5L1.5 7.5v9L12 22.5l10.5-6v-9L12 1.5zm0 2.598l7.902 4.527v8.75L12 21.902l-7.902-4.527v-8.75L12 4.098z"/>
-  <path d="M12 7.5l-4.5 2.625v5.25L12 18l4.5-2.625v-5.25L12 7.5zm0 2.598l2.402 1.402v2.75L12 15.652l-2.402-1.402v-2.75L12 10.098z"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none"><metadata><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"><rdf:Description><dc:creator>RealFaviconGenerator</dc:creator><dc:source>https://realfavicongenerator.net</dc:source></rdf:Description></rdf:RDF></metadata><rect width="160" height="160" rx="48" fill="#03020D"></rect><path d="M79.8574 32L31.4436 120.61L22 113.988L66.7958 32H79.8574ZM80.532 32L128.946 120.61L138.389 113.988L93.5936 32H80.532Z" fill="url(#paint0_linear_6236_132)"></path><path d="M128.271 121.132L80.1947 83.4801L32.1182 121.132L41.9297 128L80.1947 98.0441L118.46 128L128.271 121.132Z" fill="url(#paint1_linear_6236_132)"></path><defs>
+<linearGradient id="paint0_linear_6236_132" x1="38.4208" y1="144.266" x2="119.381" y2="54.3506" gradientUnits="userSpaceOnUse">
+<stop stop-color="#FF5416"></stop>
+<stop offset="0.2535" stop-color="#FF5115"></stop>
+<stop offset="0.461" stop-color="#FF4712"></stop>
+<stop offset="0.6523" stop-color="#FF350E"></stop>
+<stop offset="0.8327" stop-color="#FF1E08"></stop>
+<stop offset="1" stop-color="#FF0000"></stop>
+</linearGradient>
+<linearGradient id="paint1_linear_6236_132" x1="54.1252" y1="150.078" x2="101.975" y2="96.9356" gradientUnits="userSpaceOnUse">
+<stop stop-color="#FF5416"></stop>
+<stop offset="0.2535" stop-color="#FF5115"></stop>
+<stop offset="0.461" stop-color="#FF4712"></stop>
+<stop offset="0.6523" stop-color="#FF350E"></stop>
+<stop offset="0.8327" stop-color="#FF1E08"></stop>
+<stop offset="1" stop-color="#FF0000"></stop>
+</linearGradient>
+</defs></svg>

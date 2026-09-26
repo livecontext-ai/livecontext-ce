@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -89,6 +90,9 @@ public class DateTimeNode extends BaseNode {
 
     private Core.DateTimeConfig resolveConfig(ExecutionContext context) {
         if (dateTimeConfig == null) return null;
+        // durationAmount written as {{...}} is resolved here; the typed config held 0 for it.
+        Core.DateTimeConfig dateTimeConfig =
+            withDeferredScalars("dateTime", this.dateTimeConfig, Core.DateTimeConfig.class, context);
         return new Core.DateTimeConfig(
             dateTimeConfig.operation(),
             resolveTemplateString(dateTimeConfig.value(), context),
@@ -405,9 +409,17 @@ public class DateTimeNode extends BaseNode {
             if (resolved.timezone() != null) inputData.put("timezone", resolved.timezone());
             if (resolved.targetTimezone() != null) inputData.put("targetTimezone", resolved.targetTimezone());
             if (resolved.durationUnit() != null) inputData.put("durationUnit", resolved.durationUnit());
-            if (resolved.durationAmount() != 0) inputData.put("durationAmount", resolved.durationAmount());
+            String amountTemplate = deferredScalar("dateTime", "durationAmount");
+            if (amountTemplate != null) {
+                inputData.put("durationAmount", ReportedParams.valueFrom(amountTemplate, resolved.durationAmount()));
+            } else if (resolved.durationAmount() != 0) {
+                inputData.put("durationAmount", resolved.durationAmount());
+            }
             if (resolved.secondValue() != null) inputData.put("secondValue", resolved.secondValue());
             if (resolved.extractPart() != null) inputData.put("extractPart", resolved.extractPart());
+        } else if (deferredScalar("dateTime", "durationAmount") != null) {
+            // Failed before resolving: the template is what was configured.
+            inputData.put("durationAmount", deferredScalar("dateTime", "durationAmount"));
         }
         return inputData;
     }

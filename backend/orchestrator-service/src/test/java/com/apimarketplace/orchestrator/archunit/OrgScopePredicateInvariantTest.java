@@ -94,6 +94,71 @@ class OrgScopePredicateInvariantTest {
             // arguments. Surfaced by bcb970694 extracting this block into its own method,
             // which is the granularity Rule 1 keys on, not by any change to the scoping.
             "ScheduleExecutorService#runAgentAfterAdvance",
+            // Answering an agent's permission request from a linked chat: reads the
+            // request row's tenant + org only to PASS them to conversation-service, so
+            // the endpoint that releases the parked call sees the same workspace the
+            // agent was running in. No owner-vs-org comparison and no branch on either
+            // value: both are arguments. The row itself was selected by its unguessable
+            // callback token, and the authority to release is the conversation
+            // endpoint's own check, not anything decided here.
+            "AgentAuthorizationAnswerApplier#apply",
+            // Expiring an unanswered request: reads the row's org to re-bind the
+            // workspace scope for the catalog call (this runs on a scheduler thread with
+            // no request context) and its tenant to address that same call. Routing, not
+            // a predicate - and the pass deletes nothing and grants nothing.
+            "ChatAuthorizationExpiryScheduler#closeMessage",
+            // Closing a decided request's message: identical shape to the entry above,
+            // on the webhook thread instead of the scheduler one. The org re-binds the
+            // workspace scope, the tenant addresses the call, neither is compared, and
+            // the decision it reflects was already applied and authorized elsewhere.
+            "AgentAuthorizationChannelService#closeUnderOrgScope",
+            // Closing an EXPIRED request's message: same shape again, reached from the three
+            // paths that write EXPIRED (the sweep, the overdue retire on delivery, the failed
+            // hand-back on answer). The channel comes from the ROW, so the org re-binds the
+            // workspace scope for the connector's catalog call and the tenant addresses it;
+            // neither is compared, and nothing is granted. It arrived after the three entries
+            // above because it was extracted later, when the retire path was found to be
+            // leaving live buttons under an expired request.
+            "AgentAuthorizationChannelService#closeExpired",
+            // The question half of the same feature, and the same five shapes as the entries
+            // above it. Each reads a request row's tenant and org to ROUTE something, never to
+            // decide anything: nothing is compared, nothing branches on either value, and no
+            // access is granted here.
+            //
+            // #apply and #startFollowUpTurn hand a recorded answer to the conversation that
+            // asked for it, passing both values as arguments so conversation-service sees the
+            // workspace the agent was running in. That endpoint applies its own scope to the
+            // headers it receives, the same posture the approval applier documents.
+            //
+            // #closeAnswered and #toggle re-bind the workspace scope for a catalog call on a
+            // thread with no request context (a webhook, a scheduler), and address it with the
+            // tenant. #acknowledge does the same for the button press receipt.
+            //
+            // The row each of them starts from was selected by its unguessable callback token
+            // or by the message it replies to, which is the capability; the authority to answer
+            // is the per-chat allow-list, checked in ChatQuestionService#isAllowed.
+            "ChatQuestionAnswerApplier#apply",
+            "ChatQuestionAnswerApplier#startFollowUpTurn",
+            // #closeWith took over from #closeAnswered when the expiry path needed the same
+            // edit with a different line; #sayBack is the message a typed reply gets when it
+            // could not be recorded, which a button press gets through its own acknowledgement.
+            // Both are the same shape as every entry above: the org re-binds the workspace scope
+            // for a catalog call on a thread with no request context, the tenant addresses it,
+            // neither is compared and nothing is granted.
+            "ChatQuestionService#closeWith",
+            "TelegramQuestionCallbackHandler#sayBack",
+            "ChatQuestionService#toggle",
+            "TelegramQuestionCallbackHandler#acknowledge",
+            // Same shape for every other chat provider: copies the request row's tenant, org
+            // and credential into the router's Result so the provider controller can
+            // acknowledge with the credential the message went out with. Pure copy, no
+            // owner-vs-org comparison; who may answer was decided by the services before it.
+            "ChannelInboundRouter#fromRow",
+            // Product analytics (channel_request_answered): the settled request row's tenant and
+            // org are copied into the event as distinct_id and organization group. Pure copy, no
+            // owner-vs-org comparison; who may answer was decided earlier in the same method.
+            "AgentAuthorizationChannelService#answer",
+            "ChatQuestionService#applyIfComplete",
             "SignalResumeService#onSignalResolved",
             "SignalResumeService#persistSignalResolutionOutput",
             "WorkflowRunStatusService#persistSnapshot",

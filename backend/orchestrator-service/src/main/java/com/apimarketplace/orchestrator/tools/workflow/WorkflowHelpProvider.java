@@ -45,7 +45,7 @@ public class WorkflowHelpProvider {
         "trigger",       // Trigger nodes (entry points) - alias for 'triggers'
         "mcp",           // MCP nodes (actions) - alias for 'mcps'
         "agent",         // Agent nodes (AI with tools) - specific node help
-        "guardrail",     // Guardrail node - 1→1 AI content validation
+        "guardrail",     // Guardrail node - 1→1 content validation (typed rules checked exactly, others by AI)
         "classify",      // Classify node - 1→N exclusive AI routing
         "decision",      // Decision nodes (if/elsif/else) - 1→N exclusive
         "switch",        // Switch nodes (case matching) - 1→N exclusive
@@ -1195,13 +1195,13 @@ public class WorkflowHelpProvider {
         actions.put("1_list_runs", ordered(
             "syntax", "workflow(action='runs', workflow_id='uuid')",
             "zoom_level", "Widest - list of recent runs for a workflow.",
-            "returns", "Per run: run_id, status, plan_version, started_at, ended_at, duration_ms, total_nodes, execution_mode",
+            "returns", "Per run: run_id, status, plan_version, started_at, ended_at, duration_ms, total_nodes, epoch_count, execution_mode. epoch_count = number of trigger fires in that run (a schedule/webhook/form run accumulates them), the same figure get_run reports as total_epochs.",
             "next", "Pick a run_id and call get_run for the macro overview."
         ));
         actions.put("2_get_run_overview", ordered(
             "syntax", "workflow(action='get_run', run_id='uuid')",
             "zoom_level", "Run-level - macro overview: epoch summaries + DAG counters, no per-node detail.",
-            "returns", "{run_id, status, plan_version, dags:{<trigger_id>:{current_epoch,fire_count,current_spawn}}, epochs:[{epoch,trigger_id,started_at,ended_at,duration_ms,node_counts:{completed,failed,partial_failed,skipped},status}], total_epochs}",
+            "returns", "{run_id, status, plan_version, dags:{<trigger_id>:{current_epoch,fire_count,current_spawn}}, epochs:[{epoch,trigger_id,started_at,ended_at,duration_ms,node_counts:{completed,failed,partial_failed,skipped},status}], total_epochs, plan_note?}",
             "next", "Pick an epoch number from epochs[] and call get_run with epoch=N for the per-node breakdown."
         ));
         actions.put("3_get_run_epoch_detail", ordered(
@@ -1229,10 +1229,16 @@ public class WorkflowHelpProvider {
                 "skip_reason / skip_source_node", "For SKIPPED rows: why the row was skipped and which upstream node propagated the skip.",
                 "resolved_params.list / resolved_params.listResolved", "For split and find nodes: `list` is the expression as configured, `listResolved` is what it evaluated to, described in one line (e.g. 'List(size=0)', 'Map(keys=[items])', 'null'). Read it whenever the node produced 0 items: 'List(size=0)' means the upstream node really returned an empty array, while 'Map(keys=[items])' means the reference points at the object WRAPPING the array - re-point it one level deeper. On a find whose table served the rows, listResolved reads '(not evaluated: the table returned rows)'.",
                 "resolved_params.variableMapping", "For interface nodes: one entry per template variable - {expression, resolved, status}. `status` is 'resolved' (it held a value when the node ran), 'unresolved' (it held nothing) or 'not_evaluated' (nothing measured it, e.g. the render's variable byte budget was exhausted before this one; resolved_params.variableMappingError says why). Read it when the page renders empty: a variable whose `resolved` is 'Map(keys=[result])' means the template must read one level deeper, and a mapping of '{{core:<code node>.output}}' always carries that extra `result` wrapper - map '{{core:<code node>.output.result}}' instead. A variable fed by a node that runs AFTER the interface reports 'unresolved' here and still displays once that node has run. A variable mapped from a WORKSPACE variable ({{$vars.x}}) reports '<withheld: workspace variable>' instead of its value, since one can be declared secret - its expression and its status still tell you whether the wiring works.",
+                "resolved_params.prompt / systemPrompt / content / categories / rules (and task, title, instructions, negative_prompt)", "For agent, classify and guardrail nodes (and the prompt and negative_prompt of a generate node, the task of a browser agent node, the title and instructions of a task node): the text the model received for this row, templates resolved and nothing shortened, so read these to understand why the model answered as it did. On an agent node, `systemPrompt` is the node's configured system prompt as resolved: the platform adds its own instructions around it. When a classify or guardrail node has no content of its own, `content` equals `prompt`: the prompt was the text judged, and the model received it once. When a classify prompt embeds its content expression, `content` is that content and the model received it once, inside the prompt. A reference to a workspace variable ({{$vars.x}}, {{vars:x}}, {{vars.x}}) inside any of these reads '<withheld: workspace variable>' while the rest of the text is shown. A value past 120,000 characters (one text, or all categories or rules together) ends with a note giving its real length. Any OTHER parameter longer than 2,000 characters, on any node, reads as its first 120 characters followed by '… (N chars)': that is a size description, not the value.",
                 "resolved_params values that are not the value", "Two strings can appear anywhere in resolved_params, on any node, and both are also what `{{core:<label>.input.<key>}}` returns for that key. '<withheld: credential>' means the key's NAME says it holds a credential (token, apiKey, password, connectionString, a qualified key like accessToken) - the parameter ran with its real value, only the report hides it, so do not read it back into another node's parameters. '<withheld: workspace variable>' means the value came from a {{$vars.x}} workspace variable, same rule. A key named `paramsTruncated` is not a parameter at all: it says how many entries were dropped because the whole map exceeded its size budget, and the entries that survived are the ones the node reported first."
             )
         ));
         help.put("actions", actions);
+
+        help.put("plan_note", "get_run (with or without epoch), get_node_output and wait_run add a plan_note "
+            + "when the plan version a run used is no longer kept (only the most recent versions are). The report "
+            + "is then built on the workflow's current plan, so node ids, labels and types may differ from what that "
+            + "run executed; the statuses, counts and outputs are still the run's own.");
 
         help.put("usage_pattern",
             "JIT zoom/dezoom: start wide, zoom in only when needed. " +

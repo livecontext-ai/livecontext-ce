@@ -126,6 +126,13 @@ public class WorkflowBuilderPlanExporter {
         // Import edges (convert labels to normalized IDs)
         importEdges(plan, session);
 
+        // A plan that states its reading direction replaces the session's; one that does
+        // not (most agent-written plans) keeps the direction the workflow was saved in.
+        String layoutDirection = WorkflowBuilderSession.validLayoutDirection(plan.get("layoutDirection"));
+        if (layoutDirection != null) {
+            session.setLayoutDirection(layoutDirection);
+        }
+
         session.touch();
         sessionStore.save(session);
 

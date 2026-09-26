@@ -26,6 +26,8 @@ import zh from '@/messages/zh.json';
 const LOCALES = { en, fr, de, es, pt, zh } as Record<string, Record<string, unknown>>;
 
 const PANEL = path.join(__dirname, '..', 'ModelManagementPanel.tsx');
+/** Rendered inside the panel with the same `t`, so it reads the same namespace. */
+const RETIRED_PANEL = path.join(__dirname, '..', 'RetiredModelsPanel.tsx');
 
 /** Literal keys only: a template with an interpolation is resolved at run time. */
 function keysUsedBy(file: string): string[] {
@@ -41,7 +43,7 @@ function lookup(messages: unknown, dottedPath: string): unknown {
 }
 
 describe('ModelManagementPanel i18n keys', () => {
-  const keys = keysUsedBy(PANEL);
+  const keys = [...new Set([...keysUsedBy(PANEL), ...keysUsedBy(RETIRED_PANEL)])];
 
   it('asks for keys at all, so a broken extraction fails loudly instead of passing empty', () => {
     expect(keys.length).toBeGreaterThan(20);

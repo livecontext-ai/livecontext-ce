@@ -13,6 +13,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.slf4j.LoggerFactory;
+
 import java.util.List;
 import java.util.Map;
 
@@ -53,6 +58,29 @@ class V2TriggerLoadingServiceTest {
             triggerResolverService,
             contextManager
         );
+        // Every type used below has a resolver unless a test says otherwise.
+        lenient().when(triggerResolverService.supportsTriggerType(any())).thenReturn(true);
+    }
+
+    private ListAppender<ILoggingEvent> captureLogs() {
+        ch.qos.logback.classic.Logger logger =
+            (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(V2TriggerLoadingService.class);
+        previousLogLevel = logger.getLevel();
+        logger.setLevel(Level.DEBUG);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        return appender;
+    }
+
+    private Level previousLogLevel;
+
+    private void releaseLogs(ListAppender<ILoggingEvent> appender) {
+        ch.qos.logback.classic.Logger logger =
+            (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(V2TriggerLoadingService.class);
+        logger.detachAppender(appender);
+        logger.setLevel(previousLogLevel);
+        appender.stop();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -301,6 +329,61 @@ class V2TriggerLoadingServiceTest {
 
             // Then
             verify(triggerResolverService).resolveTrigger(any(), any(), eq(chatInput));
+        }
+
+        @Test
+        @DisplayName("Trigger type without a resolver (misconfigured 'table'): zero items, resolver not called, one WARN and no ERROR")
+        void triggerTypeWithoutResolverIsANoItemTriggerNotAnError() {
+            Trigger trigger = createTrigger("trigger:contact", "Contact", "table");
+            when(contextManager.hasTriggerItems("run-1")).thenReturn(false);
+            when(executionTree.plan()).thenReturn(workflowPlan);
+            when(executionTree.tenantId()).thenReturn("tenant-1");
+            when(workflowPlan.getTriggers()).thenReturn(List.of(trigger));
+            when(triggerResolverService.supportsTriggerType("table")).thenReturn(false);
+            lenient().when(triggerResolverService.resolveTrigger(any(), any(), any()))
+                .thenThrow(new IllegalArgumentException("Unsupported trigger type: table for trigger: trigger:contact"));
+            ListAppender<ILoggingEvent> logs = captureLogs();
+            try {
+                triggerLoadingService.loadTriggerItemsIfNeeded("run-1", executionTree, 0, "trigger:contact", execution);
+
+                verify(triggerResolverService, never()).resolveTrigger(any(), any(), any());
+                verify(contextManager).cacheTriggerItems(eq("run-1"), argThat(List::isEmpty));
+                assertTrue(logs.list.stream().noneMatch(e -> e.getLevel() == Level.ERROR),
+                    "an unhandled trigger type must not log at ERROR");
+                assertTrue(logs.list.stream().anyMatch(e -> e.getLevel() == Level.WARN
+                    && e.getFormattedMessage().contains("No resolver for trigger type 'table'")));
+            } finally {
+                releaseLogs(logs);
+            }
+        }
+
+        @Test
+        @DisplayName("Form trigger through the real resolver chain: zero items, no ERROR (regression 'Unsupported trigger type: form')")
+        void formTriggerThroughRealResolverChainLoadsZeroItemsWithoutError() {
+            TriggerResolverService realResolver = new TriggerResolverService(
+                List.of(new com.apimarketplace.orchestrator.services.triggers.ScheduleTriggerResolver(),
+                        new com.apimarketplace.orchestrator.services.triggers.FormTriggerResolver(),
+                        new com.apimarketplace.orchestrator.services.triggers.ErrorTriggerResolver()),
+                mock(com.apimarketplace.orchestrator.services.triggers.TriggerPayloadBuilder.class),
+                mock(com.apimarketplace.orchestrator.services.triggers.TriggerItemContextBuilder.class),
+                mock(com.apimarketplace.orchestrator.services.triggers.DataSourceTriggerResolver.class),
+                mock(com.apimarketplace.orchestrator.config.WorkflowExecutionConfig.class));
+            V2TriggerLoadingService service = new V2TriggerLoadingService(realResolver, contextManager);
+            Trigger trigger = createTrigger("trigger:contact", "Contact", "form");
+            when(contextManager.hasTriggerItems("run-1")).thenReturn(false);
+            when(executionTree.plan()).thenReturn(workflowPlan);
+            when(executionTree.tenantId()).thenReturn("tenant-1");
+            when(workflowPlan.getTriggers()).thenReturn(List.of(trigger));
+            ListAppender<ILoggingEvent> logs = captureLogs();
+            try {
+                service.loadTriggerItemsIfNeeded("run-1", executionTree, 0, "trigger:contact", execution);
+
+                verify(contextManager).cacheTriggerItems(eq("run-1"), argThat(List::isEmpty));
+                assertTrue(logs.list.stream().noneMatch(e -> e.getLevel() == Level.ERROR),
+                    "form trigger item loading must not log 'Failed to load trigger items' at ERROR");
+            } finally {
+                releaseLogs(logs);
+            }
         }
 
         @Test

@@ -3,13 +3,12 @@
 import * as React from 'react';
 import Image from 'next/image';
 import clsx from 'clsx';
-import { Plus, Trash2, Info } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
 import { ExpressionField, ConnectionProps } from '../ExpressionField';
 import { OptionalSection } from '../OptionalSection';
@@ -19,6 +18,7 @@ import { useTranslations } from 'next-intl';
 import type { BuilderNodeData, ClassifyCategory } from '../../../types';
 import { createDefaultClassifyCategories } from '../../../types';
 import type { Connection } from '../useInspectorConnections';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 /**
  * The two engines this node can run on, and the reason its picker is the only one that
@@ -228,16 +228,9 @@ export function ClassifyParametersForm({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <p className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('classify.categories')}</p>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                  <Info className="h-3 w-3 text-slate-400" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <p className="text-xs text-slate-600 dark:text-slate-300">{t('classify.categoriesDescription')}</p>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label={t('classify.categories')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+              <p className="text-xs text-slate-600 dark:text-slate-300">{t('classify.categoriesDescription')}</p>
+            </InfoPopover>
           </div>
           <Button
             type="button"
@@ -348,16 +341,9 @@ export function ClassifyParametersForm({
         <div className="space-y-2">
           <div className="flex items-center gap-1.5">
             <Label className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('temperature')}</Label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                  <Info className="h-3 w-3 text-slate-400" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <p className="text-xs text-slate-600 dark:text-slate-300">{t('classify.temperatureDescription')}</p>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label={t('temperature')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+              <p className="text-xs text-slate-600 dark:text-slate-300">{t('classify.temperatureDescription')}</p>
+            </InfoPopover>
           </div>
           <Input
             type="number"
@@ -374,16 +360,9 @@ export function ClassifyParametersForm({
         <div className="space-y-2">
           <div className="flex items-center gap-1.5">
             <Label className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('maxTokens')}</Label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                  <Info className="h-3 w-3 text-slate-400" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <p className="text-xs text-slate-600 dark:text-slate-300">{t('classify.maxTokensDescription')}</p>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label={t('maxTokens')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+              <p className="text-xs text-slate-600 dark:text-slate-300">{t('classify.maxTokensDescription')}</p>
+            </InfoPopover>
           </div>
           <Input
             type="number"

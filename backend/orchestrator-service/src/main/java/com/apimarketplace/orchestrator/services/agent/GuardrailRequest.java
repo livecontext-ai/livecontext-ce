@@ -41,6 +41,10 @@ public record GuardrailRequest(
             this.rules.add(new GuardrailRule(id, description));
             return this;
         }
+        public Builder addRule(String id, String description, String type, String action) {
+            this.rules.add(new GuardrailRule(id, description, type, action));
+            return this;
+        }
         public Builder action(String action) { this.action = action; return this; }
         public Builder provider(String provider) { this.provider = provider; return this; }
         public Builder model(String model) { this.model = model; return this; }

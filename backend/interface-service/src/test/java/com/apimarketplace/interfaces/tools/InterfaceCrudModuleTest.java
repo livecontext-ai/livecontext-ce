@@ -100,6 +100,7 @@ class InterfaceCrudModuleTest {
     void canHandle() {
         assertThat(module.canHandle("create")).isTrue();
         assertThat(module.canHandle("get")).isTrue();
+        assertThat(module.canHandle("present")).isTrue();
         assertThat(module.canHandle("list")).isTrue();
         assertThat(module.canHandle("update")).isTrue();
         assertThat(module.canHandle("patch")).isTrue();
@@ -425,6 +426,134 @@ class InterfaceCrudModuleTest {
     }
 
     // ==================== get ====================
+
+    // ==================== present ====================
+
+    @Nested
+    @DisplayName("present")
+    class PresentTests {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> viz(ToolExecutionResult result) {
+            return (Map<String, Object>) result.metadata().get("visualization");
+        }
+
+        @Test
+        @DisplayName("present emits present_interface named after the page and echoes interface_id")
+        void presentsInterface() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(fakeEntity(id, "Lead board")));
+
+            ToolExecutionResult res = module.execute("present", Map.of("interface_id", id.toString()), TENANT, ctx())
+                    .orElseThrow();
+
+            assertThat(res.success()).isTrue();
+            assertThat(viz(res)).containsEntry("type", "present_interface")
+                    .containsEntry("id", id.toString()).containsEntry("title", "Lead board");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) res.data();
+            assertThat(data).containsEntry("presented", "interface").containsEntry("interface_id", id.toString())
+                    .doesNotContainKey("htmlTemplate");
+        }
+
+        @Test
+        @DisplayName("present resolves an exact interface name like get does")
+        void presentsByName() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.listInterfaces(eq(TENANT), isNull(), isNull(), isNull()))
+                    .thenReturn(List.of(fakeEntity(id, "Lead board")));
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(fakeEntity(id, "Lead board")));
+
+            ToolExecutionResult res = module.execute("present", Map.of("interface_id", "lead_board"), TENANT, ctx())
+                    .orElseThrow();
+
+            assertThat(viz(res)).containsEntry("id", id.toString());
+        }
+
+        @Test
+        @DisplayName("present obeys the agent's interface allow-list (credentials channel) and reads nothing")
+        void respectsAllowList() {
+            UUID id = UUID.randomUUID();
+
+            ToolExecutionResult res = module.execute("present", Map.of("interface_id", id.toString()), TENANT,
+                    ctxWithCredentials(Map.of("allowedInterfaceIds", List.of(UUID.randomUUID().toString())))).orElseThrow();
+
+            assertThat(res.errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
+            verifyNoInteractions(interfaceService);
+        }
+
+        @Test
+        @DisplayName("present of a page outside the workspace is not found, with the caller's org threaded to the lookup")
+        void outOfScopeIsNotFound() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.getInterface(id, TENANT, "org-1")).thenReturn(Optional.empty());
+
+            ToolExecutionResult res = module.execute("present", Map.of("interface_id", id.toString()), TENANT,
+                    ctxWithOrg("org-1", "MEMBER")).orElseThrow();
+
+            assertThat(res.errorCode()).isEqualTo(ToolErrorCode.RESOURCE_NOT_FOUND);
+            assertThat(res.metadata() == null || !res.metadata().containsKey("visualization")).isTrue();
+        }
+
+        @Test
+        @DisplayName("the agent's title wins over the page name")
+        void titleOverride() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(fakeEntity(id, "UI")));
+
+            ToolExecutionResult res = module.execute("present", Map.of("interface_id", id.toString(), "title", "Results"),
+                    TENANT, ctx()).orElseThrow();
+
+            assertThat(viz(res)).containsEntry("title", "Results");
+        }
+
+        @Test
+        @DisplayName("get still returns the templates and its own interface marker, never a present_* switch")
+        void getIsUnchanged() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(fakeEntity(id, "UI")));
+
+            ToolExecutionResult res = module.execute("get", Map.of("interface_id", id.toString()), TENANT, ctx()).orElseThrow();
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) res.data();
+            assertThat(data).containsEntry("htmlTemplate", "<div>{{title|Hello}}</div>")
+                    .containsEntry("marker", "[visualize:interface:" + id + "]");
+            assertThat(res.metadata() == null || !res.metadata().containsKey("visualization")).isTrue();
+        }
+
+        @Test
+        @DisplayName("a failing lookup is reported as a failed present, not a success")
+        void lookupFailureIsReported() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.getInterface(id, TENANT, null)).thenThrow(new RuntimeException("db down"));
+
+            ToolExecutionResult res = module.execute("present", Map.of("interface_id", id.toString()), TENANT, ctx())
+                    .orElseThrow();
+
+            assertThat(res.errorCode()).isEqualTo(ToolErrorCode.EXECUTION_FAILED);
+            assertThat(res.error()).contains("Failed to present interface");
+        }
+
+        @Test
+        @DisplayName("present without interface_id is a missing parameter")
+        void missingId() {
+            assertThat(module.execute("present", Map.of(), TENANT, ctx()).orElseThrow().errorCode())
+                    .isEqualTo(ToolErrorCode.MISSING_PARAMETER);
+        }
+
+        @Test
+        @DisplayName("a read-only interface agent may present: it changes nothing")
+        void readOnlyAgentMayPresent() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(fakeEntity(id, "UI")));
+
+            ToolExecutionResult res = module.execute("present", Map.of("interface_id", id.toString()), TENANT,
+                    ctxWithCredentials(Map.of("interfaceAccessMode", "read"))).orElseThrow();
+
+            assertThat(res.success()).isTrue();
+        }
+    }
 
     @Nested
     @DisplayName("get")
@@ -1950,6 +2079,159 @@ class InterfaceCrudModuleTest {
         void honorsYamlOverride() {
             agentDefaults.setMaxPerResourcePerTurn(3);
             assertThat(module.resolveMaxPerResourcePerTurn(ctx())).isEqualTo(3);
+        }
+    }
+
+    // ==================== no attempt counters in success responses ====================
+
+    /**
+     * Regression: success responses used to echo the per-turn limiter as "1/5", "update 1/3",
+     * "patch 2/3" (creates_in_message, updateCount/maxUpdates, patchCount/maxPatches). Agents read
+     * it as a retry budget. The limits still apply; only the refusal speaks about them.
+     */
+    @Nested
+    @DisplayName("success responses carry no attempt counter")
+    class NoAttemptCounterTests {
+
+        private ToolExecutionContext turnCtx() {
+            return ctxWithVariables(Map.of("turnId", "turn-counter"));
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> dataOf(Optional<ToolExecutionResult> res) {
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isTrue();
+            return (Map<String, Object>) res.get().data();
+        }
+
+        private void assertNoCounter(Map<String, Object> data) {
+            assertThat(data).doesNotContainKeys("creates_in_message", "updateCount", "maxUpdates",
+                    "patchCount", "maxPatches");
+            assertThat(String.valueOf(data.get("message"))).doesNotContainPattern("\\d+/\\d+");
+        }
+
+        @Test
+        @DisplayName("create (html) inside a turn")
+        void createHasNoCounter() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.createInterface(any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), anyBoolean(), any(), any(), any())).thenReturn(fakeEntity(id, "Dash"));
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("name", "Dash");
+            params.put("html_template", "<h1>x</h1>");
+
+            assertNoCounter(dataOf(module.execute("create", params, TENANT, turnCtx())));
+        }
+
+        @Test
+        @DisplayName("create (slide) inside a turn")
+        void createSlideHasNoCounter() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.createSlideInterface(eq(TENANT), eq("Deck"), any(), any(), isNull()))
+                .thenReturn(fakeSlideEntity(id, "Deck", 1));
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("name", "Deck");
+            params.put("type", "slide");
+            params.put("slide_data", Map.of("slides", List.of(Map.of("title", "S1"))));
+
+            assertNoCounter(dataOf(module.execute("create", params, TENANT, turnCtx())));
+        }
+
+        @Test
+        @DisplayName("update inside a turn: plain success message")
+        void updateHasNoCounter() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(fakeEntity(id, "Old")));
+            when(interfaceService.updateInterface(eq(id), eq(TENANT), isNull(), isNull(), eq("New"), any(), any(), any(), any(),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), any(), any()))
+                .thenReturn(fakeEntity(id, "New"));
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", id.toString());
+            params.put("name", "New");
+
+            Map<String, Object> data = dataOf(module.execute("update", params, TENANT, turnCtx()));
+            assertNoCounter(data);
+            assertThat(data.get("message")).isEqualTo("Interface 'New' updated successfully.");
+        }
+
+        @Test
+        @DisplayName("patch inside a turn")
+        void patchHasNoCounter() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(fakeEntity(id, "Card")));
+            when(interfaceService.patchInterface(eq(id), eq(TENANT), isNull(), isNull(),
+                eq("html"), anyList(), anyBoolean())).thenReturn(fakeEntity(id, "Card"));
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", id.toString());
+            params.put("target", "html");
+            params.put("edits", List.of(Map.of("old", "Hello", "new", "Welcome")));
+
+            Map<String, Object> data = dataOf(module.execute("patch", params, TENANT, turnCtx()));
+            assertNoCounter(data);
+            assertThat(data.get("message")).isEqualTo("Interface 'Card' patched (1 edit(s) on html).");
+        }
+
+        @Test
+        @DisplayName("slide update inside a turn: plain success message")
+        void slideUpdateHasNoCounter() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(fakeSlideEntity(id, "Deck", 2)));
+            when(interfaceService.updateSlideData(eq(id), eq(TENANT), any(), any(), any()))
+                .thenReturn(fakeSlideEntity(id, "Deck", 3));
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", id.toString());
+            params.put("slide_data", Map.of("slides", List.of(Map.of("title", "S1"))));
+
+            Map<String, Object> data = dataOf(module.execute("update", params, TENANT, turnCtx()));
+            assertNoCounter(data);
+            assertThat(data.get("message")).isEqualTo("Slide deck 'Deck' updated successfully (3 slides).");
+        }
+
+        @Test
+        @DisplayName("the update limit is still enforced: the 4th update of one interface is refused")
+        void updateLimitStillEnforced() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(fakeEntity(id, "Old")));
+            when(interfaceService.updateInterface(eq(id), eq(TENANT), isNull(), isNull(), eq("New"), any(), any(), any(), any(),
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), any(), any()))
+                .thenReturn(fakeEntity(id, "New"));
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", id.toString());
+            params.put("name", "New");
+
+            for (int i = 0; i < 3; i++) {
+                assertThat(module.execute("update", params, TENANT, turnCtx()).get().success()).isTrue();
+            }
+            Optional<ToolExecutionResult> fourth = module.execute("update", params, TENANT, turnCtx());
+
+            assertThat(fourth.get().success()).isFalse();
+            assertThat(fourth.get().error()).contains("updated this interface 3 times");
+        }
+
+        @Test
+        @DisplayName("the patch limit is still enforced: the 11th patch of one interface is refused")
+        void patchLimitStillEnforced() {
+            UUID id = UUID.randomUUID();
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(fakeEntity(id, "Card")));
+            when(interfaceService.patchInterface(eq(id), eq(TENANT), isNull(), isNull(),
+                eq("html"), anyList(), anyBoolean())).thenReturn(fakeEntity(id, "Card"));
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", id.toString());
+            params.put("target", "html");
+            params.put("edits", List.of(Map.of("old", "Hello", "new", "Welcome")));
+
+            for (int i = 0; i < 10; i++) {
+                assertThat(module.execute("patch", params, TENANT, turnCtx()).get().success()).isTrue();
+            }
+            Optional<ToolExecutionResult> eleventh = module.execute("patch", params, TENANT, turnCtx());
+
+            assertThat(eleventh.get().success()).isFalse();
+            assertThat(eleventh.get().error()).contains("patched this interface 10 times");
         }
     }
 }

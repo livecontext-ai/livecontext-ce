@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocale, useTranslations } from 'next-intl';
-import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, FileText, Layers, Loader2, LockKeyhole, PanelLeftClose, PanelLeftOpen, RefreshCw } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, FileText, Layers, Loader2, PanelLeftClose, PanelLeftOpen, RefreshCw } from 'lucide-react';
 import { orchestratorApi } from '@/lib/api';
 import type { AggregatedStepTiming } from '@/lib/api/orchestrator/types';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
@@ -51,6 +51,13 @@ function LogsExplorer({ workflowId, runId, initialStepAlias, onBreadcrumbChange,
   const [nodesHidden, setNodesHidden] = useState(false);
   const [showRoot, setShowRoot] = useState(false);
   const [epoch, setEpoch] = useState<number | null | undefined>(() => getPickedEpoch(runId));
+  // The table lists every call of a node, so it always opens on all epochs; the simple view keeps its own epoch.
+  const [tableEpoch, setTableEpoch] = useState<number | null>(null);
+  useEffect(() => {
+    // Reset on leaving, so the table is already on all epochs when it opens again (no refetch of a stale epoch).
+    if (!tableView) setTableEpoch(null);
+  }, [tableView]);
+  const viewEpoch = tableView ? tableEpoch : epoch;
   const [requestedAlias, setRequestedAlias] = useState(initialStepAlias);
   const [direction, setDirection] = useState<'input' | 'output'>('output');
   const [passageId, setPassageId] = useState<number | null>(null);
@@ -78,10 +85,12 @@ function LogsExplorer({ workflowId, runId, initialStepAlias, onBreadcrumbChange,
   }, [epoch, epochs, stateQuery.isSuccess]);
 
   const nodesQuery = useQuery<AggregatedStepTiming[]>({
-    queryKey: ['workflow-logs', workflowId, runId, 'nodes', epoch],
-    queryFn: () => orchestratorApi.getEpochAggregatedSteps(runId, epoch ?? undefined),
-    enabled: enabled && epoch !== undefined,
+    queryKey: ['workflow-logs', workflowId, runId, 'nodes', viewEpoch],
+    queryFn: () => orchestratorApi.getEpochAggregatedSteps(runId, viewEpoch ?? undefined),
+    enabled: enabled && viewEpoch !== undefined,
     staleTime: 15000,
+    // Switching view or epoch keeps the current node list on screen instead of a full-body spinner.
+    placeholderData: keepPreviousData,
   });
   const nodes = useMemo(() => {
     const canvas = getCanvasNodes(workflowId);
@@ -139,11 +148,15 @@ function LogsExplorer({ workflowId, runId, initialStepAlias, onBreadcrumbChange,
   }
   function chooseEpoch(value: string) {
     const next = value === 'all' ? null : Number(value);
-    setEpoch(next);
     setTablePath('');
+    if (tableView) {
+      setTableEpoch(next);
+      return;
+    }
+    setEpoch(next);
     setPassageId(null);
   }
-  const busy = !enabled || stateQuery.isLoading || epoch === undefined || nodesQuery.isLoading;
+  const busy = !enabled || stateQuery.isLoading || viewEpoch === undefined || nodesQuery.isLoading;
   const payloadBusy = steps.loading || (direction === 'output' && payloadQuery.isLoading);
   const error = stateQuery.isError || nodesQuery.isError || (!tableView && !!alias && !!steps.error);
   const outputError = direction === 'output' && !!passage?.outputStorageId && payloadQuery.isError;
@@ -161,9 +174,9 @@ function LogsExplorer({ workflowId, runId, initialStepAlias, onBreadcrumbChange,
         <label className="flex min-w-0 items-center gap-2 text-sm text-theme-secondary">
           <Layers className="h-3.5 w-3.5 shrink-0" />
           <span className="sr-only">{t('epoch')}</span>
-          <select aria-label={t('epoch')} value={epoch ?? 'all'} onChange={event => chooseEpoch(event.target.value)} disabled={!stateQuery.isSuccess} className={`${selectClass} max-w-64`}>
+          <select aria-label={t('epoch')} value={viewEpoch ?? 'all'} onChange={event => chooseEpoch(event.target.value)} disabled={!stateQuery.isSuccess} className={`${selectClass} max-w-64`}>
             <option value="all">{t('allEpochs')}</option>
-            {epoch != null && !epochs.some(item => item.epoch === epoch) && <option value={epoch}>{t('epochNumber', { number: epoch })}</option>}
+            {viewEpoch != null && !epochs.some(item => item.epoch === viewEpoch) && <option value={viewEpoch}>{t('epochNumber', { number: viewEpoch })}</option>}
             {epochs.map(item => <option key={item.epoch} value={item.epoch}>{t('epochNumber', { number: item.epoch })} · {formatUtcDateTime(item.startedAt, { locale })}</option>)}
           </select>
         </label>
@@ -230,14 +243,14 @@ function LogsExplorer({ workflowId, runId, initialStepAlias, onBreadcrumbChange,
                 </div>
                 {tableView ? (
                   <div data-testid="workflow-logs-table" className="min-h-0 flex-1 p-3">
-                    <WorkflowStepTable key={`${alias}:${epoch}`} workflowId={workflowId} runId={runId} stepAlias={alias} epoch={epoch ?? null} jsonPath={tablePath} onNavigate={setTablePath} refreshVersion={tableRevision} />
+                    <WorkflowStepTable key={`${alias}:${tableEpoch}`} workflowId={workflowId} runId={runId} stepAlias={alias} epoch={tableEpoch} jsonPath={tablePath} onNavigate={setTablePath} refreshVersion={tableRevision} />
                   </div>
                 ) : <>
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-theme px-3 py-2">
                   <div role="group" aria-label={t('direction')} className="inline-flex rounded-lg bg-theme-secondary p-1">
                     {(['input', 'output'] as const).map(value => <button key={value} type="button" aria-pressed={direction === value} onClick={() => setDirection(value)} className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm ${direction === value ? 'bg-theme-primary font-medium text-theme-primary shadow-sm' : 'text-theme-secondary hover:text-theme-primary'}`}>{value === 'input' ? <ArrowDownToLine className="h-3.5 w-3.5" /> : <ArrowUpFromLine className="h-3.5 w-3.5" />}{t(value)}</button>)}
                   </div>
-                  {passage && <select aria-label={t('passage')} value={passage.id} onChange={event => setPassageId(Number(event.target.value))} className={`${selectClass} max-w-full`}>
+                  {passage && steps.totalElements > 1 && <select aria-label={t('passage')} value={passage.id} onChange={event => setPassageId(Number(event.target.value))} className={`${selectClass} max-w-full`}>
                     {steps.stepData.map((step, index) => <option key={step.id} value={step.id}>{t('passageNumber', { number: steps.totalElements - index })}{epoch === null && step.epoch != null ? ` · ${t('epochNumber', { number: step.epoch })}` : ''}</option>)}
                   </select>}
                 </div>
@@ -251,11 +264,9 @@ function LogsExplorer({ workflowId, runId, initialStepAlias, onBreadcrumbChange,
                   )}
                 </div>
                 </>}
-                <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-theme bg-theme-secondary/40 px-3 py-2 text-xs text-theme-secondary">
-                  <span className="flex items-center gap-1.5"><LockKeyhole className="h-3 w-3" />{t('readOnly')}</span>
-                  {!tableView && <span>{t('loadedPassages', { loaded: steps.stepData.length, total: steps.totalElements })}</span>}
-                  {!tableView && steps.hasNextPage && <button type="button" disabled={steps.isFetchingNextPage} onClick={() => void steps.fetchNextPage()} className="text-sm underline disabled:opacity-50">{t('loadMore')}</button>}
-                </footer>
+                {!tableView && steps.hasNextPage && <footer className="flex items-center justify-end border-t border-theme bg-theme-secondary/40 px-3 py-2">
+                  <button type="button" disabled={steps.isFetchingNextPage} onClick={() => void steps.fetchNextPage()} className="text-sm text-theme-secondary underline disabled:opacity-50">{t('loadMore')}</button>
+                </footer>}
               </>
             )}
           </main>

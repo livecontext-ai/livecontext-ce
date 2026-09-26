@@ -73,6 +73,13 @@ public final class ChatObservabilityAdapter {
         req.setStopReason(request.stopReason());
         req.setBudgetScope(request.budgetScope());
         req.setKeyRoute(request.keyRoute());
+        // Model replacement report (feeds the agent_run_stopped model_replaced property).
+        // replacedModel is meaningful only when the turn actually ran on a replacement.
+        req.setModelReplaced(request.modelReplaced());
+        if (Boolean.TRUE.equals(request.modelReplaced())
+                && request.replacedModel() != null && !request.replacedModel().isBlank()) {
+            req.setReplacedModel(request.replacedModel());
+        }
         req.setErrorMessage(request.errorMessage());
         req.setDurationMs(request.durationMs());
 

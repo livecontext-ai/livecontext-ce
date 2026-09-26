@@ -6,7 +6,7 @@ import { Check } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import { useAuth } from '@/lib/providers/smart-providers';
 import { setLandingIntent, track } from '@/lib/analytics/analytics';
-import { calcPrice, creditFactsFor, CREDIT_TIERS, FREE_AI_CREDITS } from '@/lib/billing/pricing-constants';
+import { calcPrice, creditFactsFor, CREDIT_TIERS } from '@/lib/billing/pricing-constants';
 import DeploymentBadge from '@/components/pricing/DeploymentBadge';
 import ReferencePrice from '@/components/pricing/ReferencePrice';
 import FoundingPriceNote from '@/components/pricing/FoundingPriceNote';
@@ -65,14 +65,7 @@ export default function PricingSection() {
   // examples list and re-formatting the same figures is work for one answer.
   const creditFacts = useMemo(() => creditFactsFor(locale), [locale]);
   const featuresFor = (id: string): string[] =>
-    planFeatureLabels(id, { tCards, tPricing, credits: landingCredits, creditFacts,
-      // Public page, no authenticated plans fetch: the seeded default. The settings
-      // pricing page shows the live configured value.
-      // The seeded figure, not the live plan row: the plans endpoint is not in the
-      // gateway's public allow-list, so this surface cannot read it at all. If an admin
-      // changes the allowance, the landing keeps quoting the shipped default until the
-      // reader signs in - stale rather than wrong, and the only option available here.
-      aiCredits: FREE_AI_CREDITS.toLocaleString(locale) });
+    planFeatureLabels(id, { tCards, tPricing, credits: landingCredits, creditFacts });
 
   const plans: PlanCard[] = [
     {

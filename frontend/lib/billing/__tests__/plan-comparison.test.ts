@@ -93,22 +93,6 @@ describe('buildPlanComparison', () => {
     // carried exactly that hole on the support dimension until 2026-08-31.
     for (const row of rows) {
       if (row.kind !== 'scale') continue;
-      // A row that declares a fallback has no blank cells to misread: the
-      // renderer prints that value instead of the "not included" cross, so the
-      // premise above does not apply. The AI allowance is the case - only Free
-      // has a separate pot, and the paid plans lack one precisely because their
-      // credits already fund agents. The fallback must actually say something,
-      // or this exemption would let a real hole through.
-      if (row.fallbackValueKey) {
-        // Not just "non-empty": the exemption is only sound if the fallback
-        // actually RESOLVES, otherwise a typo turns the blank cell into a raw
-        // message path and the hole comes back wearing a different hat.
-        expect(
-          (enMessages as { pricing: { compare: { values: Record<string, string> } } }).pricing.compare.values[row.fallbackValueKey],
-          `${row.id} declares fallback "${row.fallbackValueKey}", missing from pricing.compare.values`,
-        ).toBeTruthy();
-        continue;
-      }
       const answered = COMPARISON_PLAN_IDS.map((planId) => row.cells[planId] !== null);
       const first = answered.indexOf(true);
       if (first === -1) continue;

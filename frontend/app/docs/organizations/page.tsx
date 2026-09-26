@@ -1,11 +1,11 @@
-import { Store, Workflow, Users } from 'lucide-react';
+import { CreditCard, Server, Workflow } from 'lucide-react';
 import { docsMetadata } from '../_meta';
 import { DocsHero, DocsProse, DocsTable, Callout, CodeBlock, Steps, Step, CardGrid, Card } from '../_components';
 
 export const metadata = docsMetadata({
-  title: 'Organizations, members & roles',
+  title: 'Organizations & roles',
   description:
-    'Personal vs team workspaces, creating/switching/deleting/restoring them, the OWNER/ADMIN/MEMBER/VIEWER permission matrix, inviting and managing members, per-member resource restrictions and quotas, the audit log, workspace avatars, SAML SSO, and how sign-in differs between cloud and self-hosted.',
+    'Workspaces, members and roles: create, switch, delete and restore workspaces, invite members, restrict access, set member quotas, read the audit log, and set up SAML SSO with verified domains.',
   path: '/docs/organizations',
 });
 
@@ -13,127 +13,143 @@ export default function OrganizationsPage() {
   return (
     <>
       <DocsHero
-        eyebrow="Access & SSO"
-        title="Organizations, members & roles"
-        lead="Every workspace is an organization: a container for workflows, agents, tables, and files. You always have a personal one, and a team plan lets you create more, invite people into them with a role, and fine-tune exactly what each member can see and do."
+        eyebrow="Share & host"
+        title="Organizations & roles"
+        lead="Every workspace is an organization: a container for workflows, agents, tables, and files. You always have a personal one. Pro, Team, and Enterprise let you create more, and Team and Enterprise let you invite people into them with a role and control what each member can see, spend, and do."
       />
 
       <DocsProse>
-        <h2>Workspaces: personal vs team</h2>
+        <h2>Workspaces: personal vs extra</h2>
         <p>
-          Every user gets a <strong>personal workspace</strong> automatically at signup, named after
-          them (e.g. &ldquo;Alex&apos;s Workspace&rdquo;), with a unique slug. You are its{' '}
-          <code>OWNER</code> and it is your default workspace. The personal workspace is special: it
-          is never paused, it can never be deleted, and it never expires.
+          Every user gets a personal workspace automatically at signup, named after
+          them (for example &ldquo;Alex&apos;s Workspace&rdquo;). You are its <code>OWNER</code> and it
+          is your default workspace. The personal workspace is special: it is never paused, it can
+          never be deleted, and it never expires.
         </p>
         <p>
-          A team plan lets an owner create <strong>extra workspaces</strong> beyond the personal one.
-          Switching into one is an explicit action, it is never automatic. An extra workspace shares
-          the owner&apos;s existing credit wallet rather than starting a new subscription, so members
-          you invite into it draw from that same wallet (subject to any per-member quota you set, see
-          below).
+          On Pro, Team, and Enterprise, an owner can
+          create extra workspaces beyond the personal one. Switching into one is an
+          explicit action, never automatic. An extra workspace does not start a new subscription: it
+          shares the owner&apos;s plan, so members you invite into it draw from the owner&apos;s credit
+          wallet (subject to any per-member quota you set, see below).
+        </p>
+        <p>
+          Storage is one shared pool per account. The plan&apos;s storage allowance
+          belongs to the owner&apos;s account, not to each workspace: what is stored in every workspace
+          the owner owns is added up. Once the pool is full, every one of those workspaces refuses new
+          files, including a workspace that has stored nothing itself. See{' '}
+          <a href="/billing">Plans &amp; billing</a> for the allowance of each plan.
+        </p>
+        <p>
+          You manage all of this in <strong>Settings &gt; Organization</strong>, which has four tabs:{' '}
+          <strong>Members</strong>, <strong>Workspaces</strong>, <strong>Security</strong>, and{' '}
+          <strong>Advanced</strong>.
         </p>
 
-        <h2>Creating, switching, deleting &amp; restoring workspaces</h2>
+        <h2>Creating, switching, deleting, and restoring workspaces</h2>
         <p>
-          How many workspaces you can create is capped by your plan&apos;s workspace limit, which
-          counts the personal workspace:
+          How many workspaces you can have is capped by your plan. The count includes the personal
+          workspace:
         </p>
         <DocsTable
+          caption="Maximum workspaces per plan"
           head={['Plan', 'Max workspaces']}
+          rowHeaders
           rows={[
-            ['Free / Starter', '1 (personal only)'],
+            ['Free, Starter', '1 (personal only)'],
             ['Pro', '3'],
             ['Team', '10'],
             ['Enterprise (all tiers)', 'Unlimited'],
           ]}
         />
         <p>
-          Creating one over the cap fails with <code>WORKSPACE_LIMIT_REACHED</code>. Switching your
-          default workspace re-selects which one you land in; on cloud, switching to a{' '}
-          <em>different</em> workspace has a short cooldown (60 seconds by default) before you can
-          switch again, re-selecting the one you&apos;re already in never counts against it. Self-hosted
-          Community Edition has no switch cooldown.
+          Creating one over the cap fails with <code>WORKSPACE_LIMIT_REACHED</code>. Switching changes
+          which workspace you land in. On the cloud, after switching to a <em>different</em> workspace
+          you wait a few seconds (5 by default) before you can switch again; re-selecting the one you
+          are already in never counts. The self-hosted Community Edition has no switch cooldown.
         </p>
         <p>
-          Deleting a non-personal workspace requires typing its exact name to confirm, GitHub-style,
-          and only the <code>OWNER</code> can do it. Deletion is <strong>soft</strong>: the workspace
+          Deleting a workspace other than the personal one requires typing its exact name to confirm,
+          and only the <code>OWNER</code> can do it. Deletion is soft: the workspace
           disappears from your switcher, its pending invitations are cancelled, and any member whose
-          default was that workspace is re-homed to one that still exists, but the underlying data
-          is left intact during a grace window.
+          default was that workspace is moved to one that still exists, but the data is kept during a
+          grace window.
         </p>
         <Steps>
           <Step n={1} title="Delete">
-            The <code>OWNER</code> deletes the workspace with a matching confirmation name. It is
+            The <code>OWNER</code> deletes the workspace with the matching confirmation name. It is
             hidden immediately but not yet gone.
           </Step>
           <Step n={2} title="Grace window (30 days by default)">
             The workspace, its data, and its audit trail stay intact. The <code>OWNER</code> can
-            restore it at any point during this window.
+            restore it at any time during this window.
           </Step>
-          <Step n={3} title="Restore, or hard-purge">
-            The <code>OWNER</code> can restore it and it reappears exactly as it was. If nobody
-            restores it before the window closes, a daily cleanup job permanently purges its
-            operational data. The organization row itself is kept as a tombstone so billing and audit
-            history stay valid, it is never fully deleted.
+          <Step n={3} title="Restore, or permanent purge">
+            If the <code>OWNER</code> restores it, it reappears as it was. If nobody restores it before
+            the window closes, a daily cleanup permanently removes its data. Billing and audit history
+            stay valid after the purge.
           </Step>
         </Steps>
         <Callout variant="warn">
-          The personal workspace can never be deleted, paused, or purged, no matter what. There is
-          always at least one workspace you cannot lose.
+          The personal workspace can never be deleted, paused, or purged. There is always at least one
+          workspace you cannot lose.
         </Callout>
         <p>
-          If you downgrade your plan below your current workspace count, the extra workspaces (beyond
-          your new cap, and never the personal one) are <strong>paused</strong> rather than deleted:
-          nobody, including the owner, can enter them, but their data is retained. Upgrading again
-          un-pauses them automatically.
+          If you downgrade below your current workspace count, the extra workspaces beyond the new cap
+          (never the personal one) are paused rather than deleted: nobody, including
+          the owner, can enter them, but their data is kept. Upgrading again un-pauses them
+          automatically.
         </p>
 
         <h2>Roles: the permission matrix</h2>
         <p>
           Every membership has exactly one of four roles. <code>MEMBER</code> is the default when
-          someone is invited without specifying a role.
+          someone is invited without choosing a role.
         </p>
         <DocsTable
           head={['Action', 'OWNER', 'ADMIN', 'MEMBER', 'VIEWER']}
+          caption="What each workspace role can do"
+          rowHeaders
           rows={[
-            ['Read &amp; use org resources (workflows, tables, ...)', 'Yes', 'Yes', 'Yes', 'Read-only'],
+            ['Read and use workspace resources (workflows, tables, and so on)', 'Yes', 'Yes', 'Yes', 'Read-only'],
             ['Invite members', 'Yes', 'Yes', 'No', 'No'],
-            ['Change a member&apos;s role', 'Yes', 'No', 'No', 'No'],
-            ['Remove a member (not another ADMIN, not the OWNER)', 'Yes', 'Yes*', 'No', 'No'],
+            ["Change a member's role", 'Yes', 'No', 'No', 'No'],
+            ['Remove a member (see note)', 'Yes', 'Yes', 'No', 'No'],
             ['Cancel a pending invitation', 'Yes', 'Yes', 'No', 'No'],
-            ['Rename the workspace, upload/remove its avatar', 'Yes', 'Yes', 'No', 'No'],
+            ['Rename the workspace, upload or remove its avatar', 'Yes', 'Yes', 'No', 'No'],
             ['Read the audit log', 'Yes', 'Yes', 'No', 'No'],
-            ['Manage SAML SSO', 'Yes', 'Yes', 'No', 'No'],
+            ['Manage SAML SSO and verified domains', 'Yes', 'Yes', 'No', 'No'],
             ['Set per-member quotas', 'Yes', 'Yes', 'No', 'No'],
             ['Set per-member resource restrictions', 'Yes', 'Yes', 'No', 'No'],
-            ['Delete / restore the workspace', 'Yes', 'No', 'No', 'No'],
-            ['Transfer ownership', 'Yes', 'No', 'No', 'No'],
+            ['Delete or restore the workspace', 'Yes', 'No', 'No', 'No'],
           ]}
         />
         <p>
-          * An <code>ADMIN</code> can remove a <code>MEMBER</code> or <code>VIEWER</code>, but not
-          another <code>ADMIN</code> and never the <code>OWNER</code>. Nobody can remove themselves,
-          use leave instead.
+          Note: an <code>ADMIN</code> can remove a <code>MEMBER</code> or <code>VIEWER</code>, but not
+          another <code>ADMIN</code> and never the <code>OWNER</code>. Nobody can remove themselves: use
+          leave instead.
         </p>
         <Callout variant="info">
-          <code>OWNER</code> and <code>ADMIN</code> are exempt from per-member resource
-          restrictions: whatever is set on them is ignored, they always see everything. Usage
-          quotas are a separate control, and a quota can never be set on the <code>OWNER</code>.
+          <code>OWNER</code> and <code>ADMIN</code> are exempt from per-member resource restrictions:
+          they always see everything. Usage quotas are a separate control, and a quota can never be set
+          on the <code>OWNER</code>.
         </Callout>
 
-        <h2>Inviting members by email + role</h2>
+        <h2>Inviting members</h2>
         <p>
-          An <code>OWNER</code> or <code>ADMIN</code> invites by email and role (defaults to{' '}
-          <code>MEMBER</code>; you cannot invite someone directly as <code>OWNER</code>, ownership only
-          moves by transfer, see below). Inviting requires a team-capable plan (Team or Enterprise);
-          on any other plan you get a &ldquo;Current plan does not support team members&rdquo; error.
+          An <code>OWNER</code> or <code>ADMIN</code> invites by email and role with{' '}
+          <strong>Invite Member</strong> on the <strong>Members</strong> tab. The role defaults to{' '}
+          <code>MEMBER</code>, and you cannot invite someone as <code>OWNER</code>. Inviting requires a
+          Team or Enterprise plan; on any other plan you get a &ldquo;Current plan does not support team
+          members&rdquo; error.
         </p>
-        <p>Each plan also caps total members (current members plus any still-pending invitations):</p>
+        <p>Each plan also caps total members (current members plus pending invitations):</p>
         <DocsTable
+          caption="Maximum members per workspace, by plan"
           head={['Plan', 'Max members']}
+          rowHeaders
           rows={[
-            ['Free / Starter / Pro / Pay-as-you-go', '1 (just the owner)'],
+            ['Free, Starter, Pro', '1 (just the owner)'],
             ['Team', '25'],
             ['Enterprise Basic', '25'],
             ['Enterprise Standard', '50'],
@@ -142,189 +158,282 @@ export default function OrganizationsPage() {
           ]}
         />
         <p>
-          Inviting someone who is already a member, or who already has a pending invite, is rejected.
-          To keep invites from being abused, an inviter is capped at 20 invitations per hour, and an
-          organization at 50 per hour, both are logged in the audit log when they trip.
+          Inviting someone who is already a member, or who already has a pending invitation, is
+          rejected. To prevent abuse, one person can send at most 20 invitations per hour and a
+          workspace at most 50 per hour; hitting either limit is recorded in the audit log.
         </p>
-        <Callout variant="info">
-          Delivery differs by edition. Cloud emails the invite link. Self-hosted Community Edition has
-          no email system, so an existing local user instead gets an in-app notification, and the
-          invite response/pending list surface the raw token so an admin can hand the invitee a
-          working accept link directly. A brand-new invitee can also register through that link even
-          if public registration is closed on that install.
+        <Callout variant="info" title="Cloud vs self-hosted delivery">
+          The cloud emails the invitation link. The self-hosted Community Edition never emails
+          invitations (even when SMTP is configured for other mail): an existing local user gets an
+          in-app notification instead, and the admin gets a <strong>Copy invite link</strong> to hand
+          over directly. A new person can register through that link even when public registration is
+          closed on the install.
         </Callout>
 
         <h2>Invitation lifecycle</h2>
         <p>
           An invitation is <code>PENDING</code>, <code>ACCEPTED</code>, <code>EXPIRED</code>, or{' '}
-          <code>CANCELLED</code>. There is no separate &ldquo;declined&rdquo; status, declining simply
-          moves it to <code>CANCELLED</code>. Invitations expire 7 days after they&apos;re sent.
+          <code>CANCELLED</code>. There is no separate &ldquo;declined&rdquo; status: declining moves it
+          to <code>CANCELLED</code>. Invitations expire 7 days after they are sent.
         </p>
         <DocsTable
+          caption="Invitation actions by actor"
           head={['Actor', 'Action', 'Effect']}
           rows={[
-            ['Invitee', 'Accept (via emailed link, or from their invitation inbox)', 'Joins as the invited role. Requires the signed-in email to match the invited address.'],
-            ['Invitee', 'Decline', 'Invitation moves to CANCELLED.'],
-            ['OWNER / ADMIN', 'Cancel', 'Only while still PENDING.'],
+            ['Invitee', 'Accept (from the link, or from their invitation inbox)', 'Joins with the invited role. The signed-in email must match the invited address.'],
+            ['Invitee', 'Decline', 'The invitation moves to CANCELLED.'],
+            ['OWNER or ADMIN', 'Cancel', 'Only while the invitation is still PENDING.'],
           ]}
         />
         <p>
-          Every invitation requires an explicit accept click, there is no silent auto-join for
-          existing users. Accepting re-checks capacity at that moment too, an invite issued while there
-          was room can still be refused if the workspace was deleted, or the team plan lapsed, or the
-          member cap filled up, in the meantime.
+          Every invitation needs an explicit accept: nobody is added silently. Accepting re-checks
+          capacity at that moment, so an invitation can still be refused if the workspace was deleted,
+          the team plan lapsed, or the member cap filled up in the meantime.
         </p>
 
-        <h2>Changing roles, removing members, leaving, ownership transfer</h2>
+        <h2>Changing roles, removing members, and leaving</h2>
         <p>
-          Changing a member&apos;s role is <code>OWNER</code>-only, and the owner cannot change their
-          own role or promote anyone to <code>OWNER</code> that way, ownership only moves by the
-          dedicated transfer action below.
+          Only the <code>OWNER</code> can change a member&apos;s role, and not their own role, and never
+          to <code>OWNER</code>.
         </p>
         <p>
-          Leaving is available to everyone <em>except</em> the <code>OWNER</code>, who must transfer
-          ownership first (an owner trying to leave gets{' '}
-          <code>OWNER_CANNOT_LEAVE</code>). If the workspace you leave was your default, your
-          next-oldest remaining membership becomes your new default automatically.
+          Everyone except the <code>OWNER</code> can leave a workspace. An owner who tries gets{' '}
+          <code>OWNER_CANNOT_LEAVE</code>. If the workspace you leave was your default, your next-oldest
+          remaining membership becomes your default automatically.
         </p>
-        <p>
-          Ownership transfer hands the <code>OWNER</code> role to another existing member (they must
-          already be a member; you cannot transfer to yourself). The previous owner is demoted to{' '}
-          <code>ADMIN</code>, never removed.
-        </p>
-        <Callout variant="warn">
-          The billing subscription stays with the previous owner&apos;s account after a transfer, it
-          does not follow the role. Plan resolution for the workspace now points at the new owner, so
-          if they have no subscription of their own, team features can drop back to the free tier
-          until they do. Plan for this before transferring ownership of a paid workspace.
+        <Callout variant="info" title="Ownership transfer">
+          Transferring ownership to another member is not offered in the app at the moment. To stop
+          owning a workspace, delete it (see above).
         </Callout>
 
-        <h2>Per-member resource restrictions: DENY vs READ</h2>
+        <h2>Per-member resource restrictions</h2>
         <p>
           Beyond roles, an <code>OWNER</code> or <code>ADMIN</code> can fine-tune what a specific{' '}
-          <code>MEMBER</code> or <code>VIEWER</code> can reach, resource by resource. Each restriction
-          is a tri-state per resource:
+          <code>MEMBER</code> or <code>VIEWER</code> can reach, resource by resource, with{' '}
+          <strong>Manage Access</strong> on the <strong>Members</strong> tab. Each resource has one of
+          three levels:
         </p>
         <DocsTable
+          caption="Per-member resource access levels"
           head={['Level', 'Effect']}
+          rowHeaders
           rows={[
-            ['Full access (no restriction)', 'The default, the member sees and can use the resource per their role.'],
-            ['Read-only (READ)', 'The resource stays visible, but any write to it is blocked.'],
-            ['No access (DENY)', 'The resource is hidden entirely, from lists and from direct access.'],
+            ['Full access', 'The default. The member sees and uses the resource according to their role.'],
+            ['Read-only', 'The resource stays visible, but any change to it is blocked.'],
+            ['No access', 'The resource is hidden entirely, from lists and from direct access.'],
           ]}
         />
         <p>
-          Restrictable resource types are workflows, applications, interfaces, agents, datasources,
-          projects, files, and skills. Restrictions can be set one at a time or replaced in bulk for a
-          member and resource type in one call. <code>OWNER</code> and <code>ADMIN</code> can never be
-          restricted, whatever is set on them is ignored, they always see everything.
+          You can restrict workflows, applications, interfaces, agents, datasources, projects, files,
+          and skills, one at a time or in bulk (<strong>Allow all</strong>, <strong>Block all</strong>).
+          Restrictions set on an <code>OWNER</code> or <code>ADMIN</code> are ignored.
         </p>
 
-        <h2>Member quotas within a team plan</h2>
+        <h2>Member quotas</h2>
         <p>
-          On top of restrictions, an <code>OWNER</code> or <code>ADMIN</code> can cap how much a given
-          member consumes, on up to three independent dimensions: tool credits, storage, and LLM
-          tokens, each per billing period. Leaving a dimension unset means no cap on that dimension.
-          Caps reset on the same monthly cycle as the workspace owner&apos;s billing, and there is one
-          cap configuration per member (not per resource).
+          An <code>OWNER</code> or <code>ADMIN</code> can also cap how much a member consumes, with{' '}
+          <strong>Manage quota</strong>, on up to three independent dimensions: credits, storage, and
+          LLM tokens. An unset dimension has no cap. Caps reset on the same monthly cycle as the
+          owner&apos;s subscription, and there is one cap configuration per member.
         </p>
         <Callout variant="info">
-          A quota is enforced against whoever actually runs the work, not whoever&apos;s wallet pays
-          for it, so redirecting a member&apos;s usage to be billed to the owner does not let them
-          bypass their own cap. A quota cannot be set on the <code>OWNER</code>.
+          A quota applies to the person who runs the work, not to the wallet that pays for it, so
+          having usage billed to the owner does not let a member bypass their own cap. A quota cannot be
+          set on the <code>OWNER</code>.
         </Callout>
 
-        <h2>Organization audit log</h2>
+        <h2>Audit log</h2>
         <p>
-          <code>OWNER</code> and <code>ADMIN</code> can read a paginated, newest-first audit log of
-          membership and workspace events, optionally filtered by event type. Each entry resolves the
-          actor and target to display names.
+          <code>OWNER</code> and <code>ADMIN</code> can read the workspace audit log on the{' '}
+          <strong>Security</strong> tab: newest first, paginated, and filterable by event type. Each
+          entry shows who did it and to whom.
         </p>
-        <CodeBlock language="text">{`ORG_MEMBER_INVITED · ORG_INVITE_ACCEPTED · ORG_INVITE_CANCELLED · ORG_INVITE_RATE_LIMITED
+        <CodeBlock language="text" title="Audit event types">{`ORG_MEMBER_INVITED · ORG_INVITE_ACCEPTED · ORG_INVITE_CANCELLED · ORG_INVITE_RATE_LIMITED
 ORG_MEMBER_REMOVED · ORG_MEMBER_LEFT · ORG_ROLE_CHANGED · ORG_OWNERSHIP_TRANSFERRED
 ORG_DELETED · ORG_RESTORED · ORG_PURGED
 ORG_QUOTA_CAP_SET · ORG_QUOTA_CAP_REMOVED · ORG_QUOTA_CAP_EXCEEDED
-ORG_SAML_SSO_CONFIGURED · ORG_SAML_SSO_DELETED · ORG_SAML_SSO_MEMBER_JOINED`}</CodeBlock>
+ORG_SAML_SSO_CONFIGURED · ORG_SAML_SSO_DELETED · ORG_SAML_SSO_MEMBER_JOINED
+ORG_SSO_DOMAIN_ADDED · ORG_SSO_DOMAIN_VERIFIED · ORG_SSO_DOMAIN_REMOVED`}</CodeBlock>
         <p>
-          The audit trail survives a workspace&apos;s hard-purge (the purge itself is recorded as{' '}
-          <code>ORG_PURGED</code>), so history stays queryable even after the underlying data is gone.
+          The audit trail survives a permanent purge (the purge itself is recorded as{' '}
+          <code>ORG_PURGED</code>), so history stays readable after the data is gone.
         </p>
 
         <h2>Workspace avatar</h2>
         <p>
           A workspace can carry one avatar image (JPEG, PNG, GIF, or WebP, up to 5 MB), uploaded or
-          replaced by an <code>OWNER</code>/<code>ADMIN</code>. Removing it is idempotent and falls
-          back to a deterministic initials image derived from the workspace name, so there is never a
-          broken image, the fallback always renders something. The avatar is served without caching,
-          so a fresh upload or a rename shows up immediately everywhere it&apos;s displayed.
+          replaced by an <code>OWNER</code> or <code>ADMIN</code>. Removing it falls back to an image
+          with the workspace&apos;s initials, so there is never a broken image. A new upload or a rename
+          shows up everywhere right away.
         </p>
 
-        <h2>Organization SAML SSO (Team / Enterprise)</h2>
+        <h2>SAML SSO</h2>
+        <Callout variant="info" title="Cloud only, Team and Enterprise">
+          SAML SSO is available on Team and Enterprise workspaces on LiveContext Cloud, and is managed
+          by an <code>OWNER</code> or <code>ADMIN</code>. On the self-hosted Community Edition the panel
+          reads &ldquo;SAML SSO is only available on LiveContext Cloud. Self-hosted installs can&apos;t
+          enable SSO.&rdquo;
+        </Callout>
         <p>
-          A Team or Enterprise workspace can wire its own SAML identity provider, managed by an{' '}
-          <code>OWNER</code>/<code>ADMIN</code>. You provide the IdP&apos;s entity ID, its SSO URL
-          (HTTPS, other than localhost for testing), and its certificate, plus a display name and
-          whether to hide the connection on the generic login page.
+          A workspace can connect its own SAML identity provider (IdP). SAML users are added as
+          workspace members on their first login. Setting it up has two parts: the connection, and at
+          least one verified email domain.
+        </p>
+
+        <h3>Connect your identity provider</h3>
+        <Steps>
+          <Step n={1} title="Open the SAML SSO panel">
+            Go to <strong>Settings &gt; Organization</strong>, then the <strong>Security</strong> tab.
+          </Step>
+          <Step n={2} title="Enter the IdP details">
+            Fill in <strong>Provider name</strong>, <strong>IdP entity ID</strong>,{' '}
+            <strong>Single sign-on URL</strong> (HTTPS; plain HTTP is accepted only for localhost), and
+            the <strong>X.509 signing certificate</strong>. When you edit an existing connection, leave
+            the certificate blank to keep the current one. Then click <strong>Save SSO</strong>.
+          </Step>
+          <Step n={3} title="Configure your IdP">
+            Copy the <strong>Service provider details</strong> into your IdP: <strong>SP entity ID</strong>,{' '}
+            <strong>ACS URL</strong>, and <strong>Metadata URL</strong>. The panel also shows the{' '}
+            <strong>Workspace SSO URL</strong> (a direct sign-in link for this workspace) and the{' '}
+            <strong>Certificate fingerprint</strong>.
+          </Step>
+          <Step n={4} title="Verify at least one email domain">
+            See the next section. Until a domain is verified, nobody can join through SSO.
+          </Step>
+        </Steps>
+        <p>
+          With <strong>Hide from the global login page</strong>, users sign in through the{' '}
+          <strong>Workspace SSO URL</strong> instead of seeing a button for your workspace on the shared
+          login page.
         </p>
         <DocsTable
+          caption="Identity provider statuses"
           head={['Status', 'Meaning']}
+          rowHeaders
           rows={[
-            ['DRAFT', 'Saved but not yet provisioned.'],
-            ['ACTIVE', 'Provisioned and ready, logins through this IdP work.'],
-            ['ERROR', 'Provisioning failed, an error message explains why.'],
-            ['DISABLED', 'Turned off without deleting the configuration.'],
+            ['Draft', 'Saved but not yet provisioned.'],
+            ['Active', 'Provisioned and ready: sign-ins through this IdP work.'],
+            ['Error', 'Provisioning failed; an error message explains why.'],
+            ['Disabled', 'Turned off without deleting the configuration.'],
           ]}
         />
+
+        <h3>Verify your email domains</h3>
         <p>
-          Once <code>ACTIVE</code>, signing in through that IdP auto-provisions the user as a{' '}
-          <code>MEMBER</code> the first time (just-in-time provisioning), still subject to the
-          workspace&apos;s team support and member-limit checks. If the connection isn&apos;t active,
-          or the workspace was deleted, the login is refused.
+          SSO sign-in works only for addresses on a domain this workspace has proven it owns. You prove
+          it with a DNS TXT record, in the <strong>Verified email domains</strong> list of the same
+          panel.
         </p>
-        <Callout variant="warn">
-          Organization SAML SSO requires the cloud&apos;s Keycloak-backed authentication. Self-hosted
-          Community Edition&apos;s embedded email/password mode cannot provision it, a SAML connection
-          configured there goes to <code>ERROR</code>. This is distinct from direct social login
-          (Google/GitHub) and from an end-user&apos;s own OAuth2 connections (Gmail, Slack, ...), both
-          of which do work in Community Edition, only org-level SAML SSO needs Keycloak.
-        </Callout>
+        <Steps>
+          <Step n={1} title="Add the domain">
+            Type the domain (for example <code>company.com</code>) and click <strong>Add domain</strong>.
+            It shows as <strong>Pending</strong>, with the record to publish.
+          </Step>
+          <Step n={2} title="Publish the TXT record">
+            At your DNS provider, add a TXT record with the <strong>Name</strong> and{' '}
+            <strong>Value</strong> the panel shows. The name is <code>_livecontext-sso.</code> followed by
+            your domain, and the value starts with <code>livecontext-sso-verification=</code>. The record
+            sits on its own name, so it never touches your domain&apos;s other TXT records such as SPF.
+          </Step>
+          <Step n={3} title="Click Check now">
+            When the record is found, the domain shows as <strong>Verified</strong>. DNS changes can
+            take a few minutes to appear: if the record is not visible yet, you are told so and can
+            check again later.
+          </Step>
+        </Steps>
+        <ul>
+          <li>A workspace can list at most 20 domains.</li>
+          <li>A domain can be verified by only one workspace.</li>
+          <li>
+            A new member can join through SSO only when the email their IdP sends is on
+            a verified domain. Otherwise sign-in is refused with &ldquo;This email address is not on a
+            domain verified for this workspace&apos;s SSO&rdquo;. People who are already members keep
+            signing in as before.
+          </li>
+          <li>
+            Joining through SSO still respects the team plan and the member cap. If the connection is
+            not active, or the workspace was deleted, sign-in is refused.
+          </li>
+        </ul>
+
+        <h3>How people sign in with SSO</h3>
+        <p>
+          On the LiveContext sign-in page, a person chooses <strong>Sign in with SSO</strong> and enters
+          their <strong>Work email</strong>. If the email is on a verified domain of a workspace whose
+          connection is active, they are sent to that workspace&apos;s identity provider. Otherwise they
+          see &ldquo;No SSO is set up for this email domain. Sign in another way, or ask your workspace
+          admin.&rdquo; People can also go straight to your <strong>Workspace SSO URL</strong>.
+        </p>
 
         <h2>Signing in: cloud vs self-hosted</h2>
-        <p>
-          The two editions authenticate differently, and that difference is exactly why SAML and
-          invite-email delivery only fully work on one of them:
-        </p>
         <DocsTable
-          head={['Edition', 'Sign-in', 'Consequences']}
+          head={['Topic', 'Cloud', 'Self-hosted (Community Edition)']}
+          caption="Sign-in and workspace differences between cloud and self-hosted"
+          rowHeaders
           rows={[
-            [
-              'Cloud',
-              'Keycloak: SSO, organization SAML, and social login.',
-              'Invite emails are sent by SMTP; switching workspaces has the 60 second cooldown described above.',
-            ],
-            [
-              'Self-hosted (Community Edition)',
-              'Embedded email/password.',
-              'No SMTP: invites arrive as an in-app notification, with the raw accept token available to admins. No switch cooldown. Organization SAML SSO cannot be provisioned.',
-            ],
+            ['Sign-in', 'Email and password, social login, and workspace SAML SSO.', 'Built-in email and password.'],
+            ['SAML SSO', 'Team and Enterprise workspaces.', 'Not available.'],
+            ['Invitations', 'Sent by email.', 'Never emailed: an in-app notification for existing users, plus a copyable invite link.'],
+            ['Workspace switch cooldown', 'A few seconds (5 by default).', 'None.'],
           ]}
         />
         <p>
-          Community Edition can still close public registration after setup, an invite link with a
-          valid pending token remains a way in for that specific invitee even while registration is
-          otherwise closed.
+          The Community Edition can close public registration after setup. An invite link with a valid
+          pending invitation still lets that specific person register. See{' '}
+          <a href="/self-host">Self-hosting</a>.
         </p>
 
-        <h2>Where to go next</h2>
+        <h2>Troubleshooting</h2>
+        <DocsTable
+          caption="Common workspace and member problems"
+          rowHeaders
+          head={['Symptom', 'Cause', 'Fix']}
+          rows={[
+            [
+              'Inviting fails with "Current plan does not support team members"',
+              'Only Team and Enterprise plans can have members.',
+              'Upgrade the owner\'s plan to Team or Enterprise.',
+            ],
+            [
+              'Inviting fails with "Member limit reached"',
+              'Members plus pending invitations already fill the plan\'s member cap.',
+              'Cancel pending invitations you no longer need, remove a member, or upgrade.',
+            ],
+            [
+              <span key="s">
+                Creating a workspace fails with <code>WORKSPACE_LIMIT_REACHED</code>
+              </span>,
+              'You already have as many workspaces as your plan allows, the personal one included.',
+              'Delete a workspace you no longer use, or upgrade.',
+            ],
+            [
+              'A workspace shows as Paused and cannot be entered',
+              'It is beyond the current plan\'s workspace cap, usually after a downgrade. Its data is kept.',
+              'Upgrade the plan: paused workspaces come back automatically.',
+            ],
+            [
+              'An invitee cannot accept the invitation',
+              'They are signed in with a different email than the invited address, or the invitation is older than 7 days.',
+              'Sign in with the invited address, or send a new invitation.',
+            ],
+            [
+              'On a self-hosted install, the invited person never gets an email',
+              'The Community Edition never emails invitations.',
+              'Use Copy invite link in Settings > Organization and send the link yourself.',
+            ],
+          ]}
+        />
+
+        <h2>Related pages</h2>
         <CardGrid cols={3}>
-          <Card icon={Users} title="Chat" href="/chat">
-            Conversations and agent chats live inside a workspace too.
+          <Card icon={CreditCard} title="Plans & billing" href="/billing">
+            Who pays for members&apos; usage, and the storage each plan includes.
+          </Card>
+          <Card icon={Server} title="Self-hosting" href="/self-host">
+            Workspaces and invitations on your own install.
           </Card>
           <Card icon={Workflow} title="Workflows" href="/workflows">
             The automations your members build, run, and share.
-          </Card>
-          <Card icon={Store} title="Marketplace" href="/marketplace">
-            Publish from a workspace, or acquire into one.
           </Card>
         </CardGrid>
       </DocsProse>

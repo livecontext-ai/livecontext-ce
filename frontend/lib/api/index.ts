@@ -133,6 +133,7 @@ export type {
   ModelPricingEntry,
   DailyUsageEntry,
   UsageAnalytics,
+  ModelUsageEntry,
 } from './services/quota-api.service';
 
 // ============================================

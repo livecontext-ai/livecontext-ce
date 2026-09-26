@@ -42,7 +42,8 @@ import java.util.Set;
  * </ol>
  *
  * <p>WORKFLOW mode runs Pass 0 + Pass 1 only - preserves array shapes for SpEL
- * and {@code OutputProjector} schemas declaring {@code items: array<...>}.
+ * and {@code OutputProjector} schemas declaring {@code items: array<...>}. STEP_OUTPUT is the
+ * same with the text cap at {@link #MAX_STRING_SIZE_STEP_OUTPUT} (1 MB); base64 stays at 4 KB.
  */
 @Slf4j
 @Component
@@ -50,6 +51,18 @@ public class ResponseShaper {
 
     static final int MAX_STRING_SIZE_AGENT = 4096;       // 4 KB per leaf
     static final int MAX_STRING_SIZE_WORKFLOW = 4096;    // same - workflow LLM steps benefit too
+    /**
+     * TEXT leaf ceiling for a workflow step's own output ({@link Mode#STEP_OUTPUT}): a guard against
+     * a runaway response, not a budget. That output IS the data downstream nodes read, and at 4 KB
+     * an email body, a scraped page or a document reached every {@code {{...}}} as its first 200
+     * characters plus a marker, with nothing stored anywhere holding the rest.
+     */
+    static final int MAX_STRING_SIZE_STEP_OUTPUT = 1_048_576; // 1 MB per text leaf
+    /**
+     * Inline binary (base64) is replaced above 4 KB in every mode: a file belongs in storage as a
+     * file, not as megabytes of text copied into every step row.
+     */
+    static final int MAX_BASE64_SIZE = MAX_STRING_SIZE_AGENT;
     static final int MAX_STRING_SIZE_FALLBACK = 1024;    // pass-1.5 cap
     static final int MAX_TOTAL_RESPONSE_SIZE = 65_536;   // 64 KB total budget (agent only)
     static final int PREVIEW_LENGTH = 200;
@@ -59,7 +72,13 @@ public class ResponseShaper {
 
     private static final ObjectMapper SIZE_MAPPER = new ObjectMapper();
 
-    public enum Mode { AGENT, WORKFLOW }
+    /**
+     * {@code STEP_OUTPUT} is WORKFLOW shaping with the text cap lifted, and is chosen ONLY when the
+     * caller declares the result is a workflow step's output (a StepNode / FindNode call). Billing
+     * scope cannot decide it: an agent running inside a workflow calls with scope RUN too, and a
+     * 1 MB leaf in a model's context is exactly what the 4 KB cap exists to prevent.
+     */
+    public enum Mode { AGENT, WORKFLOW, STEP_OUTPUT }
     public enum Action { UNTOUCHED, LEAVES_ONLY, ARRAY_DIGESTED, OVERSIZE_FALLBACK }
 
     /** Aggregated truncation pattern: same canonical path → one entry. */
@@ -117,10 +136,15 @@ public class ResponseShaper {
         Map<String, int[]> patternAgg = new HashMap<>();   // canonicalPath -> {count, maxBytes}
 
         int rawBytes = serializedBytes(response);
-        int leafCap = mode == Mode.WORKFLOW ? MAX_STRING_SIZE_WORKFLOW : MAX_STRING_SIZE_AGENT;
+        int leafCap = switch (mode) {
+            case STEP_OUTPUT -> MAX_STRING_SIZE_STEP_OUTPUT;
+            case WORKFLOW -> MAX_STRING_SIZE_WORKFLOW;
+            case AGENT -> MAX_STRING_SIZE_AGENT;
+        };
+        int base64Cap = MAX_BASE64_SIZE;
         Object shaped;
         try {
-            shaped = walk(response, "", expandSet, 0, leafCap, patternAgg);
+            shaped = walk(response, "", expandSet, 0, leafCap, base64Cap, patternAgg);
         } catch (Exception e) {
             log.warn("ResponseShaper: walk failed, returning raw response: {}", e.getMessage());
             return new ShapingResult(response, List.of(), Action.UNTOUCHED, rawBytes, rawBytes);
@@ -166,7 +190,7 @@ public class ResponseShaper {
 
     @SuppressWarnings("unchecked")
     private Object walk(Object value, String path, Set<String> expandSet, int depth,
-                        int leafCap, Map<String, int[]> patternAgg) {
+                        int leafCap, int base64Cap, Map<String, int[]> patternAgg) {
         if (depth > MAX_DEPTH) {
             return "[MAX_DEPTH_REACHED]";
         }
@@ -186,7 +210,7 @@ public class ResponseShaper {
             for (Map.Entry<String, Object> e : map.entrySet()) {
                 String key = e.getKey();
                 String childPath = path.isEmpty() ? key : path + "." + key;
-                result.put(key, walk(e.getValue(), childPath, expandSet, depth + 1, leafCap, patternAgg));
+                result.put(key, walk(e.getValue(), childPath, expandSet, depth + 1, leafCap, base64Cap, patternAgg));
             }
             return result;
         }
@@ -195,17 +219,18 @@ public class ResponseShaper {
             List<Object> result = new ArrayList<>(list.size());
             for (int i = 0; i < list.size(); i++) {
                 String childPath = path + "[" + i + "]";
-                result.add(walk(list.get(i), childPath, expandSet, depth + 1, leafCap, patternAgg));
+                result.add(walk(list.get(i), childPath, expandSet, depth + 1, leafCap, base64Cap, patternAgg));
             }
             return result;
         }
         if (value instanceof String s) {
             int len = s.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
-            if (len > leafCap) {
+            boolean base64 = len > Math.min(leafCap, base64Cap) && isLikelyBase64(s);
+            if (len > (base64 ? base64Cap : leafCap)) {
                 String canonical = PathPattern.canonicalize(path);
                 patternAgg.merge(canonical, new int[]{1, len},
                         (a, b) -> new int[]{a[0] + 1, Math.max(a[1], b[1])});
-                if (isLikelyBase64(s)) {
+                if (base64) {
                     return String.format("[BASE64_CONTENT: %s]", formatSize(len));
                 }
                 String preview = s.length() > PREVIEW_LENGTH ? s.substring(0, PREVIEW_LENGTH) : s;
@@ -435,7 +460,7 @@ public class ResponseShaper {
     private ShapeAndAction passOneFiveFallback(Object tree, Set<String> expandSet) {
         // Re-clip every string leaf at MAX_STRING_SIZE_FALLBACK.
         Map<String, int[]> dummyAgg = new HashMap<>();
-        Object reclipped = walk(tree, "", expandSet, 0, MAX_STRING_SIZE_FALLBACK, dummyAgg);
+        Object reclipped = walk(tree, "", expandSet, 0, MAX_STRING_SIZE_FALLBACK, MAX_STRING_SIZE_FALLBACK, dummyAgg);
         if (serializedBytes(reclipped) <= MAX_TOTAL_RESPONSE_SIZE) {
             return new ShapeAndAction(reclipped, Action.OVERSIZE_FALLBACK);
         }

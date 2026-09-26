@@ -22,7 +22,7 @@ class AgentModuleResolverTest {
 
             assertThat(modules).containsExactlyInAnyOrder(
                 "catalog", "table", "interface", "agent", "skill", "memory",
-                "workflow", "application", "web_search", "files", "wait", "ask_user"
+                "workflow", "application", "web_search", "files", "wait", "ask_user", "channel"
             );
             assertThat(modules).doesNotContain("image_generation");
         }
@@ -37,7 +37,8 @@ class AgentModuleResolverTest {
 
             assertThat(modules).doesNotContain("catalog");
             assertThat(modules).containsExactlyInAnyOrder(
-                "table", "interface", "agent", "skill", "memory", "workflow", "application", "web_search", "files", "wait", "ask_user"
+                "table", "interface", "agent", "skill", "memory", "workflow", "application", "web_search",
+                "files", "wait", "ask_user", "channel"
             );
         }
 
@@ -67,9 +68,12 @@ class AgentModuleResolverTest {
             Set<String> modules = AgentModuleResolver.resolveEnabledModules(config);
 
             // No grants → the 5 internal families are DENIED (authoritative, no list fallback).
-            // catalog/skill/files/wait are always on; web_search defaults on (absent webSearch).
+            // catalog/skill/files/wait/ask_user/channel are always on; web_search defaults on
+            // (absent webSearch). channel is always-on because connecting a chat the user reads
+            // has no resource to scope, and leaving it out is the feature being unreachable
+            // rather than a restriction.
             assertThat(modules).containsExactlyInAnyOrder(
-                "catalog", "skill", "memory", "files", "wait", "ask_user", "web_search"
+                "catalog", "skill", "memory", "files", "wait", "ask_user", "channel", "web_search"
             );
         }
 
@@ -87,7 +91,8 @@ class AgentModuleResolverTest {
 
             Set<String> modules = AgentModuleResolver.resolveEnabledModules(config);
 
-            assertThat(modules).containsExactlyInAnyOrder("catalog", "skill", "memory", "files", "wait", "ask_user");
+            assertThat(modules).containsExactlyInAnyOrder(
+                "catalog", "skill", "memory", "files", "wait", "ask_user", "channel");
         }
 
         @Test
@@ -110,7 +115,8 @@ class AgentModuleResolverTest {
             Set<String> modules = AgentModuleResolver.resolveEnabledModules(config);
 
             assertThat(modules).containsExactlyInAnyOrder(
-                "catalog", "table", "interface", "skill", "memory", "workflow", "web_search", "files", "wait", "ask_user"
+                "catalog", "table", "interface", "skill", "memory", "workflow", "web_search",
+                "files", "wait", "ask_user", "channel"
             );
             assertThat(modules).doesNotContain("agent", "application");
         }
@@ -125,7 +131,8 @@ class AgentModuleResolverTest {
 
             assertThat(modules).doesNotContain("web_search");
             // No grants → the 5 internal families are denied; only the always-on modules remain.
-            assertThat(modules).containsExactlyInAnyOrder("catalog", "skill", "memory", "files", "wait", "ask_user");
+            assertThat(modules).containsExactlyInAnyOrder(
+                "catalog", "skill", "memory", "files", "wait", "ask_user", "channel");
         }
 
         @Test

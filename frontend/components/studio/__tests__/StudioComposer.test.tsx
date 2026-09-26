@@ -822,3 +822,17 @@ describe('StudioComposer - the box grows with the prompt', () => {
     expect(box.style.maxHeight).toBe('200px');
   });
 });
+
+describe('Orbi on the studio composer', () => {
+  it('is always perched, and can be poked', () => {
+    renderComposer(model());
+    const perch = screen.getByTestId('orbi-perch');
+    expect(perch.querySelector('[data-testid="orbi-poke"]')).not.toBeNull();
+    expect(perch.querySelector('svg')!.getAttribute('data-mood')).toBe('idle');
+  });
+
+  it('thinks while a generation runs', () => {
+    renderComposer(model(), { isRunning: true });
+    expect(screen.getByTestId('orbi-perch').querySelector('svg')!.getAttribute('data-mood')).toBe('thinking');
+  });
+});

@@ -43,7 +43,7 @@ public class AgentToolsProvider implements ToolsProvider {
     private final AgentTaskContextModule taskContextModule;
 
     private static final List<String> VALID_ACTIONS = List.of(
-        "create", "get", "list", "update", "delete", "execute", "help", "help_models", "budgets",
+        "create", "get", "present", "list", "update", "delete", "execute", "help", "help_models", "budgets",
         // Memory & sharing
         "get_history", "search_messages", "share", "unshare", "refresh_share",
         // Marketplace publication lifecycle
@@ -146,6 +146,7 @@ public class AgentToolsProvider implements ToolsProvider {
                 .description("""
                     Action to perform. Groups:
                     - Agent CRUD: create, get, list, update, delete
+                    - Show: present (open the agent in the user's side panel, agent_id; changes nothing)
                     - Spending: budgets (which capped agents are near or past their own credit cap)
                     - Execution: execute
                     - Memory & sharing: get_history, search_messages, share, unshare, refresh_share
@@ -161,7 +162,7 @@ public class AgentToolsProvider implements ToolsProvider {
                 .required(true)
                 .enumValues(VALID_ACTIONS)
                 .build(),
-            stringParam("agent_id", "Agent ID - UUID (for: get, update, delete, execute, assign[target], task_update[reassign]). For assign: omit or NULL to create a backlog task any agent can claim.", false),
+            stringParam("agent_id", "Agent ID - UUID (for: get, present, update, delete, execute, assign[target], task_update[reassign]). For assign: omit or NULL to create a backlog task any agent can claim.", false),
             stringParam("name", "Agent name (for: create, update)", false),
             stringParam("description", "Agent description (for: create, update)", false),
             stringParam("system_prompt", "System prompt for the agent - REQUIRED for create", false),
@@ -182,6 +183,16 @@ public class AgentToolsProvider implements ToolsProvider {
             intParam("max_tokens", "Maximum output tokens per turn; auto-capped to the model's real ceiling (for: create, update)", false, 16000),
             intParam("max_iterations", "Maximum tool call iterations 1-1000 (for: create, update)", false, 100),
             intParam("execution_timeout", "Execution timeout in seconds 10-7200 (for: create, update)", false, 3600),
+            stringParam("chat_channel_link_id", "Where this agent's permission requests and questions reach "
+                + "the user when nobody is watching the run: the linkId of one of the workspace's connected "
+                + "destinations, as channel(action='list') returns it (checked when something is delivered, not when saved). Omit (or pass empty) for the workspace "
+                + "default destination. If that destination is later disconnected, the agent's requests are "
+                + "reported as not delivered rather than sent to another chat; the same happens if the agent cannot be read at that moment (for: create, update)", false),
+            boolParam("chat_channel_enabled", "(for: update; a new agent starts with it on) Whether this agent reaches the user outside the "
+                + "app at all (default true). false: nothing leaves the app, its permission requests are not "
+                + "delivered (the action is not done) and its questions are answered by assumption; it also "
+                + "turns require_tool_authorization off. require_tool_authorization can only be turned on while "
+                + "this is true.", false, null),
             intParam("inactivity_timeout", "Inactivity watchdog window in seconds: the agent is stopped (INACTIVITY_TIMEOUT) if it emits no token, thinking, or tool activity for this long. Independent of execution_timeout (the total cap). 0 = disabled, 10-7200 = custom, omit for the 5-minute default (for: create, update)", false, null),
             enumParam("tools_mode", "Tool access: 'all'=all MCP/catalog tools, 'none'=no MCP tools (internal tools like table, web_search remain), 'off'=NO tools at all (not even internal - a reasoning-only judge/classifier/transformer agent that advertises ZERO tool schemas; resource grants are ignored), 'custom'=only tools listed in 'tools' param (for: create, update)", false,
                 List.of("all", "none", "off", "custom")),
@@ -216,6 +227,15 @@ public class AgentToolsProvider implements ToolsProvider {
                 .description("Sub-agent UUIDs the agent can call - see RESOURCE GRANTS. (for: create, update)")
                 .build(),
             boolParam("web_search", "Enable web search capability for the agent (default: true) (for: create, update)", false, true),
+            boolParam("require_tool_authorization", "(for: update) Ask the user for permission before this agent "
+                + "runs a sensitive action in its OWN runs - a schedule, a webhook, a task - which never ask "
+                + "today. Off by default. When nobody is watching such a run, the request is delivered to the "
+                + "chat the workspace connected with channel(action='connect'), and a late Approve lets the "
+                + "action run on the agent's next run; with no connected chat it waits in the app instead, so "
+                + "the run ends without doing the sensitive thing. Two contexts are NOT covered and stay exempt: "
+                + "the agent running inside a workflow node, and the agent called as a sub-agent by another "
+                + "agent. Turn it on for an agent that publishes, pays or sends on someone's behalf.",
+                false, null),
             boolParam("generation", "Let the agent produce images, video, audio, voice and music with the "
                 + "generation tool (default: false) (for: create, update). Off unless you pass true: every "
                 + "asset it produces spends the account's credits, at the rate the chosen model sets. Turn it "
@@ -297,7 +317,7 @@ public class AgentToolsProvider implements ToolsProvider {
             boolParam("schedule_memory", "Schedule uses conversation memory - agent sees previous executions (for: create, update)", false, false),
 
             // ==================== Task Delegation (assign, inbox, complete, recurrences, ...) ====================
-            stringParam("title", "Short task title, max 500 chars (for: assign, recurrence_create, recurrence_update)", false),
+            stringParam("title", "Short task title, max 500 chars (for: assign, recurrence_create, recurrence_update). For present: optional panel title (default: the agent name).", false),
             stringParam("instructions", "Detailed task instructions, max 50KB (for: assign, recurrence_create, recurrence_update)", false),
             stringParam("reviewer_agent_id", "Agent UUID that reviews the task: task_complete then moves it to in_review for that agent (who uses review_inbox/task_approve/task_reject_review). Omitted = the human user reviews it outside this tool. (for: assign, task_update)", false),
             intParam("max_review_attempts", "Max reviewer rejects before the task auto-fails (status='failed' with the last reviewer feedback). Range [1, 20], default 3. Needs reviewer_agent_id. (for: assign, task_update)", false, null),
@@ -389,7 +409,8 @@ public class AgentToolsProvider implements ToolsProvider {
             .description("""
                 Create, manage, and delegate work to AI agents.
                 CRUD: create (requires name + system_prompt), get, list, update, delete. tools_mode defaults to 'all'. model_provider/model_name are OPTIONAL - omit to use the platform default.
-                execute: run a sub-agent with a prompt synchronously. Requires agent_id + prompt. Memory on by default.
+                present: opens the agent (agent_id) in the user's side panel so they see it now; changes nothing.
+                execute: run a sub-agent with a prompt synchronously. Requires agent_id + prompt. Memory on by default. A sub-agent cannot ask the person itself: when its reply ends with a question for them, ask it with ask_user and run the sub-agent again with the answer.
                 RESOURCE GRANTS (create/update) - the five families workflows, applications, tables, interfaces, agents all use the same 3-param pattern:
                 - '<family>' list: IDs to grant. Default [] = NO access. Pass [] to revoke. Omitting or null = [].
                 - '<family>_grant': 'none'=no access, 'all'=EVERY resource of that family (the list is then ignored), 'custom'=only the listed IDs. On CREATE, omitting it derives the grant from the list (empty=none, non-empty=custom). On UPDATE the stored grant is KEPT, so a list sent without its grant is discarded: send both, and read '<family>Grant' back from the response.

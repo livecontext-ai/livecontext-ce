@@ -49,12 +49,27 @@ public class AuthAnalyticsEmitter {
     static final String PLAN_GRANTED = "plan_granted";
     static final String ORGANIZATION_CREATED = "organization_created";
     static final String INVITATION_ACCEPTED = "invitation_accepted";
+    static final String CREDIT_ALERT_SENT = "credit_alert_sent";
+    static final String LIFECYCLE_EVENT_SENT = "lifecycle_event_sent";
+    static final String MARKETING_CONSENT_CHANGED = "marketing_consent_changed";
+    static final String SSO_MEMBER_JOINED = "sso_member_joined";
+
+    public static final String SSO_OUTCOME_JOINED = "joined";
+    public static final String SSO_OUTCOME_REJECTED = "rejected";
 
     @Autowired(required = false)
     private PostHogAnalyticsClient postHog;
 
     private boolean inactive() {
         return postHog == null || !postHog.isActive();
+    }
+
+    /**
+     * Whether an event would actually be sent. For callers that must READ something only to
+     * build an event (a previous value), so that read is skipped when nothing is captured.
+     */
+    public boolean isActive() {
+        return !inactive();
     }
 
     private void capture(Long userId, String event, Map<String, Object> props) {
@@ -233,6 +248,84 @@ public class AuthAnalyticsEmitter {
         putOrg(props, orgId);
         props.put("role", role != null ? role.name() : null);
         capture(userId, INVITATION_ACCEPTED, props);
+    }
+
+    // ── notifications / lifecycle ─────────────────────────────────────────────
+
+    /**
+     * A credit alert was delivered and recorded as sent for this cycle.
+     *
+     * @param level {@code LOW} or {@code EXHAUSTED} (any case), sent lowercased
+     */
+    public void creditAlertSent(Long userId, String organizationId, String level) {
+        capture(userId, CREDIT_ALERT_SENT, buildCreditAlertSentProps(level, organizationId));
+    }
+
+    static Map<String, Object> buildCreditAlertSentProps(String level, String organizationId) {
+        Map<String, Object> props = base();
+        putOrg(props, organizationId);
+        props.put("level", level != null ? level.toLowerCase(java.util.Locale.ROOT) : null);
+        return props;
+    }
+
+    /**
+     * A lifecycle (Resend) event was handed to Resend. Only the event NAME travels, never its
+     * payload nor the recipient address.
+     */
+    public void lifecycleEventSent(Long userId, String lifecycleEvent, boolean delivered) {
+        if (lifecycleEvent == null) return;
+        capture(userId, LIFECYCLE_EVENT_SENT, buildLifecycleEventSentProps(lifecycleEvent, delivered));
+    }
+
+    static Map<String, Object> buildLifecycleEventSentProps(String lifecycleEvent, boolean delivered) {
+        Map<String, Object> props = base();
+        props.put("lifecycle_event", lifecycleEvent);
+        props.put("delivered", delivered);
+        return props;
+    }
+
+    /**
+     * The marketing consent of this user actually changed. {@code source} is omitted: the
+     * onboarding page and the settings page reach the service through the same endpoint,
+     * so the backend cannot tell them apart.
+     */
+    public void marketingConsentChanged(Long userId, boolean consent) {
+        capture(userId, MARKETING_CONSENT_CHANGED, buildMarketingConsentChangedProps(consent));
+    }
+
+    static Map<String, Object> buildMarketingConsentChangedProps(boolean consent) {
+        Map<String, Object> props = base();
+        props.put("consent", consent);
+        return props;
+    }
+
+    // ── SSO ───────────────────────────────────────────────────────────────────
+
+    /**
+     * Outcome of a SAML sign-in against a workspace's SSO connection.
+     *
+     * @param outcome {@code joined} or {@code rejected} (an existing member is not counted:
+     *                the membership check runs per user resolution, not per sign-in)
+     * @param reason  the rejection reason (lowercased enum name), only for {@code rejected}
+     * @param role    the role granted, only for {@code joined}
+     */
+    public void ssoMemberJoined(Long userId, String organizationId, String outcome, String reason,
+                                OrganizationRole role) {
+        capture(userId, SSO_MEMBER_JOINED, buildSsoMemberJoinedProps(organizationId, outcome, reason, role));
+    }
+
+    static Map<String, Object> buildSsoMemberJoinedProps(String organizationId, String outcome, String reason,
+                                                         OrganizationRole role) {
+        Map<String, Object> props = base();
+        putOrg(props, organizationId);
+        props.put("outcome", outcome);
+        if (SSO_OUTCOME_REJECTED.equals(outcome) && reason != null) {
+            props.put("reason", reason);
+        }
+        if (SSO_OUTCOME_JOINED.equals(outcome) && role != null) {
+            props.put("role", role.name().toLowerCase(java.util.Locale.ROOT));
+        }
+        return props;
     }
 
     // ── shared ────────────────────────────────────────────────────────────────

@@ -25,6 +25,14 @@ class ToolAccessControlTest {
         assertThat(denied.orElseThrow()).contains("read-only").contains("execute");
     }
 
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"workflow", "table", "interface", "agent", "file"})
+    @DisplayName("present only switches the user's view, so a read-only agent may use it on every tool that has it")
+    void allowsPresentWhenReadOnly(String category) {
+        assertThat(ToolAccessControl.checkWriteAccess(
+            Map.of("__" + category + "AccessMode__", "read"), category, "present")).isEmpty();
+    }
+
     @Test
     @DisplayName("budgets is a READ, so a read-only agent may ask which caps are nearly spent")
     void allowsTheBudgetsAction() {

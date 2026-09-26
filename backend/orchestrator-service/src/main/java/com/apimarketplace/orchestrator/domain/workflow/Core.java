@@ -125,7 +125,13 @@ public record Core(
     // Common
     Map<String, Object> params,
     // React Flow node ID - passed from frontend plan for step↔node mapping
-    String graphNodeId
+    String graphNodeId,
+    // Numeric / boolean config fields whose plan value is a {{...}} template, by config key then
+    // field name. Kept out of the typed config (Jackson cannot put a template in an int, and used
+    // to drop the WHOLE config for it) and resolved by the node at run time. Derived from the raw
+    // plan on every parse, never serialized: the raw plan JSON remains the source of truth.
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    Map<String, Map<String, String>> deferredScalars
 ) {
 
     // Valid core types
@@ -338,10 +344,24 @@ public record Core(
         // default ("✅ Approve" / "❌ Reject"). Only the displayed button text changes;
         // the approve/reject callback semantics are unaffected.
         String approveLabel,
-        String rejectLabel
+        String rejectLabel,
+        // The workspace destination to use, picked like a credential: a destination id from
+        // channel(action='list'), or "default" for the workspace default. When set it decides
+        // the service, the account and the chat; channel/credentialId/chatId are then ignored.
+        // Blank = the older shape, where the node names a service (and optionally a chat).
+        String linkId
     ) {
+        /** The pre-destination shape, still what older plans and callers build. */
+        public ApprovalDelegation(String channel, Long credentialId, String chatId, String messageTemplate,
+                                  String imageTemplate, List<String> allowedUserIds, String approveLabel,
+                                  String rejectLabel) {
+            this(channel, credentialId, chatId, messageTemplate, imageTemplate, allowedUserIds, approveLabel,
+                    rejectLabel, "");
+        }
+
         public ApprovalDelegation {
             channel = channel == null ? "" : channel.trim().toLowerCase(java.util.Locale.ROOT);
+            linkId = linkId == null ? "" : linkId.trim();
             chatId = chatId == null ? "" : chatId;
             messageTemplate = messageTemplate == null ? "" : messageTemplate;
             imageTemplate = imageTemplate == null ? "" : imageTemplate;
@@ -350,9 +370,9 @@ public record Core(
             rejectLabel = rejectLabel == null ? "" : rejectLabel;
         }
 
-        /** True when the author actually selected a channel (the section is optional). */
+        /** True when the author actually selected a channel or a destination (the section is optional). */
         public boolean isConfigured() {
-            return !channel.isBlank();
+            return !channel.isBlank() || !linkId.isBlank();
         }
     }
 
@@ -389,6 +409,12 @@ public record Core(
         forkOutputs = forkOutputs == null ? null : List.copyOf(forkOutputs);
         optionChoices = optionChoices == null ? null : List.copyOf(optionChoices);
         params = params == null ? Map.of() : Map.copyOf(params);
+        deferredScalars = deferredScalars == null ? Map.of() : Map.copyOf(deferredScalars);
+    }
+
+    /** The constructor before {@link #deferredScalars}: a core with no templated scalar. */
+    public Core(String id, String type, Map<String, Object> position, String label, List<DecisionCondition> decisionConditions, String switchExpression, List<SwitchCase> switchCases, String loopCondition, Integer maxIterations, String strategy, String list, Integer maxItems, String splitStrategy, List<ForkOutput> forkOutputs, TransformConfig transformConfig, WaitConfig waitConfig, DownloadConfig downloadConfig, ResponseConfig responseConfig, AggregateConfig aggregateConfig, List<OptionChoice> optionChoices, HttpRequestConfig httpRequestConfig, ApprovalConfig approvalConfig, DataInputConfig dataInputConfig, FilterConfig filterConfig, SortConfig sortConfig, LimitConfig limitConfig, RemoveDuplicatesConfig removeDuplicatesConfig, SummarizeConfig summarizeConfig, DateTimeConfig dateTimeConfig, CryptoJwtConfig cryptoJwtConfig, XmlConfig xmlConfig, CompressionConfig compressionConfig, RssConfig rssConfig, ConvertToFileConfig convertToFileConfig, ExtractFromFileConfig extractFromFileConfig, CompareDatasetsConfig compareDatasetsConfig, SubWorkflowConfig subWorkflowConfig, RespondToWebhookConfig respondToWebhookConfig, SendEmailConfig sendEmailConfig, EmailInboxConfig emailInboxConfig, CodeConfig codeConfig, SetConfig setConfig, HtmlExtractConfig htmlExtractConfig, TaskConfig taskConfig, StopOnErrorConfig stopOnErrorConfig, SshConfig sshConfig, SftpConfig sftpConfig, DatabaseConfig databaseConfig, Map<String, Object> params, String graphNodeId) {
+        this(id, type, position, label, decisionConditions, switchExpression, switchCases, loopCondition, maxIterations, strategy, list, maxItems, splitStrategy, forkOutputs, transformConfig, waitConfig, downloadConfig, responseConfig, aggregateConfig, optionChoices, httpRequestConfig, approvalConfig, dataInputConfig, filterConfig, sortConfig, limitConfig, removeDuplicatesConfig, summarizeConfig, dateTimeConfig, cryptoJwtConfig, xmlConfig, compressionConfig, rssConfig, convertToFileConfig, extractFromFileConfig, compareDatasetsConfig, subWorkflowConfig, respondToWebhookConfig, sendEmailConfig, emailInboxConfig, codeConfig, setConfig, htmlExtractConfig, taskConfig, stopOnErrorConfig, sshConfig, sftpConfig, databaseConfig, params, graphNodeId, Map.of());
     }
 
     /**
@@ -923,8 +949,13 @@ public record Core(
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record CryptoJwtConfig(String operation, String algorithm, String value, String key,
-                                   String secret, String token, Map<String, Object> payload,
+                                   String secret, String token, Object payload,
                                    String encoding) {
+        // `payload` is an Object because two writers disagree on its shape and both are
+        // legitimate: an agent sends a JSON object, the builder form sends the TEXT the author
+        // typed (JSON, or one {{reference}} to an object). Typed as a Map, every form-saved
+        // payload made Jackson reject the whole cryptoJwt block, and the node silently ran its
+        // defaults (hash of nothing). CryptoJwtNode resolves it and normalizes it to a Map.
         public CryptoJwtConfig {
             operation = operation == null ? "hash" : operation;
             // valid: hash, hmacSign, hmacVerify, encrypt, decrypt, jwtCreate, jwtDecode, jwtVerify,

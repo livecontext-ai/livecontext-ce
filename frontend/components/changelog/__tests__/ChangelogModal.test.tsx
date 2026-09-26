@@ -5,6 +5,8 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockUseChangelog = vi.hoisted(() => vi.fn());
+const mockTrack = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/analytics/analytics', () => ({ track: (...a: unknown[]) => mockTrack(...a) }));
 
 vi.mock('next-intl', () => ({
   useTranslations: () => (key: string) => {
@@ -77,6 +79,39 @@ describe('ChangelogModal', () => {
     // never reaches the close path, and the panel would greet them again on every load forever.
     expect(screen.getByText('See what changed')).toBeInTheDocument();
     expect(markSeen).toHaveBeenCalled();
+  });
+
+  it('reports changelog_shown exactly once per entry, even under StrictMode', () => {
+    mockTrack.mockReset();
+    render(<React.StrictMode><ChangelogModal /></React.StrictMode>);
+    settle();
+
+    expect(mockTrack.mock.calls.filter(([e]) => e === 'changelog_shown'))
+      .toEqual([['changelog_shown', { entry_key: ENTRY.key, has_media: true }]]);
+  });
+
+  it('reports how the panel was closed: dismiss or learn_more', () => {
+    mockTrack.mockReset();
+    const first = render(<ChangelogModal />);
+    settle();
+    fireEvent.click(screen.getByTestId('changelog-dismiss'));
+    expect(mockTrack).toHaveBeenCalledWith('changelog_closed', { entry_key: ENTRY.key, has_media: true, action: 'dismiss' });
+    first.unmount();
+
+    mockTrack.mockReset();
+    render(<ChangelogModal />);
+    settle();
+    fireEvent.click(screen.getByText('See all updates'));
+    expect(mockTrack).toHaveBeenCalledWith('changelog_closed', { entry_key: ENTRY.key, has_media: true, action: 'learn_more' });
+  });
+
+  it('reports nothing for an entry that is never shown', () => {
+    mockTrack.mockReset();
+    mockUseChangelog.mockReturnValue({ entry: ENTRY, decision: 'seal', markSeen, isAvailable: true, isLoading: false });
+    render(<ChangelogModal />);
+    settle();
+
+    expect(mockTrack).not.toHaveBeenCalled();
   });
 
   it('acknowledges the entry when dismissed, so it never opens again', () => {

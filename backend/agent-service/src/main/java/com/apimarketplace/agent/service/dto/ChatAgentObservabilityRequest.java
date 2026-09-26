@@ -84,8 +84,39 @@ public record ChatAgentObservabilityRequest(
 
     // V506: whose key the execution ran on (OWN_KEY / PLATFORM), read off the execution
     // response's metrics by conversation-service; null = unpinned.
-    String keyRoute
+    String keyRoute,
+
+    // The chat turn ran on the admin replacement of a disabled model (read off the execution
+    // response's metrics by conversation-service); null = not reported.
+    Boolean modelReplaced,
+    // The disabled model id the turn was configured with; sent only when modelReplaced is true.
+    String replacedModel
 ) {
+    /** V506 shape (key route, no model replacement report). */
+    public ChatAgentObservabilityRequest(
+            String agentEntityId, String provider, String model, Double temperature,
+            Integer maxTokens, Integer maxIterations, boolean success, String stopReason,
+            String budgetScope, String errorMessage, long durationMs, int iterationCount,
+            int totalToolCalls, int successfulToolCalls, int failedToolCalls, int messageCount,
+            int totalPromptTokens, int totalCompletionTokens, int totalTokens,
+            Integer totalCacheCreationTokens, Integer totalCacheReadTokens, Integer totalCachedTokens,
+            Integer totalReasoningTokens, String toolSequence, List<String> distinctTools,
+            boolean loopDetected, String loopType, String loopToolName, String systemPrompt,
+            String userPrompt, String conversationId, String source, String taskId, String executionId,
+            List<ToolResultDto> toolResults, List<MessageDto> conversationHistory,
+            List<UsageInfoDto> usagePerIteration, List<Long> iterationDurations,
+            List<String> finishReasonsPerIteration, List<Integer> toolCallsPerIteration,
+            String keyRoute) {
+        this(agentEntityId, provider, model, temperature, maxTokens, maxIterations, success, stopReason,
+                budgetScope, errorMessage, durationMs, iterationCount, totalToolCalls, successfulToolCalls,
+                failedToolCalls, messageCount, totalPromptTokens, totalCompletionTokens, totalTokens,
+                totalCacheCreationTokens, totalCacheReadTokens, totalCachedTokens, totalReasoningTokens,
+                toolSequence, distinctTools, loopDetected, loopType, loopToolName, systemPrompt, userPrompt,
+                conversationId, source, taskId, executionId, toolResults, conversationHistory,
+                usagePerIteration, iterationDurations, finishReasonsPerIteration, toolCallsPerIteration,
+                keyRoute, null, null);
+    }
+
     /** Pre-V506 shape (no key route = unpinned). */
     public ChatAgentObservabilityRequest(
             String agentEntityId, String provider, String model, Double temperature,
@@ -119,7 +150,7 @@ public record ChatAgentObservabilityRequest(
                 totalCachedTokens, totalReasoningTokens, toolSequence, distinctTools, loopDetected, loopType,
                 loopToolName, systemPrompt, userPrompt, conversationId, source, taskId, executionId,
                 toolResults, conversationHistory, usagePerIteration, iterationDurations,
-                finishReasonsPerIteration, toolCallsPerIteration, keyRoute);
+                finishReasonsPerIteration, toolCallsPerIteration, keyRoute, modelReplaced, replacedModel);
     }
 
     public record ToolResultDto(

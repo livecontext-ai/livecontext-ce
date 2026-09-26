@@ -1,5 +1,4 @@
 import * as React from 'react';
-import * as ReactDOM from 'react-dom';
 import type { Node } from 'reactflow';
 import type { BuilderNodeData, FieldType } from '../../types';
 import { getFieldTypeColor } from '../../types';
@@ -7,9 +6,9 @@ import { LazyStructureTree } from './LazyStructureTree';
 import { useMcpToolDetails } from '../../hooks/useMcpData';
 import { normalizeLabel } from '../../utils/labelNormalizer';
 import { useTranslations } from 'next-intl';
-import { RefreshCcw, Info, X, ArrowLeft } from 'lucide-react';
+import { RefreshCcw, ArrowLeft } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { NodeIcon, getIconSlug } from '../nodes/shared';
-import { usePopoverPosition } from '../../hooks/ui/usePopoverPosition';
 import { nodeRegistry } from '../../registry/nodeRegistry';
 import { extractFormFields, extractFormFieldsByAction } from '../../utils/interfaceHtmlUtils';
 
@@ -27,8 +26,6 @@ interface SourceNodeInspectorProps {
 // Info tooltip component for loop nodes
 const LoopInfoTooltip = ({ isIterationInput }: { isIterationInput: boolean }) => {
   const t = useTranslations('workflowBuilder.inspector');
-  const [isOpen, setIsOpen] = React.useState(false);
-  const { buttonRef, popoverStyle } = usePopoverPosition(isOpen, 256);
 
   const title = isIterationInput ? t('previousIteration') : t('loopOutput');
   const explanation = isIterationInput
@@ -36,52 +33,12 @@ const LoopInfoTooltip = ({ isIterationInput }: { isIterationInput: boolean }) =>
     : t('loopOutputExplanation');
 
   return (
-    <div className="relative inline-flex ml-1">
-      <button
-        ref={buttonRef}
-        onClick={(e) => {
-          e.stopPropagation();
-          setIsOpen(!isOpen);
-        }}
-        className="p-0.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-        title={t('clickForInfo')}
-      >
-        <Info className="h-3 w-3 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300" />
-      </button>
-      {isOpen && typeof document !== 'undefined' && ReactDOM.createPortal(
-        <>
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 z-[9998]"
-            onClick={() => setIsOpen(false)}
-          />
-          {/* Tooltip popup */}
-          <div
-            className="fixed z-[9999] p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700"
-            style={popoverStyle}
-          >
-            <div className="flex items-start justify-between gap-2 mb-2">
-              <span className="font-medium text-sm text-slate-700 dark:text-slate-200">
-                {title}
-              </span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsOpen(false);
-                }}
-                className="p-0.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700"
-              >
-                <X className="h-3.5 w-3.5 text-slate-400" />
-              </button>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-              {explanation}
-            </p>
-          </div>
-        </>,
-        document.body
-      )}
-    </div>
+    <InfoPopover label={title} size="sm" side="bottom" align="end" triggerClassName="ml-1" contentClassName="w-[256px] p-3">
+      <p className="mb-2 font-medium text-sm text-slate-700 dark:text-slate-200">{title}</p>
+      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+        {explanation}
+      </p>
+    </InfoPopover>
   );
 };
 

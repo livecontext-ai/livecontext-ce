@@ -112,7 +112,8 @@ public class AgentConfigResolver {
             dto.getLoopIdenticalStop(),
             dto.getLoopConsecutiveStop(),
             dto.getReasoningEffort(),
-            dto.getInactivityTimeout());
+            dto.getInactivityTimeout(),
+            dto.getRequireToolAuthorization());
 
         return new ResolveResult(merged, overrides);
     }

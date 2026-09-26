@@ -158,6 +158,12 @@ interface ApplicationTabContentProps {
    * application's sound on. Omit it wherever nobody owns the volume.
    */
   onToggleMediaMuted?: () => void;
+  /**
+   * The embedder's settings entry (the application page's cog). Rendered as the
+   * LAST control of the toolbar, so settings live behind the same central toggle
+   * as every other application control instead of floating in a corner.
+   */
+  settingsControl?: React.ReactNode;
 }
 
 type ResolvedVariablePagination = {
@@ -176,7 +182,7 @@ function isExplicitFalse(value: unknown): boolean {
   return value === false || value === 'false';
 }
 
-export function ApplicationTabContent({ config, runId, workflowId, runSurfaceId, onAction, carouselControls, isExpanded: controlledExpanded, onExpandedChange, toolbarOpen: controlledToolbarOpen, onToolbarOpenChange, viewingEpoch: controlledViewingEpoch, onViewingEpochChange, openOnLatestEpoch = false, previewMode = false, templateSource, mediaMuted, onToggleMediaMuted }: ApplicationTabContentProps) {
+export function ApplicationTabContent({ config, runId, workflowId, runSurfaceId, onAction, carouselControls, isExpanded: controlledExpanded, onExpandedChange, toolbarOpen: controlledToolbarOpen, onToolbarOpenChange, viewingEpoch: controlledViewingEpoch, onViewingEpochChange, openOnLatestEpoch = false, previewMode = false, templateSource, mediaMuted, onToggleMediaMuted, settingsControl }: ApplicationTabContentProps) {
   const t = useTranslations('marketplace');
   const tActions = useTranslations('actions');
   const tCanvas = useTranslations('workflowBuilder.canvas');
@@ -1712,11 +1718,11 @@ export function ApplicationTabContent({ config, runId, workflowId, runSurfaceId,
     ) : null;
 
     if (!variablePaginationControl && !launchButton && !epochSelector && !continueButton
-        && !templateValuesButton && !resetDataButton && !soundButton && !stopButton) {
+        && !templateValuesButton && !resetDataButton && !soundButton && !stopButton && !settingsControl) {
       return undefined;
     }
-    return <>{soundButton}{variablePaginationControl}{templateValuesButton}{resetDataButton}{launchButton}{stopButton}{epochSelector}{continueButton}</>;
-  }, [canStopRun, runActions.status, runActions.pending, runActions.failed, runActions.perform, mediaMuted, onToggleMediaMuted, hasMediaAudio, tSound, totalEpochs, epochTimestamps, sortedEpochs, maxDuration, viewingEpoch, showsAllEpochs, currentDisplayEpoch, displayedEpochStatus, epochDropdownOpen, handleViewEpoch, handleEpochPickedByUser, runId, isAwaitingSignal, config.nodeId, isContinuing, isCurrentItemPending, handleDefaultContinue, t, tRun, tRoot, currentItemTriple, pendingSignalCount, launchable, hasPanelTriggers, hasAnyLaunchable, handleLaunchTrigger, isLaunching, tActions, previewMode, activeVariablePage, variablePaginationItems, handleVariablePrevious, handleVariableNext, tCanvas, templateActionsAvailable, canResetData, handleLoadTemplateValues, isLoadingTemplateValues, handleResetData, isResettingData]);
+    return <>{soundButton}{variablePaginationControl}{templateValuesButton}{resetDataButton}{launchButton}{stopButton}{epochSelector}{continueButton}{settingsControl}</>;
+  }, [settingsControl, canStopRun, runActions.status, runActions.pending, runActions.failed, runActions.perform, mediaMuted, onToggleMediaMuted, hasMediaAudio, tSound, totalEpochs, epochTimestamps, sortedEpochs, maxDuration, viewingEpoch, showsAllEpochs, currentDisplayEpoch, displayedEpochStatus, epochDropdownOpen, handleViewEpoch, handleEpochPickedByUser, runId, isAwaitingSignal, config.nodeId, isContinuing, isCurrentItemPending, handleDefaultContinue, t, tRun, tRoot, currentItemTriple, pendingSignalCount, launchable, hasPanelTriggers, hasAnyLaunchable, handleLaunchTrigger, isLaunching, tActions, previewMode, activeVariablePage, variablePaginationItems, handleVariablePrevious, handleVariableNext, tCanvas, templateActionsAvailable, canResetData, handleLoadTemplateValues, isLoadingTemplateValues, handleResetData, isResettingData]);
 
   // ── The interface's display format - scale-to-fit virtual viewport ──
   // When the INTERFACE declares a format (preset name or "WxH"), the iframe renders inside a
@@ -1946,7 +1952,7 @@ export function ApplicationTabContent({ config, runId, workflowId, runSurfaceId,
         </div>
 
         {/* Floating pill toolbar - bottom center (collapsed/expanded toggle) */}
-        {(hasActions || carouselControls) && (
+        {(hasActions || carouselControls || settingsControl) && (
           <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[10000]">
             {toolbarOpen ? (
               <InterfaceToolbar
@@ -2089,7 +2095,7 @@ export function ApplicationTabContent({ config, runId, workflowId, runSurfaceId,
           view is its own `fixed inset-0` portal to document.body, so it
           overlays the whole viewport (escaping the marketplace shell) and
           `isExpanded` toggles through the carousel-lifted state. */}
-      {(hasActions || carouselControls) && (() => {
+      {(hasActions || carouselControls || settingsControl) && (() => {
         const toolbarBlock = toolbarOpen ? (
           <InterfaceToolbar
             currentPage={currentPage}

@@ -223,4 +223,72 @@ class HtmlExtractNodeTest {
         // a key present with an empty value reads as a setting the author made.
         assertFalse(params.containsKey("rootSelector"));
     }
+
+    @Test
+    @DisplayName("a {{...}} defaultValue is resolved when the selector matches nothing, not inserted as its text")
+    @SuppressWarnings("unchecked")
+    void resolvesTemplatedDefaultValue() {
+        String html = "<html><body><p>no price here</p></body></html>";
+        Core.HtmlExtractConfig config = new Core.HtmlExtractConfig(
+            "{{html}}", "single", null,
+            List.of(new Core.HtmlExtractField("price", ".price", "text", "none", false, "{{trigger:in.output.fallback}}")),
+            true
+        );
+        HtmlExtractNode node = new HtmlExtractNode("core:html_extract", config);
+        node.setTemplateAdapter(mockTemplateAdapter);
+        when(mockTemplateAdapter.resolveTemplates(anyMap(), any())).thenAnswer(invocation -> {
+            Map<String, Object> in = invocation.getArgument(0);
+            return in.containsKey("__html__") ? Map.of("__html__", html) : Map.of("__v__", "N/A");
+        });
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertTrue(result.isSuccess());
+        List<Map<String, Object>> items = (List<Map<String, Object>>) result.output().get("items");
+        assertEquals("N/A", items.get(0).get("price"));
+    }
+
+    @Test
+    @DisplayName("a failure AFTER the source resolved reports the resolved HTML, not the expression")
+    @SuppressWarnings("unchecked")
+    void failureReportsResolvedSourceHtml() {
+        String html = "<html><body><div>x</div></body></html>";
+        Core.HtmlExtractConfig config = new Core.HtmlExtractConfig(
+            "{{core:fetch.output.body}}", "multiple", "div[",
+            List.of(new Core.HtmlExtractField("t", "div", "text", "none", false, null)),
+            true
+        );
+        HtmlExtractNode node = buildNode(config, html);
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertFalse(result.isSuccess(), "an unparseable root selector must fail the node");
+        Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+        assertEquals(html, params.get("sourceHtml"));
+    }
+
+    @Test
+    @DisplayName("a {{...}} cleanWhitespace runs with the resolved boolean, not the typed default false")
+    @SuppressWarnings("unchecked")
+    void templatedCleanWhitespaceIsResolved() {
+        String html = "<html><body><h1>Title</h1></body></html>";
+        Core.HtmlExtractConfig config = new Core.HtmlExtractConfig(
+            "{{html}}", "single", null,
+            List.of(new Core.HtmlExtractField("title", "h1", "text", "none", false, null)),
+            false
+        );
+        HtmlExtractNode node = new HtmlExtractNode("core:html_extract", config);
+        node.setTemplateAdapter(mockTemplateAdapter);
+        node.setDeferredScalars(Map.of("htmlExtract", Map.of("cleanWhitespace", "{{core:x.output.n}}")));
+        when(mockTemplateAdapter.resolveTemplates(anyMap(), any())).thenAnswer(invocation -> {
+            Map<String, Object> in = invocation.getArgument(0);
+            return in.containsKey("__html__") ? Map.of("__html__", html) : Map.of("__v__", true);
+        });
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+        Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+        assertEquals(true, params.get("cleanWhitespace"));
+    }
 }

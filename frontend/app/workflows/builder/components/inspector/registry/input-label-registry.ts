@@ -34,6 +34,7 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
     requiredApprovals: 'Required Approvals',
     timeoutMs: 'Timeout (ms)',
     contextTemplate: 'Context',
+    contextResolved: 'Context (resolved)',
     delegation: 'Delegation',
     continuationMode: 'On Approval',
   },
@@ -140,6 +141,7 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
   },
   'public_link': {
     file: 'File',
+    fileResolved: 'File (resolved)',
     ttl_minutes: 'TTL (minutes)',
     disposition: 'Disposition',
   },
@@ -273,6 +275,7 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
   'sub_workflow': {
     workflowId: 'Workflow',
     inputMapping: 'Input Mapping',
+    inputMappingResolved: 'Input Mapping (resolved)',
     inputs: 'Inputs',
     timeoutSeconds: 'Timeout (s)',
     maxDepth: 'Max Depth',
@@ -559,6 +562,9 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
  */
 const CROSS_NODE_INPUT_LABELS: Record<string, string> = {
   paramsTruncated: 'Truncated',
+  // A trigger whose params could not be resolved still fires (its payload and epoch stand) and
+  // says why here, instead of reporting the raw plan map as if it were what it ran with.
+  paramsResolutionError: 'Resolution error',
   // The signal bookkeeping a PARKED node's row carries beside its own parameters
   // (SignalResumeService.buildSignalInputData). It belongs to no node type either: an
   // interface, an approval and a wait all get these five when their signal resolves, and

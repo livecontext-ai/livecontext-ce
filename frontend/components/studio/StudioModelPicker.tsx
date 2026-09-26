@@ -4,10 +4,7 @@ import * as React from 'react';
 import { ArrowLeft, Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { Popover, PopoverTrigger } from '@/components/ui/popover';
-// A menu opened from the studio is drawn on the studio's own ground: it renders in a portal on
-// the document, so it cannot inherit the surface's tokens and has to be handed them.
-import { StudioPopoverContent } from '@/components/studio/StudioPopoverContent';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 // The app's own menu surface and row. PopoverContent's stock `bg-popover` is a token this theme
 // does not define, so a menu built on the bare primitive renders with NO background.
 import { menuItemClass, menuSurfaceClass } from '@/components/ui/menu';
@@ -255,7 +252,7 @@ export function StudioModelPicker({
         </Button>
       </PopoverTrigger>
 
-      <StudioPopoverContent
+      <PopoverContent
         align="end"
         className={`${menuSurfaceClass} max-h-[60vh] w-80 overflow-y-auto`}
         // Three doors, because Radix dismisses on three different events and a form the reader is
@@ -394,7 +391,7 @@ export function StudioModelPicker({
             )}
           </>
         )}
-      </StudioPopoverContent>
+      </PopoverContent>
     </Popover>
   );
 }

@@ -214,16 +214,11 @@ public class WorkflowBuilderLoader {
                         log.info("♻️ Reusing existing session {} for workflow {} in conversation {}",
                                 existing.getSessionId(), workflow.getId(), conversationId);
 
-                        // Refresh snapshot from DB (may have changed via frontend save)
-                        if (workflow.getPlan() != null && !workflow.getPlan().isEmpty()) {
-                            try {
-                                @SuppressWarnings("unchecked")
-                                Map<String, Object> snapshot = objectMapper.convertValue(
-                                        workflow.getPlan(), LinkedHashMap.class);
-                                existing.setLoadedPlanSnapshot(snapshot);
-                            } catch (Exception e) {
-                                log.warn("Failed to update plan snapshot on reuse: {}", e.getMessage());
-                            }
+                        // The canvas may have saved since this session last wrote: rebuild
+                        // from the stored plan then. Refreshing only the baseline here would
+                        // hide that save from the check and let the next auto-save undo it.
+                        if (!resyncWithStoredPlan(existing) && existing.getLoadedPlanSnapshot() == null) {
+                            recordStoredPlan(existing, workflow.getPlan());
                         }
 
                         // Refresh Redis TTL and indices
@@ -262,16 +257,9 @@ public class WorkflowBuilderLoader {
             // Convert workflow to session with conversation isolation
             WorkflowBuilderSession session = convertWorkflowToSession(workflow, tenantId, conversationId);
 
-            // Store plan snapshot in session memory for reference (NO DB write)
+            // Baseline for resyncWithStoredPlan (NO DB write)
             if (workflow.getPlan() != null && !workflow.getPlan().isEmpty()) {
-                try {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> snapshot = objectMapper.convertValue(
-                            workflow.getPlan(), LinkedHashMap.class);
-                    session.setLoadedPlanSnapshot(snapshot);
-                } catch (Exception e) {
-                    log.warn("Failed to store plan snapshot for workflow {}: {}", workflow.getId(), e.getMessage());
-                }
+                recordStoredPlan(session, workflow.getPlan());
             }
 
             sessionStore.save(session);
@@ -317,6 +305,101 @@ public class WorkflowBuilderLoader {
     }
 
     /**
+     * Rebuilds the session from the stored plan when that plan was saved by someone
+     * else since this session last read or wrote it.
+     *
+     * <p>The session keeps its own copy of the workflow and every auto-save writes that
+     * WHOLE copy to {@code workflows.plan}. Without this check, a save made on the
+     * builder canvas between two agent actions (a node moved, a parameter edited) was
+     * silently put back to the session's older copy by the agent's next action.
+     *
+     * <p>What makes the rebuild safe is that every successful modifying action is
+     * auto-saved, so what the session holds is already in the stored plan unless someone
+     * else overwrote it. Two known exceptions lose session-only state: an action that
+     * changed the session and then reported failure (it is never auto-saved), and the
+     * undo/redo history, which a rebuild clears. The caller tells the agent its session
+     * was reloaded so neither goes unexplained. A session with no baseline (never loaded
+     * from or saved to the database) is left alone.
+     *
+     * @return true when the session was rebuilt from the stored plan
+     */
+    public boolean resyncWithStoredPlan(WorkflowBuilderSession session) {
+        String loadedId = session.getLoadedWorkflowId();
+        Map<String, Object> baseline = session.getLoadedPlanSnapshot();
+        if (loadedId == null || baseline == null) {
+            return false;
+        }
+        UUID workflowId;
+        try {
+            workflowId = UUID.fromString(loadedId);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+        Optional<WorkflowEntity> workflowOpt = workflowRepository.findById(workflowId);
+        if (workflowOpt.isEmpty()) {
+            return false;
+        }
+        WorkflowEntity workflow = workflowOpt.get();
+        Map<String, Object> stored = workflow.getPlan();
+        if (stored == null || stored.isEmpty() || samePlan(baseline, stored)) {
+            return false;
+        }
+        if (!session.isBaselineTracksWrites()) {
+            // A session stored before baselines followed its writes: the difference is most
+            // likely its own auto-saves. Adopt the stored plan as the baseline, no rebuild.
+            recordStoredPlan(session, stored);
+            sessionStore.save(session);
+            return false;
+        }
+
+        WorkflowBuilderSession fresh = convertWorkflowToSession(
+                workflow, session.getTenantId(), session.getConversationId());
+        session.adoptPlanContentFrom(fresh);
+        recordStoredPlan(session, stored);
+        sessionStore.save(session);
+        log.info("Workflow {} was saved outside session {} since its last write: session rebuilt from the stored plan",
+                workflowId, session.getSessionId());
+        return true;
+    }
+
+    /**
+     * Records {@code storedPlan} as the plan the session last read or wrote, the
+     * baseline {@link #resyncWithStoredPlan} compares against. Stored as a deep copy so
+     * later in-memory edits to the session cannot move the baseline with them.
+     */
+    public void recordStoredPlan(WorkflowBuilderSession session, Map<String, Object> storedPlan) {
+        if (storedPlan == null) {
+            return;
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> copy = objectMapper.readValue(
+                    objectMapper.writeValueAsBytes(storedPlan), LinkedHashMap.class);
+            session.setLoadedPlanSnapshot(copy);
+            session.setBaselineTracksWrites(true);
+        } catch (Exception e) {
+            log.warn("Could not record the stored plan baseline for session {}: {}",
+                    session.getSessionId(), e.getMessage());
+        }
+    }
+
+    /**
+     * Compares two plans as JSON documents: key order and the Java number type a map
+     * happens to hold (Integer after a database read, Long or Double after an in-memory
+     * build) must not read as a change.
+     */
+    private boolean samePlan(Map<String, Object> a, Map<String, Object> b) {
+        try {
+            return objectMapper.readTree(objectMapper.writeValueAsBytes(a))
+                    .equals(objectMapper.readTree(objectMapper.writeValueAsBytes(b)));
+        } catch (Exception e) {
+            // Unreadable either way: treat as unchanged rather than rebuild on noise.
+            log.warn("Could not compare the stored plan with the session baseline: {}", e.getMessage());
+            return true;
+        }
+    }
+
+    /**
      * Convert a WorkflowEntity to a WorkflowBuilderSession for editing.
      */
     @SuppressWarnings("unchecked")
@@ -339,6 +422,12 @@ public class WorkflowBuilderLoader {
         if (plan == null) {
             return session;
         }
+
+        // The canvas's reading direction, which the session writes back on every save. It
+        // is plan content like the nodes: dropping it made every agent edit re-open a
+        // top-to-bottom workflow left to right, since positions without a direction are
+        // read as the historical horizontal layout.
+        session.setLayoutDirection(WorkflowBuilderSession.validLayoutDirection(plan.get("layoutDirection")));
 
         // Load interfaces first (so they're available when linking)
         // Deep-normalize variable references to fix old plans with {{mcp:Label With Spaces.output...}}
@@ -497,6 +586,15 @@ public class WorkflowBuilderLoader {
                 String nodeId = computeNodeId(tableCopy, LabelNormalizer.PREFIX_TABLE);
                 // Sync interfaceIds to linkedInterfaces map
                 syncInterfaceIds(session, nodeId, tableCopy);
+            }
+        }
+
+        // Load sticky notes. The session writes its notes back on every save, so a plan
+        // loaded without them lost every note of the workflow on the first agent edit.
+        List<Map<String, Object>> notes = (List<Map<String, Object>>) plan.get("notes");
+        if (notes != null) {
+            for (Map<String, Object> note : notes) {
+                session.getNotes().add(new LinkedHashMap<>(note));
             }
         }
 
@@ -785,6 +883,7 @@ public class WorkflowBuilderLoader {
 
             // Keep session alive after save - user may continue editing
             session.setLoadedWorkflowId(savedId);
+            recordStoredPlan(session, saveResult.getWorkflow().getPlan());
             sessionStore.save(session);
 
             Map<String, Object> result = new LinkedHashMap<>();
@@ -1235,7 +1334,7 @@ public class WorkflowBuilderLoader {
                     ? ((Number) dsIdObj).longValue()
                     : Long.parseLong(dsIdObj.toString());
 
-                DataSourceDto ds = dataSourceClient.getDataSource(dsId, session.getTenantId());
+                DataSourceDto ds = dataSourceClient.getDataSource(dsId, session.getTenantId(), session.getOrgId());
                 if (ds != null) {
                     outputs.put("id", "string");
                     referenceSyntax.put("id", "{{" + nodeId + ".output.id}}");

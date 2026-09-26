@@ -61,12 +61,10 @@ function read(messages: any, path: string): unknown {
 /** Message paths under `pricing` that the FAQ and the plan comparison resolve. */
 const REQUIRED_PATHS = [
   'compare.dimensions.creditsTooltip',
-  // The other three "i" that answer "what does a credit buy". They say it in
-  // the same words and with the same figures, so they belong to the same
-  // parity, placeholder and punctuation sweeps as the one above.
-  'compare.dimensions.aiCreditsTooltip',
+  // The other "i" that answers "what does a credit buy". It says it in the same
+  // words and with the same figures, so it belongs to the same parity,
+  // placeholder and punctuation sweeps as the one above.
   'planCards.features.creditsFreeTooltip',
-  'planCards.features.aiCreditsFreeTooltip',
   `faq.${CREDIT_EXAMPLES_FAQ_KEY}.examplesCaption`,
   ...CREDIT_EXAMPLES.flatMap((example) => [
     `faq.${CREDIT_EXAMPLES_FAQ_KEY}.examples.${example.id}.count`,
@@ -124,7 +122,7 @@ describe('credit examples', () => {
       // them: the only multiples of 5 on offer were 5 (understating the pack by 45%,
       // which is a different claim rather than an estimate) and 10 (which the pack did
       // not cover). Since the page moved to a lightweight basis on 2026-09-21 an agent
-      // conversation is ~55 credits and a pack covers 90, so every count is comfortably
+      // conversation is ~40 credits and a pack covers 125, so every count is comfortably
       // above ten and no example needs the hatch. A margin move or a dearer basis can
       // put one back under ten, which is why it stays.
       const roundEnough = example.perEntryPack % 5 === 0 || example.perEntryPack < 10;
@@ -193,7 +191,7 @@ describe('credit-to-conversation copy', () => {
   });
 
   /**
-   * The four pricing "i" that price a unit of work, and the three model-picker
+   * The two pricing "i" that price a unit of work, and the three model-picker
    * ones. They are the same sentence in two places: "about N credits for <a
    * unit>, an estimate from real usage". The figure is bolded with the `**`
    * marker (see lib/utils/boldMarkup) because it is the one thing a reader is
@@ -201,9 +199,7 @@ describe('credit-to-conversation copy', () => {
    */
   const MARKED_TOOLTIPS = [
     ['pricing', 'compare.dimensions.creditsTooltip'],
-    ['pricing', 'compare.dimensions.aiCreditsTooltip'],
     ['pricing', 'planCards.features.creditsFreeTooltip'],
-    ['pricing', 'planCards.features.aiCreditsFreeTooltip'],
     ['modelInfo', 'creditEstimateTooltip.chatConversation'],
     ['modelInfo', 'creditEstimateTooltip.guardrailCheck'],
     ['modelInfo', 'creditEstimateTooltip.classifyStep'],
@@ -316,45 +312,34 @@ describe('credit-to-conversation copy', () => {
     expect(stale).toEqual([]);
   });
 
-  it.each(Object.keys(LOCALES))('%s says which pot the free plan\'s comparison figure is', (locale) => {
-    // The comparison table's "Monthly credits" row carries ONE label and ONE tooltip for
-    // all five columns (plan-comparison.ts declares a single scale row), and that tooltip
-    // prices a short agent exchange, which on FREE the monthly bucket refuses. The CELL
-    // is therefore the only place that can say which pot the Free figure belongs to, and
-    // the plan card two clicks away already says "workflow credits" on its own line.
-    //
-    // Asserted as a SHAPE, because "workflows" is a different word in every locale: the
-    // cell must carry a parenthesised qualifier beside the figure. The English one is
-    // then checked for the word itself, so the shape rule cannot be satisfied by a
-    // qualifier that says something else entirely.
+  it.each(Object.keys(LOCALES))('%s states the free plan\'s comparison figure without a workflow-only qualifier', (locale) => {
+    // The Free monthly credits are ONE pool that pays for workflows and for chat on the
+    // free-tier models. The cell used to carry a "(workflows)" qualifier from the time
+    // the pool was workflow-only; left in place it would tell a reader chat is not paid
+    // from it. Asserted as a SHAPE (no parenthesised qualifier), since the word differs
+    // in every locale.
     const cell = String(read((LOCALES[locale] as any)?.pricing ?? {}, 'compare.values.creditsFree'));
-    expect(cell, `${locale}: the free credits cell names no pot`).toMatch(/[(（].+[)）]/);
-    if (locale === 'en') expect(cell.toLowerCase()).toContain('workflow');
+    expect(cell, `${locale}: the free credits cell still qualifies its pot`).not.toMatch(/[(（].+[)）]/);
+    expect(cell).toMatch(/\d/);
   });
 
-  it.each(Object.keys(LOCALES))('%s prices each free-plan pot with a debit that pot can fund', (locale) => {
-    // The Free plan shows two lines and they fund DIFFERENT SOURCE TYPES, which is a
-    // backend rule and not a presentation choice: CreditService restricts the monthly
-    // bucket to WORKFLOW_NODE / WORKFLOW_NODE_PROMO, while a chat turn, an agent turn
-    // and a classify step all draw the separate AI allowance, and the flat-cost add-ons
-    // draw PAYG.
-    //
-    // So the unit a tooltip quotes is not a wording choice either. This card used to
-    // price the monthly pot with a classification step, which on FREE that pot REFUSES:
-    // the sentence read as a promise the ledger would not keep. Each "i" now quotes a
-    // unit its own pot actually pays for, and the LLM units are pinned OUT of the
-    // workflow one so the mistake cannot come back under a different placeholder.
+  it.each(Object.keys(LOCALES))('%s prices the free-plan pool with both units it funds', (locale) => {
+    // The Free pool funds WORKFLOW_NODE and chat/agent turns on free-tier models
+    // (CreditService.subBucketEligible), so its tooltip prices one of each: a workflow
+    // node and a short agent exchange. The other LLM units (a classify step, a plain
+    // Q&A, an agent build conversation) are the paid tooltip's vocabulary and stay out,
+    // so the Free line cannot drift into quoting what a frontier model costs.
     const features = (LOCALES[locale] as any)?.pricing?.planCards?.features ?? {};
-    expect(features.creditsFreeTooltip, `${locale}: the workflow pot must price a workflow node`)
+    expect(features.creditsFreeTooltip, `${locale}: the free pool must price a workflow node`)
       .toContain('{nodeCredits}');
-    for (const llmUnit of ['{exchangeCredits}', '{classifyCredits}', '{simpleCredits}', '{agentCredits}']) {
-      expect(
-        features.creditsFreeTooltip,
-        `${locale}: the monthly workflow pot cannot fund ${llmUnit}, so it must not price itself with it`,
-      ).not.toContain(llmUnit);
-    }
-    expect(features.aiCreditsFreeTooltip, `${locale}: the AI pot must price an agent exchange`)
+    expect(features.creditsFreeTooltip, `${locale}: the free pool must price an agent exchange`)
       .toContain('{exchangeCredits}');
+    for (const llmUnit of ['{classifyCredits}', '{simpleCredits}', '{agentCredits}']) {
+      expect(features.creditsFreeTooltip, `${locale}: the free pool must not price itself with ${llmUnit}`)
+        .not.toContain(llmUnit);
+    }
+    expect(features.aiCreditsFreeTooltip, `${locale}: the retired AI pot tooltip must be gone`)
+      .toBeUndefined();
   });
 
   it.each(Object.keys(LOCALES))('%s writes no em-dash or en-dash in the new copy', (locale) => {

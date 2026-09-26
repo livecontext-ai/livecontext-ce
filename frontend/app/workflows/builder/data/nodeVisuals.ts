@@ -7,7 +7,7 @@ import {
   Workflow,
   CheckCircle,
   LogOut,
-  Wrench,
+  Plug,
   ArrowRightLeft,
   CirclePause,
   Download,
@@ -709,7 +709,7 @@ export function resolveNodeIcon(nodeId: string, nodeKind?: BuilderNodeKind, node
 
   // 4. MCP nodes (id starts with mcp- or kind is tool/mcp)
   if (nodeId.startsWith('mcp-') || nodeKind === 'tool' || nodeKind === 'mcp') {
-    return { icon: Wrench, iconBg: MCP_BG };
+    return { icon: Plug, iconBg: MCP_BG };
   }
 
   // 5. Kind-based lookup (covers cases where nodeId doesn't match registry format, e.g. "transform_data")

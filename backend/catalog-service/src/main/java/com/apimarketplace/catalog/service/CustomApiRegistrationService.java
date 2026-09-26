@@ -1032,6 +1032,36 @@ public class CustomApiRegistrationService {
      * catalog header. Mirrors {@code ApiMigrationImporter.STATIC_HEADER_SKIP} so the custom
      * and seed routes agree on what a caller may not set.
      */
+    /**
+     * A static header value is a short literal, not prose and not a template.
+     *
+     * <p>Rejects: blank, longer than 64 characters, and ANY value carrying an unresolved
+     * {@code {...}}/{@code &#123;&#123;...&#125;&#125;} placeholder (e.g. {@code {{api_key}}},
+     * {@code {YYYYMM}}), which are runtime/credential templates that would shadow a real
+     * credential header or go out verbatim.
+     *
+     * <p>Whitespace is rejected too, with ONE exception: a space that directly follows a
+     * {@code ;}. That is the media-type parameter form, and it is the only place a genuine
+     * literal holds a space: {@code application/vnd.heroku+json; version=3}. Prose never looks
+     * like that, so the exception costs nothing.
+     *
+     * <p>Measured over the 980-seed corpus before widening it: of the 12 distinct static header
+     * values the whitespace test used to reject, 10 are credential templates
+     * ({@code Bearer {token}}, {@code Basic {base64(id:secret)}}) which the brace test rejects
+     * anyway, and 2 are documentation prose (fly_io's "Required if machine is leased"). Heroku's
+     * {@code Accept} was the only true literal among them, and its 26 endpoints answered
+     * 400 {@code missing_version} in production because this rule dropped it.
+     */
+    static boolean isLiteralHeaderValue(String value) {
+        if (value == null || value.isBlank() || value.length() > 64) {
+            return false;
+        }
+        if (value.indexOf('{') >= 0 || value.indexOf('}') >= 0) {
+            return false;
+        }
+        return value.replace("; ", ";").chars().noneMatch(Character::isWhitespace);
+    }
+
     private static final Set<String> STATIC_HEADER_SKIP = Set.of(
             "content-type", "content-length", "host", "connection",
             "transfer-encoding", "accept-encoding");
@@ -1473,13 +1503,10 @@ public class CustomApiRegistrationService {
             // JSON null would otherwise pass every literal check and put `X-Foo: null` on the wire.
             String value = valueNode != null && valueNode.isValueNode() && !valueNode.isNull()
                     ? valueNode.asText() : null;
-            boolean literal = value != null && !value.isBlank()
-                    && value.length() <= 64
-                    && value.chars().noneMatch(Character::isWhitespace)
-                    && value.indexOf('{') < 0 && value.indexOf('}') < 0;
+            boolean literal = isLiteralHeaderValue(value);
             if (!literal) {
                 log.warn("Static header '{}' not registered: its value is not a short literal "
-                        + "(no spaces, at most 64 characters, no braces)", name);
+                        + "(at most 64 characters, no braces, and no space except after a ';')", name);
                 continue;
             }
 

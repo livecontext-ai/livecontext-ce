@@ -103,11 +103,54 @@ public final class PlatformCredentialModels {
             String createdBy,
             String tenantId,
             String variant,
-            String organizationId
+            String organizationId,
+            String selectedScopes
     ) {
 
         /** Fallback for rows created before V103 or by callers that don't specify a variant. */
         public static final String DEFAULT_VARIANT = "primary";
+
+        /**
+         * Pre-V513 canonical shape (no {@code selectedScopes}) - defaults it to {@code null}, which
+         * means "request every catalog scope" (the behaviour every row had before V513).
+         */
+        public PlatformCredential(
+                Long id,
+                String integrationName,
+                String displayName,
+                AuthType authType,
+                String clientId,
+                String clientSecret,
+                String apiKey,
+                String username,
+                String password,
+                String authUrl,
+                String tokenUrl,
+                String defaultScopes,
+                String iconSlug,
+                String category,
+                String description,
+                boolean showUnverifiedAppWarning,
+                boolean isEnabled,
+                Map<String, String> customFields,
+                BigDecimal defaultMarkupCredits,
+                Integer maxCallsPerRun,
+                Instant createdAt,
+                Instant updatedAt,
+                String createdBy,
+                String tenantId,
+                String variant,
+                String organizationId
+        ) {
+            this(id, integrationName, displayName, authType,
+                    clientId, clientSecret, apiKey, username, password,
+                    authUrl, tokenUrl, defaultScopes,
+                    iconSlug, category, description, showUnverifiedAppWarning, isEnabled,
+                    customFields,
+                    defaultMarkupCredits, maxCallsPerRun,
+                    createdAt, updatedAt, createdBy, tenantId,
+                    variant, organizationId, null);
+        }
 
         /**
          * Legacy 23-arg constructor - defaults {@code variant} to {@value #DEFAULT_VARIANT}
@@ -241,7 +284,7 @@ public final class PlatformCredentialModels {
                     iconSlug, category, description, showUnverifiedAppWarning, isEnabled,
                     customFields,
                     defaultMarkupCredits, maxCallsPerRun,
-                    createdAt, updatedAt, createdBy, tenantId, variant, organizationId
+                    createdAt, updatedAt, createdBy, tenantId, variant, organizationId, selectedScopes
             );
         }
 
@@ -253,7 +296,7 @@ public final class PlatformCredentialModels {
                     iconSlug, category, description, showUnverifiedAppWarning, isEnabled,
                     customFields,
                     defaultMarkupCredits, maxCallsPerRun,
-                    createdAt, updatedAt, createdBy, newTenantId, variant, organizationId
+                    createdAt, updatedAt, createdBy, newTenantId, variant, organizationId, selectedScopes
             );
         }
 
@@ -265,8 +308,22 @@ public final class PlatformCredentialModels {
                     iconSlug, category, description, showUnverifiedAppWarning, isEnabled,
                     customFields,
                     defaultMarkupCredits, maxCallsPerRun,
-                    createdAt, updatedAt, createdBy, tenantId, variant, newOrganizationId
+                    createdAt, updatedAt, createdBy, tenantId, variant, newOrganizationId, selectedScopes
             );
+        }
+
+        /**
+         * The scopes this own-client row chose to request, or an empty list when it made no
+         * selection (NULL / blank column), which means "every catalog scope".
+         */
+        public java.util.List<String> selectedScopeList() {
+            if (selectedScopes == null || selectedScopes.isBlank()) {
+                return java.util.List.of();
+            }
+            return java.util.Arrays.stream(selectedScopes.trim().split("\\s+"))
+                    .filter(v -> !v.isBlank())
+                    .distinct()
+                    .toList();
         }
 
         /** Whether this is a platform-wide credential (not tenant-scoped). */
@@ -333,8 +390,42 @@ public final class PlatformCredentialModels {
             BigDecimal defaultMarkupCredits,
             Integer maxCallsPerRun,
             Boolean showUnverifiedAppWarning,
-            String variant
+            String variant,
+            java.util.List<String> selectedScopes
     ) {
+
+        /**
+         * Pre-V513 shape (no {@code selectedScopes}). {@code null} there means "leave the row's
+         * current selection unchanged" on an update and "no selection" on a create.
+         */
+        public CreatePlatformCredentialRequest(
+                String integrationName,
+                String displayName,
+                String authType,
+                String clientId,
+                String clientSecret,
+                String apiKey,
+                String username,
+                String password,
+                String authUrl,
+                String tokenUrl,
+                String defaultScopes,
+                String iconSlug,
+                String category,
+                String description,
+                Map<String, String> customFields,
+                BigDecimal defaultMarkupCredits,
+                Integer maxCallsPerRun,
+                Boolean showUnverifiedAppWarning,
+                String variant
+        ) {
+            this(integrationName, displayName, authType,
+                    clientId, clientSecret, apiKey, username, password,
+                    authUrl, tokenUrl, defaultScopes,
+                    iconSlug, category, description,
+                    customFields, defaultMarkupCredits, maxCallsPerRun,
+                    showUnverifiedAppWarning, variant, null);
+        }
 
         /**
          * Legacy 17-arg constructor - defaults {@code variant} to {@code null}
@@ -455,8 +546,45 @@ public final class PlatformCredentialModels {
             Instant updatedAt,
             String tenantId,
             String variant,
-            String organizationId
+            String organizationId,
+            List<String> selectedScopes
     ) {
+
+        /** Pre-V513 canonical shape (no {@code selectedScopes}): an empty selection. */
+        public PlatformCredentialResponse(
+                Long id,
+                String integrationName,
+                String displayName,
+                String authType,
+                String clientIdMasked,
+                boolean hasClientSecret,
+                boolean hasApiKey,
+                boolean hasBasicAuth,
+                boolean hasCustomFields,
+                String authUrl,
+                String tokenUrl,
+                String defaultScopes,
+                String iconSlug,
+                String category,
+                String description,
+                boolean showUnverifiedAppWarning,
+                boolean isEnabled,
+                BigDecimal defaultMarkupCredits,
+                Integer maxCallsPerRun,
+                List<EndpointStatusResponse> endpoints,
+                Instant createdAt,
+                Instant updatedAt,
+                String tenantId,
+                String variant,
+                String organizationId
+        ) {
+            this(id, integrationName, displayName, authType, clientIdMasked,
+                    hasClientSecret, hasApiKey, hasBasicAuth, hasCustomFields,
+                    authUrl, tokenUrl, defaultScopes, iconSlug, category, description,
+                    showUnverifiedAppWarning, isEnabled, defaultMarkupCredits, maxCallsPerRun,
+                    endpoints, createdAt, updatedAt, tenantId,
+                    variant, organizationId, List.of());
+        }
 
         /**
          * Legacy 22-arg constructor - defaults {@code variant} to
@@ -575,7 +703,8 @@ public final class PlatformCredentialModels {
                     credential.updatedAt(),
                     credential.tenantId(),
                     credential.variant() != null ? credential.variant() : PlatformCredential.DEFAULT_VARIANT,
-                    credential.organizationId()
+                    credential.organizationId(),
+                    credential.selectedScopeList()
             );
         }
 

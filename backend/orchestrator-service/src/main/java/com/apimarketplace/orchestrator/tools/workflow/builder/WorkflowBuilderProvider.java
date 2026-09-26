@@ -82,6 +82,15 @@ public class WorkflowBuilderProvider implements ToolsProvider {
      */
     private com.apimarketplace.auth.client.entitlement.PlanFeatureGate planFeatureGate;
 
+    // workflow(action='present'): switches the user's view. Setter-injected like the
+    // gate above so the many hand-built provider fixtures keep their constructor.
+    private WorkflowPresenter presenter;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setPresenter(WorkflowPresenter presenter) {
+        this.presenter = presenter;
+    }
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setPlanFeatureGate(
             com.apimarketplace.auth.client.entitlement.PlanFeatureGate planFeatureGate) {
@@ -191,8 +200,14 @@ public class WorkflowBuilderProvider implements ToolsProvider {
             }
         }
 
+        boolean sessionReloaded = WorkflowBuilderActionConfig.RESYNC_BEFORE_WRITE_ACTIONS.contains(canonicalAction)
+                && resyncWithStoredPlan(parameters, tenantId, context);
+
         try {
             ToolExecutionResult result = dispatchAction(canonicalAction, parameters, tenantId, context);
+            if (sessionReloaded) {
+                result = withSessionReloadedNotice(result);
+            }
             resultEnricher.logAction(action, parameters, result, tenantId);
 
             if (result.success() && WorkflowBuilderActionConfig.isModifyingAction(canonicalAction)) {
@@ -205,6 +220,52 @@ public class WorkflowBuilderProvider implements ToolsProvider {
             log.error("Error executing workflow action {}: {}", action, e.getMessage(), e);
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Error: " + e.getMessage());
         }
+    }
+
+    /**
+     * Rebuilds the current session from the stored plan when the builder canvas saved
+     * it after the session last read or wrote it (see
+     * {@link WorkflowBuilderLoader#resyncWithStoredPlan}). No session yet is a no-op:
+     * the action itself reports that. A failure is logged and the action proceeds, as
+     * it did before this check existed.
+     *
+     * @return true when the session was reloaded from the stored plan
+     */
+    private boolean resyncWithStoredPlan(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
+        try {
+            var sr = sessionManager.getSession(parameters, tenantId, extractConversationId(context));
+            return !sr.isError() && loader.resyncWithStoredPlan(sr.session());
+        } catch (RuntimeException e) {
+            log.warn("Could not check the stored plan before a session write for tenant {}: {}",
+                    tenantId, e.getMessage());
+            return false;
+        }
+    }
+
+    static final String SESSION_RELOADED_NOTICE =
+            "The workflow was changed and saved outside this session (for example in the editor, or by "
+            + "another session) since your previous "
+            + "workflow call. Your session was reloaded from that saved version before this call ran, so it "
+            + "includes those changes, and the undo history from before this point is gone. "
+            + "Call workflow(action='describe') to see the current nodes.";
+
+    /**
+     * Tells the agent its session was reloaded: otherwise an undo that now finds nothing,
+     * or a connect to a node the user deleted in the editor, fails with no explanation.
+     */
+    private static ToolExecutionResult withSessionReloadedNotice(ToolExecutionResult result) {
+        if (!result.success()) {
+            String error = result.error() == null ? SESSION_RELOADED_NOTICE
+                    : result.error() + " Note: " + SESSION_RELOADED_NOTICE;
+            return new ToolExecutionResult(false, result.data(), error, result.errorCode(), result.metadata());
+        }
+        if (result.data() instanceof Map<?, ?> data) {
+            Map<Object, Object> withNotice = new LinkedHashMap<>(data);
+            withNotice.put("session_reloaded", SESSION_RELOADED_NOTICE);
+            return new ToolExecutionResult(true, withNotice, null, null, result.metadata());
+        }
+        log.debug("Session reloaded before an action whose result has no map to carry the notice");
+        return result;
     }
 
     /**
@@ -325,6 +386,9 @@ public class WorkflowBuilderProvider implements ToolsProvider {
             case "run_node" -> executeRunNode(params, tenantId, ctx);
             case "resolve_approval" -> executeResolveApproval(params, tenantId, ctx);
             case "continue_interface" -> executeContinueInterface(params, tenantId, ctx);
+            case "present" -> presenter != null
+                ? presenter.present(params, tenantId, ctx)
+                : ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "present is not available here.");
             case "pin" -> delegateCrud("pin", params, tenantId, ctx);
             case "unpin" -> delegateCrud("unpin", params, tenantId, ctx);
             case "publish" -> delegateCrud("publish", params, tenantId, ctx);

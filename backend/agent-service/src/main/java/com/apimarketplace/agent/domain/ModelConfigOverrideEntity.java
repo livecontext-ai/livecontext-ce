@@ -263,6 +263,37 @@ public class ModelConfigOverrideEntity {
     private Map<String, Object> feedMetadata;
 
     /**
+     * The model that replaces this one at execution time while it is disabled (V515).
+     * Both null = no explicit choice, the platform default model is used. Read by
+     * {@code ModelReplacementResolver}; admin-local, never carried by a catalog bundle.
+     */
+    @Column(name = "replacement_provider", length = 50)
+    private String replacementProvider;
+
+    @Column(name = "replacement_model", length = 150)
+    private String replacementModel;
+
+    /**
+     * V533: when an admin retired the model, null otherwise. A retired row is out of the catalog
+     * until restored: the merge skips it, no bundle or seed ships it, the CE relay refuses it, and
+     * DB triggers keep it {@code enabled=false} and undeletable (the row is the tombstone).
+     * Written only by {@code ModelCatalogService.retireModels / restoreModels}.
+     */
+    @Column(name = "retired_at")
+    private Instant retiredAt;
+
+    @Column(name = "retired_by", length = 100)
+    private String retiredBy;
+
+    /**
+     * Request-intake flag (same contract as {@code rateLimitsExplicitlySet}): true when the
+     * caller's body carried the replacement keys, so an explicit blank clears the pair
+     * while an absent key leaves it alone.
+     */
+    @Transient
+    private boolean replacementExplicitlySet = false;
+
+    /**
      * Transient flag: when true, rate limit fields were explicitly provided
      * (even if null = "clear"). Used by saveOverride() to distinguish
      * "not provided" (skip) from "provided as null" (clear).
@@ -470,6 +501,37 @@ public class ModelConfigOverrideEntity {
 
     public Map<String, Object> getFeedMetadata() { return feedMetadata; }
     public void setFeedMetadata(Map<String, Object> feedMetadata) { this.feedMetadata = feedMetadata; }
+
+    public String getReplacementProvider() { return replacementProvider; }
+    public void setReplacementProvider(String replacementProvider) { this.replacementProvider = replacementProvider; }
+
+    public String getReplacementModel() { return replacementModel; }
+    public void setReplacementModel(String replacementModel) { this.replacementModel = replacementModel; }
+
+    /**
+     * Whether self-hosted (CE) installs get this model: the ONE rule the CE bundle, the CE seed
+     * export and the cloud LLM relay all apply, so a model a CE receives is exactly a model the
+     * relay will run. Retired and deprecated rows are out; otherwise the cloud admin's
+     * {@code bundle_enabled} wins over {@code enabled} (same resolution the bundle payload signs),
+     * and NULL reads as on.
+     */
+    public boolean isAvailableToCe() {
+        if (retiredAt != null || deprecatedAt != null) {
+            return false;
+        }
+        Boolean effective = bundleEnabled != null ? bundleEnabled : enabled;
+        return !Boolean.FALSE.equals(effective);
+    }
+
+    public Instant getRetiredAt() { return retiredAt; }
+    public void setRetiredAt(Instant retiredAt) { this.retiredAt = retiredAt; }
+    public boolean isRetired() { return retiredAt != null; }
+
+    public String getRetiredBy() { return retiredBy; }
+    public void setRetiredBy(String retiredBy) { this.retiredBy = retiredBy; }
+
+    public boolean isReplacementExplicitlySet() { return replacementExplicitlySet; }
+    public void setReplacementExplicitlySet(boolean replacementExplicitlySet) { this.replacementExplicitlySet = replacementExplicitlySet; }
 
     public boolean isRateLimitsExplicitlySet() { return rateLimitsExplicitlySet; }
     public void setRateLimitsExplicitlySet(boolean rateLimitsExplicitlySet) { this.rateLimitsExplicitlySet = rateLimitsExplicitlySet; }

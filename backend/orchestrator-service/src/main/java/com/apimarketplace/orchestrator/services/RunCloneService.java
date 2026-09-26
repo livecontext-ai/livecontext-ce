@@ -476,6 +476,7 @@ public class RunCloneService {
             copy.setSkipSourceNode(source.getSkipSourceNode());
             copy.setNormalizedKey(source.getNormalizedKey());
             copy.setItemNumber(source.getItemNumber());
+            copy.setMocked(source.isMocked());
 
             clones.add(copy);
         }

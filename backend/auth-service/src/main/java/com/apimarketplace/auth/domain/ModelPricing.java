@@ -65,9 +65,9 @@ public class ModelPricing {
      * (V493), pushed by agent-service's {@code AuthPricingSyncClient}.
      *
      * <p>TRUE means a FREE-plan account may fund a chat / agent turn on this model
-     * from its monthly AI ALLOWANCE ({@code subscription.ai_remaining_credits}, V494)
-     * instead of the PAYG bucket alone. It does NOT widen the monthly credit grant,
-     * which stays workflow-only whatever this says. Cloud-only: a CE install meters
+     * from its monthly credits (V512; before, from a separate AI allowance, V494)
+     * instead of the PAYG bucket alone. A FALSE model is PAYG-only on the Free plan
+     * whatever the account's monthly balance. Cloud-only: a CE install meters
      * nothing, so the flag is never read there.
      *
      * <p>Defaults to FALSE and fails closed: a mirror that has not caught up with a

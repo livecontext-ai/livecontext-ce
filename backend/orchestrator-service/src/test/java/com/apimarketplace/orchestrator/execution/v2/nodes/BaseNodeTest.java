@@ -420,6 +420,255 @@ class BaseNodeTest {
     /**
      * Concrete implementation of BaseNode for testing purposes.
      */
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Template resolution: one resolver for every field of every node
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Template resolution")
+    class TemplateResolutionTests {
+
+        private void resolvesTo(Object value) {
+            org.mockito.Mockito.when(mockTemplateAdapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> {
+                    Map<String, Object> out = new java.util.HashMap<>();
+                    out.put("__v__", value);
+                    return out;
+                });
+            node.setTemplateAdapter(mockTemplateAdapter);
+        }
+
+        @Test
+        @DisplayName("a reference that resolves to nothing is null, never the configured {{...}} text")
+        void referenceToNothingIsNullNotTheTemplate() {
+            resolvesTo(null);
+
+            assertNull(node.resolveTemplateString("{{core:skipped.output.email}}", context));
+        }
+
+        @Test
+        @DisplayName("a reference to an object is its JSON, never Java's {a=1} that reads as unresolved")
+        void objectIsJsonNotJavaToString() {
+            Map<String, Object> obj = new java.util.LinkedHashMap<>();
+            obj.put("a", 1);
+            obj.put("b", "x");
+            resolvesTo(obj);
+
+            assertEquals("{\"a\":1,\"b\":\"x\"}", node.resolveTemplateString("{{core:up.output.obj}}", context));
+        }
+
+        @Test
+        @DisplayName("a reference to a list is its JSON array, never [a, b]")
+        void listIsJsonArray() {
+            resolvesTo(List.of("a@x.io", "b@y.io"));
+
+            assertEquals("[\"a@x.io\",\"b@y.io\"]", node.resolveTemplateString("{{core:up.output.to}}", context));
+        }
+
+        @Test
+        @DisplayName("the typed resolver keeps the referenced value's own type")
+        void typedResolverKeepsType() {
+            Map<String, Object> obj = Map.of("k", 2);
+            resolvesTo(obj);
+
+            assertSame(obj, node.resolveTemplateValue("{{core:up.output.obj}}", context));
+        }
+
+        @Test
+        @DisplayName("a resolution that throws fails with the expression, instead of running with the raw template")
+        void failureThrowsWithTheExpression() {
+            org.mockito.Mockito.when(mockTemplateAdapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new IllegalArgumentException("json() could not parse"));
+            node.setTemplateAdapter(mockTemplateAdapter);
+
+            IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> node.resolveTemplateString("{{json(core:up.output.text)}}", context));
+            assertTrue(e.getMessage().contains("{{json(core:up.output.text)}}"), e.getMessage());
+            assertTrue(e.getMessage().contains("json() could not parse"), e.getMessage());
+        }
+
+        @Test
+        @DisplayName("a plain string and a blank value pass through unchanged")
+        void plainAndBlankPassThrough() {
+            resolvesTo("literal");
+            assertEquals("literal", node.resolveTemplateString("literal", context));
+            assertEquals("  ", node.resolveTemplateString("  ", context));
+            assertNull(node.resolveTemplateString(null, context));
+        }
+
+        @Test
+        @DisplayName("a map is resolved leaf by leaf: an author's own `template` key is kept, and so is key order")
+        @SuppressWarnings("unchecked")
+        void mapIsResolvedLeafByLeaf() {
+            // Handed whole to the adapter, a map carrying a `template` key was taken for a template
+            // SPEC and collapsed to that one value, in an unordered copy.
+            org.mockito.Mockito.when(mockTemplateAdapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo("R"));
+            node.setTemplateAdapter(mockTemplateAdapter);
+            Map<String, Object> configured = new java.util.LinkedHashMap<>();
+            configured.put("z", "{{core:a.output.x}}");
+            configured.put("template", "invoice-v2");
+            configured.put("nested", List.of("{{core:b.output.y}}", 3));
+
+            Map<String, Object> resolved = (Map<String, Object>) node.resolveTemplateValue(configured, context);
+
+            assertEquals(List.of("z", "template", "nested"), List.copyOf(resolved.keySet()));
+            assertEquals("R", resolved.get("z"));
+            assertEquals("invoice-v2", resolved.get("template"));
+            assertEquals(List.of("R", 3), resolved.get("nested"));
+        }
+
+        @Test
+        @DisplayName("without a template adapter the configured value is returned as-is")
+        void noAdapterReturnsConfigured() {
+            assertEquals("{{core:x.output.y}}", node.resolveTemplateString("{{core:x.output.y}}", context));
+        }
+    }
+
+    @Nested
+    @DisplayName("Deferred scalars (numeric / boolean fields written as {{...}})")
+    class DeferredScalarTests {
+
+        private void resolvesEveryTemplateTo(Object value) {
+            org.mockito.Mockito.when(mockTemplateAdapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo(value));
+            node.setTemplateAdapter(mockTemplateAdapter);
+        }
+
+        @Test
+        @DisplayName("the typed config is rebuilt with the resolved value; the other fields keep theirs")
+        void rebuildsTheConfigWithTheResolvedValue() {
+            resolvesEveryTemplateTo(25);
+            node.setDeferredScalars(Map.of("limit", Map.of("count", "{{core:cfg.output.n}}")));
+
+            com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig cfg = node.withDeferredScalars("limit",
+                new com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig(10, null, 3, null),
+                com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig.class, context);
+
+            assertEquals(25, cfg.count());
+            assertEquals(3, cfg.offset());
+        }
+
+        @Test
+        @DisplayName("a template resolving to numeric TEXT is read as the number")
+        void numericTextIsCoerced() {
+            resolvesEveryTemplateTo(" 7 ");
+            node.setDeferredScalars(Map.of("limit", Map.of("count", "{{core:cfg.output.n}}")));
+
+            assertEquals(7, node.withDeferredScalars("limit",
+                new com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig(10, null, 0, null),
+                com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig.class, context).count());
+        }
+
+        @Test
+        @DisplayName("a template resolving to something that is not a number fails naming the config")
+        void nonNumberFails() {
+            resolvesEveryTemplateTo("abc");
+            node.setDeferredScalars(Map.of("limit", Map.of("count", "{{core:cfg.output.n}}")));
+
+            IllegalStateException e = assertThrows(IllegalStateException.class, () -> node.withDeferredScalars("limit",
+                new com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig(10, null, 0, null),
+                com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig.class, context));
+            assertTrue(e.getMessage().contains("limit.count"), e.getMessage());
+        }
+
+        @Test
+        @DisplayName("a template resolving to nothing fails naming the field, never runs on the default")
+        void nothingFails() {
+            resolvesEveryTemplateTo(null);
+            node.setDeferredScalars(Map.of("limit", Map.of("count", "{{core:skipped.output.n}}")));
+
+            IllegalStateException e = assertThrows(IllegalStateException.class, () -> node.withDeferredScalars("limit",
+                new com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig(10, null, 0, null),
+                com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig.class, context));
+            assertTrue(e.getMessage().contains("limit.count"), e.getMessage());
+        }
+
+        @Test
+        @DisplayName("without a deferred template the config is returned as-is")
+        void noTemplateReturnsConfig() {
+            com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig config =
+                new com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig(10, null, 0, null);
+
+            assertSame(config, node.withDeferredScalars("limit", config,
+                com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig.class, context));
+        }
+
+        @Test
+        @DisplayName("a boolean component named isX survives the rebuild when ANOTHER field is templated")
+        void isPrefixedBooleanSurvives() {
+            // Serialized, `isHtml` comes back as `html` and the rebuilt config read false.
+            resolvesEveryTemplateTo(99L);
+            node.setDeferredScalars(Map.of("sendEmail", Map.of("credentialId", "{{core:cfg.output.id}}")));
+            com.apimarketplace.orchestrator.domain.workflow.Core.SendEmailConfig config =
+                new com.apimarketplace.orchestrator.domain.workflow.Core.SendEmailConfig(
+                    null, 587, null, null, true, null, null, "a@x.io", null, null,
+                    "Subject", "Body", true, null, null, null, null);
+
+            com.apimarketplace.orchestrator.domain.workflow.Core.SendEmailConfig cfg = node.withDeferredScalars(
+                "sendEmail", config, com.apimarketplace.orchestrator.domain.workflow.Core.SendEmailConfig.class, context);
+
+            assertTrue(cfg.isHtml(), "isHtml must keep its configured true");
+            assertEquals(99L, cfg.credentialId());
+        }
+
+        @Test
+        @DisplayName("a fractional value for an integer field is refused, never truncated to its whole part")
+        void fractionForIntegerFieldIsRefused() {
+            resolvesEveryTemplateTo(5.7);
+            node.setDeferredScalars(Map.of("limit", Map.of("count", "{{core:cfg.output.n}}")));
+
+            IllegalStateException e = assertThrows(IllegalStateException.class, () -> node.withDeferredScalars("limit",
+                new com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig(10, null, 0, null),
+                com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig.class, context));
+            assertTrue(e.getMessage().contains("limit.count"), e.getMessage());
+        }
+
+        @Test
+        @DisplayName("one shared node, two concurrent contexts: each execution gets its OWN resolved value")
+        void sharedNodeIsNotMutatedAcrossContexts() {
+            // Nodes are shared by concurrent split items; the rebuilt config must never leak
+            // from one execution into another through the node.
+            org.mockito.Mockito.when(mockTemplateAdapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> {
+                    ExecutionContext ctx = inv.getArgument(1);
+                    Map<String, Object> out = new java.util.HashMap<>();
+                    out.put("__v__", ctx.itemIndex() == 0 ? 3 : 8);
+                    return out;
+                });
+            node.setTemplateAdapter(mockTemplateAdapter);
+            node.setDeferredScalars(Map.of("limit", Map.of("count", "{{item.n}}")));
+            com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig shared =
+                new com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig(10, null, 0, null);
+            ExecutionContext second = ExecutionContext.create("run-1", "workflow-run-1", "tenant-1", "item-2", 1,
+                Map.of(), mockPlan);
+
+            int a = node.withDeferredScalars("limit", shared,
+                com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig.class, context).count();
+            int b = node.withDeferredScalars("limit", shared,
+                com.apimarketplace.orchestrator.domain.workflow.Core.LimitConfig.class, second).count();
+
+            assertEquals(3, a);
+            assertEquals(8, b);
+            assertEquals(10, shared.count(), "the shared config is untouched");
+        }
+
+        @Test
+        @DisplayName("resolveDeferredLong refuses a fractional value")
+        void longRefusesFraction() {
+            resolvesEveryTemplateTo(2.5);
+
+            IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> node.resolveDeferredLong("wait", "duration", "{{core:cfg.output.d}}", context));
+            assertTrue(e.getMessage().contains("whole number"), e.getMessage());
+        }
+    }
+
     private static class TestableBaseNode extends BaseNode {
 
         public TestableBaseNode(String nodeId, NodeType type) {

@@ -456,6 +456,57 @@ class StepDataPersistenceServiceTest {
         }
 
         @Test
+        @DisplayName("A step served by the mock mode is flagged mocked, keeping its real tool id and status")
+        void mockedResultIsFlaggedOnTheRow() {
+            // The tool-health dashboard reads this column: before it existed, a mocked `error`
+            // step was a FAILED row under the tool's real id, indistinguishable from a real failure.
+            Step step = mock(Step.class);
+            when(step.label()).thenReturn("Send Mail");
+            when(step.id()).thenReturn("gmail/send-message");
+            when(execution.getRunId()).thenReturn("run-123");
+            when(execution.getPlan()).thenReturn(plan);
+            when(plan.findStep(anyString())).thenReturn(Optional.of(step));
+            when(plan.getTenantId()).thenReturn("tenant-1");
+            when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
+
+            StepExecutionResult mockedFailure = new StepExecutionResult(
+                    "mcp:send_mail", NodeStatus.FAILED, "mocked failure",
+                    Map.of("error", "mocked failure", "__mocked__", true, "__mock_source__", "error"),
+                    10L, null);
+
+            WorkflowStepDataEntity entity = service.buildStepEntity(
+                    execution, UUID.randomUUID(), "mcp:send_mail", "Send Mail", "graph-1", mockedFailure, 0, 0);
+
+            assertTrue(entity.isMocked());
+            assertEquals("gmail/send-message", entity.getToolId());
+            assertEquals("FAILED", entity.getStatus());
+        }
+
+        @Test
+        @DisplayName("A real execution is not flagged mocked, including a FAILED one")
+        void realResultIsNotFlaggedMocked() {
+            when(execution.getRunId()).thenReturn("run-123");
+            when(execution.getPlan()).thenReturn(plan);
+            when(plan.findStep(anyString())).thenReturn(Optional.empty());
+            when(plan.getTenantId()).thenReturn("tenant-1");
+            when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
+
+            StepExecutionResult realFailure = new StepExecutionResult(
+                    "mcp:step", NodeStatus.FAILED, "HTTP 500", Map.of("error", "HTTP 500", "http_status", 500),
+                    10L, null);
+            // A marker that is present but not TRUE is not a mock: isMocked reads Boolean.TRUE only.
+            StepExecutionResult notTrue = new StepExecutionResult(
+                    "mcp:step", NodeStatus.COMPLETED, "ok", Map.of("__mocked__", "false"), 10L, null);
+
+            assertFalse(service.buildStepEntity(
+                    execution, UUID.randomUUID(), "mcp:step", "Step", "graph-1", realFailure, 0, 0).isMocked());
+            assertFalse(service.buildStepEntity(
+                    execution, UUID.randomUUID(), "mcp:step", "Step", "graph-1", notTrue, 0, 0).isMocked());
+        }
+
+        @Test
         @DisplayName("Should use step label from plan when available")
         void shouldUseStepLabelFromPlanWhenAvailable() {
             UUID workflowRunId = UUID.randomUUID();

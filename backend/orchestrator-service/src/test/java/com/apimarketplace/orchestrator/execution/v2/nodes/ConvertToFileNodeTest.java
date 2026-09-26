@@ -110,7 +110,7 @@ class ConvertToFileNodeTest {
         grace.put("name", "Grace");
         List<Map<String, Object>> rows = List.of(ada, grace);
         when(mockTemplateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
-            .thenReturn(Map.of("__expr__", rows));
+            .thenAnswer(TemplateResolutionStubs.templatesResolveTo(rows));
 
         Core.ConvertToFileConfig config = new Core.ConvertToFileConfig(
             "csv",
@@ -1072,24 +1072,64 @@ class ConvertToFileNodeTest {
         }
 
         private NodeExecutionResult run(Object resolvedValue) {
+            return run(resolvedValue, null);
+        }
+
+        private NodeExecutionResult run(Object resolvedValue, FileStorageService storage) {
             when(mockTemplateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
-                .thenReturn(Map.of("__expr__", resolvedValue));
+                .thenAnswer(invocation -> {
+                    Map<String, Object> in = invocation.getArgument(0);
+                    Map<String, Object> out = new java.util.HashMap<>();
+                    in.forEach((k, v) -> out.put(k,
+                        "{{trigger:start.name}}".equals(v) ? "acme"
+                            : v instanceof String s && s.contains("{{") ? resolvedValue : v));
+                    return out;
+                });
             Core.ConvertToFileConfig config = new Core.ConvertToFileConfig(
                 "csv", "{{core:extract.output.items}}", "{{trigger:start.name}}", ",", "yes");
             ConvertToFileNode node = new ConvertToFileNode("core:convert", config);
             node.setTemplateAdapter(mockTemplateAdapter);
+            if (storage != null) {
+                node.setFileStorageService(storage);
+            }
             return node.execute(context);
         }
 
         @Test
-        @DisplayName("`filename` is the string the file is actually named from, not a second resolution of it")
-        void reportsTheFilenameTheNodeUses() {
-            // execute() names the file from the CONFIGURED string. Reporting a resolved one
-            // showed a name no file on disk or in storage ever carried - a value that looks
-            // more helpful than the truth and sends the reader looking for the wrong file.
-            Map<String, Object> params = paramsOf(run(List.of(Map.of("id", "1"))));
+        @DisplayName("a {{...}} filename is resolved, and the name reported is the name the file carries")
+        void reportsTheResolvedFilenameTheFileCarries() {
+            // execute() used to name the file from the CONFIGURED string, so the file was
+            // literally called "{{trigger:start.name}}.csv" while `value` beside it resolved.
+            // One resolution now names the file and is what the panel reports.
+            FileStorageService storage = org.mockito.Mockito.mock(FileStorageService.class);
+            NodeExecutionResult result = run(List.of(Map.of("id", "1")), storage);
 
-            assertEquals("{{trigger:start.name}}", params.get("filename"));
+            assertEquals("acme", paramsOf(result).get("filename"));
+            verify(storage).upload(anyString(), any(), anyString(), anyString(), eq("acme.csv"), anyString(),
+                any(byte[].class), anyInt(), anyInt(), nullable(Integer.class), any());
+        }
+
+        @Test
+        @DisplayName("a {{$vars.name}} filename names the file but is withheld in Params")
+        void workspaceVariableFilenameIsWithheld() {
+            Map<String, Object> values = new java.util.HashMap<>();
+            values.put("{{core:extract.output.items}}", List.of(Map.of("id", "1")));
+            values.put("{{$vars.name}}", "s3cr3t");
+            when(mockTemplateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
+                .thenAnswer(TemplateResolutionStubs.resolving(values));
+            Core.ConvertToFileConfig config = new Core.ConvertToFileConfig(
+                "csv", "{{core:extract.output.items}}", "{{$vars.name}}", ",", "yes");
+            ConvertToFileNode node = new ConvertToFileNode("core:convert", config);
+            node.setTemplateAdapter(mockTemplateAdapter);
+            FileStorageService storage = org.mockito.Mockito.mock(FileStorageService.class);
+            node.setFileStorageService(storage);
+
+            NodeExecutionResult result = node.execute(context);
+
+            verify(storage).upload(anyString(), any(), anyString(), anyString(), eq("s3cr3t.csv"), anyString(),
+                any(byte[].class), anyInt(), anyInt(), nullable(Integer.class), any());
+            assertEquals(com.apimarketplace.orchestrator.services.template.ReportedParams.WITHHELD_WORKSPACE_VARIABLE,
+                paramsOf(result).get("filename"));
         }
 
         @Test

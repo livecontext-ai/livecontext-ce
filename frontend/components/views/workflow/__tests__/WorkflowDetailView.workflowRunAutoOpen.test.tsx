@@ -47,7 +47,12 @@ vi.mock('@/app/workflows/builder/hooks/state', () => ({
     isSaving: false,
   }),
 }));
-vi.mock('@/components/app/WorkflowPanelContent', () => ({ setPendingActivateTab: vi.fn() }));
+const requestPresentApplication = vi.hoisted(() => vi.fn());
+vi.mock('@/components/app/WorkflowPanelContent', () => ({
+  setPendingActivateTab: vi.fn(),
+  requestPresentApplication,
+  APP_TAB_ID: '__application__',
+}));
 vi.mock('@/lib/api', () => ({ orchestratorApi: { getPinnedWorkflowRun: vi.fn() } }));
 vi.mock('@/lib/hooks/useOrgScopedReset', () => ({ useOrgScopedReset: () => undefined }));
 vi.mock('../hooks', () => ({ useAutoCollapseSidebar: () => undefined }));
@@ -56,7 +61,7 @@ vi.mock('@/components/workflow/WorkflowRunCanvas', () => ({ WorkflowRunCanvas: (
 
 import { WorkflowDetailView } from '@/components/views/workflow/WorkflowDetailView';
 
-function fireAutoOpen(detail: { type: string; id: string; runId?: string }) {
+function fireAutoOpen(detail: { type: string; id: string; title?: string; runId?: string }) {
   act(() => {
     window.dispatchEvent(new CustomEvent('sidePanelAutoOpen', { detail }));
   });
@@ -114,5 +119,55 @@ describe('WorkflowDetailView - overlays an agent-launched run on the canvas in p
     fireAutoOpen({ type: 'workflow_run', id: 'wf-1', runId: 'run-abc' });
     expect(setRunId).not.toHaveBeenCalled();
     expect(push).not.toHaveBeenCalled();
+  });
+});
+
+describe('WorkflowDetailView - the agent presents a view (workflow(action=present))', () => {
+  afterEach(() => {
+    setRunId.mockReset();
+    markRunAsJustExecuted.mockReset();
+    requestPresentApplication.mockReset();
+    modeState.current = { isPreviewOnly: false, runId: null, setRunId };
+    cleanup();
+  });
+
+  it('binds the presented run and asks the panel to show its Application', () => {
+    render(<WorkflowDetailView workflowId="wf-1" />);
+    fireAutoOpen({ type: 'present_application', id: 'wf-1', runId: 'run-abc' });
+
+    expect(setRunId).toHaveBeenCalledWith('run-abc');
+    expect(requestPresentApplication).toHaveBeenCalledWith('wf-1', 'run-abc');
+  });
+
+  it('still asks for the Application when the page already shows that run', () => {
+    render(<WorkflowDetailView workflowId="wf-1" runId="run-abc" />);
+    fireAutoOpen({ type: 'present_application', id: 'wf-1', runId: 'run-abc' });
+
+    expect(setRunId).not.toHaveBeenCalled();
+    expect(requestPresentApplication).toHaveBeenCalledWith('wf-1', 'run-abc');
+  });
+
+  it('ignores the Application of another workflow', () => {
+    render(<WorkflowDetailView workflowId="wf-1" />);
+    fireAutoOpen({ type: 'present_application', id: 'wf-other', runId: 'run-abc' });
+
+    expect(setRunId).not.toHaveBeenCalled();
+    expect(requestPresentApplication).not.toHaveBeenCalled();
+  });
+
+  it('binds a presented run in place, without asking for the Application', () => {
+    render(<WorkflowDetailView workflowId="wf-1" />);
+    fireAutoOpen({ type: 'present_run', id: 'wf-1', runId: 'run-abc' });
+
+    expect(setRunId).toHaveBeenCalledWith('run-abc');
+    expect(requestPresentApplication).not.toHaveBeenCalled();
+  });
+
+  it('leaves the other presented views to the app header', () => {
+    render(<WorkflowDetailView workflowId="wf-1" />);
+    fireAutoOpen({ type: 'present_table', id: '7', title: 'Leads' });
+
+    expect(setRunId).not.toHaveBeenCalled();
+    expect(requestPresentApplication).not.toHaveBeenCalled();
   });
 });

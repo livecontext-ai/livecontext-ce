@@ -4,7 +4,7 @@ import * as React from 'react';
 import { Lock } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useValidationOptional } from '../../contexts/ValidationContext';
-import { FieldInfoTooltip } from './forms/shared/FieldInfoTooltip';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 /**
  * "This node needs a higher plan", as a marker beside the node's name.
@@ -62,7 +62,12 @@ export function NodePlanNotice({ nodeId }: { nodeId: string }) {
           pricing page only, so the lock states the restriction and the info
           button beside it explains which plan lifts it. */}
       <Lock className="h-3.5 w-3.5 text-amber-500" aria-hidden />
-      <FieldInfoTooltip description={t('nodeNotice', { plan: requiredPlan })} />
+      <InfoPopover
+        label={t('nodeNotice', { plan: requiredPlan })}
+        // A short name for the button: the sentence is already the status label above and
+        // the panel's text, so naming the button with it too would read it three times.
+        accessibleName={t('infoLabel', { plan: requiredPlan })}
+        size="sm" side="bottom" align="end">{t('nodeNotice', { plan: requiredPlan })}</InfoPopover>
     </span>
   );
 }

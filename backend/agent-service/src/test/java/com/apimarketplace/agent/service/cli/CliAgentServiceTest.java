@@ -90,6 +90,23 @@ class CliAgentServiceTest {
             assertThat(captor.getValue().getKeyRoute()).isEqualTo("PLATFORM");
         }
 
+        /**
+         * Prod 2026-09-23: every bridge turn showed twice in the run history, the real run and a
+         * phantom WORKFLOW run with provider "external" and no conversation, written here.
+         */
+        @Test
+        @DisplayName("a session serving a dispatched run records nothing: its dispatcher records the run")
+        void dispatchedRunIsNotRecordedTwice() {
+            CliSessionStartRequest request = new CliSessionStartRequest(
+                null, null, "test-model", "conv-1", null, "stream-1", null, null,
+                UUID.randomUUID().toString(), null);
+            CliSessionResponse started = service.startSession(request, "tenant-1", "org-test");
+
+            service.endSession(started.sessionId(), "tenant-1");
+
+            verify(observabilityService, never()).recordFromRequest(any());
+        }
+
         @Test
         @DisplayName("ending a session under the wrong tenant records nothing")
         void wrongTenantRecordsNothing() {
@@ -312,6 +329,112 @@ class CliAgentServiceTest {
 
             Map<String, Object> creds = getSessionCredentials(response.sessionId());
             assertThat(creds).doesNotContainKey("__approvedToolActions__");
+        }
+
+        /**
+         * Prod 2026-09-23: a task run on the CLI bridge asked its question with ask_user. The
+         * session's credentials had no task id, so the call looked like a person watching the chat:
+         * it waited 150 s on a screen nobody had open and never reached the connected Telegram.
+         */
+        @Test
+        @DisplayName("a task's session knows it is a task, so its questions go to the chat channel")
+        void taskSessionIsNotPromptable() throws Exception {
+            CliSessionStartRequest request = new CliSessionStartRequest(
+                null, null, "test-model", "conv-1", null, "stream-1", null, null, null, null, null, null,
+                "task-9", null, null);
+
+            Map<String, Object> creds = getSessionCredentials(
+                service.startSession(request, "tenant-1", "org-test").sessionId());
+
+            assertThat(creds).containsEntry("__taskId__", "task-9");
+            assertThat(com.apimarketplace.agent.tools.authz.ToolAuthorizationScope.isUserPromptable(creds)).isFalse();
+            assertThat(com.apimarketplace.agent.tools.authz.ToolAuthorizationScope.questionReach(creds))
+                .isEqualTo(com.apimarketplace.agent.tools.authz.ToolAuthorizationScope.QuestionReach.CHANNEL);
+        }
+
+        @Test
+        @DisplayName("an unattended run and an armed agent keep their markers on the bridge session")
+        void unattendedAndArmedMarkersReachTheSession() throws Exception {
+            CliSessionStartRequest request = new CliSessionStartRequest(
+                null, null, "test-model", "conv-1", null, "stream-1", null, null, null, null, null, null,
+                null, true, true);
+
+            Map<String, Object> creds = getSessionCredentials(
+                service.startSession(request, "tenant-1", "org-test").sessionId());
+
+            assertThat(creds).containsEntry("__unattendedRun__", true)
+                .containsEntry("__requireToolAuthorization__", true);
+            assertThat(com.apimarketplace.agent.tools.authz.ToolAuthorizationScope.questionReach(creds))
+                .isEqualTo(com.apimarketplace.agent.tools.authz.ToolAuthorizationScope.QuestionReach.CHANNEL);
+        }
+
+        /**
+         * Prod 2026-09-23: agent(action='execute') ran a sub-agent on the bridge; its session said
+         * depth 0, so its ask_user parked a card for 112 s that nobody could see while the parent
+         * chat waited on it, and the person saw an agent that never answered.
+         */
+        @Test
+        @DisplayName("a sub-agent's session keeps its depth, so it never parks a card for a person")
+        void subAgentSessionKeepsItsDepth() throws Exception {
+            CliSessionStartRequest request = new CliSessionStartRequest(
+                null, null, "test-model", "conv-child", null, "stream-1", null, null, null, null, null, null,
+                null, null, null, 1);
+
+            Map<String, Object> creds = getSessionCredentials(
+                service.startSession(request, "tenant-1", "org-test").sessionId());
+
+            assertThat(creds).containsEntry("__agent_depth__", 1);
+            assertThat(com.apimarketplace.agent.tools.authz.ToolAuthorizationScope.isUserPromptable(creds)).isFalse();
+            assertThat(com.apimarketplace.agent.tools.authz.ToolAuthorizationScope.questionReach(creds))
+                .isEqualTo(com.apimarketplace.agent.tools.authz.ToolAuthorizationScope.QuestionReach.NONE);
+        }
+
+        @Test
+        @DisplayName("a workflow agent node's session never asks through a channel: no reply can re-enter it")
+        void workflowNodeSessionHasNoQuestionReach() throws Exception {
+            CliSessionStartRequest request = new CliSessionStartRequest(
+                null, null, "test-model", "conv-1", null, "stream-1", null, null, null, null, null, null,
+                null, null, null, null, "run-4");
+
+            Map<String, Object> creds = getSessionCredentials(
+                service.startSession(request, "tenant-1", "org-test").sessionId());
+
+            assertThat(creds).containsEntry("__workflowRunId__", "run-4");
+            assertThat(com.apimarketplace.agent.tools.authz.ToolAuthorizationScope.questionReach(creds))
+                .isEqualTo(com.apimarketplace.agent.tools.authz.ToolAuthorizationScope.QuestionReach.NONE);
+        }
+
+        @Test
+        @DisplayName("an armed agent bound to the session asks permission even if the bridge did not say so")
+        void armedBoundAgentIsArmedFromItsOwnRow() throws Exception {
+            String agentId = UUID.randomUUID().toString();
+            AgentEntity agent = mock(AgentEntity.class);
+            when(agent.getRequireToolAuthorization()).thenReturn(true);
+            when(agentService.getAgent(eq(UUID.fromString(agentId)), any(), any(), any()))
+                .thenReturn(java.util.Optional.of(agent));
+            CliSessionStartRequest request = new CliSessionStartRequest(
+                null, null, "test-model", "conv-1", null, "stream-1", null, agentId, null, null);
+
+            Map<String, Object> creds = getSessionCredentials(
+                service.startSession(request, "tenant-1", "org-test").sessionId());
+
+            assertThat(creds).containsEntry("__requireToolAuthorization__", true);
+        }
+
+        @Test
+        @DisplayName("a chat session carries none of the run markers, so it stays promptable")
+        void chatSessionHasNoRunMarkers() throws Exception {
+            CliSessionStartRequest request = new CliSessionStartRequest(
+                null, null, "test-model", "conv-1", null, "stream-1", null, null, null, null, null, null,
+                " ", false, false);
+
+            Map<String, Object> creds = getSessionCredentials(
+                service.startSession(request, "tenant-1", "org-test").sessionId());
+
+            assertThat(creds).doesNotContainKeys("__taskId__", "__unattendedRun__", "__requireToolAuthorization__");
+            assertThat(creds).containsEntry("__agent_depth__", 0);
+            assertThat(com.apimarketplace.agent.tools.authz.ToolAuthorizationScope.questionReach(creds))
+                .isEqualTo(com.apimarketplace.agent.tools.authz.ToolAuthorizationScope.QuestionReach.IN_APP);
         }
 
         @Test

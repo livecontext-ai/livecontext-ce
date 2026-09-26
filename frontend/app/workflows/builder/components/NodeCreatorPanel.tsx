@@ -596,7 +596,7 @@ export function NodeCreatorPanel({ isOpen, onClose, onSelectNode, currentWorkflo
         <div className="px-5 pt-4 sm:pt-4 flex-shrink-0">
           <div className="relative flex items-center">
             <div className="absolute left-3 pointer-events-none z-10"><Search className="h-4 w-4 text-gray-400" /></div>
-            <Input type="text" placeholder={t('searchPlaceholder', { context: navigationLevel === 'apis' ? 'mcp' : navigationLevel === 'tools' ? 'tools' : 'nodes' })} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9 pr-9" autoFocus />
+            <Input type="text" placeholder={navigationLevel === 'apis' ? t('searchIntegrations') : t('searchPlaceholder', { context: navigationLevel === 'tools' ? 'tools' : 'nodes' })} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9 pr-9" autoFocus />
             {searchQuery && <button onClick={() => setSearchQuery('')} className="absolute right-3 z-10 text-gray-400 hover:text-gray-600"><X className="h-4 w-4" /></button>}
           </div>
         </div>

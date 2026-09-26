@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { FOOTER_INTEGRATION_COUNT, WELL_KNOWN_INTEGRATIONS } from '../wellKnownIntegrations';
-import { MONO_DARK_ICON_SLUGS } from '@/lib/credentials/monoIconSlugs';
+import { DARK_ICON_SLUGS } from '@/lib/credentials/darkIconSlugs.generated';
 
 /**
  * The footer's fallback list must be real integrations, not plausible ones.
@@ -133,9 +133,16 @@ describe('well-known integrations fallback', () => {
    * `Math.max` is the right aggregator because one light region is enough to see the mark.
    */
   function rendersDark(iconSlug: string): boolean {
-    const svg = readFileSync(join(process.cwd(), 'public', 'icons', 'services', `${iconSlug}.svg`), 'utf8');
-    const fills = Array.from(svg.matchAll(/fill="(#[0-9a-fA-F]{3,6})"/g)).map((m) => m[1]);
-    if (!/fill="/.test(svg)) return true;
+    const svg = readFileSync(join(process.cwd(), 'public', 'icons', 'services', `${iconSlug}.svg`), 'utf8')
+      // Named colours are hex to this detector: OpenAI's current mark is `fill="black"`.
+      .replace(/\bblack\b/gi, '#000000')
+      .replace(/\bwhite\b/gi, '#ffffff');
+    // A fill is declared either as an attribute or in CSS (`style="fill:#..."`, `<style>`
+    // classes, which is how most brand kits export).
+    const fills = Array.from(svg.matchAll(/fill(?:="|:\s*)(#[0-9a-fA-F]{3,6})\b/g)).map((m) => m[1]);
+    // An embedded raster (a brand's own PNG favicon wrapped in <image>) declares no fill
+    // either, and is not black by default: it is not what this detector can judge.
+    if (!/fill(?:="|:)/.test(svg)) return !/<image\b/.test(svg);
     return fills.length > 0 && Math.max(...fills.map(luminance)) < 0.18;
   }
 
@@ -144,22 +151,24 @@ describe('well-known integrations fallback', () => {
     (_name, iconSlug) => {
       // Existing on disk is not the same as being visible. Zendesk shipped here declaring NO
       // fill at all, so the mark disappeared into the first band under the hero in dark mode
-      // while passing every other case. Artwork that renders dark must be declared in
-      // MONO_DARK_ICON_SLUGS, which flips it to white.
+      // while passing every other case. Artwork that renders dark must ship a
+      // `<key>.dark.svg`, which ServiceLogo draws on the dark theme instead.
       if (rendersDark(iconSlug)) {
-        expect(MONO_DARK_ICON_SLUGS.has(iconSlug)).toBe(true);
+        expect(DARK_ICON_SLUGS.has(iconSlug)).toBe(true);
       }
     },
   );
 
   it('proves the dark-legibility case is not vacuous', () => {
     // It has to count what the DETECTOR classifies, not what the set declares. An earlier
-    // version counted membership of MONO_DARK_ICON_SLUGS, and a review neutered rendersDark
+    // version counted membership of the dark-icon set, and a review neutered rendersDark
     // to a constant false with every case still green: the conditional above had gone
-    // silently vacuous and this case could not tell. Five entries classify dark today
-    // (github, openai, linear, dropbox, zendesk).
+    // silently vacuous and this case could not tell. Five entries classify dark today,
+    // github, openai, zendesk, threads and twitter (linear and dropbox left when their current,
+    // coloured marks replaced the old black ones).
     const detected = WELL_KNOWN_INTEGRATIONS.filter((i) => rendersDark(i.iconSlug));
-    expect(detected.length).toBeGreaterThanOrEqual(5);
+    expect(detected.map((i) => i.iconSlug)).toEqual(expect.arrayContaining(['github', 'openai', 'zendesk']));
+    expect(detected.length).toBeGreaterThanOrEqual(3);
   });
 
   it('detects both shapes of dark artwork, not just one', () => {

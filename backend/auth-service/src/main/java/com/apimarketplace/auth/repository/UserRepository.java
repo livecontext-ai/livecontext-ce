@@ -37,6 +37,18 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("SELECT u FROM User u WHERE u.email = :email AND u.authProvider = :provider")
     Optional<User> findByEmailAndProvider(@Param("email") String email, @Param("provider") AuthProvider provider);
 
+    /**
+     * The user's id when the account exists, holding a {@code FOR KEY SHARE} lock on its row until
+     * the caller's transaction ends; empty otherwise.
+     *
+     * <p>For a write that references {@code auth.users} by a header-supplied id: checking with
+     * {@code existsById} and then inserting leaves a window where a concurrent account deletion
+     * commits in between and the insert fails on the foreign key (a 500). Taken inside the same
+     * transaction as the insert, this lock makes the deletion wait for the insert instead.
+     */
+    @Query(value = "SELECT u.id FROM auth.users u WHERE u.id = :id FOR KEY SHARE", nativeQuery = true)
+    Optional<Long> lockExistingForKeyShare(@Param("id") Long id);
+
     boolean existsByUsername(String username);
 
     boolean existsByEmail(String email);
@@ -62,6 +74,18 @@ public interface UserRepository extends JpaRepository<User, Long> {
                AND u.id IN :userIds
             """)
     List<Long> findAdminIdsIn(@Param("userIds") java.util.Collection<Long> userIds);
+
+    /**
+     * Every enabled platform admin that Keycloak knows (a provider id), for the admin
+     * two-factor enforcement sweep. The admin list is a handful of rows.
+     */
+    @Query("""
+            SELECT DISTINCT u FROM User u JOIN u.roles r
+             WHERE r = 'ADMIN'
+               AND u.enabled = true
+               AND u.providerId IS NOT NULL
+            """)
+    List<User> findEnabledAdminsWithProviderId();
 
     /**
      * O(1) "does ANY account exist" probe (derived {@code LIMIT 1}, never a count
@@ -135,4 +159,68 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("SELECT u FROM User u WHERE u.enabled = false AND u.deactivatedAt IS NOT NULL " +
            "AND u.deactivatedAt < :cutoff")
     List<User> findAccountsPastGracePeriod(@Param("cutoff") LocalDateTime cutoff);
+
+    // ---- Lifecycle email context (V527). Each one is a single conditional UPDATE that
+    // returns 1 only when it CHANGED something, so the caller knows whether the Resend
+    // contact needs a sync, and no whole-row save can revert a concurrent login write. ----
+
+    /** An explicit pick in the UI always wins and pins the locale. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE User u SET u.locale = :locale, u.localeExplicit = true " +
+           "WHERE u.id = :userId AND (u.locale IS NULL OR u.locale <> :locale OR u.localeExplicit = false)")
+    int updateLocaleExplicit(@Param("userId") Long userId, @Param("locale") String locale);
+
+    /** The locale the app merely displayed: never overwrites an explicit pick. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE User u SET u.locale = :locale " +
+           "WHERE u.id = :userId AND u.localeExplicit = false AND (u.locale IS NULL OR u.locale <> :locale)")
+    int updateLocaleImplicit(@Param("userId") Long userId, @Param("locale") String locale);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE User u SET u.timeZone = :timeZone " +
+           "WHERE u.id = :userId AND (u.timeZone IS NULL OR u.timeZone <> :timeZone)")
+    int updateTimeZone(@Param("userId") Long userId, @Param("timeZone") String timeZone);
+
+    /** Write-once. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE User u SET u.signupCountry = :country WHERE u.id = :userId AND u.signupCountry IS NULL")
+    int captureSignupCountry(@Param("userId") Long userId, @Param("country") String country);
+
+    /**
+     * Write-once, for good: the capture instant survives the 12-month purge of the address,
+     * so an account whose IP was purged is never re-captured.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE User u SET u.signupIp = :ip, u.signupIpCapturedAt = :now " +
+           "WHERE u.id = :userId AND u.signupIp IS NULL AND u.signupIpCapturedAt IS NULL")
+    int captureSignupIp(@Param("userId") Long userId, @Param("ip") String ip, @Param("now") java.time.Instant now);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE User u SET u.marketingConsent = :consent, u.marketingConsentAt = :now WHERE u.id = :userId")
+    int updateMarketingConsent(@Param("userId") Long userId, @Param("consent") boolean consent,
+                               @Param("now") java.time.Instant now);
+
+    /** Returns 1 exactly once per account: the first workflow ever created. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE User u SET u.activatedAt = :now WHERE u.id = :userId AND u.activatedAt IS NULL")
+    int markActivatedIfFirst(@Param("userId") Long userId, @Param("now") java.time.Instant now);
+
+    /** Write-once: 1 for the ONE caller that may send user.signed_up, 0 for every later or racing one. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE User u SET u.lifecycleSignupEmittedAt = :now WHERE u.id = :userId AND u.lifecycleSignupEmittedAt IS NULL")
+    int markSignupEmittedIfFirst(@Param("userId") Long userId, @Param("now") java.time.Instant now);
+
+    /**
+     * Gives back a signup stamp whose welcome never left Resend: clears it only while it still
+     * holds {@code stampedAt}, the value the releasing attempt wrote, so it never undoes another claim.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE User u SET u.lifecycleSignupEmittedAt = NULL WHERE u.id = :userId AND u.lifecycleSignupEmittedAt = :stampedAt")
+    int releaseSignupEmitted(@Param("userId") Long userId, @Param("stampedAt") java.time.Instant stampedAt);
+
+    /** Nulls every signup IP captured before the cutoff (the 12-month retention). */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE User u SET u.signupIp = NULL " +
+           "WHERE u.signupIp IS NOT NULL AND u.signupIpCapturedAt < :cutoff")
+    int purgeSignupIpsCapturedBefore(@Param("cutoff") java.time.Instant cutoff);
 }

@@ -552,6 +552,146 @@ class DataSourceTableModuleTest {
         }
     }
 
+    // ==================== present ====================
+
+    @Nested
+    @DisplayName("present")
+    class PresentTests {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> viz(ToolExecutionResult result) {
+            return (Map<String, Object>) result.metadata().get("visualization");
+        }
+
+        @Test
+        @DisplayName("present emits present_table named after the table and echoes table_id")
+        void presentsTable() {
+            when(dataSourceService.getDataSource(5L)).thenReturn(Optional.of(fakeDs(5L, "Leads")));
+
+            ToolExecutionResult res = module.execute("present", Map.of("table_id", 5), TENANT, ctx()).orElseThrow();
+
+            assertThat(res.success()).isTrue();
+            assertThat(viz(res)).containsEntry("type", "present_table").containsEntry("id", "5").containsEntry("title", "Leads");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) res.data();
+            assertThat(data).containsEntry("presented", "table").containsEntry("table_id", "5");
+        }
+
+        @Test
+        @DisplayName("a table with a blank name is titled by its id, never an empty panel title")
+        void blankNameFallsBackToId() {
+            when(dataSourceService.getDataSource(5L)).thenReturn(Optional.of(fakeDs(5L, " ")));
+
+            ToolExecutionResult res = module.execute("present", Map.of("table_id", 5), TENANT, ctx()).orElseThrow();
+
+            assertThat(viz(res)).containsEntry("title", "Table #5");
+        }
+
+        @Test
+        @DisplayName("present obeys the agent's table allow-list exactly like get, and reads nothing")
+        void respectsAllowList() {
+            ToolExecutionContext restricted = new ToolExecutionContext(
+                TENANT, Map.of("allowedTableIds", List.of("8")), Map.of(), Set.of(), null, null, null, null);
+
+            ToolExecutionResult res = module.execute("present", Map.of("table_id", 5), TENANT, restricted).orElseThrow();
+
+            assertThat(res.errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
+            verifyNoInteractions(dataSourceService);
+        }
+
+        @Test
+        @DisplayName("present of another tenant's table is not found and carries no visualization")
+        void outOfScopeIsNotFound() {
+            when(dataSourceService.getDataSource(777L))
+                    .thenReturn(Optional.of(fakeDsScoped(777L, "OtherUsersTable", "other-tenant", null)));
+
+            ToolExecutionResult res = module.execute("present", Map.of("table_id", 777), TENANT, ctx()).orElseThrow();
+
+            assertThat(res.errorCode()).isEqualTo(ToolErrorCode.DATASOURCE_NOT_FOUND);
+            assertThat(res.metadata() == null || !res.metadata().containsKey("visualization")).isTrue();
+        }
+
+        @Test
+        @DisplayName("present of an unknown table is not found, and without table_id is a missing parameter")
+        void unknownAndMissing() {
+            when(dataSourceService.getDataSource(999L)).thenReturn(Optional.empty());
+
+            assertThat(module.execute("present", Map.of("table_id", 999), TENANT, ctx()).orElseThrow().errorCode())
+                    .isEqualTo(ToolErrorCode.DATASOURCE_NOT_FOUND);
+            assertThat(module.execute("present", Map.of(), TENANT, ctx()).orElseThrow().errorCode())
+                    .isEqualTo(ToolErrorCode.MISSING_PARAMETER);
+        }
+
+        @Test
+        @DisplayName("a read-only table agent may present: it changes nothing")
+        void readOnlyAgentMayPresent() {
+            when(dataSourceService.getDataSource(5L)).thenReturn(Optional.of(fakeDs(5L, "Leads")));
+            ToolExecutionContext readOnly = new ToolExecutionContext(
+                TENANT, Map.of("tableAccessMode", "read"), Map.of(), Set.of(), null, null, null, null);
+
+            assertThat(module.execute("present", Map.of("table_id", 5), TENANT, readOnly).orElseThrow().success()).isTrue();
+        }
+
+        @Test
+        @DisplayName("a member denied the table gets NOT_FOUND on present AND get, and nothing is shown")
+        void memberDeniedTableIsNotFound() {
+            DataSource ds = fakeDsScoped(5L, "Payroll", TENANT, "org-1");
+            when(dataSourceService.getDataSource(5L)).thenReturn(Optional.of(ds));
+            when(dataSourceService.canAccessViaOrg("org-1", TENANT, "5", "MEMBER")).thenReturn(false);
+            ToolExecutionContext member = new ToolExecutionContext(TENANT, Map.of(), Map.of(), Set.of(), null, null, "org-1", "MEMBER");
+
+            ToolExecutionResult presented = module.execute("present", Map.of("table_id", 5), TENANT, member).orElseThrow();
+            ToolExecutionResult read = module.execute("get", Map.of("table_id", 5), TENANT, member).orElseThrow();
+
+            assertThat(presented.errorCode()).isEqualTo(ToolErrorCode.DATASOURCE_NOT_FOUND);
+            assertThat(presented.metadata() == null || !presented.metadata().containsKey("visualization")).isTrue();
+            assertThat(read.errorCode()).isEqualTo(ToolErrorCode.DATASOURCE_NOT_FOUND);
+        }
+
+        @Test
+        @DisplayName("a member the workspace allows is shown the table")
+        void memberAllowedTableIsPresented() {
+            when(dataSourceService.getDataSource(5L)).thenReturn(Optional.of(fakeDsScoped(5L, "Leads", TENANT, "org-1")));
+            when(dataSourceService.canAccessViaOrg("org-1", TENANT, "5", "MEMBER")).thenReturn(true);
+            ToolExecutionContext member = new ToolExecutionContext(TENANT, Map.of(), Map.of(), Set.of(), null, null, "org-1", "MEMBER");
+
+            assertThat(module.execute("present", Map.of("table_id", 5), TENANT, member).orElseThrow().success()).isTrue();
+        }
+
+        @Test
+        @DisplayName("the agent's title wins over the table name")
+        void titleOverride() {
+            when(dataSourceService.getDataSource(5L)).thenReturn(Optional.of(fakeDs(5L, "Leads")));
+
+            ToolExecutionResult res = module.execute("present", Map.of("table_id", 5, "title", "This week's leads"),
+                    TENANT, ctx()).orElseThrow();
+
+            assertThat(viz(res)).containsEntry("title", "This week's leads");
+        }
+
+        @Test
+        @DisplayName("a failing lookup is reported as a failed present, not a success")
+        void lookupFailureIsReported() {
+            when(dataSourceService.getDataSource(5L)).thenThrow(new RuntimeException("db down"));
+
+            ToolExecutionResult res = module.execute("present", Map.of("table_id", 5), TENANT, ctx()).orElseThrow();
+
+            assertThat(res.errorCode()).isEqualTo(ToolErrorCode.EXECUTION_FAILED);
+            assertThat(res.error()).contains("Failed to present data source").contains("db down");
+        }
+
+        @Test
+        @DisplayName("get keeps answering the table itself and never switches the user's view")
+        void getDoesNotPresent() {
+            when(dataSourceService.getDataSource(5L)).thenReturn(Optional.of(fakeDs(5L, "Leads")));
+
+            ToolExecutionResult res = module.execute("get", Map.of("table_id", 5), TENANT, ctx()).orElseThrow();
+
+            assertThat(res.success()).isTrue();
+            assertThat(res.metadata() == null || !res.metadata().containsKey("visualization")).isTrue();
+        }
+    }
+
     // ==================== list ====================
 
     @Nested
@@ -832,7 +972,8 @@ class DataSourceTableModuleTest {
         @DisplayName("Should update with table_id")
         void shouldUpdateWithTableId() {
             when(dataSourceService.getDataSource(3L)).thenReturn(Optional.of(fakeDs(3L, "Old")));
-            when(dataSourceService.updateDataSource(eq(3L), eq("New"), any(), any()))
+            // The CALLER (tenant + role) is handed to the service, whose member gate judges them.
+            when(dataSourceService.updateDataSource(eq(3L), eq("New"), any(), any(), eq(TENANT), isNull()))
                     .thenReturn(fakeDs(3L, "New"));
 
             Map<String, Object> params = Map.of("table_id", 3, "name", "New");
@@ -901,7 +1042,8 @@ class DataSourceTableModuleTest {
             Optional<ToolExecutionResult> res = module.execute("delete", Map.of("table_id", 4), TENANT, ctx());
             assertThat(res).isPresent();
             assertThat(res.get().success()).isTrue();
-            verify(dataSourceService).deleteDataSource(4L);
+            // The CALLER (tenant + role), never the single-arg form that judges the table's owner.
+            verify(dataSourceService).deleteDataSource(4L, TENANT, null);
         }
 
         @Test

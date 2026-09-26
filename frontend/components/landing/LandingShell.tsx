@@ -105,11 +105,25 @@ export const landingChromeStyles = `
     --landing-icon-color: #f1f5f9;
   }
 
-  /* Mono-dark brand logos (github/openai/anthropic…) flip to white only when the
-     LANDING theme is dark - keyed off the landing root, not the <body> .dark, so
-     the public theme stays decoupled from the app theme. */
-  .landing-root.dark .logo-mono {
-    filter: brightness(0) invert(1);
+  /* Skip link (rendered only when a surface passes skipLinkTarget): off-screen
+     until focused, then pinned top-left above the sticky header (WCAG 2.4.1). */
+  .landing-root .landing-skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -4rem;
+    z-index: 100;
+    padding: 0.5rem 0.875rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--accent-foreground);
+    background: var(--accent-primary);
+    border-radius: 0.5rem;
+  }
+
+  .landing-root .landing-skip-link:focus {
+    top: 0.75rem;
+    outline: 2px solid var(--expression-color);
+    outline-offset: 2px;
   }
 
   /* The cookie consent banner mounts in the locale layout, OUTSIDE .landing-root,
@@ -443,14 +457,14 @@ export function LandingFooter({ siteBaseUrl, labels = DEFAULT_SHELL_LABELS }: { 
             click from an integration page and vice versa. */}
         <FooterIntegrations siteBaseUrl={siteBaseUrl} heading={labels.integrations} allLabel={labels.allIntegrations} />
         {/* The families the platform runs on. Named rather than counted: "275 models" tells
-            a visitor nothing, "Claude, GPT, Gemini, Grok" answers the question they came
+            a visitor nothing, "Claude, GPT, Gemini, DeepSeek" answers the question they came
             with. Each is checked against the catalogue seed by wellKnownModels.test.ts.
             The destination is /models, not the docs: the column pointed at the docs because
             no public page listed the models, which stopped being true when /models shipped.
             A visitor clicking "Claude" wants the list and its prices, not the BYOK setup
             guide, and /models links on to the docs for the setup half. Each family carries
-            its OWN provider filter, so the eight are eight destinations rather than one URL
-            printed eight times, and "Grok" lands on Grok. */}
+            its OWN provider filter, so the families are distinct destinations rather than one URL
+            printed several times, and "DeepSeek" lands on DeepSeek. */}
         <div>
           <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>{labels.models}</p>
           <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
@@ -571,9 +585,12 @@ interface LandingShellProps {
    *  site when this shell renders on a sub-host (the docs subdomain). Undefined
    *  elsewhere → links stay relative. */
   siteBaseUrl?: string;
+  /** Rendered as a "Skip to content" link BEFORE the header (the first Tab stop),
+   *  pointing at this element id. Styled here, in the shared chrome CSS (`.landing-skip-link`). */
+  skipLinkTarget?: string;
 }
 
-export function LandingShell({ children, extraStyles, headerExtra, themeStorageKey, themeRespectStored = true, siteBaseUrl }: LandingShellProps) {
+export function LandingShell({ children, extraStyles, headerExtra, themeStorageKey, themeRespectStored = true, siteBaseUrl, skipLinkTarget }: LandingShellProps) {
   return (
     <LandingThemeProvider
       className="min-h-screen flex flex-col"
@@ -585,6 +602,11 @@ export function LandingShell({ children, extraStyles, headerExtra, themeStorageK
           tag server-side and the full text client-side - a hydration mismatch
           (React #418) plus unstyled server HTML. */}
       <style>{landingChromeStyles + (extraStyles ?? '')}</style>
+      {skipLinkTarget ? (
+        <a href={`#${skipLinkTarget}`} className="landing-skip-link">
+          Skip to content
+        </a>
+      ) : null}
       <LandingHeader extra={headerExtra} siteBaseUrl={siteBaseUrl} />
       <main className="flex-1">{children}</main>
       <LandingFooter siteBaseUrl={siteBaseUrl} />

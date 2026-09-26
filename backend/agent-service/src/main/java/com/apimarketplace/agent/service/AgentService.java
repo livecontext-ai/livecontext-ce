@@ -1149,6 +1149,78 @@ public class AgentService {
     }
 
     /**
+     * Choose where this agent's permission requests and questions are sent (V523): one of the
+     * workspace's chat destinations, or {@code null} for the workspace default. Same org-scope +
+     * write-access gate as {@link #setInactivityTimeout}.
+     *
+     * <p>The id is not checked against the destinations here: they live in the orchestrator's
+     * schema, which this service does not read. The orchestrator checks it at delivery, against
+     * the request's own workspace, and never falls back to another chat when it does not match.
+     */
+    @Transactional
+    public AgentEntity setChatChannelLinkId(UUID id, String tenantId, String callerOrgId, UUID chatChannelLinkId) {
+        AgentEntity existing = agentRepository.findById(id)
+            .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + id));
+
+        String agentOrgId = existing.getOrganizationId();
+        if (!isInScope(existing, tenantId, callerOrgId)) {
+            if (agentOrgId != null) {
+                logger.warn("OrgAccess denied: user {} (active org {}) not in scope to set the chat destination of agent {} (org {})",
+                        tenantId, callerOrgId, id, agentOrgId);
+                throw new com.apimarketplace.auth.client.access.OrgAccessDeniedException("agent", id.toString());
+            }
+            throw new IllegalArgumentException("Agent tenant mismatch");
+        }
+        String callerOrgRole = com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole();
+        assertNotViewerWrite(agentOrgId, tenantId, callerOrgRole, id, "set the chat destination of");
+        if (agentOrgId != null
+                && !orgAccessService.canWrite(agentOrgId, tenantId, "agent", id.toString(), callerOrgRole)) {
+            logger.warn("OrgAccess deny-list: user {} (role {}) restricted from setting the chat destination of agent {} in org {}",
+                    tenantId, callerOrgRole, id, agentOrgId);
+            throw new com.apimarketplace.auth.client.access.OrgAccessDeniedException("agent", id.toString());
+        }
+
+        existing.setChatChannelLinkId(chatChannelLinkId);
+        return agentRepository.save(existing);
+    }
+
+    /**
+     * V524 - switch the agent's out-of-app delivery on or off. Same gate as
+     * {@link #setChatChannelLinkId}. Switching it off also disarms {@code requireToolAuthorization}:
+     * asking permission only makes sense where the person can be asked, and an armed agent with no
+     * channel would refuse every sensitive action in its unattended runs while asking nobody.
+     */
+    @Transactional
+    public AgentEntity setChatChannelEnabled(UUID id, String tenantId, String callerOrgId, boolean enabled) {
+        AgentEntity existing = agentRepository.findById(id)
+            .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + id));
+
+        String agentOrgId = existing.getOrganizationId();
+        if (!isInScope(existing, tenantId, callerOrgId)) {
+            if (agentOrgId != null) {
+                logger.warn("OrgAccess denied: user {} (active org {}) not in scope to switch the chat channel of agent {} (org {})",
+                        tenantId, callerOrgId, id, agentOrgId);
+                throw new com.apimarketplace.auth.client.access.OrgAccessDeniedException("agent", id.toString());
+            }
+            throw new IllegalArgumentException("Agent tenant mismatch");
+        }
+        String callerOrgRole = com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole();
+        assertNotViewerWrite(agentOrgId, tenantId, callerOrgRole, id, "switch the chat channel of");
+        if (agentOrgId != null
+                && !orgAccessService.canWrite(agentOrgId, tenantId, "agent", id.toString(), callerOrgRole)) {
+            logger.warn("OrgAccess deny-list: user {} (role {}) restricted from switching the chat channel of agent {} in org {}",
+                    tenantId, callerOrgRole, id, agentOrgId);
+            throw new com.apimarketplace.auth.client.access.OrgAccessDeniedException("agent", id.toString());
+        }
+
+        existing.setChatChannelEnabled(enabled);
+        if (!enabled) {
+            existing.setRequireToolAuthorization(false);
+        }
+        return agentRepository.save(existing);
+    }
+
+    /**
      * Patch the per-agent compaction overrides (enable + cadence), V350. Runs the
      * EXACT same org-scope + write-access gate as {@link #setBacklogEnabled} /
      * {@link #updateAgent}. Per-field patch semantics: a {@code *Present=false} flag
@@ -1735,6 +1807,56 @@ public class AgentService {
      */
     private void validateGuardOverrides(Map<String, Integer> guardOverrides) {
         com.apimarketplace.agent.config.GuardOverrides.validate(guardOverrides);
+    }
+
+    /**
+     * Arm or disarm an agent's tool-authorization requirement (V299).
+     *
+     * <p>Armed, this agent asks permission for a sensitive action in the runs that are
+     * ITS OWN and are exempt by default: a schedule, a webhook, a task, and its own
+     * chat. Disarmed (the default) it behaves as it always has.
+     *
+     * <p>Two contexts are deliberately NOT covered: the agent running inside a workflow
+     * node, and the agent called as a sub-agent. Neither carries a stream id in its
+     * credentials, so the authorization park cannot paint a card and returns before the
+     * out-of-app delivery; arming them would refuse the action while asking nobody.
+     * Covering them means giving those executions a conversation and a stream first.
+     *
+     * <p>Its own method, not another parameter on the update overloads. The flag
+     * decides whether an unattended run pauses on a human, so it must be set by a
+     * call that says so, and a partial update that forgets to carry it must not be
+     * able to disarm an agent by omission.
+     *
+     * @return the saved entity, so the caller can report the value that actually landed
+     */
+    /** Same, in the 4-argument shape the other per-agent patch methods use. */
+    @Transactional
+    public AgentEntity setRequireToolAuthorization(UUID agentId, String tenantId, String orgId,
+                                                   boolean required) {
+        return setRequireToolAuthorization(agentId, tenantId, orgId, null, required);
+    }
+
+    @Transactional
+    public AgentEntity setRequireToolAuthorization(UUID agentId, String tenantId, String orgId,
+                                                   String orgRole, boolean required) {
+        AgentEntity agent = getAgent(agentId, tenantId, orgId, orgRole)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
+        assertCanWriteAgent(agentId, tenantId, orgId);
+        if (required && !agent.isChatChannelEnabled()) {
+            // Asking only makes sense where the person can be asked: with the agent's chat channel
+            // off, an armed agent would refuse every sensitive action in its unattended runs.
+            throw new ChannelRequiredException();
+        }
+        agent.setRequireToolAuthorization(required);
+        return agentRepository.save(agent);
+    }
+
+    /** Arming sensitive-action asking on an agent whose chat channel is off (V524). */
+    public static class ChannelRequiredException extends IllegalArgumentException {
+        public ChannelRequiredException() {
+            super("This agent's chat channel is off, so it has nowhere to ask for permission. Turn its "
+                    + "chat channel on first (chat_channel_enabled=true), then ask for permission.");
+        }
     }
 
     /**

@@ -448,8 +448,11 @@ class ResolvedParamsSecretExclusionTest {
                 org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.any()))
             .thenAnswer(call -> {
                 Map<String, Object> resolved = new java.util.LinkedHashMap<>();
-                ((Map<?, ?>) call.getArgument(0)).forEach((k, ignored) ->
-                    resolved.put(String.valueOf(k), value));
+                // Only a template resolves; a literal ("root", a default filename) comes back as
+                // itself, as the real adapter returns it.
+                ((Map<?, ?>) call.getArgument(0)).forEach((k, v) ->
+                    resolved.put(String.valueOf(k),
+                        v instanceof String s && s.contains("{{") ? value : v));
                 return resolved;
             });
         return adapter;

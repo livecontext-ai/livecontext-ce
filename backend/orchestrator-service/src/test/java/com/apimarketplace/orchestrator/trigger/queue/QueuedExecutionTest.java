@@ -76,4 +76,41 @@ class QueuedExecutionTest {
     private QueuedExecution createExecution(int priority) {
         return new QueuedExecution(null, "trigger:test", TriggerType.MANUAL, Map.of(), priority);
     }
+
+    @Test
+    void startedItemCannotBeCancelled() {
+        QueuedExecution item = new QueuedExecution(null, "trigger:t", TriggerType.MANUAL, Map.of(), 1);
+
+        assertTrue(item.tryStart());
+        assertFalse(item.tryCancel(), "a started item must report that it could not be cancelled");
+        assertFalse(item.isCancelled());
+    }
+
+    @Test
+    void cancelledItemCannotBeStarted() {
+        QueuedExecution item = new QueuedExecution(null, "trigger:t", TriggerType.MANUAL, Map.of(), 1);
+
+        assertTrue(item.tryCancel());
+        assertTrue(item.tryCancel(), "cancelling twice stays cancelled");
+        assertFalse(item.tryStart(), "a worker must skip a cancelled item");
+        assertTrue(item.isCancelled());
+    }
+
+    @Test
+    void racingStartAndCancelHaveExactlyOneWinner() throws Exception {
+        for (int i = 0; i < 500; i++) {
+            QueuedExecution item = new QueuedExecution(null, "trigger:t", TriggerType.MANUAL, Map.of(), 1);
+            java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.atomic.AtomicBoolean started = new java.util.concurrent.atomic.AtomicBoolean();
+            Thread worker = new Thread(() -> {
+                try { go.await(); } catch (InterruptedException ignored) { }
+                started.set(item.tryStart());
+            });
+            worker.start();
+            go.countDown();
+            boolean cancelled = item.tryCancel();
+            worker.join();
+            assertNotEquals(started.get(), cancelled, "exactly one of start and cancel must win");
+        }
+    }
 }

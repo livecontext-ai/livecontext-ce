@@ -6,6 +6,18 @@ posthog:
   api-key: ${POSTHOG_API_KEY:}
   host: ${POSTHOG_HOST:https://eu.i.posthog.com}
 
+# Cloud lifecycle emails (Resend contacts + events feeding Resend Automations). OFF by
+# default: inert unless enabled=true AND an api key is set, which only cloud prod does
+# (LIFECYCLE_RESEND_API_KEY comes from the k8s secret). The CE monolith never sets them.
+lifecycle:
+  resend:
+    enabled: ${LIFECYCLE_RESEND_ENABLED:false}
+    api-key: ${LIFECYCLE_RESEND_API_KEY:}
+    base-url: ${LIFECYCLE_RESEND_BASE_URL:https://api.resend.com}
+  # 12-month retention of auth.users.signup_ip (abuse prevention only). Both editions.
+  signup-ip:
+    purge-cron: ${LIFECYCLE_SIGNUP_IP_PURGE_CRON:0 30 3 * * *}
+
 # Service CLOUD UNIQUEMENT. Le monolith CE charge ce JAR via dépendance Maven; les beans KC restent
 # inactifs en CE via @ConditionalOnProperty(auth.mode=keycloak, matchIfMissing=false).
 # Voir CLAUDE.md section "Règle architecturale CE / Cloud".

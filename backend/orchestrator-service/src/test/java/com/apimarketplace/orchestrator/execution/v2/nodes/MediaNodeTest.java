@@ -1402,6 +1402,36 @@ class MediaNodeTest {
         }
 
         @Test
+        @DisplayName("cues that resolve to a JSON STRING (a code or LLM step's output) are parsed; they used to be refused as not an array")
+        @SuppressWarnings("unchecked")
+        void jsonStringCuesAreParsed() {
+            stubRender();
+            Map<String, Object> p = params("cues", "[{\"start_seconds\":0,\"end_seconds\":2.4,\"text\":\"Hello\"}]");
+
+            NodeExecutionResult result = node(p).execute(context);
+
+            assertTrue(result.isSuccess(), "expected success, got: " + result.errorMessage());
+            verify(mediaRenderService).render(anyString(), any(), anyString(), anyString(),
+                anyInt(), anyInt(), any(), anyString(), optionsCaptor.capture(), anyList());
+            List<Map<String, Object>> cues = (List<Map<String, Object>>) optionsCaptor.getValue().get("cues");
+            assertEquals(1, cues.size());
+            assertEquals("Hello", cues.get(0).get("text"));
+        }
+
+        @Test
+        @DisplayName("a resolution that throws FAILS the node; it used to render with the raw {{...}} params")
+        void resolutionFailureFailsTheNode() {
+            when(templateAdapter.resolveTemplates(anyMap(), any()))
+                .thenThrow(new IllegalStateException("unknown node reference: core:clip"));
+
+            NodeExecutionResult result = node(params()).execute(context);
+
+            assertFalse(result.isSuccess());
+            verify(mediaRenderService, never()).render(anyString(), any(), anyString(), anyString(),
+                anyInt(), anyInt(), any(), anyString(), anyMap(), anyList());
+        }
+
+        @Test
         @DisplayName("missing video -> failure naming the param an agent must map")
         void missingVideoFails() {
             Map<String, Object> params = new LinkedHashMap<>();

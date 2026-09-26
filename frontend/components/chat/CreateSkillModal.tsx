@@ -3,11 +3,11 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Zap, Check, Info, RotateCcw, Globe
+  Zap, Check, RotateCcw, Globe
 } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { orchestratorApi } from '@/lib/api/orchestrator';
 import type { Skill } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
@@ -184,19 +184,10 @@ export function CreateSkillModal({ onClose, onSkillCreated, skill, folderId }: C
 
               {/* Description */}
               <div>
-                <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                   {t('descriptionLabel')} *
-                  <TooltipProvider delayDuration={0}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs">
-                        <p className="text-xs">{t('descriptionInfo')}</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </label>
+                  <InfoPopover label={t('descriptionLabel')}>{t('descriptionInfo')}</InfoPopover>
+                </span>
                 <textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
@@ -234,19 +225,10 @@ export function CreateSkillModal({ onClose, onSkillCreated, skill, folderId }: C
 
               {/* Instructions */}
               <div>
-                <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                   {t('instructionsLabel')} *
-                  <TooltipProvider delayDuration={0}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs">
-                        <p className="text-xs">{t('instructionsInfo')}</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </label>
+                  <InfoPopover label={t('instructionsLabel')}>{t('instructionsInfo')}</InfoPopover>
+                </span>
                 <textarea
                   value={instructions}
                   onChange={(e) => setInstructions(e.target.value)}

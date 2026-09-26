@@ -1,5 +1,6 @@
 package com.apimarketplace.conversation.controller;
 
+import com.apimarketplace.agent.tools.authz.AuthorizationAsk;
 import com.apimarketplace.conversation.dto.ConversationDto;
 import com.apimarketplace.conversation.dto.CreateConversationDto;
 import com.apimarketplace.conversation.dto.MessageDto;
@@ -821,6 +822,14 @@ public class ConversationController {
      * the case where a fresh turn has to replay the call - writing one in the other case
      * would leave an unused grant that silently authorizes the NEXT call of the same rule.
      * The pending action is cleared either way.
+     *
+     * <p>An optional {@code askFingerprint} narrows that grant to the call that asked, so the
+     * fresh turn replays THAT call and no other call of the same rule. The chat-button path
+     * sends it because the person answering is not watching what the agent does next and the
+     * turn that spends the grant may be a scheduled one, hours later. The in-app card sends
+     * none and keeps the rule-wide grant it has always written: there the approved call
+     * resumes in place, in front of the person who approved it. {@code remember=true} is a
+     * deliberate standing choice about the RULE, so it is never narrowed.
      */
     @PostMapping("/{conversationId}/tool-authorization/approve")
     public ResponseEntity<Map<String, Object>> approveToolAuthorization(
@@ -839,6 +848,8 @@ public class ConversationController {
             return ResponseEntity.badRequest().body(Map.of("error", "rule is required"));
         }
         boolean remember = request != null && Boolean.TRUE.equals(request.get("remember"));
+        String askFingerprint = gateKeyOf(request, "askFingerprint");
+        boolean scopedToOneAsk = false;
         // Release the parked call first, because whether one was released decides how this
         // approval must be recorded.
         String gateKey = gateKeyOf(request, "toolCallId");
@@ -849,12 +860,15 @@ public class ConversationController {
         // call of the same rule with no card at all. Releasing IS the authorization here.
         // "Toujours autoriser" is a deliberate standing choice and is persisted regardless.
         if (remember || !released) {
-            toolAuthorizationApprovalService.approve(conversationId, rule, remember);
+            String granted = remember ? rule : AuthorizationAsk.scopedGrant(rule, askFingerprint);
+            scopedToOneAsk = !granted.equals(rule);
+            toolAuthorizationApprovalService.approve(conversationId, granted, remember);
         }
         // Clear ONLY this rule's card so other parallel cards stay pending.
         pendingActionService.clearOnePendingAction(conversationId, "auth:" + rule);
-        logger.info("🔓 [TOOL_AUTH] Approved rule {} for conversation {} (remember={}, parkedCallReleased={})",
-                rule, conversationId, remember, released);
+        logger.info("🔓 [TOOL_AUTH] Approved rule {} for conversation {} (remember={}, parkedCallReleased={}, "
+                        + "scopedToOneAsk={})",
+                rule, conversationId, remember, released, scopedToOneAsk);
         return ResponseEntity.ok(Map.of(
             "conversationId", conversationId,
             "rule", rule,

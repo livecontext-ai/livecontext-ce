@@ -5,6 +5,7 @@ import com.apimarketplace.auth.credential.domain.PlatformCredentialModels.Platfo
 import com.apimarketplace.auth.credential.util.ClientIdMasker;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Tenant-facing summary of a custom OAuth connection (a tenant-owned
@@ -31,7 +32,11 @@ public record MyOAuthAppDto(
         // Org that owns this connection. null = personal scope (visible in every
         // workspace). When set, the connection is scoped to that workspace; the
         // frontend compares it to the active org to render a scope badge.
-        String organizationId
+        String organizationId,
+        // V513: the catalog scopes this own OAuth client chose to request. Empty = no
+        // selection, so every catalog scope is requested. Scope names are public catalog
+        // data, not secrets.
+        List<String> selectedScopes
 ) {
 
     public static MyOAuthAppDto from(PlatformCredential c) {
@@ -55,7 +60,8 @@ public record MyOAuthAppDto(
                 c.createdAt(),
                 c.updatedAt(),
                 c.createdBy(),
-                c.organizationId()
+                c.organizationId(),
+                c.selectedScopeList()
         );
     }
 
@@ -76,7 +82,8 @@ public record MyOAuthAppDto(
                 response.createdAt(),
                 response.updatedAt(),
                 null,
-                response.organizationId()
+                response.organizationId(),
+                response.selectedScopes() != null ? response.selectedScopes() : List.of()
         );
     }
 }

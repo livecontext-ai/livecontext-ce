@@ -18,6 +18,8 @@ interface UseDirtyStateOptions {
   isRunMode: boolean;
   onDirtyChange?: (isDirty: boolean) => void;
   onRefreshBlocked?: () => void;
+  /** The canvas's reading direction: changing it is an edit (see computeGraphSignature). */
+  layoutDirection?: string;
 }
 
 interface UseDirtyStateReturn {
@@ -40,6 +42,7 @@ export function useDirtyState({
   isRunMode,
   onDirtyChange,
   onRefreshBlocked,
+  layoutDirection,
 }: UseDirtyStateOptions): UseDirtyStateReturn {
   const [isDirty, setIsDirty] = React.useState(false);
   const initialStateHashRef = React.useRef<string | null>(null);
@@ -50,8 +53,13 @@ export function useDirtyState({
   // selection) are stripped so only real user changes trigger dirty state. The
   // signature lives in ./graphSignature because useHistory needs the same answer
   // to "is this a user edit?" - see the note there.
+  // Through a ref so `resetDirtyState` keeps its identity (callers hold it in effects),
+  // while still hashing the direction of the moment it is called: right after a Save.
+  const layoutDirectionRef = React.useRef(layoutDirection);
+  layoutDirectionRef.current = layoutDirection;
   const computeStateHash = React.useCallback(
-    (nodesList: Node[], edgesList: Edge[]) => computeGraphSignature(nodesList, edgesList),
+    (nodesList: Node[], edgesList: Edge[]) =>
+      computeGraphSignature(nodesList, edgesList, layoutDirectionRef.current),
     []
   );
 
@@ -95,7 +103,7 @@ export function useDirtyState({
     if (hasChanges !== isDirty) {
       setIsDirty(hasChanges);
     }
-  }, [workflowLoaded, nodes, edges, computeStateHash, isDirty]);
+  }, [workflowLoaded, nodes, edges, layoutDirection, computeStateHash, isDirty]);
 
   // Notify parent when dirty state changes + broadcast via CustomEvent
   React.useEffect(() => {

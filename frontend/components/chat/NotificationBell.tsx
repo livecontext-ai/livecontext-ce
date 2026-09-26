@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
-import { Bell, Bot, AppWindow, Workflow, Clock, Webhook, MessageSquare, FormInput, Zap, Trash2, ChevronLeft, ChevronRight, UserPlus, Table, Sparkles, BookOpen, Monitor, Share2, Copy, Check, ExternalLink, MessageCircle, MessagesSquare, FileText, Trophy } from 'lucide-react';
+import { Bell, Bot, AppWindow, Workflow, Clock, Webhook, MessageSquare, FormInput, Zap, Trash2, ChevronLeft, ChevronRight, UserPlus, Table, Sparkles, BookOpen, Monitor, Share2, Copy, Check, ExternalLink, MessageCircle, MessagesSquare, FileText, Trophy, ClipboardList, KeyRound, Coins } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { EpochStatusIcon } from '@/components/workflow/EpochStatusIcon';
@@ -16,7 +16,7 @@ import { useNotificationsPaged } from '@/hooks/useNotificationsPaged';
 import { useRecentActivity } from '@/hooks/useRecentActivity';
 import { useSharedConversations } from '@/hooks/useSharedConversations';
 import { useCurrentOrg } from '@/lib/stores/current-org-store';
-import type { NotificationItem } from '@/lib/api/orchestrator/home-status.service';
+import type { NotificationItem, SubjectType } from '@/lib/api/orchestrator/home-status.service';
 import type { ActiveAutomation, TriggerType } from '@/lib/api/orchestrator/dashboard.service';
 import { KIND_TO_NODE_ICON_KEY, TRIGGER_KIND_ORDER } from '@/lib/api/orchestrator/dashboard.service';
 import type { RecentActivityItem, ResourceKind } from '@/lib/api/orchestrator/recent-activity.service';
@@ -24,6 +24,7 @@ import { RESOURCE_KIND_ORDER } from '@/lib/api/orchestrator/recent-activity.serv
 import { shareLinkUrl, type SharedLink } from '@/lib/api/sharing.service';
 import { formatUtcDate, parseUtcAware } from '@/lib/utils/dateFormatters';
 import { RunApprovalsDialog } from '@/components/approvals/RunApprovalsDialog';
+import { track } from '@/lib/analytics/analytics';
 import { TriggerRowActions, TRIGGER_ROW_ACTIONS_YIELD, hasTriggerRowActions } from './TriggerRowActions';
 
 // 4-tab bell:
@@ -204,8 +205,15 @@ export function NotificationBell() {
   // from a genuinely empty inbox - so opening the bell early bounced the user to
   // Activity and hid rows that were about to land one tick later.
   const handleOpenChange = (next: boolean) => {
+    let openingTab = tab;
     if (next && !inboxLoading && unreadCount === 0 && items.length === 0) {
-      setTab(automations.length > 0 ? 'triggers' : 'activity');
+      openingTab = automations.length > 0 ? 'triggers' : 'activity';
+      setTab(openingTab);
+    }
+    // Reported on the open transition only (a Radix close also lands here), with the tab the
+    // bell actually opens onto after the empty-inbox fallback above.
+    if (next && !open) {
+      track('notification_bell_opened', { unread_count: unreadCount, tab: openingTab });
     }
     // The bell stays mounted for the whole session, so without this reset the
     // Triggers tab would keep whatever chip was selected on a previous visit.
@@ -221,7 +229,20 @@ export function NotificationBell() {
   // visibility without an eager fetch. The red unread dot and blue imminent
   // ring still convey state on top of the always-present icon.
 
+  const selectTab = (next: Tab) => {
+    if (next !== tab) track('notification_tab_changed', { tab: next });
+    setTab(next);
+  };
+
   const handleRowClick = (item: NotificationItem) => {
+    // Enums and a boolean only: the subject's NAME is user content and never leaves the browser.
+    track('notification_row_clicked', {
+      category: item.category.toLowerCase(),
+      subject_type: String(item.subjectType).toLowerCase(),
+      severity: item.severity,
+      unread: item.unread,
+      tab: 'inbox',
+    });
     setOpen(false);
     router.push(notificationHref(item));
   };
@@ -237,6 +258,13 @@ export function NotificationBell() {
   };
 
   const handleAutomationClick = (automation: ActiveAutomation) => {
+    // A Triggers row is not a notification: it has no category, severity nor read state, so it
+    // is reported under the fixed category 'automation' with only the resource type beside it.
+    track('notification_row_clicked', {
+      category: 'automation',
+      subject_type: String(automation.resourceType).toLowerCase(),
+      tab: 'triggers',
+    });
     setOpen(false);
     router.push(resourceHref(automation));
   };
@@ -312,23 +340,23 @@ export function NotificationBell() {
         <div className="flex items-center border-b border-gray-200/70 dark:border-gray-700/70">
           <TabButton
             active={tab === 'inbox'}
-            onClick={() => setTab('inbox')}
+            onClick={() => selectTab('inbox')}
             label={t('inboxTab')}
             badge={unreadCount}
           />
           <TabButton
             active={tab === 'triggers'}
-            onClick={() => setTab('triggers')}
+            onClick={() => selectTab('triggers')}
             label={t('triggersTab')}
           />
           <TabButton
             active={tab === 'activity'}
-            onClick={() => setTab('activity')}
+            onClick={() => selectTab('activity')}
             label={t('activityTab')}
           />
           <TabButton
             active={tab === 'shared'}
-            onClick={() => setTab('shared')}
+            onClick={() => selectTab('shared')}
             label={t('sharedTab')}
           />
           <span className="flex-1" />
@@ -1062,41 +1090,7 @@ function InboxList({
               aria-hidden="true"
             />
           )}
-          {/* P7: CREDENTIAL rows render the integration's ServiceIcon next to
-              the severity dot so users can recognize the API at a glance
-              ("googlecalendar" → Google Calendar logo). TRIGGER rows render
-              a kind-specific lucide icon (Clock / Webhook / chat / form) so
-              "1 schedule disabled" is visually distinguishable from
-              "1 webhook disabled" without reading the title. Other subject
-              types keep the dot-only layout. */}
-          {item.subjectType === 'CREDENTIAL' && item.integration && (
-            <ServiceIcon
-              iconSlug={item.integration}
-              size="sm"
-              className="relative z-[1] mt-0.5 shrink-0"
-            />
-          )}
-          {item.subjectType === 'TRIGGER' && (() => {
-            const Icon = triggerKindIcon(item.triggerKind);
-            return (
-              <Icon
-                className="relative z-[1] mt-0.5 h-4 w-4 shrink-0 text-theme-muted"
-                aria-hidden="true"
-              />
-            );
-          })()}
-          {item.subjectType === 'ORG_INVITATION' && (
-            <UserPlus
-              className="relative z-[1] mt-0.5 h-4 w-4 shrink-0 text-theme-muted"
-              aria-hidden="true"
-            />
-          )}
-          {item.subjectType === 'BADGE' && (
-            <Trophy
-              className="relative z-[1] mt-0.5 h-4 w-4 shrink-0 text-amber-500"
-              aria-hidden="true"
-            />
-          )}
+          <InboxRowIcon item={item} />
           <span className="relative z-[1] flex-1 min-w-0 pointer-events-none">
             <span className="block text-sm text-theme-primary truncate">
               {subjectLabel(item, tBadges)}
@@ -1618,6 +1612,74 @@ function resourceIcon(type: ActiveAutomation['resourceType']) {
 }
 
 /**
+ * Leading icon of an inbox row, so every row has a visual anchor next to its
+ * severity dot. A failed run carries the red "failed" mark the Triggers tab's
+ * last-run line draws, whatever its subject. Every other row carries the icon
+ * of its subject: the integration's own logo for a credential
+ * ("googlecalendar" -> Google Calendar), the kind of trigger (Clock / Webhook /
+ * chat / form), else the icon the rest of the app uses for that resource.
+ *
+ * The subject switch is exhaustive over {@link SubjectType}: a new backend
+ * subject type fails to compile here until it has an icon, which is how
+ * AGENT_TASK ("task assigned"), APPLICATION, AGENT, BILLING and non-failure
+ * WORKFLOW rows once shipped with a bare dot.
+ */
+function InboxRowIcon({ item }: { item: NotificationItem }) {
+  if (item.category === 'RUN_FAILED') {
+    return (
+      <span
+        data-testid="inbox-run-failed-icon"
+        className="relative z-[1] mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center"
+      >
+        <EpochStatusIcon status="FAILED" size="sm" />
+      </span>
+    );
+  }
+  const cls = 'relative z-[1] mt-0.5 h-4 w-4 shrink-0 text-theme-muted';
+  const type: SubjectType = item.subjectType;
+  switch (type) {
+    case 'CREDENTIAL': {
+      // One look for "no logo", whether the slug is missing or its logo fails to load.
+      const key = <KeyRound className={cls} aria-hidden="true" data-testid="inbox-subject-icon-CREDENTIAL" />;
+      return item.integration
+        ? <ServiceIcon iconSlug={item.integration} size="sm" className="relative z-[1] mt-0.5 shrink-0" fallbackIcon={key} />
+        : key;
+    }
+    case 'TRIGGER': {
+      const Icon = triggerKindIcon(item.triggerKind);
+      return <Icon className={cls} aria-hidden="true" data-testid="inbox-subject-icon-TRIGGER" />;
+    }
+    case 'WORKFLOW':
+      return <Workflow className={cls} aria-hidden="true" data-testid="inbox-subject-icon-WORKFLOW" />;
+    case 'AGENT_TASK':
+      return <ClipboardList className={cls} aria-hidden="true" data-testid="inbox-subject-icon-AGENT_TASK" />;
+    case 'APPLICATION':
+      return <AppWindow className={cls} aria-hidden="true" data-testid="inbox-subject-icon-APPLICATION" />;
+    case 'ORG_INVITATION':
+      return <UserPlus className={cls} aria-hidden="true" data-testid="inbox-subject-icon-ORG_INVITATION" />;
+    case 'AGENT':
+      return <Bot className={cls} aria-hidden="true" data-testid="inbox-subject-icon-AGENT" />;
+    case 'BILLING':
+      return <Coins className={cls} aria-hidden="true" data-testid="inbox-subject-icon-BILLING" />;
+    case 'BADGE':
+      return (
+        <Trophy
+          className="relative z-[1] mt-0.5 h-4 w-4 shrink-0 text-amber-500"
+          aria-hidden="true"
+          data-testid="inbox-subject-icon-BADGE"
+        />
+      );
+    default: {
+      // Unreachable while the union is exhaustive; a value from a newer backend
+      // still gets a neutral bell rather than a bare dot.
+      const unknown: never = type;
+      void unknown;
+      return <Bell className={cls} aria-hidden="true" data-testid="inbox-subject-icon-UNKNOWN" />;
+    }
+  }
+}
+
+/**
  * Per-kind lucide icon for TRIGGER bell rows. Mirrors the emitter contract in
  * {@code TriggerLifecycleManager.emitTriggerDisabledAfterCommit} which writes
  * one of {@code "schedule" | "webhook" | "chat" | "form"} to
@@ -1691,10 +1753,20 @@ function notificationHref(item: NotificationItem): string {
     }
     case 'ORG_INVITATION':
       return `/app/invitations`;
+    case 'BILLING':
+      // Credits running low or exhausted: the page where credits are added.
+      return `/app/settings/billing`;
     case 'BADGE':
       // The trophy wall is a tab of the settings overview page, which reads the
       // active tab from `?tab=` on mount.
       return `/app/settings/overview?tab=trophies`;
+    case 'AGENT':
+      // Same idiom `resourceHref` uses for an agent below, and for the same reason:
+      // no per-agent page exists, so the deep link opens the right-side panel on the
+      // agent list. subjectId IS the agent id for this subject type. An AGENT item is
+      // about how an agent is configured rather than about something it produced, so
+      // the panel that holds the setting is the right landing place.
+      return `/app/agent?openAgent=${item.subjectId}`;
     default:
       // Forward-compat for unknown subject_types: land on the app root
       // which redirects to the user's chat home. Never `/app/dashboard`

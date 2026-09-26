@@ -20,10 +20,10 @@
  */
 
 import React from 'react';
-import { Coins, Info, Plus } from 'lucide-react';
+import { Coins, Plus } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { formatUtcDateOrNull } from '@/lib/utils/dateFormatters';
 import {
   Tooltip,
@@ -41,20 +41,6 @@ interface BalanceBreakdownProps {
   subBalance: number | null;
   /** PAYG bucket. null when V250 endpoint not yet hit. */
   paygBalance: number | null;
-  /**
-   * V494 - the monthly AI allowance, a THIRD bucket that is deliberately not part
-   * of {@code balance}: it can only pay for agent and chat turns on the models
-   * opened to the free tier. Rendered as its own row so a Free account can see
-   * what it has left; null or zero on every plan without one, which is every paid
-   * plan, and the row is then omitted entirely.
-   */
-  aiBalance?: number | null;
-  /**
-   * V494 - whether the plan HAS an allowance, independent of what is left of it. A
-   * spent pot and a plan with no pot both read zero, and they are not the same thing
-   * to a reader whose chat has just stopped working.
-   */
-  hasAiAllowance?: boolean;
 }
 
 /** Optional monthly-cycle counter rendered when the user is on a paid plan. */
@@ -108,11 +94,6 @@ export function BalanceBreakdownTooltip({
   const t = useTranslations('billing.payg');
   const locale = useLocale();
 
-  // V494: no AI-allowance row here, unlike the card below. This tooltip's only
-  // mounts are the sidebar's CE arm, which is dead (its caller passes a null
-  // balance in CE, so the guard never opens - see AppSidebar), and wiring a third
-  // bucket through a path that cannot render would be plumbing nobody can see.
-  // The wallet card on the quota page is where the allowance is shown.
   const hasBreakdown =
     subBalance !== null &&
     paygBalance !== null &&
@@ -170,8 +151,6 @@ export function BalanceBreakdownCard({
   balance,
   subBalance,
   paygBalance,
-  aiBalance,
-  hasAiAllowance = false,
   onTopUp,
   topUpEnabled = true,
   monthlyPlan,
@@ -240,50 +219,6 @@ export function BalanceBreakdownCard({
           periodEndsAt={monthlyPlan?.periodEndsAt ?? null}
         />
         <PaygGauge balance={paygPart} />
-        {/* V494: drawn for any account whose plan grants an allowance, INCLUDING one
-            that has spent it to zero - that reader is the one who needs to see it. A
-            paid wallet has no allowance and keeps exactly the two rows it had. */}
-        {aiBalance != null && (aiBalance > 0 || hasAiAllowance) && (
-          <AiAllowanceGauge balance={aiBalance} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-/**
- * The Free plan's monthly AI allowance, as its own row.
- *
- * <p>Separate from the two wallet gauges on purpose: this pot is NOT part of the
- * headline balance and cannot pay for anything but agent and chat turns on the
- * models opened to the free tier, so showing it inside the balance would promise
- * spending power the wallet does not have. Same shape as {@link PaygGauge} (full
- * bar when funded) because it renews against a grant whose size the wallet card
- * does not know.
- */
-function AiAllowanceGauge({ balance }: { balance: number }) {
-  const t = useTranslations('billing.payg');
-  const locale = useLocale();
-
-  return (
-    <div>
-      <div className="flex items-center justify-between text-sm mb-1">
-        <span className="text-theme-secondary">{t('breakdown.ai')}</span>
-        <span className="font-medium text-theme-primary">
-          {formatCreditsCompact(balance, locale)}
-        </span>
-      </div>
-      <div className="h-1.5 rounded-full bg-theme-tertiary overflow-hidden">
-        {/* Full while funded, empty once spent. No denominator: the card is not told
-            what the pot refills to, and inventing one would put a number on screen
-            that no endpoint answered for. */}
-        <div
-          className="h-full bg-sky-500 dark:bg-sky-400 transition-all"
-          style={{ width: balance > 0 ? '100%' : '0%' }}
-        />
-      </div>
-      <div className="text-xs text-theme-muted mt-1">
-        {t('breakdown.aiHint')}
       </div>
     </div>
   );
@@ -395,10 +330,10 @@ function SubscriptionGauge({
   // page through useCreditWallet.
   // Clamped at BOTH ends. Only the high end used to be held, and a debit can
   // drive a bucket negative (`CreditService.applyDebit` takes the whole cost
-  // from PAYG when the plan's monthly grant is workflow-only), which yields
+  // from PAYG when the Free plan's monthly credits may not pay for it), which yields
   // `width: "-20%"` - an invalid declaration, so the bar silently disappears
   // rather than reading empty. Giving FREE accounts a denominator here widened
-  // that exposure, and FREE is exactly the workflow-only plan.
+  // that exposure, and FREE is exactly the plan whose monthly credits are scoped.
   const fillPct = hasAllowance
     ? Math.max(0, Math.min(100, Math.round((balance / allowance) * 100)))
     : balance > 0
@@ -486,39 +421,31 @@ function RenewalLine({
   return (
     <div className="text-xs text-theme-muted mt-1 flex items-center gap-1">
       <span data-testid="subscription-renewal-line">{t('line', { amount, date })}</span>
-      <Popover>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            aria-label={t('explainLabel')}
-            data-testid="subscription-renewal-info"
-            className="shrink-0 text-theme-muted hover:text-theme-primary transition-colors"
-          >
-            <Info className="h-3 w-3" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent
-          side="top"
-          align="start"
-          sideOffset={6}
-          className="w-[280px] p-3 bg-theme-primary rounded-xl border border-gray-300/70 dark:border-gray-600/70"
-          data-testid="subscription-renewal-popover"
-        >
-          <p className="text-sm font-medium text-theme-primary mb-2">{t('title')}</p>
-          <ul className="space-y-1.5 text-xs text-theme-secondary">
-            <li>{t('grant', { amount, date })}</li>
-            {/* Stated as a consequence, not as a warning: the balance is REPLACED, which is
-                also why the gauge above can read full the day after it read empty. */}
-            <li>{t('noCarryOver')}</li>
-            <li>{t('paygKept')}</li>
-            {/* Only when the two dates genuinely differ. On a monthly plan they are one event
-                and this sentence would invent a distinction the reader does not have. */}
-            {invoiceDate && (
-              <li className="text-theme-primary">{t('yearlyBilling', { date: invoiceDate })}</li>
-            )}
-          </ul>
-        </PopoverContent>
-      </Popover>
+      <InfoPopover
+        label={t('explainLabel')}
+        accessibleName={t('explainLabel')}
+        size="sm"
+        side="top"
+        align="start"
+        data-testid="subscription-renewal-info"
+        contentTestId="subscription-renewal-popover"
+        contentClassName="w-[280px]"
+        contentProps={{ sideOffset: 6 }}
+      >
+        <p className="text-sm font-medium text-theme-primary mb-2">{t('title')}</p>
+        <ul className="space-y-1.5 text-xs text-theme-secondary">
+          <li>{t('grant', { amount, date })}</li>
+          {/* Stated as a consequence, not as a warning: the balance is REPLACED, which is
+              also why the gauge above can read full the day after it read empty. */}
+          <li>{t('noCarryOver')}</li>
+          <li>{t('paygKept')}</li>
+          {/* Only when the two dates genuinely differ. On a monthly plan they are one event
+              and this sentence would invent a distinction the reader does not have. */}
+          {invoiceDate && (
+            <li className="text-theme-primary">{t('yearlyBilling', { date: invoiceDate })}</li>
+          )}
+        </ul>
+      </InfoPopover>
     </div>
   );
 }

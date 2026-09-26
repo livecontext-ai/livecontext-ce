@@ -17,7 +17,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import com.apimarketplace.auth.repository.PlanRepository;
 import com.apimarketplace.common.plan.CloudPlanAccess;
 
@@ -30,6 +33,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -506,6 +511,70 @@ class PlanResolutionServiceTest {
         OrganizationMember memA = new OrganizationMember(org, user, OrganizationRole.MEMBER, false);
         when(subscriptionRepository.findActiveByOwnerUserIds(any())).thenReturn(List.of()); // local none → cloud TEAM wins
         assertThat(service.resolvePausedOrgIds(List.of(memA))).isEmpty();
+    }
+
+    // ---- resolveDefaultWorkspacePlan (CE cloud link) ----
+
+    @Test
+    @DisplayName("resolveDefaultWorkspacePlan: the DEFAULT workspace owner's plan, whatever X-Organization-ID the request carries")
+    void defaultWorkspacePlanIgnoresRequestWorkspace() {
+        OrganizationMember defaultTeam = new OrganizationMember(org, user, OrganizationRole.MEMBER, true);
+        when(memberRepository.findActiveDefaultByUserId(42L)).thenReturn(Optional.of(defaultTeam));
+        when(subscriptionRepository.findActiveByUserId(1L)).thenReturn(Optional.of(sub(teamPlan)));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Organization-ID", UUID.randomUUID().toString());
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        try {
+            PlanResolutionService.DefaultWorkspacePlan plan = service.resolveDefaultWorkspacePlan(42L);
+
+            assertThat(plan.planCode()).isEqualTo("TEAM");
+            assertThat(plan.lookupFailed()).isFalse();
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+        verify(memberRepository, never())
+                .findActiveByOrganizationIdAndUserId(any(), any());
+    }
+
+    @Test
+    @DisplayName("resolveDefaultWorkspacePlan: a dormant default (owner no longer team) falls back to the user's OWN personal workspace, like the gateway")
+    void dormantDefaultFallsBackToPersonalWorkspace() {
+        OrganizationMember dormantDefault = new OrganizationMember(org, user, OrganizationRole.MEMBER, true);
+        Organization personal = new Organization("Mine", "mine", true, user);
+        personal.setId(UUID.randomUUID());
+        OrganizationMember personalOwner = new OrganizationMember(personal, user, OrganizationRole.OWNER, false);
+        when(memberRepository.findActiveDefaultByUserId(42L)).thenReturn(Optional.of(dormantDefault));
+        when(subscriptionRepository.findActiveByUserId(1L)).thenReturn(Optional.of(sub(freePlan)));
+        when(memberRepository.findPersonalByUserId(42L)).thenReturn(Optional.of(personalOwner));
+        when(subscriptionRepository.findActiveByUserId(42L)).thenReturn(Optional.of(sub(new Plan("PRO", "Pro", "Pro"))));
+
+        assertThat(service.resolveDefaultWorkspacePlan(42L).planCode()).isEqualTo("PRO");
+    }
+
+    @Test
+    @DisplayName("resolveDefaultWorkspacePlan: no default and no personal workspace is FREE (not a failure)")
+    void noWorkspaceIsFree() {
+        when(memberRepository.findActiveDefaultByUserId(42L)).thenReturn(Optional.empty());
+        when(memberRepository.findPersonalByUserId(42L)).thenReturn(Optional.empty());
+
+        PlanResolutionService.DefaultWorkspacePlan plan = service.resolveDefaultWorkspacePlan(42L);
+
+        assertThat(plan.planCode()).isEqualTo("FREE");
+        assertThat(plan.lookupFailed()).isFalse();
+    }
+
+    @Test
+    @DisplayName("resolveDefaultWorkspacePlan: a lookup failure is REPORTED, never disguised as FREE")
+    void lookupFailureIsReported() {
+        when(memberRepository.findActiveDefaultByUserId(42L)).thenThrow(new RuntimeException("db down"));
+
+        PlanResolutionService.DefaultWorkspacePlan plan = service.resolveDefaultWorkspacePlan(42L);
+
+        assertThat(plan.lookupFailed()).isTrue();
+        assertThat(plan.planCode()).isNull();
+        // The legacy resolver still swallows it into FREE, which is why the CE-link gate stopped using it.
+        when(memberRepository.findByUser_IdAndIsDefaultTrue(42L)).thenThrow(new RuntimeException("db down"));
+        assertThat(service.resolveActiveOrgEntitlement(42L).planCode()).isEqualTo("FREE");
     }
 
     private Subscription ownerSub(User owner, Plan plan) {

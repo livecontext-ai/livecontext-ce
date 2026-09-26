@@ -57,6 +57,11 @@ import { priceUnitLabel } from '@/lib/credentials/priceUnits';
 import { ApiError } from '@/lib/api/api-client';
 import { useMonthlyCreditsCannotPay } from '@/lib/hooks/useMonthlyCreditsCannotPay';
 import { UpgradeRequiredBadge, UpgradeRequiredNotice } from '@/components/billing/UpgradeRequiredBadge';
+import {
+  outcomeOfGenerationResult,
+  trackStudioGenerationSubmitted,
+  trackStudioModelSelected,
+} from '@/lib/generation/studioAnalytics';
 
 /**
  * Run one generation, from a format to a finished asset.
@@ -412,13 +417,17 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
    * key to a video provider, or a parameter the new model refuses.
    */
   const chooseModel = useCallback((next: string) => {
+    // Both callers are the reader's own pick (the model list, or a provider landing on its first
+    // model); a recipe or a format switch sets the model directly and is not reported.
+    const picked = models.find((m) => m.model === next);
+    if (picked) trackStudioModelSelected(picked, 'modal');
     setModelId(next);
     setParams({});
     setRecipeParams({});
     setAssets({});
     setUploadError({});
     setCredentialId(null);
-  }, []);
+  }, [models]);
 
   /**
    * The PLATFORM measurement each model would be quoted on: the size typed for
@@ -1042,6 +1051,7 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
           : {}),
       });
       setResult(answer);
+      trackStudioGenerationSubmitted(selected, credentialSource, outcomeOfGenerationResult(answer), 'modal');
       if (answer.success) {
         // The asset now exists and carries its own recipe, so it belongs at the top of the
         // history - here and on the Files page behind this dialog, which read one cache.
@@ -1084,6 +1094,12 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
       const lostConnection = e instanceof ApiError
         ? LOST_MID_FLIGHT.includes(e.status)
         : true;
+      // Same reading as the Studio page: a 4xx the server chose to send (not 408/429, which say
+      // "not now") is a refusal before anything ran.
+      const answeredAndRefused = e instanceof ApiError && e.status >= 400 && e.status < 500
+        && e.status !== 408 && e.status !== 429;
+      trackStudioGenerationSubmitted(selected, credentialSource,
+        lostConnection ? 'lost' : answeredAndRefused ? 'refused' : 'failed', 'modal');
       setResult({
         success: false,
         error: lostConnection

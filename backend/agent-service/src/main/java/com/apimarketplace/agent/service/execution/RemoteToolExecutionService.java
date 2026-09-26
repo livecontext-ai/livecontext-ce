@@ -8,10 +8,13 @@ import com.apimarketplace.agent.domain.ToolResult;
 import com.apimarketplace.agent.prompt.ConversationToolDefinitions;
 import com.apimarketplace.agent.tool.ToolExecutionService;
 import com.apimarketplace.agent.tools.authz.AuthorizationSubject;
+import com.apimarketplace.agent.tools.authz.AuthorizationAsk;
 import com.apimarketplace.agent.tools.authz.ToolAuthorizationGuard;
 import com.apimarketplace.agent.tools.authz.ToolAuthorizationPolicy;
 import com.apimarketplace.agent.tools.authz.ToolAuthorizationScope;
 import com.apimarketplace.agent.tools.remote.ToolServiceTopology;
+import com.apimarketplace.notification.client.NotificationClient;
+import com.apimarketplace.notification.client.dto.NotificationEmitRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,11 +27,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * ToolExecutionService implementation for agent-service.
@@ -126,12 +131,45 @@ public class RemoteToolExecutionService implements ToolExecutionService {
     @Autowired(required = false)
     private ApprovalCardExtractor approvalCardExtractor;
 
+    /**
+     * Reaches the person through a chat they read, for the runs where the in-app
+     * card has nobody in front of it. Optional like the rest: without it an
+     * unattended run behaves exactly as before, ending its turn with the request
+     * waiting in the app.
+     */
+    @Autowired(required = false)
+    private ChannelAuthorizationClient channelAuthorizationClient;
+
+    /**
+     * Rings the bell when an armed agent has nobody to ask.
+     *
+     * <p>Optional like the rest, and the degradation is honest rather than silent: without
+     * it the agent still stops and still says why in its own turn, it is only the person who
+     * is not told. Wired in every real deployment by {@code NotificationClientConfig}.
+     */
+    @Autowired(required = false)
+    private NotificationClient notificationClient;
+
+    /** Names the agent on its bell row. Optional: without it the row says "An agent". */
+    @Autowired(required = false)
+    private com.apimarketplace.agent.repository.AgentRepository agentRepository;
+
+    /** Test seam: wire the bell without a Spring context. */
+    void configureNotificationClientForTest(NotificationClient client) {
+        this.notificationClient = client;
+    }
+
     /** Test seam: wire the gate collaborators without a Spring context. */
     void configureApprovalGateForTest(ToolApprovalGate gate, ApprovalCardPublisher publisher,
                                       ApprovalCardExtractor extractor) {
         this.approvalGate = gate;
         this.approvalCardPublisher = publisher;
         this.approvalCardExtractor = extractor;
+    }
+
+    /** Test seam: wire the out-of-app delivery without a Spring context. */
+    void configureChannelAuthorizationForTest(ChannelAuthorizationClient client) {
+        this.channelAuthorizationClient = client;
     }
 
     public RemoteToolExecutionService(ObjectMapper objectMapper) {
@@ -176,7 +214,7 @@ public class RemoteToolExecutionService implements ToolExecutionService {
             // Park until the user answers. A non-null answer here means "not approved"
             // and IS the pre-gate result, so refusing, timing out or having no gate at all
             // all land on the exact behaviour that shipped before this gate existed.
-            ToolResult notApproved = parkForAuthorization(toolCall, credentials, authResult, startTime);
+            ToolResult notApproved = parkForAuthorization(toolCall, tenantId, credentials, authResult, startTime);
             if (notApproved != null) {
                 return notApproved;
             }
@@ -338,7 +376,7 @@ public class RemoteToolExecutionService implements ToolExecutionService {
      *         for real; otherwise the result to hand back (refused, expired, or no gate
      *         available - all identical to the pre-gate behaviour).
      */
-    ToolResult parkForAuthorization(ToolCall toolCall, Map<String, Object> credentials,
+    ToolResult parkForAuthorization(ToolCall toolCall, String tenantId, Map<String, Object> credentials,
                                     ToolResult gateResult, long callStartedEpochMs) {
         String gateKey = toolCall.id();
         String streamId = streamIdOf(credentials);
@@ -359,6 +397,40 @@ public class RemoteToolExecutionService implements ToolExecutionService {
         if (!approvalGate.beginPark(parkRequest)) {
             return gateResult;
         }
+
+        // Nobody is watching this run, so the card alone would wait for someone to
+        // open the app. Ask the workspace's chat as well, BEFORE painting the card:
+        // when the same question is already waiting there from an earlier run, the
+        // right move is to paint nothing and say so, rather than add a second card
+        // and a second message the person cannot tell apart.
+        ChannelAuthorizationClient.Delivery delivery = null;
+        if (channelAuthorizationClient != null
+                && ToolAuthorizationScope.isUnattended(credentials)) {
+            delivery = channelAuthorizationClient.request(
+                    tenantId, orgIdOf(credentials), conversationId, gateKey,
+                    ruleOf(gateResult), agentIdOf(credentials), summaryOf(gateResult),
+                    askFingerprint(toolCall));
+            if (delivery.isAlreadyPending()) {
+                approvalGate.abandonPark(conversationId, gateKey);
+                return alreadyAskedResult(gateResult, delivery);
+            }
+            if (!delivery.isWaitingOnSomeone()) {
+                // Nobody was reached and nobody is watching, so the park would hold this
+                // call for its full budget against an answer that cannot arrive, and the
+                // agent would then read "your request ran out of time" about a request
+                // that was never sent. Stop here instead, tell the agent what is actually
+                // true, and put it in the bell, which is the only surface a person looks
+                // at for a run they were not present for.
+                //
+                // The card is deliberately still painted by the result consumer (no
+                // authorizationAlreadyPending flag on this path): it costs nothing and it
+                // is there if somebody does open the conversation.
+                approvalGate.abandonPark(conversationId, gateKey);
+                notifyNobodyToAsk(tenantId, credentials, gateResult);
+                return unreachableResult(gateResult);
+            }
+        }
+
         String buffered = approvalCardPublisher.publishToolAuthorization(
                 streamId, conversationId, gateResult.metadata(), true, gateKey);
         if (buffered == null) {
@@ -378,7 +450,277 @@ public class RemoteToolExecutionService implements ToolExecutionService {
             return null;
         }
         // The card is already on screen - stop the callback from painting a second one.
-        return withCardEmitted(gateResult, decision);
+        return withCardEmitted(waitingElsewhere(gateResult, decision, delivery), decision);
+    }
+
+    /**
+     * Tell the agent it may not act and has nobody to ask.
+     *
+     * <p>Distinct from a refusal on purpose. A refusal is an answer, and an agent that reads
+     * one has learnt something about what it may do. This is the absence of any way to put
+     * the question, which calls for a different next move: state the block, name what would
+     * lift it, and stop rather than retry a call whose gate cannot change within the run.
+     */
+    private static ToolResult unreachableResult(ToolResult gateResult) {
+        return withContent(gateResult, structuredGateContent(
+                "authorization_unreachable",
+                "The action has NOT run. This agent asks permission for sensitive actions, this run "
+                        + "has nobody watching it, and this workspace has no chat connected to ask on, "
+                        + "so the question could not be put to anyone. Do NOT retry the call: nothing "
+                        + "within this run can change that. Finish your turn by saying, in one sentence, "
+                        + "what you were about to do and that you need permission for it. Someone can "
+                        + "connect a chat with channel(action='discover') then channel(action='connect'), "
+                        + "after which a later run asks there instead of stopping."));
+    }
+
+    /**
+     * Put the block in the bell, because the conversation this run writes to is not read.
+     *
+     * <p>The whole point of an unattended run is that nobody is in front of it. An agent that
+     * stops there has stopped in silence: before this, the only trace was a card painted into
+     * a stream with no subscriber and a tool result in a transcript nobody opens. The bell is
+     * where a person looks for what happened while they were away.
+     *
+     * <p>Never throws and never fails the call. The block is already the bad outcome; failing
+     * the tool because the bell could not be rung would replace one problem with two.
+     */
+    private void notifyNobodyToAsk(String tenantId, Map<String, Object> credentials, ToolResult gateResult) {
+        if (notificationClient == null || tenantId == null || tenantId.isBlank()) {
+            return;
+        }
+        UUID subjectId = agentUuidOf(credentials);
+        if (subjectId == null) {
+            // The endpoint requires one, and there is nothing honest to invent: a run with no
+            // agent id cannot be pointed at from a bell row. Logged at a level somebody reads,
+            // because it means a real block went unreported.
+            log.warn("An armed run was blocked with nobody to ask and no agent id to report it "
+                    + "against, so no notification was raised");
+            return;
+        }
+        String organizationId = orgIdOf(credentials);
+        if (organizationId == null || organizationId.isBlank()) {
+            // The endpoint refuses a notification with no workspace ("organizationId required
+            // after V261"), and it does so before its own validate(), with a 400 the client
+            // swallows. Sending it anyway is the silence this method exists to end.
+            log.warn("An armed run of agent {} was blocked with nobody to ask and no workspace to "
+                    + "report it in, so no notification was raised", subjectId);
+            return;
+        }
+        try {
+            NotificationEmitRequest req = new NotificationEmitRequest();
+            req.setTenantId(tenantId);
+            req.setOrganizationId(organizationId);
+            req.setCategory("AGENT_AUTHORIZATION_UNREACHABLE");
+            req.setSeverity("warning");
+            req.setSubjectType("AGENT");
+            req.setSubjectId(subjectId);
+            // Keyed on the agent and the rule, not on the call: an agent that runs hourly
+            // hits the same wall every hour, and one bell row per wall is the useful
+            // number. The endpoint dedupes on (tenant, category, sourceId).
+            req.setSourceId("agent-auth-unreachable:" + subjectId + ":" + ruleOf(gateResult));
+            Map<String, Object> payload = new HashMap<>();
+            // REQUIRED by the endpoint: it refuses a payload with no status
+            // ("payload.status required (V174 contract)") and the refusal is a 400 the client
+            // swallows, so the omission costs the whole notification and says nothing anywhere.
+            // NotificationContractTest pins this, because a mocked client cannot.
+            payload.put("status", "blocked");
+            // What the bell shows as the row's title. Its resolver reads payload.subjectName, and
+            // with nothing there the row reads "Notification", which names nothing: the person
+            // has to know WHICH agent stopped overnight.
+            payload.put("subjectName", agentNameOf(subjectId, organizationId));
+            payload.put("rule", ruleOf(gateResult));
+            payload.put("summary", summaryOf(gateResult));
+            req.setPayload(payload);
+            req.setOccurredAt(Instant.now());
+            notificationClient.emit(req);
+        } catch (Exception ex) {
+            log.debug("AGENT_AUTHORIZATION_UNREACHABLE emit failed for agent {} (non-critical): {}",
+                    subjectId, ex.getMessage());
+        }
+    }
+
+    /**
+     * The agent's display name, best effort, scoped to the workspace it runs in.
+     *
+     * <p>Read here because this service owns agents; the notification's name is fixed at emit
+     * time by design (the bell does not call back across services per row). A failed lookup
+     * costs the name, never the notification.
+     */
+    private String agentNameOf(UUID agentId, String organizationId) {
+        if (agentRepository != null) {
+            try {
+                return agentRepository.findByIdAndOrganizationIdStrict(agentId, organizationId)
+                        .map(agent -> agent.getName())
+                        .filter(name -> name != null && !name.isBlank())
+                        .orElse("An agent");
+            } catch (Exception ex) {
+                log.debug("Could not read the name of agent {}: {}", agentId, ex.getMessage());
+            }
+        }
+        return "An agent";
+    }
+
+    /** The agent's id as a UUID, or null when it is absent or not one. */
+    private static UUID agentUuidOf(Map<String, Object> credentials) {
+        String agentId = agentIdOf(credentials);
+        if (agentId == null || agentId.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(agentId.trim());
+        } catch (IllegalArgumentException ex) {
+            // Not a UUID. Parsing it inside the emit would throw before the send and lose the
+            // notification to a catch that logs at debug, which is the same silence twice.
+            return null;
+        }
+    }
+
+    /**
+     * Tell the agent its question is now in front of someone, somewhere it cannot see.
+     *
+     * <p>Only for a park that ended UNANSWERED. A refusal or a stop is already
+     * settled and its own wording is the accurate one. Without this the agent ends
+     * its turn believing the request simply ran out of time, and its next run asks
+     * again: the duplicate is refused, but the agent is then surprised by its own
+     * refusal instead of having read, in its own conversation, that it already asked.
+     */
+    private static ToolResult waitingElsewhere(ToolResult gateResult, ToolApprovalGate.Decision decision,
+                                               ChannelAuthorizationClient.Delivery delivery) {
+        if (delivery == null || !delivery.isWaitingOnSomeone()
+                || decision == ToolApprovalGate.Decision.DENIED
+                || decision == ToolApprovalGate.Decision.STOPPED) {
+            return gateResult;
+        }
+        return withContent(gateResult, structuredGateContent(
+                "authorization_requested",
+                "The action has NOT run. Your request for permission was sent to the user on "
+                        + channelName(delivery) + " and is still waiting there. Do NOT ask for it again "
+                        + "and do NOT retry the call: while it is waiting, asking again is refused as a "
+                        + "duplicate. Say in one sentence that you are waiting for permission, then "
+                        + "finish your turn. If they allow it, the action runs on your next run without "
+                        + "you asking again. If nobody ever answers, the request expires on its own and "
+                        + "a later run may ask once more."));
+    }
+
+    /** The turn where the same question is already waiting: say so, and stop. */
+    private static ToolResult alreadyAskedResult(ToolResult gateResult,
+                                                 ChannelAuthorizationClient.Delivery delivery) {
+        String since = delivery.requestedAt() != null ? " (sent " + delivery.requestedAt() + ")" : "";
+        ToolResult result = withContent(gateResult, structuredGateContent(
+                "authorization_pending",
+                "The action has NOT run. You ALREADY asked the user for permission to do exactly this, on "
+                        + channelName(delivery) + since + ", and they have not answered yet. No new request "
+                        + "was sent. Do NOT ask again and do NOT retry: while that request is waiting, "
+                        + "repeating it is refused as a duplicate. Say in one sentence that you are still "
+                        + "waiting, then finish your turn. If nobody ever answers, it expires on its own "
+                        + "and a later run may ask once more."));
+        Map<String, Object> metadata = result.metadata() != null
+                ? new HashMap<>(result.metadata()) : new HashMap<>();
+        // No card was painted for this one, so the result consumer must not be told
+        // one was - it would suppress its own and the app would show nothing at all.
+        metadata.put("authorizationAlreadyPending", true);
+        return ToolResult.builder()
+                .toolCall(result.toolCall())
+                .success(result.success())
+                .content(result.content())
+                .error(result.error())
+                .durationMs(result.durationMs())
+                .metadata(metadata)
+                .build();
+    }
+
+    /**
+     * Where the question went, as the agent should say it back to the user.
+     *
+     * <p>Both halves, because they answer different questions. The channel says which app to go
+     * and look in; the destination's own title says WHICH conversation there, and a workspace
+     * with a bot in three rooms has three of those. Orchestrator resolves that title on every
+     * delivery precisely so this sentence can carry it, and dropping it here left the agent
+     * saying "I asked on telegram" to somebody who then has to guess where.
+     */
+    private static String channelName(ChannelAuthorizationClient.Delivery delivery) {
+        String channel = blankToNull(delivery.channel());
+        String destination = blankToNull(delivery.chatLabel());
+        if (channel == null && destination == null) {
+            // Delivered by something that named neither. Still true, and still better than a
+            // sentence that trails off where the place should be.
+            return "their chat channel";
+        }
+        if (destination == null) {
+            return channel;
+        }
+        if (channel == null) {
+            return destination;
+        }
+        return channel + " (" + destination + ")";
+    }
+
+    private static String blankToNull(String value) {
+        return value != null && !value.isBlank() ? value : null;
+    }
+
+    private static ToolResult withContent(ToolResult result, String content) {
+        return ToolResult.builder()
+                .toolCall(result.toolCall())
+                .success(result.success())
+                .content(content)
+                .error(result.error())
+                .durationMs(result.durationMs())
+                .metadata(result.metadata())
+                .build();
+    }
+
+    /** The shape every gate result uses, so the model reads one contract, not three. */
+    private static String structuredGateContent(String status, String message) {
+        try {
+            Map<String, Object> structured = new LinkedHashMap<>();
+            structured.put("status", status);
+            structured.put("executed", false);
+            structured.put("message", message);
+            return SHARED_MAPPER.writeValueAsString(structured);
+        } catch (Exception e) {
+            // The wording matters more than the shape: a plain string still reaches the model.
+            return message;
+        }
+    }
+
+    private static String ruleOf(ToolResult gateResult) {
+        Map<String, Object> metadata = gateResult.metadata();
+        Object rule = metadata != null ? metadata.get("rule") : null;
+        return rule != null ? String.valueOf(rule) : null;
+    }
+
+    /**
+     * What makes two asks the same ask: the tool, and the arguments it was called with.
+     *
+     * <p>Derived from the CALL, not from the display summary the card carries: that
+     * summary is only written when {@code summarizeArguments} produces one, and without
+     * it the identity would collapse to the rule, so "publish post A" and "publish post
+     * B" in one conversation would be treated as a repeat of each other. Keys are sorted
+     * so an argument map in a different order is still the same ask.
+     */
+    private static String askFingerprint(ToolCall toolCall) {
+        return AuthorizationAsk.material(toolCall.toolName(), toolCall.arguments());
+    }
+
+    private static String summaryOf(ToolResult gateResult) {
+        Map<String, Object> metadata = gateResult.metadata();
+        Object summary = metadata != null ? metadata.get("argsSummary") : null;
+        return summary != null ? String.valueOf(summary) : null;
+    }
+
+    private static String agentIdOf(Map<String, Object> credentials) {
+        Object agentId = credentials != null ? credentials.get("__agentId__") : null;
+        return agentId != null ? String.valueOf(agentId) : null;
+    }
+
+    /**
+     * Both spellings, like every other reader of this key in this class. A producer
+     * using the plain alias would otherwise resolve to no workspace, and the request
+     * would be silently skipped with "no channel" rather than delivered.
+     */
+    private String orgIdOf(Map<String, Object> credentials) {
+        return credentialString(credentials, "orgId", "__orgId__");
     }
 
     /**
@@ -606,7 +948,7 @@ public class RemoteToolExecutionService implements ToolExecutionService {
             // live stream, so it raises cards and holds calls exactly like the direct route.
             return null;
         }
-        if (isAlreadyAuthorized(credentials, rule)) {
+        if (isAlreadyAuthorized(credentials, rule, toolCall)) {
             return null; // approved this turn (transient resume) or persisted "always authorize"
         }
         log.info("Tool authorization required for rule={} (toolCallId={}) - pausing for user approval",
@@ -614,14 +956,20 @@ public class RemoteToolExecutionService implements ToolExecutionService {
         return buildAuthorizationRequiredResult(toolCall, rule, startTime);
     }
 
-    private boolean isAlreadyAuthorized(Map<String, Object> credentials, String rule) {
+    private boolean isAlreadyAuthorized(Map<String, Object> credentials, String rule, ToolCall toolCall) {
         if (credentials == null) {
             return false;
         }
         Object approved = credentials.get("__approvedToolActions__");
-        // "*" is the conversation-wide blanket grant (chatConfig.autoAuthorizeTools): the user
-        // opted into running sensitive actions without being asked for the rest of this conversation.
-        return approved instanceof Collection<?> col && (col.contains(rule) || col.contains("*"));
+        if (!(approved instanceof Collection<?> col)) {
+            return false;
+        }
+        // Three ways in, and the third is why the call is passed: an approval given in a chat is
+        // recorded against the ASK, so it covers the call the person was shown and no other call
+        // of the same rule. "*" is the conversation-wide toggle; the bare rule is an in-app
+        // approval or a remembered "always allow".
+        return AuthorizationAsk.authorizes(col, rule,
+                AuthorizationAsk.fingerprintOfCall(rule, toolCall.toolName(), toolCall.arguments()));
     }
 
     private ToolResult buildAuthorizationRequiredResult(ToolCall toolCall, String rule, long startTime) {

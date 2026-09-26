@@ -38,6 +38,7 @@ import { ModelOptionDisplay, ModelInfoPopover } from '@/components/ai/ModelInfo'
 import { useModelCostBasis } from '@/lib/hooks/useModelCostBasis';
 import { REASONING_EFFORT_LEVELS, supportsReasoningEffort } from '@/lib/ai-providers/reasoningEffort';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SELECT_EMPTY_VALUE_SENTINEL } from '@/components/ui/select';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 // Re-exported for callers that imported it from this module historically.
 export { PROVIDER_ICON_MAP };
@@ -146,36 +147,36 @@ export function ModelSelectorDropdown({
    *  stays free of both translations and data hooks. */
   upgradeRequired?: boolean;
   /**
-   * V494 - the same question, asked per model. The Free plan's AI allowance pays
+   * The same question, asked per model. The Free plan's monthly credits pay
    * for the models opened to the free tier and for no others, so the account-level
    * {@code upgradeRequired} would badge rows the account can already run. Also the
    * caller's to fetch, for the same reason: no data hook lives here. Absent falls
-   * back to {@code upgradeRequired}, which is the pre-V494 behaviour.
+   * back to {@code upgradeRequired}.
    */
   blockedForModel?: (model: { freeTierEnabled?: boolean }) => boolean;
   /**
    * The mirror of {@code blockedForModel}: is this model free for this reader
    * right now? Caller-resolved for the same reason, and it must be
    * {@code useMonthlyCreditsCannotPay.freeTierForModel} - the verdict that also
-   * weighs the allowance BALANCE, and whose doc says what goes wrong otherwise.
+   * weighs the monthly BALANCE, and whose doc says what goes wrong otherwise.
    * Absent = no model is marked, which is what every surface showed before this
    * existed.
    */
   freeTierForModel?: (model: { freeTierEnabled?: boolean }) => boolean;
-  /** V494 - true when free-tier models should be offered first. Caller-resolved. */
+  /** True when free-tier models should be offered first. Caller-resolved. */
   prefersFreeTierModels?: boolean;
   /** Rendered under the model list, saying why and linking to the plans. A
    *  node rather than an import, for the same reason as {@code emptyState}. */
   upgradeNotice?: React.ReactNode;
   /**
    * Rendered next to the model name on the CLOSED composer, when the model in
-   * hand is one the reader's free-tier allowance covers.
+   * hand is one the reader's Free monthly credits cover.
    *
    * <p>The menu is where a choice is made, but the composer is where a new
    * account sits before it ever opens one: without this, the only place it could
    * learn that its current model costs nothing was a menu it had no reason to
    * open. A node rather than a flag for the same reason as {@code upgradeNotice}
-   * - the words, and the allowance figure they quote, stay with the caller. Shown
+   * - the words stay with the caller. Shown
    * only when the SELECTED model is covered, so a caller hands it down
    * unconditionally.
    */
@@ -198,8 +199,7 @@ export function ModelSelectorDropdown({
   // answer once per catalogue entry.
   const { basis: costBasis } = useModelCostBasis();
 
-  // V494: free-tier models lead for an account whose monthly credits are
-  // workflow-scoped. A STABLE partition, so the admin's catalogue order survives
+  // Free-tier models lead for an account on the Free plan. A STABLE partition, so the admin's catalogue order survives
   // inside each half. Driven by a PROP, not a hook: this component is
   // translation-free and data-hook-free by design (see the file header), and the
   // panels render it without a query client.
@@ -212,8 +212,8 @@ export function ModelSelectorDropdown({
   }, [availableModels, prefersFreeTierModels]);
 
   // The notice under the list must agree with the rows above it. Left on the
-  // account-level verdict, a Free account holding an allowance read "upgrade to
-  // continue" directly beneath the very model that allowance pays for.
+  // account-level verdict, a Free account with monthly credits read "upgrade to
+  // continue" directly beneath the very model those credits pay for.
   // The catalogue row behind the current selection. `selectedModelData` is typed
   // as a name and an id, so it cannot answer either verdict below even when a
   // caller happens to pass a fuller object. One scan, two answers.
@@ -228,7 +228,7 @@ export function ModelSelectorDropdown({
   }, [blockedForModel, currentModel, upgradeRequired]);
 
   // Whether the CLOSED composer says the current model is free. The verdict is
-  // the caller's, so it weighs the allowance balance as well as the plan, and
+  // the caller's, so it weighs the monthly balance as well as the plan, and
   // cannot claim "free" on the very row `selectionBlocked` locks.
   const selectionIsFreeTier = React.useMemo(
     () => (freeTierForModel && currentModel ? freeTierForModel(currentModel) : false),
@@ -417,9 +417,12 @@ export function ModelSelectorDropdown({
             span: the name is the elastic part of this row (see the wrapper's
             comment), so a chip inside it would be the first thing an ellipsis
             ate on a 320px side panel - exactly the width where a new account
-            meets it. `shrink-0` keeps it whole and lets the name give way. */}
+            meets it. `shrink-0` keeps it whole and lets the name give way.
+            `flex items-center` rather than a bare span: an inline wrapper put the
+            chip on the text baseline of the button's taller inherited line box,
+            so it sat below the model name instead of on its centre line. */}
         {selectionIsFreeTier && freeTierBadge && (
-          <span className="shrink-0">{freeTierBadge}</span>
+          <span className="flex shrink-0 items-center">{freeTierBadge}</span>
         )}
         <ChevronDown className={cn(
           "w-3.5 h-3.5 shrink-0 transition-transform duration-200",
@@ -491,7 +494,7 @@ export function ModelSelectorDropdown({
                       way - `blocked` means "cannot pay right now", which a top-up
                       changes, and disabling the row would also hide the notice
                       under the list, the one thing here that says what to do. */}
-                  <Image
+                  <ServiceLogo as={Image}
                     src={`/icons/services/${model.iconSlug}.svg`}
                     alt={model.provider}
                     width={18}

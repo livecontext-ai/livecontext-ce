@@ -23,7 +23,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import com.apimarketplace.common.event.EventBus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -58,6 +60,8 @@ public class MessageService {
     private final ObjectMapper objectMapper;
     private final StorageBreakdownService breakdownService;
     private final ChatCompactionOrchestrator compactionOrchestrator;
+    /** One transaction per message written by {@link #persistAttemptAndError}. */
+    private final TransactionTemplate perMessageTx;
 
     public MessageService(ConversationRepository conversationRepository,
                           MessageRepository messageRepository,
@@ -67,7 +71,8 @@ public class MessageService {
                           ObjectMapper objectMapper,
                           StorageBreakdownService breakdownService,
                           @org.springframework.beans.factory.annotation.Autowired(required = false)
-                          ChatCompactionOrchestrator compactionOrchestrator) {
+                          ChatCompactionOrchestrator compactionOrchestrator,
+                          PlatformTransactionManager transactionManager) {
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
         this.messageAttachmentRepository = messageAttachmentRepository;
@@ -76,6 +81,8 @@ public class MessageService {
         this.objectMapper = objectMapper;
         this.breakdownService = breakdownService;
         this.compactionOrchestrator = compactionOrchestrator;
+        this.perMessageTx = new TransactionTemplate(transactionManager);
+        this.perMessageTx.setPropagationBehavior(TransactionTemplate.PROPAGATION_REQUIRES_NEW);
     }
 
     /**
@@ -85,27 +92,16 @@ public class MessageService {
      * insufficient credits) so the conversation shows the attempt and the reason
      * rather than staying empty.
      *
-     * <p><b>Transactional posture</b> (subtle - Spring AOP gotcha): NOT declared
-     * {@code @Transactional} on purpose. The two inner {@code addMessage} calls
-     * are <i>self-invocations</i> on {@code this}, so the {@code @Transactional}
-     * annotation on {@code addMessage} is BYPASSED - Spring's proxy-based AOP
-     * cannot intercept calls that don't go through the proxy. Persistence still
-     * commits because Spring Data's {@link org.springframework.data.jpa.repository.support.SimpleJpaRepository}
-     * declares {@code @Transactional} on {@code save()}, so each individual repo
-     * write opens its own micro-tx. Net effect:
-     * <ul>
-     *   <li>first {@code addMessage} fails → its repo writes roll back; second
-     *       still attempts (separate try/catch); both errors logged.</li>
-     *   <li>first succeeds, second fails → user message already committed by its
-     *       own micro-tx, assistant line lost. Partial state ("user prompt
-     *       visible, assistant line missing") is more informative than nothing.</li>
-     * </ul>
-     *
-     * <p><b>Hazard documented above (pre-existing, not introduced here):</b>
-     * inside {@code addMessage} itself, the message-row save and the conversation-
-     * row updated_at save are two separate micro-tx - a crash between them leaves
-     * a message persisted without its parent conversation's {@code updated_at}
-     * bumped. Acceptable for this best-effort path.
+     * <p><b>Transactional posture.</b> Each message is written in its OWN transaction
+     * ({@code REQUIRES_NEW} through {@link #perMessageTx}), so a failure on the user
+     * line never rolls back or blocks the assistant line, and vice versa. The
+     * transaction is opened explicitly because the {@code addMessage} calls below are
+     * self-invocations on {@code this}: Spring's proxy never sees them, so the
+     * {@code @Transactional} on {@code addMessage} does not apply. Relying on it (the
+     * previous posture) meant no session was open while {@code addMessage} touched the
+     * LAZY {@code Conversation.messages} collection, and with {@code open-in-view: false}
+     * every call died on {@code LazyInitializationException}: the conversation stayed
+     * empty and the user never learned why the run was skipped (prod, 2026-09-25).
      *
      * <p>Each call is wrapped in its own try/catch + ERROR log so a persistence
      * failure surfaces in operator dashboards instead of silently disappearing -
@@ -121,7 +117,7 @@ public class MessageService {
             userMsg.setRole("user");
             userMsg.setContent(userContent != null ? userContent : "");
             userMsg.setTimestamp(Instant.now().toString());
-            addMessage(conversationId, userMsg);
+            perMessageTx.executeWithoutResult(status -> addMessage(conversationId, userMsg, false));
         } catch (Exception e) {
             logger.error("Failed to persist user attempt message for conversation {}: {}",
                     conversationId, e.getMessage());
@@ -133,7 +129,7 @@ public class MessageService {
             errMsg.setRole("assistant");
             errMsg.setContent(errorContent);
             errMsg.setTimestamp(Instant.now().toString());
-            addMessage(conversationId, errMsg);
+            perMessageTx.executeWithoutResult(status -> addMessage(conversationId, errMsg, false));
         } catch (Exception e) {
             logger.error("Failed to persist assistant error message for conversation {}: {}",
                     conversationId, e.getMessage());
@@ -146,6 +142,16 @@ public class MessageService {
      */
     @Transactional
     public MessageDto addMessage(String conversationId, MessageDto messageDto) {
+        return addMessage(conversationId, messageDto, true);
+    }
+
+    /**
+     * @param dispatchCompaction false for a line that is not a real assistant turn (the typed
+     *        refusal written by {@link #persistAttemptAndError}): compacting a conversation calls
+     *        a model, which must not happen because a run was refused for lack of credits.
+     *        Callers own the transaction (the public overload is {@code @Transactional}).
+     */
+    private MessageDto addMessage(String conversationId, MessageDto messageDto, boolean dispatchCompaction) {
         logger.info("Adding {} message to conversation: {}", messageDto.getRole(), conversationId);
 
         Conversation conversation = conversationRepository.findById(conversationId)
@@ -198,7 +204,7 @@ public class MessageService {
         // Surface-agnostic compaction chokepoint: every assistant turn - chat, workflow-agent,
         // standalone-agent, sub-agent - lands here via ConversationClient.saveMessage or the
         // direct chat pipeline. Dispatch once, from one place, guarded by role.
-        if (compactionOrchestrator != null
+        if (dispatchCompaction && compactionOrchestrator != null
                 && message.getRole() == Message.MessageRole.ASSISTANT) {
             try {
                 compactionOrchestrator.afterTurnAsync(

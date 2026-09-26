@@ -90,6 +90,49 @@ class ExecutionLinkRouterTest {
     }
 
     @Test
+    @DisplayName("V515: a link whose TARGET is disabled with a replacement runs on that replacement")
+    void disabledTargetWithReplacementIsFollowed() {
+        com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+            org.mockito.Mockito.mock(com.apimarketplace.agent.service.ModelReplacementResolver.class);
+        ReflectionTestUtils.setField(router, "modelReplacementResolver", resolver);
+        when(linkService.resolve("anthropic", "claude-opus-4-8", "WORKFLOW")).thenReturn(Optional.of(BRIDGE_ROUTE));
+        when(resolver.explicitReplacementIfDisabled("claude-code", "claude-opus-4-8")).thenReturn(Optional.of(
+            new com.apimarketplace.agent.service.ModelReplacementResolver.Pair("claude-code", "claude-opus-4-9")));
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+
+        assertThat(router.runnableRoute("anthropic", "claude-opus-4-8", "WORKFLOW"))
+            .isEqualTo(new ModelExecutionLinkService.ExecutionRoute("claude-code", "claude-opus-4-9"));
+    }
+
+    @Test
+    @DisplayName("V515: a link whose target has no replacement is returned unchanged")
+    void targetWithoutReplacementUnchanged() {
+        com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+            org.mockito.Mockito.mock(com.apimarketplace.agent.service.ModelReplacementResolver.class);
+        ReflectionTestUtils.setField(router, "modelReplacementResolver", resolver);
+        when(linkService.resolve("anthropic", "claude-opus-4-8", "WORKFLOW")).thenReturn(Optional.of(API_ROUTE));
+        when(resolver.explicitReplacementIfDisabled("openrouter", "anthropic/claude-opus-4-8")).thenReturn(Optional.empty());
+
+        assertThat(router.runnableRoute("anthropic", "claude-opus-4-8", "WORKFLOW")).isEqualTo(API_ROUTE);
+    }
+
+    @Test
+    @DisplayName("V515: a target replaced ONTO an unwired bridge is dropped like any bridge link")
+    void replacedTargetStillPassesTheBridgeCheck() {
+        com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+            org.mockito.Mockito.mock(com.apimarketplace.agent.service.ModelReplacementResolver.class);
+        ReflectionTestUtils.setField(router, "modelReplacementResolver", resolver);
+        when(linkService.resolve("anthropic", "claude-opus-4-8", "WORKFLOW")).thenReturn(Optional.of(API_ROUTE));
+        when(resolver.explicitReplacementIfDisabled("openrouter", "anthropic/claude-opus-4-8")).thenReturn(Optional.of(
+            new com.apimarketplace.agent.service.ModelReplacementResolver.Pair("claude-code", "claude-opus-4-9")));
+        when(bridgeDispatcher.isAvailable()).thenReturn(false);
+
+        // The replacement is checked AFTER the swap: a target moved onto a CLI must not
+        // become a silent bridge failure where the bridge is not wired.
+        assertThat(router.runnableRoute("anthropic", "claude-opus-4-8", "WORKFLOW")).isNull();
+    }
+
+    @Test
     @DisplayName("a link-store failure runs the billed pair instead of failing the run")
     void storeFailureFallsBackToTheBilledPair() {
         when(linkService.resolve("anthropic", "claude-opus-4-8", "WORKFLOW"))

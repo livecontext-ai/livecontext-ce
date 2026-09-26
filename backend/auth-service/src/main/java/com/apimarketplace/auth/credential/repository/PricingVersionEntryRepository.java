@@ -2,6 +2,8 @@ package com.apimarketplace.auth.credential.repository;
 
 import com.apimarketplace.auth.credential.domain.PricingVersionEntry;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -36,4 +38,17 @@ public interface PricingVersionEntryRepository extends JpaRepository<PricingVers
      */
     List<PricingVersionEntry> findByPricingVersionIdAndApiToolId(
             Long pricingVersionId, UUID apiToolId);
+
+    /**
+     * Every (endpoint, model) pair this credential has EVER published a price
+     * for, in any version, as {@code [apiToolId, modelId]} rows.
+     *
+     * <p>"Ever", not "latest", on purpose: it is how a caller tells a model
+     * nobody has priced yet from one an administrator priced and then REMOVED.
+     * The second is a decision and must stay removed.
+     */
+    @Query("SELECT DISTINCT e.apiToolId, e.modelId FROM PricingVersionEntry e "
+            + "WHERE e.pricingVersionId IN (SELECT v.id FROM PlatformCredentialPricingVersion v "
+            + "WHERE v.platformCredentialId = :credentialId)")
+    List<Object[]> findEverPublishedKeys(@Param("credentialId") Long credentialId);
 }

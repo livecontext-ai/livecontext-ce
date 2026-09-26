@@ -202,7 +202,11 @@ public class CeConversationStubController {
         // (the frontend only finalizes the bubble on `done`), not a non-terminal `content`.
         try {
             switch (state == null ? "COMPLETED" : state.toUpperCase()) {
-                case "ERROR" -> streamStateService.error(streamId, body == null ? null : body.get("error")).block();
+                // Same reader as the cloud endpoint: the client sends "errorMessage", and this
+                // stub used to read "error", so every CE stream error was stored as "Unknown error".
+                case "ERROR" -> streamStateService.error(streamId,
+                        com.apimarketplace.conversation.controller.internal.InternalAccessController
+                                .producerErrorMessage(body)).block();
                 case "STOPPED", "STOPPED_BY_USER" -> streamStateService.stop(streamId).block();
                 default -> streamStateService.complete(streamId).block();
             }

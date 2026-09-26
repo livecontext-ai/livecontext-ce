@@ -1067,6 +1067,76 @@ class CreditServiceTest {
                     eq(ownerUserId), eq(USER_ID), any(LocalDateTime.class), any());
             verify(ledgerRepository, never()).getDailyUsageByType(anyLong(), any(LocalDateTime.class), any());
         }
+
+        @Test
+        @DisplayName("modelUsage covers the period shown and previousModelUsage the period of the same length just before it")
+        void modelUsageCoversTheShownPeriodAndTheOneBefore() {
+            ArgumentCaptor<LocalDateTime> from = ArgumentCaptor.forClass(LocalDateTime.class);
+            ArgumentCaptor<LocalDateTime> to = ArgumentCaptor.forClass(LocalDateTime.class);
+            when(ledgerRepository.getModelUsage(eq(USER_ID), from.capture(), to.capture(),
+                    eq("AGENT_EXECUTION"), eq("anthropic"), isNull(), eq("org-9")))
+                    .thenReturn(List.<Object[]>of(new Object[]{"anthropic", "claude-sonnet-5", "AGENT_EXECUTION", 3L, new BigDecimal("12.5000"), 900L}))
+                    .thenReturn(List.<Object[]>of(new Object[]{"anthropic", "claude-sonnet-5", "AGENT_EXECUTION", 1L, new BigDecimal("4.0000"), 300L}));
+
+            LocalDateTime before = LocalDateTime.now();
+            Map<String, Object> result = creditService.getUsageAnalytics(
+                    USER_ID, 7, "AGENT_EXECUTION", "anthropic", null, "org-9");
+            LocalDateTime after = LocalDateTime.now();
+
+            // Current window [now-7d, now), then the previous one [now-14d, now-7d): the two
+            // windows touch without overlapping, so no row is counted in both periods.
+            assertThat(from.getAllValues()).hasSize(2);
+            LocalDateTime currentFrom = from.getAllValues().get(0);
+            assertThat(currentFrom).isBetween(before.minusDays(7), after.minusDays(7));
+            assertThat(to.getAllValues().get(0)).isEqualTo(currentFrom.plusDays(7));
+            assertThat(to.getAllValues().get(1)).isEqualTo(currentFrom);
+            assertThat(from.getAllValues().get(1)).isEqualTo(currentFrom.minusDays(7));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> current = (List<Map<String, Object>>) result.get("modelUsage");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> previous = (List<Map<String, Object>>) result.get("previousModelUsage");
+            assertThat(current).singleElement().satisfies(row -> {
+                assertThat(row).containsEntry("provider", "anthropic").containsEntry("model", "claude-sonnet-5")
+                        .containsEntry("sourceType", "AGENT_EXECUTION").containsEntry("count", 3L)
+                        .containsEntry("tokens", 900L);
+                assertThat((BigDecimal) row.get("credits")).isEqualByComparingTo("12.5");
+            });
+            assertThat(previous).singleElement().satisfies(row -> assertThat(row).containsEntry("count", 1L));
+        }
+
+        @Test
+        @DisplayName("a row that is not an LLM call keeps its null provider and model instead of failing the whole payload")
+        void modelUsageKeepsNullProviderAndModel() {
+            List<Object[]> rows = new ArrayList<>();
+            rows.add(new Object[]{null, null, "PLATFORM_MARKUP", 2L, new BigDecimal("1.0000"), 0L});
+            when(ledgerRepository.getModelUsage(eq(USER_ID), any(), any(), isNull(), isNull(), isNull(), isNull()))
+                    .thenReturn(rows);
+
+            Map<String, Object> result = creditService.getUsageAnalytics(USER_ID, 30, null, null, null, null);
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> current = (List<Map<String, Object>>) result.get("modelUsage");
+            assertThat(current).singleElement().satisfies(row -> {
+                assertThat(row).containsEntry("provider", null).containsEntry("model", null)
+                        .containsEntry("sourceType", "PLATFORM_MARKUP");
+            });
+        }
+
+        @Test
+        @DisplayName("a MEMBER's model breakdown uses the payer+executor intersection, never the owner's wallet-wide rows")
+        void memberModelUsageUsesPayerAndExecutor() {
+            Long ownerUserId = 7L;
+            PlanResolutionService resolver = mock(PlanResolutionService.class);
+            creditService.setPlanResolutionService(resolver);
+            when(resolver.resolvePayerUserId(USER_ID)).thenReturn(ownerUserId);
+
+            creditService.getUsageAnalytics(USER_ID, 30, null, null, null, "org-9");
+
+            verify(ledgerRepository, times(2)).getModelUsageForPayerAndExecutor(
+                    eq(ownerUserId), eq(USER_ID), any(), any(), isNull(), isNull(), isNull(), eq("org-9"));
+            verify(ledgerRepository, never()).getModelUsage(anyLong(), any(), any(), any(), any(), any(), any());
+        }
     }
 
     // ===== V366 (ADR-0010) - per-workspace usage reporting =====
@@ -1705,14 +1775,14 @@ class CreditServiceTest {
     @DisplayName("consumeForMarketplacePurchase")
     class ConsumeForMarketplacePurchase {
 
-        private static final String PUB_ID = "pub-uuid-abc-123";
+        private static final String PURCHASE_KEY = "marketplace-purchase:org-1:pub-uuid-abc-123";
 
         @Test
         @DisplayName("should deduct exact credit amount and create ledger with MARKETPLACE_PURCHASE type")
         void shouldDeductExactCreditsAndCreateLedger() {
             mockActiveSubscription(INITIAL_BALANCE);
 
-            CreditConsumeResult result = creditService.consumeForMarketplacePurchase(USER_ID, PUB_ID, 25);
+            CreditConsumeResult result = creditService.consumeForMarketplacePurchase(USER_ID, PURCHASE_KEY, 25);
 
             assertThat(result.success()).isTrue();
             assertThat(result.creditsUsed()).isEqualByComparingTo("25");
@@ -1722,10 +1792,10 @@ class CreditServiceTest {
             CreditLedgerEntry entry = ledgerCaptor.getValue();
             assertThat(entry.getUserId()).isEqualTo(USER_ID);
             assertThat(entry.getSourceType()).isEqualTo("MARKETPLACE_PURCHASE");
-            assertThat(entry.getSourceId()).isEqualTo(PUB_ID);
+            assertThat(entry.getSourceId()).isEqualTo(PURCHASE_KEY);
             assertThat(entry.getAmount()).isEqualByComparingTo("-25");
             assertThat(entry.getBalanceAfter()).isEqualByComparingTo("75.0000");
-            assertThat(entry.getDescription()).isEqualTo("Publication purchase: " + PUB_ID);
+            assertThat(entry.getDescription()).isEqualTo("Publication purchase: " + PURCHASE_KEY);
         }
 
         @Test
@@ -1733,7 +1803,7 @@ class CreditServiceTest {
         void shouldReturnInsufficientWhenBalanceBelowCost() {
             mockActiveSubscription(new BigDecimal("10.0000"));
 
-            CreditConsumeResult result = creditService.consumeForMarketplacePurchase(USER_ID, PUB_ID, 25);
+            CreditConsumeResult result = creditService.consumeForMarketplacePurchase(USER_ID, PURCHASE_KEY, 25);
 
             assertThat(result.success()).isFalse();
             assertThat(result.error()).contains("Insufficient credits");
@@ -1749,7 +1819,7 @@ class CreditServiceTest {
         void shouldReturnNoSubscription() {
             mockNoSubscription();
 
-            CreditConsumeResult result = creditService.consumeForMarketplacePurchase(USER_ID, PUB_ID, 25);
+            CreditConsumeResult result = creditService.consumeForMarketplacePurchase(USER_ID, PURCHASE_KEY, 25);
 
             assertThat(result.success()).isFalse();
             assertThat(result.error()).isEqualTo("No active subscription");
@@ -1761,7 +1831,7 @@ class CreditServiceTest {
         void shouldNotSetProviderModelOrTokenFields() {
             mockActiveSubscription(INITIAL_BALANCE);
 
-            creditService.consumeForMarketplacePurchase(USER_ID, PUB_ID, 10);
+            creditService.consumeForMarketplacePurchase(USER_ID, PURCHASE_KEY, 10);
 
             verify(ledgerRepository).save(ledgerCaptor.capture());
             CreditLedgerEntry entry = ledgerCaptor.getValue();
@@ -1776,7 +1846,7 @@ class CreditServiceTest {
         void shouldHandleZeroCost() {
             mockActiveSubscription(INITIAL_BALANCE);
 
-            CreditConsumeResult result = creditService.consumeForMarketplacePurchase(USER_ID, PUB_ID, 0);
+            CreditConsumeResult result = creditService.consumeForMarketplacePurchase(USER_ID, PURCHASE_KEY, 0);
 
             assertThat(result.success()).isTrue();
             assertThat(result.creditsUsed()).isEqualByComparingTo(BigDecimal.ZERO);
@@ -1847,7 +1917,7 @@ class CreditServiceTest {
         @Test
         @DisplayName("idempotent: short-circuits to success when sourceId already exists in ledger")
         void idempotentOnDuplicateSourceId() {
-            when(ledgerRepository.existsBySourceId(WS_SOURCE_ID)).thenReturn(true);
+            when(ledgerRepository.existsNonRejectionBySourceId(WS_SOURCE_ID)).thenReturn(true);
             when(subscriptionRepository.findActiveByUserId(USER_ID))
                     .thenReturn(Optional.of(createSubscription(INITIAL_BALANCE)));
 
@@ -1963,7 +2033,7 @@ class CreditServiceTest {
         @Test
         @DisplayName("idempotent: short-circuits to success when sourceId already exists in ledger")
         void idempotentOnDuplicateSourceId() {
-            when(ledgerRepository.existsBySourceId(WF_SOURCE_ID)).thenReturn(true);
+            when(ledgerRepository.existsNonRejectionBySourceId(WF_SOURCE_ID)).thenReturn(true);
             when(subscriptionRepository.findActiveByUserId(USER_ID))
                     .thenReturn(Optional.of(createSubscription(INITIAL_BALANCE)));
 
@@ -2121,7 +2191,7 @@ class CreditServiceTest {
         @DisplayName("idempotent: short-circuits to success when sourceId already exists in ledger")
         void idempotentOnDuplicateSourceId() {
             when(pricingService.hasPricing(IG_PROVIDER, IG_MODEL)).thenReturn(true);
-            when(ledgerRepository.existsBySourceId(IG_SOURCE_ID)).thenReturn(true);
+            when(ledgerRepository.existsNonRejectionBySourceId(IG_SOURCE_ID)).thenReturn(true);
             when(subscriptionRepository.findActiveByUserId(USER_ID))
                     .thenReturn(Optional.of(createSubscription(INITIAL_BALANCE)));
 
@@ -2465,7 +2535,7 @@ class CreditServiceTest {
         @Test
         @DisplayName("consumeForWorkflowNode should create ledger entry with cost=1 in unlimited mode")
         void workflowNodeShouldCreateLedgerEntryInUnlimitedMode() {
-            when(ledgerRepository.existsBySourceId("run-1:node-a")).thenReturn(false);
+            when(ledgerRepository.existsNonRejectionBySourceId("run-1:node-a")).thenReturn(false);
 
             CreditConsumeResult result = unlimitedCreditService.consumeForWorkflowNode(USER_ID, "run-1:node-a");
 
@@ -2506,7 +2576,7 @@ class CreditServiceTest {
         @Test
         @DisplayName("consumeForWorkflowNode should skip duplicate sourceId in unlimited mode")
         void workflowNodeShouldSkipDuplicateInUnlimitedMode() {
-            when(ledgerRepository.existsBySourceId("run-1:node-dup")).thenReturn(true);
+            when(ledgerRepository.existsNonRejectionBySourceId("run-1:node-dup")).thenReturn(true);
 
             CreditConsumeResult result = unlimitedCreditService.consumeForWorkflowNode(USER_ID, "run-1:node-dup");
 

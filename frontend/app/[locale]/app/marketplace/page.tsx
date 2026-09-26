@@ -28,6 +28,10 @@ import { PublicationCard, PublicationCardSkeleton } from '@/components/marketpla
 import type { MarketplaceRefinements } from '@/lib/api/orchestrator/publication.service';
 import { samePageUrl, showSamePageUrl } from '@/lib/navigation/showSamePageUrl';
 import { track } from '@/lib/analytics/analytics';
+import {
+  CloudLinkExpiredNotice,
+  useCloudLinkExpired,
+} from '@/components/cloud-link/CloudLinkExpiredNotice';
 
 // Card + preview helpers extracted to a shared component so the onboarding
 // "suggested apps" modal reuses the exact same markup (no style fork).
@@ -1420,6 +1424,9 @@ function CeMarketplaceGate() {
   // against completing the same state twice - React 18 StrictMode double-invokes
   // effects in dev, and a re-run would otherwise fire a second, failing connect.
   const completedStateRef = useRef<string | null>(null);
+  // ?cloud_link_error=expired: the backend no longer knew the OAuth state of the callback.
+  // Read here (not in the CTA) so the parameter is cleaned whichever branch renders.
+  const cloudLinkExpired = useCloudLinkExpired();
 
   // Returning from the cloud connect flow lands here as
   // ?cloud_link_callback=1&state=... (the backend allows the marketplace as a
@@ -1457,7 +1464,7 @@ function CeMarketplaceGate() {
   if (isInstallCloudLinked) {
     return <MarketplacePageContent remote />;
   }
-  return <CeMarketplaceCloudConnect />;
+  return <CeMarketplaceCloudConnect expired={cloudLinkExpired} />;
 }
 
 // Same chrome as both branches (header + 4-col card grid) so resolving the
@@ -1490,7 +1497,7 @@ function CeMarketplaceGateSkeleton() {
 // call to action. The button starts the OAuth link flow with the marketplace
 // as the returnPath, so the install returns here once linked and the gate
 // flips to the full cloud marketplace (CeMarketplaceGate handles the callback).
-function CeMarketplaceCloudConnect() {
+function CeMarketplaceCloudConnect({ expired = false }: { expired?: boolean }) {
   const t = useTranslations('marketplace');
   const locale = useLocale();
   const [connecting, setConnecting] = useState(false);
@@ -1500,8 +1507,7 @@ function CeMarketplaceCloudConnect() {
     setConnecting(true);
     setError(null);
     try {
-      const { authUrl } = await cloudLinkService.getAuthUrl(`/${locale}/app/marketplace`);
-      window.location.href = authUrl;
+      window.location.href = await cloudLinkService.getConnectUrl(`/${locale}/app/marketplace`);
     } catch {
       setError(t('cloudConnect.error'));
       setConnecting(false);
@@ -1532,6 +1538,7 @@ function CeMarketplaceCloudConnect() {
             {error && (
               <p className="text-sm text-red-500 mb-4">{error}</p>
             )}
+            {!error && expired && <CloudLinkExpiredNotice className="mb-4 max-w-md" />}
             <Button onClick={handleConnect} disabled={connecting}>
               {connecting ? (
                 <LoadingSpinner size="xs" className="mr-2" />

@@ -1,6 +1,6 @@
 {
   "name": "livecontext",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "One-command launcher for LiveContext Community Edition. Runs the self-hosted Docker stack (workflows, AI agents, apps) with a single npm command.",
   "type": "module",
   "bin": {

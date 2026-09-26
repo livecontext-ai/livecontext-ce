@@ -118,6 +118,16 @@ public final class ToolAuthorizationPolicy {
     public static final String PARAM_SCHEDULE_CRON = "schedule_cron";
 
     /**
+     * Rule raised when a call turns an agent's tool-authorization requirement OFF.
+     * Its own key, not {@link #RULE_AGENT_SCHEDULE}: the card names what is being
+     * removed, and a person who armed an agent deliberately should read that.
+     */
+    public static final String RULE_AGENT_DISARM = "agent:disarm_tool_authorization";
+
+    /** The parameter the condition above reads. */
+    public static final String PARAM_REQUIRE_TOOL_AUTHORIZATION = "require_tool_authorization";
+
+    /**
      * A rule that depends on the ARGUMENTS, not only on the action.
      *
      * @param tool    facade tool name, lowercase
@@ -146,7 +156,14 @@ public final class ToolAuthorizationPolicy {
             new ConditionalRule("agent", "create",
                     ToolAuthorizationPolicy::armsAgentSchedule, RULE_AGENT_SCHEDULE),
             new ConditionalRule("agent", "update",
-                    ToolAuthorizationPolicy::armsAgentSchedule, RULE_AGENT_SCHEDULE)
+                    ToolAuthorizationPolicy::armsAgentSchedule, RULE_AGENT_SCHEDULE),
+            // Turning the tool-authorization requirement OFF removes, permanently, the
+            // question a person asked to be asked. Left ungated it is a one-call bypass of
+            // the guard itself: an agent that is required to ask before publishing can
+            // simply stop being required to. Turning it ON is not gated - tightening needs
+            // no permission.
+            new ConditionalRule("agent", "update",
+                    ToolAuthorizationPolicy::disarmsToolAuthorization, RULE_AGENT_DISARM)
     );
 
     /**
@@ -162,6 +179,21 @@ public final class ToolAuthorizationPolicy {
      * module looks, so it calls the same function the module calls rather than reimplementing
      * the flattening.
      */
+    /**
+     * True when the call turns the tool-authorization requirement OFF.
+     *
+     * <p>Reads the MERGED view for the same reason as the schedule condition: the module
+     * flattens a nested {@code params} object before looking, so a guard reading only the
+     * top level would answer "not disarming" for the shape models actually send.
+     */
+    private static boolean disarmsToolAuthorization(Map<String, Object> arguments) {
+        if (arguments == null) {
+            return false;
+        }
+        Object value = ToolParamUtils.mergeParams(arguments).get(PARAM_REQUIRE_TOOL_AUTHORIZATION);
+        return value != null && "false".equalsIgnoreCase(String.valueOf(value).trim());
+    }
+
     private static boolean armsAgentSchedule(Map<String, Object> arguments) {
         if (arguments == null) {
             return false;

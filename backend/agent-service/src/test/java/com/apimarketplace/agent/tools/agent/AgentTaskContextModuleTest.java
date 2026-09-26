@@ -541,4 +541,134 @@ class AgentTaskContextModuleTest {
             assertThat(module.execute("get_history", Map.of(), TENANT, context(REVIEWER))).isEmpty();
         }
     }
+
+    @Nested
+    @DisplayName("task_get_execution: long content is read back from storage")
+    class LongContentReadBack {
+
+        @Test
+        @DisplayName("BUG: a long message comes back whole up to the limit, and past it the excerpt stays with its real length")
+        void longMessageIsReadBackUpToTheLimit() {
+            AgentExecutionEntity exec = buildExecution(EXECUTION_ID);
+            when(visibilityResolver.resolveRoleAndTask(any(), any(), any(), any()))
+                    .thenReturn(new ResolvedTask(Role.REVIEWER, buildTask()));
+            when(executionRepository.findById(EXECUTION_ID)).thenReturn(Optional.of(exec));
+            UUID fits = UUID.randomUUID();
+            UUID tooLong = UUID.randomUUID();
+            AgentExecutionMessageEntity email = new AgentExecutionMessageEntity();
+            email.setSequenceNumber(0);
+            email.setRole("user");
+            email.setTenantId(TENANT);
+            email.setContent("Classify this email...[truncated]");
+            email.setContentStorageId(fits);
+            email.setContentLength(12_748);
+            AgentExecutionMessageEntity huge = new AgentExecutionMessageEntity();
+            huge.setSequenceNumber(1);
+            huge.setRole("assistant");
+            huge.setTenantId(TENANT);
+            huge.setContent("Huge...[truncated]");
+            huge.setContentStorageId(tooLong);
+            huge.setContentLength(AgentTaskContextModule.MAX_STORED_CONTENT_CHARS + 1);
+            when(messageRepository.findByExecutionIdOrderBySequenceNumber(eq(EXECUTION_ID), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(email, huge), PageRequest.of(0, 50), 2));
+            com.apimarketplace.common.storage.service.StorageService storage =
+                    org.mockito.Mockito.mock(com.apimarketplace.common.storage.service.StorageService.class);
+            when(storage.getByIdReadOnly(fits, TENANT)).thenReturn(Optional.of("Classify this email: the whole body"));
+            module.setTraceContentLoader(new com.apimarketplace.agent.service.TraceContentLoader(storage, null));
+
+            ToolExecutionResult result = module.execute("task_get_execution",
+                    Map.of("task_id", TASK_ID.toString(), "execution_id", EXECUTION_ID.toString()),
+                    TENANT, context(REVIEWER)).orElseThrow();
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>)
+                    ((Map<String, Object>) ((Map<String, Object>) result.data()).get("messages")).get("items");
+            assertThat(items.get(0).get("content")).isEqualTo("Classify this email: the whole body");
+            assertThat(items.get(1).get("content")).isEqualTo("Huge...[truncated]");
+            assertThat(items.get(1).get("content_length")).isEqualTo(AgentTaskContextModule.MAX_STORED_CONTENT_CHARS + 1);
+            verify(storage, never()).getByIdReadOnly(eq(tooLong), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("task_get_execution: a long tool result is read back from storage")
+    class LongToolCallReadBack {
+
+        @Test
+        @DisplayName("BUG: a tool result moved to storage comes back whole under the limit")
+        void longToolResultIsReadBack() {
+            AgentExecutionEntity exec = buildExecution(EXECUTION_ID);
+            when(visibilityResolver.resolveRoleAndTask(any(), any(), any(), any()))
+                    .thenReturn(new ResolvedTask(Role.REVIEWER, buildTask()));
+            when(executionRepository.findById(EXECUTION_ID)).thenReturn(Optional.of(exec));
+            when(messageRepository.findByExecutionIdOrderBySequenceNumber(eq(EXECUTION_ID), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 50), 0));
+            UUID stored = UUID.randomUUID();
+            AgentExecutionToolCallEntity call = new AgentExecutionToolCallEntity();
+            call.setSequenceNumber(0);
+            call.setToolName("web_search");
+            call.setTenantId(TENANT);
+            call.setContent("{\"results\":...[truncated]");
+            call.setContentStorageId(stored);
+            call.setContentLength(9_000);
+            when(toolCallRepository.findByExecutionIdOrderBySequenceNumberDesc(eq(EXECUTION_ID), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(call), PageRequest.of(0, 20), 1));
+            com.apimarketplace.common.storage.service.StorageService storage =
+                    org.mockito.Mockito.mock(com.apimarketplace.common.storage.service.StorageService.class);
+            when(storage.getByIdReadOnly(stored, TENANT)).thenReturn(Optional.of("{\"results\":[\"a full page\"]}"));
+            module.setTraceContentLoader(new com.apimarketplace.agent.service.TraceContentLoader(storage, null));
+
+            ToolExecutionResult result = module.execute("task_get_execution",
+                    Map.of("task_id", TASK_ID.toString(), "execution_id", EXECUTION_ID.toString(),
+                            "include_tool_calls", true),
+                    TENANT, context(REVIEWER)).orElseThrow();
+
+            assertThat(result.success()).isTrue();
+            assertThat(result.data().toString()).contains("a full page").doesNotContain("...[truncated]");
+        }
+    }
+
+    @Nested
+    @DisplayName("task_get_execution: one read-back budget per response")
+    class ResponseReadBackBudget {
+
+        @Test
+        @DisplayName("past the response budget the remaining long rows keep their excerpt, and a tool call reports content_length")
+        void responseBudgetBoundsTheReadBack() {
+            AgentExecutionEntity exec = buildExecution(EXECUTION_ID);
+            when(visibilityResolver.resolveRoleAndTask(any(), any(), any(), any()))
+                    .thenReturn(new ResolvedTask(Role.REVIEWER, buildTask()));
+            when(executionRepository.findById(EXECUTION_ID)).thenReturn(Optional.of(exec));
+            int rowSize = AgentTaskContextModule.MAX_STORED_CONTENT_CHARS;
+            int rowsThatFit = (int) (AgentTaskContextModule.MAX_RESPONSE_READ_BACK_CHARS / rowSize);
+            List<AgentExecutionMessageEntity> rows = new ArrayList<>();
+            for (int i = 0; i < rowsThatFit + 2; i++) {
+                AgentExecutionMessageEntity m = new AgentExecutionMessageEntity();
+                m.setSequenceNumber(i);
+                m.setRole("tool");
+                m.setTenantId(TENANT);
+                m.setContent("excerpt-" + i + "...[truncated]");
+                m.setContentStorageId(UUID.randomUUID());
+                m.setContentLength(rowSize);
+                rows.add(m);
+            }
+            when(messageRepository.findByExecutionIdOrderBySequenceNumber(eq(EXECUTION_ID), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(rows, PageRequest.of(0, 100), rows.size()));
+            com.apimarketplace.common.storage.service.StorageService storage =
+                    org.mockito.Mockito.mock(com.apimarketplace.common.storage.service.StorageService.class);
+            when(storage.getByIdReadOnly(any(), eq(TENANT))).thenReturn(Optional.of("z".repeat(rowSize)));
+            module.setTraceContentLoader(new com.apimarketplace.agent.service.TraceContentLoader(storage, null));
+
+            ToolExecutionResult result = module.execute("task_get_execution",
+                    Map.of("task_id", TASK_ID.toString(), "execution_id", EXECUTION_ID.toString(), "limit", 100),
+                    TENANT, context(REVIEWER)).orElseThrow();
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>)
+                    ((Map<String, Object>) ((Map<String, Object>) result.data()).get("messages")).get("items");
+            long readBack = items.stream().filter(i -> String.valueOf(i.get("content")).length() == rowSize).count();
+            assertThat(readBack).isEqualTo(rowsThatFit);
+            assertThat(items.get(items.size() - 1).get("content")).asString().endsWith("...[truncated]");
+        }
+    }
 }

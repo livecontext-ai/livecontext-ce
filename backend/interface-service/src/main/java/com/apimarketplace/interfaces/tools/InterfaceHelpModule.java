@@ -166,6 +166,9 @@ public class InterfaceHelpModule implements ToolModule {
         Map<String, String> actions = new LinkedHashMap<>();
         actions.put("create", "interface(action='create', name='...', description='...', format='...', html_template='...', css_template='...', js_template='...')");
         actions.put("get", "interface(action='get', interface_id='<uuid>') - returns name, description, format (absent when none is set) and the stored templates.");
+        actions.put("present", "interface(action='present', interface_id='<uuid>') - opens the page in the user's side panel so they see it now. "
+            + "Optional title (the panel title, default the page name). Changes nothing. Use it once the page shows the result the user asked for, not after every edit. Response: presented, interface_id. "
+            + "To show a page filled with a workflow run's data, present that run's application with workflow(action='present') instead.");
         actions.put("list", "interface(action='list', limit=25, offset=0)");
         actions.put("update", "interface(action='update', interface_id='<uuid>', html_template='...') - REPLACES the whole template. " +
             "For a small change (a label, a color, one block), prefer 'patch' instead of re-sending everything. " +

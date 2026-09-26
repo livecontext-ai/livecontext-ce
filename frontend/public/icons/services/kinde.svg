@@ -1,1 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#14161A"><rect width="24" height="24" rx="4"/><text x="12" y="15.5" fill="#fff" font-family="Arial,sans-serif" font-size="10" font-weight="bold" text-anchor="middle">Ki</text></svg>
+<svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect width="32" height="32" fill="white" />
+    <path
+        d="M19.731 26.946L11.388 16.283V26.946H7.959V5.09201H11.388V15.441L19.416 5.09201H23.444L15.079 15.704L24.041 26.946H19.731Z"
+        fill="black" />
+</svg>

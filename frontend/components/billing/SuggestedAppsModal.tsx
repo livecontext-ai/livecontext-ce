@@ -32,7 +32,7 @@ import { isCeMode } from '@/lib/format-cost';
  * opens the publication's marketplace preview page.
  *
  * <p><b>Sequencing.</b> Onboarding arms two things: the welcome gift (what the
- * account's credits and AI allowance are) and this. The gift goes first, so this
+ * account's monthly credits are) and this. The gift goes first, so this
  * one waits for {@link WELCOME_GIFT_DONE_EVENT} when a gift is still pending,
  * and opens straight away when none is.
  *

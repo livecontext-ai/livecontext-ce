@@ -117,6 +117,60 @@ class StorageMappingResolverServiceTest {
         }
     }
 
+    /**
+     * Regression (prod 2026-09-25): an unmapped tool is the normal case and must not be reported as
+     * a failure, while any OTHER catalog refusal is an anomaly that must stay visible. The catalog's
+     * exact "no mapping" answer is the only thing allowed to drop to DEBUG.
+     */
+    @Nested
+    @DisplayName("parseMappingResponse - log level of a catalog refusal")
+    class CatalogRefusalLogLevelTests {
+
+        @Test
+        @DisplayName("the catalog's 'no mapping' answer returns null and logs nothing at WARN or above")
+        void noMappingAnswerIsNotAWarning() throws Exception {
+            UUID toolId = UUID.randomUUID();
+            List<ch.qos.logback.classic.spi.ILoggingEvent> events = captureLogs(() ->
+                    assertThat(service.parseMappingResponse(
+                            "{\"success\":false,\"error\":\"No mapping found for this tool\"}", toolId)).isNull());
+
+            assertThat(events).noneMatch(e -> e.getLevel().isGreaterOrEqual(ch.qos.logback.classic.Level.WARN));
+        }
+
+        @Test
+        @DisplayName("any other catalog refusal returns null and stays at WARN with the catalog's reason")
+        void otherRefusalStaysAWarning() throws Exception {
+            UUID toolId = UUID.randomUUID();
+            List<ch.qos.logback.classic.spi.ILoggingEvent> events = captureLogs(() ->
+                    assertThat(service.parseMappingResponse(
+                            "{\"success\":false,\"error\":\"No mapping definition found\"}", toolId)).isNull());
+
+            assertThat(events).anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN
+                    && e.getFormattedMessage().contains(toolId.toString())
+                    && e.getFormattedMessage().contains("No mapping definition found"));
+        }
+
+        private List<ch.qos.logback.classic.spi.ILoggingEvent> captureLogs(ThrowingRunnable action) throws Exception {
+            ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                    org.slf4j.LoggerFactory.getLogger(StorageMappingResolverService.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            try {
+                action.run();
+            } finally {
+                logger.detachAppender(appender);
+            }
+            return appender.list;
+        }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
     @Nested
     @DisplayName("resolve")
     class ResolveTests {

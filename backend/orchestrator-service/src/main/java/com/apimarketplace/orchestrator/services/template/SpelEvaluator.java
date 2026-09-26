@@ -491,6 +491,17 @@ public class SpelEvaluator {
         if (value != null) {
             return value;
         }
+        // A prefixed key written with the label as displayed (`core:Check_Status`) is stored
+        // under its NORMALIZED form (`core:check_status`). The adapter path normalizes; this one
+        // matched the exact key only, so the same reference resolved in one node and not in a
+        // decision beside it.
+        String normalized = normalizePrefixedKey(key);
+        if (normalized != null) {
+            value = context.get(normalized);
+            if (value != null) {
+                return value;
+            }
+        }
 
         java.util.regex.Matcher m = ARRAY_ACCESS.matcher(key);
         if (m.matches()) {
@@ -503,6 +514,36 @@ public class SpelEvaluator {
         }
         return null;
     }
+
+    /**
+     * {@code prefix:Label} with the label normalized the way node keys are stored, or null when
+     * the key is not a plain {@code prefix:label} or is already normalized.
+     */
+    private static String normalizePrefixedKey(String key) {
+        int colon = key.indexOf(':');
+        if (colon <= 0 || colon == key.length() - 1 || key.indexOf('[') >= 0) {
+            return null;
+        }
+        String label = key.substring(colon + 1);
+        String normalized = com.apimarketplace.orchestrator.utils.LabelNormalizer.normalizeLabel(label);
+        if (normalized == null || normalized.isEmpty() || normalized.equals(label)) {
+            return null;
+        }
+        return key.substring(0, colon + 1) + normalized;
+    }
+
+    /** The step stored under {@code <prefix>:<alias>} for any node prefix, or null. */
+    private static Object findPrefixedStep(String alias, Map<String, Object> context) {
+        for (String prefix : STEP_PREFIXES) {
+            Object value = context.get(prefix + alias);
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static final String[] STEP_PREFIXES = {"core:", "mcp:", "agent:", "table:", "interface:"};
 
     /**
      * The resolution a condition actually performs, exposed read-only so a diagnostic
@@ -542,6 +583,19 @@ public class SpelEvaluator {
             if (baseValue instanceof Map) {
                 return pathNavigator.navigateMapPath((Map<String, Object>) baseValue, remainingPath);
             }
+            // A bare step alias (`summary.output.text`) can be shadowed at the top level by a
+            // trigger field of the same name, which is a scalar: read the step under its
+            // prefixed key instead (`core:summary`, `mcp:summary`, ...). The bare field keeps
+            // answering `{{summary}}` as before.
+            if (baseValue != null && !baseKey.contains(":")) {
+                Object stepValue = findPrefixedStep(baseKey, context);
+                if (stepValue instanceof Map) {
+                    Object viaStep = pathNavigator.navigateMapPath((Map<String, Object>) stepValue, remainingPath);
+                    if (viaStep != null) {
+                        return viaStep;
+                    }
+                }
+            }
         }
 
         // Handle standalone array access: "items[1]" without dots
@@ -560,6 +614,13 @@ public class SpelEvaluator {
 
             // Try with full prefixed key
             String fullKey = prefix + ":" + rest.split("\\.")[0];
+            if (!context.containsKey(fullKey)) {
+                // Same normalization as resolveBaseKey: `core:Check_Status` is stored normalized.
+                String normalizedKey = normalizePrefixedKey(fullKey);
+                if (normalizedKey != null && context.containsKey(normalizedKey)) {
+                    fullKey = normalizedKey;
+                }
+            }
             if (context.containsKey(fullKey)) {
                 Object value = context.get(fullKey);
                 if (rest.contains(".") && value instanceof Map) {

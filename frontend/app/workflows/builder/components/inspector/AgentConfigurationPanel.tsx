@@ -1,12 +1,11 @@
 import * as React from 'react';
 import Image from 'next/image';
-import { Info, MemoryStick } from 'lucide-react';
+import { MemoryStick } from 'lucide-react';
 import { AvatarDisplay } from '@/components/agents';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ExpressionField, ConnectionProps } from './ExpressionField';
 import { OptionalSection } from './OptionalSection';
 import { ModelPicker } from '@/components/ai/ModelPicker';
@@ -18,6 +17,8 @@ import { useTranslations } from 'next-intl';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
 import type { Agent as AgentEntity } from '@/lib/api/orchestrator/types';
 import type { Node, Edge } from 'reactflow';
+import { InfoPopover } from '@/components/ui/info-popover';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 interface ConnectedTool {
     id: string;
@@ -272,18 +273,11 @@ function AgentEntityPanel({
                         <Label className="text-sm font-semibold text-slate-500 dark:text-slate-400">
                             {t('memoryLabel')}
                         </Label>
-                        <Popover>
-                            <PopoverTrigger asChild>
-                                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                                    <Info className="h-3 w-3 text-slate-400" />
-                                </button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                                <p className="text-xs text-slate-600 dark:text-slate-300">
-                                    {t('memoryDescription')}
-                                </p>
-                            </PopoverContent>
-                        </Popover>
+                        <InfoPopover label={t('memoryLabel')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+                          <p className="text-xs text-slate-600 dark:text-slate-300">
+                              {t('memoryDescription')}
+                          </p>
+                        </InfoPopover>
                     </div>
                     <Switch
                         checked={withMemory}
@@ -454,7 +448,7 @@ function InlineConfigPanel({
                                 <div key={tool.id} className="flex items-center gap-2">
                                     <div className="flex-shrink-0 w-5 h-5 flex items-center justify-center">
                                         {tool.iconSlug ? (
-                                            <Image
+                                            <ServiceLogo as={Image}
                                                 src={`/icons/services/${tool.iconSlug}.svg`}
                                                 alt={tool.name}
                                                 width={18}
@@ -462,16 +456,17 @@ function InlineConfigPanel({
                                                 className="w-[18px] h-[18px] rounded-md p-0.5 dark:bg-slate-100/10"
                                                 onError={(e) => {
                                                     const target = e.target as HTMLImageElement;
-                                                    target.src = "/mcp_black.png";
+                                                    target.src = "/icons/integration_black.svg";
+                                                    target.classList.add("dark:invert");
                                                 }}
                                             />
                                         ) : (
                                             <Image
-                                                src="/mcp_black.png"
+                                                src="/icons/integration_black.svg"
                                                 alt="Tool"
                                                 width={18}
                                                 height={18}
-                                                className="w-[18px] h-[18px] rounded-md p-0.5 dark:bg-slate-100/10"
+                                                className="w-[18px] h-[18px] rounded-md p-0.5 dark:bg-slate-100/10 dark:invert"
                                             />
                                         )}
                                     </div>
@@ -482,11 +477,11 @@ function InlineConfigPanel({
                     ) : (
                         <div className="flex items-center gap-2">
                             <Image
-                                src="/mcp_black.png"
-                                alt="MCP"
+                                src="/icons/integration_black.svg"
+                                alt="Integration"
                                 width={18}
                                 height={18}
-                                className="w-[18px] h-[18px] rounded-md p-0.5 dark:bg-slate-100/10"
+                                className="w-[18px] h-[18px] rounded-md p-0.5 dark:invert"
                             />
                             <span className="text-sm text-slate-700 dark:text-slate-300">{tf('agentInline.allTools')}</span>
                         </div>
@@ -524,16 +519,9 @@ function InlineConfigPanel({
                 <div className="space-y-2">
                     <div className="flex items-center gap-1.5">
                         <Label className="text-sm font-semibold text-slate-500 dark:text-slate-400">{tf('temperature')}</Label>
-                        <Popover>
-                            <PopoverTrigger asChild>
-                                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                                    <Info className="h-3 w-3 text-slate-400" />
-                                </button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                                <p className="text-xs text-slate-600 dark:text-slate-300">{tf('agentInline.temperatureDescription')}</p>
-                            </PopoverContent>
-                        </Popover>
+                        <InfoPopover label={tf('temperature')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+                          <p className="text-xs text-slate-600 dark:text-slate-300">{tf('agentInline.temperatureDescription')}</p>
+                        </InfoPopover>
                     </div>
                     <Input
                         type="number"
@@ -550,16 +538,9 @@ function InlineConfigPanel({
                 <div className="space-y-2">
                     <div className="flex items-center gap-1.5">
                         <Label className="text-sm font-semibold text-slate-500 dark:text-slate-400">{tf('maxTokens')}</Label>
-                        <Popover>
-                            <PopoverTrigger asChild>
-                                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                                    <Info className="h-3 w-3 text-slate-400" />
-                                </button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                                <p className="text-xs text-slate-600 dark:text-slate-300">{tf('agentInline.maxTokensDescription')}</p>
-                            </PopoverContent>
-                        </Popover>
+                        <InfoPopover label={tf('maxTokens')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+                          <p className="text-xs text-slate-600 dark:text-slate-300">{tf('agentInline.maxTokensDescription')}</p>
+                        </InfoPopover>
                     </div>
                     <Input
                         type="number"
@@ -576,16 +557,9 @@ function InlineConfigPanel({
                 <div className="space-y-2">
                     <div className="flex items-center gap-1.5">
                         <Label className="text-sm font-semibold text-slate-500 dark:text-slate-400">{tf('agentInline.maxIterations')}</Label>
-                        <Popover>
-                            <PopoverTrigger asChild>
-                                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                                    <Info className="h-3 w-3 text-slate-400" />
-                                </button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                                <p className="text-xs text-slate-600 dark:text-slate-300">{tf('agentInline.maxIterationsDescription')}</p>
-                            </PopoverContent>
-                        </Popover>
+                        <InfoPopover label={tf('agentInline.maxIterations')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+                          <p className="text-xs text-slate-600 dark:text-slate-300">{tf('agentInline.maxIterationsDescription')}</p>
+                        </InfoPopover>
                     </div>
                     <Input
                         type="number"
@@ -603,16 +577,9 @@ function InlineConfigPanel({
                     <div className="space-y-2">
                         <div className="flex items-center gap-1.5">
                             <Label className="text-sm font-semibold text-slate-500 dark:text-slate-400">{tf('agentInline.maxToolsToDiscover')}</Label>
-                            <Popover>
-                                <PopoverTrigger asChild>
-                                    <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                                        <Info className="h-3 w-3 text-slate-400" />
-                                    </button>
-                                </PopoverTrigger>
-                                <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                                    <p className="text-xs text-slate-600 dark:text-slate-300">{tf('agentInline.maxToolsDescription')}</p>
-                                </PopoverContent>
-                            </Popover>
+                            <InfoPopover label={tf('agentInline.maxToolsToDiscover')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+                              <p className="text-xs text-slate-600 dark:text-slate-300">{tf('agentInline.maxToolsDescription')}</p>
+                            </InfoPopover>
                         </div>
                         <Input
                             type="number"

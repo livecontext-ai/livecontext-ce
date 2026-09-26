@@ -44,6 +44,20 @@ public class TriggerResolverService implements TriggerResolver {
     }
 
     /**
+     * True when a registered handler resolves this trigger type. Lets a caller that can live
+     * without a payload (the step-by-step item loader) tell "no handler" apart from a real
+     * resolution failure without going through the exception {@link #resolveTrigger} throws.
+     */
+    public boolean supportsTriggerType(String triggerType) {
+        for (TriggerTypeHandler handler : handlers) {
+            if (handler.canHandle(triggerType)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Resolves a trigger and loads its data.
      * @throws IllegalArgumentException if trigger type is unknown or unsupported
      */

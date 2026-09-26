@@ -85,6 +85,11 @@ public class WebhookController {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.apimarketplace.auth.service.RewardService rewardService;
 
+    // Lifecycle emails (Resend): checkout.completed ends the abandoned-checkout sequence.
+    // Optional like the fields above: null in legacy test ctors, inert when unconfigured.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails;
+
     public WebhookController(
             BillingEventRepository billingEventRepository,
             SubscriptionService subscriptionService,
@@ -477,6 +482,7 @@ public class WebhookController {
 
         if (userId != null) {
             logger.info("Checkout completed for user {} (decoded from nonce: {})", userId, nonce);
+            emitCheckoutCompleted(userId, paygTopup);
 
             // Record the checkout event with the decoded userId
             try {
@@ -597,6 +603,23 @@ public class WebhookController {
         }
     }
 
+    /**
+     * {@code checkout.completed} for the lifecycle emails. Never throws: a lifecycle email
+     * must never fail a webhook Stripe would then retry. A Stripe redelivery emits it again,
+     * which is harmless: the event only ends a wait, it starts nothing.
+     */
+    void emitCheckoutCompleted(Long userId, boolean credits) {
+        if (lifecycleEmails == null || userId == null) return;
+        try {
+            lifecycleEmails.emit(userId, com.apimarketplace.auth.lifecycle.LifecycleEvents.CHECKOUT_COMPLETED,
+                    java.util.Map.of("kind", credits
+                            ? com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_CREDITS
+                            : com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_SUBSCRIPTION));
+        } catch (Exception e) {
+            logger.debug("checkout.completed not emitted for user {}: {}", userId, e.toString());
+        }
+    }
+
     private void handleCheckoutCompletedRaw(Event event) {
         try {
             String sessionId = null;
@@ -644,8 +667,15 @@ public class WebhookController {
                 if (userId == null) {
                     return;
                 }
+                emitCheckoutCompleted(userId, true);
                 parseAndGrantPaygTopup(userId, sessionId, creditAmountStr, tier);
                 return;  // mode=PAYMENT: no customer.subscription.* event will follow
+            }
+
+            // Subscription checkout: same lifecycle signal as the typed path.
+            Long subscriptionUserId = (nonce != null && !nonce.isBlank()) ? nonceUtil.decodeNonce(nonce) : null;
+            if (subscriptionUserId != null) {
+                emitCheckoutCompleted(subscriptionUserId, false);
             }
 
             // We wait for customer.subscription.* to provision

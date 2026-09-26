@@ -1,13 +1,11 @@
 'use client';
 
 import * as React from 'react';
-import { Info } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { useTranslations } from 'next-intl';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { BuilderNodeData } from '../../../types';
 import type { ConnectionProps } from '../ExpressionField';
 import {
@@ -17,6 +15,7 @@ import {
   PUBLIC_LINK_TTL_MAX,
   PUBLIC_LINK_TTL_MIN,
 } from '../../../utils/publicLinkParams';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 interface PublicLinkParametersFormProps {
   node: Node<BuilderNodeData>;
@@ -86,23 +85,13 @@ export function PublicLinkParametersForm({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('publicLink.file')}</span>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-                >
-                  <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                  <p className="font-semibold text-slate-900 dark:text-slate-100">{t('publicLink.title')}</p>
-                  <p>{t('publicLink.description')}</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">{t('publicLink.fileHint')}</p>
-                </div>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label={t('publicLink.file')} size="sm" side="right" align="start">
+              <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                <p className="font-semibold text-slate-900 dark:text-slate-100">{t('publicLink.title')}</p>
+                <p>{t('publicLink.description')}</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">{t('publicLink.fileHint')}</p>
+              </div>
+            </InfoPopover>
           </div>
           <span className="text-sm text-slate-500 dark:text-slate-400">{t('required')}</span>
         </div>

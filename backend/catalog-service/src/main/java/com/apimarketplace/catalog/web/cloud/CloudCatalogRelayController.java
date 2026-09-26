@@ -1,6 +1,7 @@
 package com.apimarketplace.catalog.web.cloud;
 
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.common.plan.CeLinkRefusal;
 import com.apimarketplace.auth.client.dto.CeLinkEntitlementsResult;
 import com.apimarketplace.catalog.domain.dto.CeCatalogRelayRequest;
 import com.apimarketplace.catalog.service.relay.CeCatalogRelayService;
@@ -113,9 +114,10 @@ public class CloudCatalogRelayController {
 
     /**
      * Read-only availability probe: is this integration executable through the
-     * relay, and at what markup? Gated on authentication + link ownership only;
-     * the subscription state is INCLUDED in the body ({@code subscriptionActive})
-     * so an unsubscribed CE can render its upsell instead of a hard 402.
+     * relay, and at what markup? Gated on authentication + a linked AND paid account
+     * (the shared CE-link gate: a link whose account is not on a paid plan gets 403
+     * CLOUD_LINK_PLAN_REQUIRED here like on every relay). The subscription state is
+     * still echoed in the body ({@code subscriptionActive}) for installs that read it.
      */
     @GetMapping("/platform-info/{integrationName}")
     public ResponseEntity<Map<String, Object>> platformInfo(
@@ -185,9 +187,9 @@ public class CloudCatalogRelayController {
     }
 
     /**
-     * Shared link-ownership check, mirroring the web-search relay: a populated
-     * error response short-circuits; {@code null} means the caller owns an
-     * active link to the install and the request may proceed.
+     * Shared CE-link gate, mirroring the web-search relay: a populated error response
+     * (the shared {@code CeLinkRefusal} bodies) short-circuits; {@code null} means the
+     * caller owns an active link to the install AND its governing plan is paid.
      */
     @Nullable
     private ResponseEntity<Map<String, Object>> authorize(Long cloudUserId, String installId) {
@@ -195,11 +197,9 @@ public class CloudCatalogRelayController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("error", "AUTHENTICATION_REQUIRED"));
         }
-        if (!authClient.userOwnsActiveCeLink(String.valueOf(cloudUserId), installId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("error", "CE_LINK_NOT_ACTIVE"));
-        }
-        return null;
+        // Linked AND paid (shared refusal bodies): a suspended link answers
+        // CLOUD_LINK_PLAN_REQUIRED, an unlinked one CE_LINK_NOT_ACTIVE; null = proceed.
+        return CeLinkRefusal.response(authClient.ceLinkAccess(String.valueOf(cloudUserId), installId));
     }
 
     /**

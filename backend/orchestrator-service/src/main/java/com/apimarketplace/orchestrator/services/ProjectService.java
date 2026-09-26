@@ -409,7 +409,7 @@ public class ProjectService {
     }
 
     private boolean assignDataSource(UUID projectId, Long dataSourceId, String userId, String orgId) {
-        DataSourceDto ds = dataSourceClient.getDataSource(dataSourceId, userId);
+        DataSourceDto ds = dataSourceClient.getDataSource(dataSourceId, userId, orgId);
         if (ds == null || !matchesWorkspace(userId, orgId, ds.tenantId(), ds.organizationId())) return false;
         dataSourceClient.updateProjectId(dataSourceId, projectId, userId);
         return true;

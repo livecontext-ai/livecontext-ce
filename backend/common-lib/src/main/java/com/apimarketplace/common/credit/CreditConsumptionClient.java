@@ -59,8 +59,9 @@ public class CreditConsumptionClient {
 
     /**
      * A CE install's LLM traffic relayed through cloud. Deliberately NOT funded by the
-     * FREE AI allowance (see {@code CreditService.AI_ALLOWANCE_SOURCE_TYPES}), which is
-     * exactly why a relay pre-flight must name it rather than gating as a chat turn.
+     * Free plan's monthly credits, even on a free-tier model (see
+     * {@code CreditService.FREE_TIER_LLM_SOURCE_TYPES}), which is exactly why a relay
+     * pre-flight must name it rather than gating as a chat turn.
      */
     public static final String SOURCE_TYPE_CE_LLM_RELAY = "CE_LLM_RELAY";
 
@@ -245,7 +246,7 @@ public class CreditConsumptionClient {
      * Source-type-aware credit check. Pass the spend's source type (e.g.
      * {@code CHAT_CONVERSATION} from the internal/scheduled chat gates) so the
      * server applies the FREE-plan bucket scoping: a Free user with monthly
-     * workflow-only credits but no PAYG top-up is refused up-front instead of
+     * credits but no PAYG top-up is refused a non-free-tier turn up-front instead of
      * running the LLM and overshooting the PAYG bucket negative post-flight.
      * {@code null} keeps the legacy total-balance semantics.
      *
@@ -259,10 +260,10 @@ public class CreditConsumptionClient {
 
     /**
      * Model-aware variant (V494). A caller that knows which model the turn will run
-     * on MUST use it: a Free account's monthly AI allowance pays for chat and agent
-     * turns on the models opened to the free tier, and auth-service cannot count
-     * that allowance toward the gate without knowing the model. Omitting it refuses
-     * a turn the debit would have funded.
+     * on MUST use it: a Free account's monthly credits pay for chat and agent turns
+     * on the models opened to the free tier (V512), and auth-service cannot count
+     * them toward the gate without knowing the model. Omitting it refuses a turn the
+     * debit would have funded.
      *
      * <p>The model is part of the cache key, since the verdict now differs between
      * two models for the same account and source type.
@@ -549,25 +550,24 @@ public class CreditConsumptionClient {
     }
 
     /**
-     * Spending power for LLM work: the wallet PLUS the monthly AI allowance (V494).
+     * Spending power for LLM work on one model: what an agent/chat turn on it can
+     * actually draw (V494, V512). On the Free plan that is the monthly pool plus PAYG on
+     * a free-tier model and PAYG alone on any other; on a paid plan, the whole wallet.
      *
-     * <p>Deliberately a separate method rather than widening {@link #fetchBalance}.
-     * The allowance can only pay for agent/chat turns on a free-tier model, so folding
-     * it into the general figure hands a phantom budget to callers it can never fund:
-     * the orchestrator's workflow run budget would start a run on credits no
-     * WORKFLOW_NODE debit can draw (the run then dies mid-execution instead of being
-     * refused up front), and the image-generation pre-flight would pass a gate the
-     * debit refuses.
+     * <p>Deliberately a separate method rather than reusing {@link #fetchBalance}: the
+     * two figures answer different questions. The orchestrator's workflow run budget
+     * and the image-generation pre-flight keep {@link #fetchBalance}, because what they
+     * spend is routed differently from an LLM turn.
      *
      * <p>Use this ONLY from LLM budget guards. It is a safety net, not the authoritative
      * gate - the pre-flight check and the debit both re-resolve - but it is model-aware:
-     * the allowance only funds the models an admin opened, so the server is asked what
-     * the pot is worth for THIS model rather than adding it blindly. Adding it blindly
-     * budgets an agent loop against money no debit on a closed model can draw, which is
-     * the same error as withholding it, pointing the other way.
+     * the server answers with the same routing the debit uses for THIS model, so an agent
+     * loop is never budgeted against money no debit on it can draw.
      *
      * <p>The model-blind overload remains for callers that genuinely have no model; it
-     * reports the wallet alone, which is the pre-V494 answer and always safe.
+     * reports the whole wallet, which on the Free plan OVERSTATES what a turn on a
+     * non-free-tier model can draw. Pass the model whenever it is known; the debit
+     * stays the authoritative gate either way.
      */
     public BigDecimal fetchLlmSpendableBalance(String userId) {
         return fetchLlmSpendableBalance(userId, null, null);
@@ -918,6 +918,10 @@ public class CreditConsumptionClient {
     /**
      * Consume a fixed credit amount (e.g. marketplace purchase).
      * Uses the same auth-service endpoint with MARKETPLACE_PURCHASE sourceType.
+     *
+     * @param sourceId the per-purchase key from {@link SourceIdBuilder#marketplacePurchase}, never
+     *                 a bare publication id: the ledger key is unique across all users, so a
+     *                 publication id would let only its first buyer ever be charged.
      */
     public Map<String, Object> consumeFixedCredits(String userId, String sourceId, int credits) {
         if (!enabled) {

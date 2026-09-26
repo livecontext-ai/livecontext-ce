@@ -24,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
@@ -74,7 +75,7 @@ class TriggerCreatorDatasourceTest {
         // Return a datasource with no column mapping so buildTriggerSchema stays silent
         DataSourceDto ds = new DataSourceDto(42L, "tenant-1", "orders", null,
                 null, null, null, null, null, null, null, null, null, null, null, null);
-        lenient().when(dataSourceClient.getDataSource(anyLong(), anyString())).thenReturn(ds);
+        lenient().when(dataSourceClient.getDataSource(anyLong(), anyString(), nullable(String.class))).thenReturn(ds);
         lenient().when(dataSourceClient.getDataSourcesByTenant(anyString())).thenReturn(List.of());
     }
 
@@ -88,6 +89,17 @@ class TriggerCreatorDatasourceTest {
     @SuppressWarnings("unchecked")
     private List<String> getEventTypes(WorkflowBuilderSession session) {
         return (List<String>) getParams(session).get("event_types");
+    }
+
+    @Test
+    @DisplayName("The trigger table's schema is read with the session org (teammate's table in a workspace)")
+    void triggerSchemaLookupCarriesSessionOrg() {
+        stubHappyPathDefaults();
+        WorkflowBuilderSession session = WorkflowBuilderSession.create("tenant-1", "org-1", "conv-1", "Test Workflow", null);
+
+        creator.executeAddTrigger(session, baseParams("On Order Change", 42L), "tenant-1");
+
+        org.mockito.Mockito.verify(dataSourceClient, org.mockito.Mockito.atLeastOnce()).getDataSource(42L, "tenant-1", "org-1");
     }
 
     // ==================== event_types defaults ====================
@@ -290,7 +302,7 @@ class TriggerCreatorDatasourceTest {
                     .thenReturn(new LinkedHashMap<>());
             DataSourceDto ds = new DataSourceDto(42L, "tenant-1", "tasks", null,
                     null, null, null, null, null, null, null, mappingSpec, null, null, null, null);
-            lenient().when(dataSourceClient.getDataSource(anyLong(), anyString())).thenReturn(ds);
+            lenient().when(dataSourceClient.getDataSource(anyLong(), anyString(), nullable(String.class))).thenReturn(ds);
             lenient().when(dataSourceClient.getDataSourcesByTenant(anyString())).thenReturn(List.of());
         }
 

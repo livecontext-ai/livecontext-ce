@@ -147,6 +147,30 @@ public final class PlanTier {
     }
 
     /**
+     * Whether {@code planCode} is a PAID plan: a code this file knows, ranked above FREE
+     * (STARTER, PAYG, PRO, TEAM and every ENTERPRISE SKU).
+     *
+     * <p><b>Strict, fails CLOSED</b>, the deliberate opposite of {@link #userRank}: FREE,
+     * {@code CREDIT_PACK} (a top-up, not a plan), {@link #CE}, {@link #NO_SUBSCRIPTION},
+     * null, blank and any code this file has not been taught are all NOT paid. It exists
+     * for rules that spend cloud money on the caller's behalf (the CE cloud link, whose
+     * relays run LLM, search and catalog calls on the cloud's keys), where letting an
+     * unknown code through costs real money instead of briefly un-gating a feature. Use
+     * {@link #meets} for ordinary feature gating, which must keep failing open.
+     */
+    public static boolean isPaid(String planCode) {
+        String code = normalize(planCode);
+        if (code.isEmpty()) {
+            return false;
+        }
+        Integer rank = RANKS.get(code);
+        if (rank == null && code.startsWith("ENTERPRISE")) {
+            rank = 4;
+        }
+        return rank != null && rank > 0;
+    }
+
+    /**
      * The cheapest plan that satisfies {@code requiredPlanCode}, for an upgrade
      * prompt. Returns the requirement itself once normalised, or {@code null}
      * when there is nothing to require.

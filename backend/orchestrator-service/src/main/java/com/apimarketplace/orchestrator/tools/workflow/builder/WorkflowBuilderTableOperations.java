@@ -49,7 +49,7 @@ public class WorkflowBuilderTableOperations {
         parameters.put("table_id", tableId);
 
         // 2. Verify table exists
-        DataSourceDto table = dataSourceClient.getDataSource(tableId, tenantId);
+        DataSourceDto table = dataSourceClient.getDataSource(tableId, tenantId, session != null ? session.getOrgId() : null);
         if (table == null) {
             return buildTableNotFoundError(tenantId, tableId, operation);
         }

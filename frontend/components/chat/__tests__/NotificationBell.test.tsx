@@ -16,6 +16,9 @@ import { NotificationBell, TRIGGERS_ROWS_FRESH_FOR_MS } from '../NotificationBel
 import type { NotificationItem } from '@/lib/api/orchestrator/home-status.service';
 import { TRIGGER_ROW_ACTIONS_YIELD } from '../TriggerRowActions';
 
+const trackMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/analytics/analytics', () => ({ track: (...a: unknown[]) => trackMock(...a) }));
+
 const pushMock = vi.fn();
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: pushMock }),
@@ -403,6 +406,60 @@ describe('NotificationBell - tabs Inbox/Activity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Daily Digest' }));
 
     expect(pushMock).toHaveBeenCalledWith('/app/workflow/wf-99');
+  });
+
+  describe('analytics', () => {
+    beforeEach(() => trackMock.mockReset());
+
+    it('reports the bell opening once, with the unread count and the tab it opens onto', () => {
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+
+      expect(trackMock.mock.calls.filter(([e]) => e === 'notification_bell_opened'))
+        .toEqual([['notification_bell_opened', { unread_count: 1, tab: 'inbox' }]]);
+    });
+
+    it('an empty inbox reports the fallback tab it actually lands on', () => {
+      inboxMock.current = { ...inboxMock.current, items: [], unreadCount: 0 };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+
+      expect(trackMock).toHaveBeenCalledWith('notification_bell_opened', { unread_count: 0, tab: 'triggers' });
+    });
+
+    it('reports a tab change, and not a click on the tab already shown', () => {
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      trackMock.mockReset();
+
+      fireEvent.click(screen.getByText('inboxTab'));
+      expect(trackMock).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByText('activityTab'));
+      expect(trackMock).toHaveBeenCalledWith('notification_tab_changed', { tab: 'activity' });
+    });
+
+    it('an inbox row click sends enums only, never the subject name', () => {
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Open WF' }));
+
+      expect(trackMock).toHaveBeenCalledWith('notification_row_clicked', {
+        category: 'run_failed', subject_type: 'workflow', severity: 'error', unread: true, tab: 'inbox',
+      });
+      expect(JSON.stringify(trackMock.mock.calls)).not.toContain('"WF"');
+    });
+
+    it('a Triggers row click is reported as an automation row, without its name', () => {
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+      fireEvent.click(screen.getByRole('button', { name: 'Daily Digest' }));
+
+      expect(trackMock).toHaveBeenCalledWith('notification_row_clicked', {
+        category: 'automation', subject_type: 'workflow', tab: 'triggers',
+      });
+      expect(JSON.stringify(trackMock.mock.calls)).not.toContain('Daily Digest');
+    });
   });
 
   it('Triggers row with productionRunIdPublic routes to /run/{prodRun} (regression: Issue 2)', () => {
@@ -1221,6 +1278,155 @@ describe('NotificationBell - tabs Inbox/Activity', () => {
     expect(pushMock).toHaveBeenCalledWith('/app/settings/credentials');
   });
 
+  it('billingRowRoutesToBillingPage (credit alerts, V528)', () => {
+    inboxMock.current = {
+      ...inboxMock.current,
+      items: [
+        {
+          subjectId: 'billing-uuid',
+          subjectName: 'Credits',
+          subjectType: 'BILLING' as const,
+          runIdPublic: null,
+          category: 'CREDIT_LOW',
+          severity: 'warning' as const,
+          count: 1,
+          firstEventAt: '2026-09-24T07:00:00Z',
+          lastEventAt: '2026-09-24T07:00:00Z',
+          unread: true,
+        },
+      ],
+      unreadCount: 1,
+    };
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Credits' }));
+
+    expect(pushMock).toHaveBeenCalledWith('/app/settings/billing');
+  });
+
+  it('a RUN_FAILED row carries the red failed icon, the way a trophy row carries its trophy', () => {
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+
+    const slot = screen.getByTestId('inbox-run-failed-icon');
+    expect(slot.querySelector('svg.text-red-500')).not.toBeNull();
+  });
+
+  it('a non-failure row (CRED_EXPIRED) draws no failed icon', () => {
+    inboxMock.current = {
+      ...inboxMock.current,
+      items: [
+        {
+          subjectId: 'uuid-y',
+          subjectName: 'test',
+          subjectType: 'CREDENTIAL' as const,
+          runIdPublic: null,
+          category: 'CRED_EXPIRED' as const,
+          severity: 'warning' as const,
+          count: 1,
+          firstEventAt: '2026-05-12T11:39:42Z',
+          lastEventAt: '2026-05-12T11:39:42Z',
+          unread: true,
+        },
+      ],
+      unreadCount: 1,
+    };
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+
+    expect(screen.queryByTestId('inbox-run-failed-icon')).toBeNull();
+  });
+
+  // Regression: AGENT_TASK ("task assigned"), APPLICATION, AGENT, BILLING and
+  // non-failure WORKFLOW rows used to render a bare severity dot with no icon.
+  it.each([
+    ['AGENT_TASK', 'AGENT_TASK_ASSIGNED'],
+    ['WORKFLOW', 'APPROVAL_PENDING'],
+    ['APPLICATION', 'APPROVAL_PENDING'],
+    ['AGENT', 'BUDGET_REACHED'],
+    ['BILLING', 'CREDIT_LOW'],
+    ['ORG_INVITATION', 'ORG_INVITATION_PENDING'],
+    ['BADGE', 'BADGE_UNLOCKED'],
+    ['TRIGGER', 'WEBHOOK_TRIGGER_DISABLED'],
+    ['CREDENTIAL', 'CRED_EXPIRED'],
+  ] as const)('a %s row draws its subject icon (%s)', (subjectType, category) => {
+    inboxMock.current = {
+      ...inboxMock.current,
+      items: [
+        {
+          subjectId: 'uuid-icon',
+          subjectName: 'Subject',
+          subjectType,
+          runIdPublic: null,
+          category,
+          severity: 'info' as const,
+          count: 1,
+          firstEventAt: '2026-09-24T07:00:00Z',
+          lastEventAt: '2026-09-24T07:00:00Z',
+          unread: true,
+        },
+      ],
+      unreadCount: 1,
+    };
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+
+    // The CREDENTIAL case has no integration slug, so it draws the key fallback.
+    expect(screen.getByTestId(`inbox-subject-icon-${subjectType}`)).toBeTruthy();
+    expect(screen.queryByTestId('inbox-run-failed-icon')).toBeNull();
+  });
+
+  function renderSingleRow(subjectType: string, category: string, extra: Record<string, unknown> = {}) {
+    inboxMock.current = {
+      ...inboxMock.current,
+      items: [
+        {
+          subjectId: 'uuid-single',
+          subjectName: 'Subject',
+          subjectType: subjectType as 'WORKFLOW',
+          runIdPublic: null,
+          category,
+          severity: 'error' as const,
+          count: 1,
+          firstEventAt: '2026-09-24T07:00:00Z',
+          lastEventAt: '2026-09-24T07:00:00Z',
+          unread: true,
+          ...extra,
+        },
+      ],
+      unreadCount: 1,
+    };
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+  }
+
+  // Regression: the per-subject icons and the failed icon used to be independent
+  // conditionals, so a RUN_FAILED row on a TRIGGER subject stacked two icons.
+  it('a RUN_FAILED row on a TRIGGER subject draws one icon, the failed one', () => {
+    renderSingleRow('TRIGGER', 'RUN_FAILED', { triggerKind: 'webhook' });
+
+    const row = screen.getByTestId('inbox-run-failed-icon').closest('.group') as HTMLElement;
+    // Leading icons are the direct children sized h-4 w-4 (the severity dot is h-2 w-2).
+    const leadingIcons = Array.from(row.children).filter(
+      (el) => el.classList.contains('h-4') && el.classList.contains('w-4'),
+    );
+    expect(leadingIcons).toHaveLength(1);
+  });
+
+  it('a subject type unknown to this build still draws a neutral icon instead of a bare dot', () => {
+    renderSingleRow('FUTURE_SUBJECT', 'SOMETHING_NEW', { severity: 'info' });
+
+    expect(screen.getByTestId('inbox-subject-icon-UNKNOWN')).toBeTruthy();
+  });
+
+  it('a RUN_FAILED workflow row draws ONLY the failed icon, never the workflow icon beside it', () => {
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+
+    expect(screen.getByTestId('inbox-run-failed-icon')).toBeTruthy();
+    expect(screen.queryByTestId('inbox-subject-icon-WORKFLOW')).toBeNull();
+  });
+
   it('credentialRowRendersServiceIcon (visual: API icon next to severity dot)', () => {
     inboxMock.current = {
       ...inboxMock.current,
@@ -1408,6 +1614,36 @@ describe('NotificationBell - tabs Inbox/Activity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Review the report' }));
 
     expect(pushMock).toHaveBeenCalledWith('/app/board?resource=task');
+  });
+
+  it('agentRowRoutesToTheAgentPanel', () => {
+    inboxMock.current = {
+      ...inboxMock.current,
+      items: [
+        {
+          subjectId: 'agent-uuid',
+          subjectName: 'Nightly reporter',
+          subjectType: 'AGENT' as const,
+          runIdPublic: null,
+          category: 'AGENT_AUTHORIZATION_UNREACHABLE' as const,
+          severity: 'warning' as const,
+          count: 1,
+          firstEventAt: '2026-09-22T03:00:00Z',
+          lastEventAt: '2026-09-22T03:00:00Z',
+          unread: true,
+        },
+      ],
+      unreadCount: 1,
+    };
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Nightly reporter' }));
+
+    // No per-agent page exists, so the deep link opens the right-side panel on the agent
+    // list, which is where the setting that caused the block is changed. Without the case
+    // this row falls to the default and lands on /app, which tells the reader nothing about
+    // an agent that stopped overnight.
+    expect(pushMock).toHaveBeenCalledWith('/app/agent?openAgent=agent-uuid');
   });
 
   it('applicationRowRoutesToApplicationShell', () => {

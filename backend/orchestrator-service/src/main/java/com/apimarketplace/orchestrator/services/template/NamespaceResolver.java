@@ -591,6 +591,19 @@ public class NamespaceResolver {
             if (stepOutputs.containsKey("mcp:" + variablePath)) {
                 return stepOutputs.get("mcp:" + variablePath);
             }
+            // A bare step alias with a path (`check_status.output.ok`): every step output is
+            // also stored under its bare label, and the condition path resolves it there. This
+            // one only looked for a FIELD named `check_status` inside some output.
+            if (variablePath.contains(".")) {
+                String[] aliasParts = variablePath.split("\\.", 2);
+                Object aliased = stepOutputs.get(aliasParts[0]);
+                if (aliased != null) {
+                    Object viaAlias = navigateWithOutputFallback(aliased, aliasParts[1]);
+                    if (viaAlias != null) {
+                        return viaAlias;
+                    }
+                }
+            }
 
             // Search inside each step output
             for (Map.Entry<String, Object> entry : stepOutputs.entrySet()) {
@@ -651,6 +664,16 @@ public class NamespaceResolver {
 
         if (currentItem != null && variablePath.startsWith("current_item.")) {
             return pathNavigator.navigatePath(currentItem, variablePath.substring("current_item.".length()));
+        }
+
+        // The item this node runs for, like the condition path reads it. Scanning the step
+        // outputs answered with the TRIGGER's item_index, which inside a split is not the item.
+        if ("item_index".equals(variablePath)) {
+            return context.getCurrentItemIndex();
+        }
+        if ("item_id".equals(variablePath) && context.getGlobalVariables() != null
+                && context.getGlobalVariables().get("item_id") != null) {
+            return context.getGlobalVariables().get("item_id");
         }
 
         if ("index".equals(variablePath) || "current_index".equals(variablePath)) {

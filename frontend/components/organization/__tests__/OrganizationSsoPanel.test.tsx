@@ -54,6 +54,8 @@ vi.mock('@/lib/api/organization-api', () => ({
     getSamlConnection: getSamlConnectionMock,
     saveSamlConnection: saveSamlConnectionMock,
     deleteSamlConnection: deleteSamlConnectionMock,
+    // The verified-domains section inside the panel has its own test file.
+    listSsoDomains: vi.fn().mockResolvedValue([]),
   },
 }));
 

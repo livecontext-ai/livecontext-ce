@@ -236,7 +236,7 @@ public class ConversationEventPublisher {
         event.put("timestamp", Instant.now().toString());
         publish(conversationId, event, "error");
 
-        finalizeStream(streamId, "ERROR");
+        finalizeStreamAsError(streamId, error);
     }
 
     /**
@@ -301,6 +301,19 @@ public class ConversationEventPublisher {
         if (streamId == null) return;
         try {
             conversationClient.finalizeStream(streamId, terminalState);
+        } catch (Exception e) {
+            log.warn("[ConversationEventPublisher] Failed to finalize stream {}: {}", streamId, e.getMessage());
+        }
+    }
+
+    /**
+     * ERROR finalize carrying this producer's reason, so conversation-service records the
+     * real cause instead of a fixed placeholder.
+     */
+    private void finalizeStreamAsError(String streamId, String errorMessage) {
+        if (streamId == null) return;
+        try {
+            conversationClient.finalizeStream(streamId, "ERROR", errorMessage);
         } catch (Exception e) {
             log.warn("[ConversationEventPublisher] Failed to finalize stream {}: {}", streamId, e.getMessage());
         }

@@ -156,7 +156,19 @@ public class HttpRequestNode extends BaseNode {
         }
         if (timeout != null && timeout > 0) inputData.put("timeout", timeout);
 
+        // The resolved url and the form of it that may be printed, kept for the catch below:
+        // a transport failure is worded around the resolved url (see ReportedParams.scrubUrl).
+        String calledUrl = null;
+        String printableUrl = null;
         try {
+            // The configured timeout, or its {{...}} resolved for this call. A template used to
+            // leave the timeout unset (the parser cannot hold one in an Integer), so the request
+            // ran on the shared client's default instead of the one the author asked for.
+            Integer effectiveTimeout = effectiveTimeout(context);
+            String timeoutTemplate = deferredScalar("httpRequest", "timeout");
+            if (timeoutTemplate != null) {
+                inputData.put("timeout", ReportedParams.valueFrom(timeoutTemplate, effectiveTimeout));
+            }
             // Validate RestTemplate
             if (restTemplate == null) {
                 Map<String, Object> failOutput = new HashMap<>();
@@ -172,11 +184,21 @@ public class HttpRequestNode extends BaseNode {
                 return NodeExecutionResult.failureWithOutput(nodeId, "URL is required", failOutput, 0);
             }
 
-            // Add query parameters
-            url = appendQueryParams(url, context);
+            // Add query parameters. The resolved pairs are kept for the report: the configured
+            // ones are what the Params column used to show, so a {{...}} value read as unresolved
+            // there while the request carried its value.
+            Map<String, Object> resolvedQuery = new LinkedHashMap<>();
+            java.util.Set<String> workspaceVariableParams = new java.util.HashSet<>();
+            url = appendQueryParams(url, context, resolvedQuery, workspaceVariableParams);
 
             // Add API key as query param if configured
             url = appendApiKeyQueryParam(url, context);
+            // Captured before the validator below, which words its refusal around the url
+            // ("Malformed URL: <url>"): from here on a failure may carry the resolved url.
+            calledUrl = url;
+            printableUrl = ReportedParams.referencesAnyWorkspaceVariable(urlExpression)
+                ? ReportedParams.maskUrlSecrets(urlExpression)
+                : ReportedParams.maskUrlSecrets(redactApiKeyFromUrl(url, context), workspaceVariableParams);
 
             // SSRF protection: validate URL before making any request
             UrlSafetyValidator.validateUrl(url);
@@ -184,11 +206,20 @@ public class HttpRequestNode extends BaseNode {
             // Masked BEFORE the log, not only before the row: this line prints the
             // post-enrichment url, which is the one carrying the key appendApiKeyQueryParam
             // just appended. Computed once and reused for the row and the cancel log below.
-            String reportableUrl = ReportedParams.maskUrlSecrets(redactApiKeyFromUrl(url, context));
+            // A url EXPRESSION that pulls a workspace variable (`https://h/{{$vars.token}}/x`,
+            // `?tier={{$vars.x}}` typed into the url) cannot be masked by position once resolved:
+            // the configured expression is reported instead, so the variable is named, never printed.
+            String reportableUrl = ReportedParams.referencesAnyWorkspaceVariable(urlExpression)
+                ? ReportedParams.maskUrlSecrets(urlExpression)
+                : ReportedParams.maskUrlSecrets(redactApiKeyFromUrl(url, context), workspaceVariableParams);
             logger.info("HTTP Request: {} {}", method, reportableUrl);
 
             // Prepare headers
-            HttpHeaders httpHeaders = prepareHeaders(context);
+            // The auth NAMES the request used (username, key name, header name), resolved once,
+            // by the code that applies them. Their values authenticate and never enter the report.
+            Map<String, String> resolvedAuthNames = new LinkedHashMap<>();
+            HttpHeaders httpHeaders = prepareHeaders(context, resolvedAuthNames);
+            resolvedAuthNames.forEach((key, value) -> putIfPresent(inputData, key, value));
 
             // Prepare body
             Object body = prepareBody(context);
@@ -213,19 +244,18 @@ public class HttpRequestNode extends BaseNode {
                 inputData.put("headers", headers.stream()
                     .map(HttpParam::key).filter(Objects::nonNull).toList());
             }
-            if (!queryParams.isEmpty()) {
+            if (!resolvedQuery.isEmpty()) {
                 Map<String, Object> reportedQuery = new LinkedHashMap<>();
-                for (HttpParam param : queryParams) {
-                    if (param.key() == null) continue;
+                resolvedQuery.forEach((key, value) ->
                     // The URL predicate, the same one `maskUrlSecrets` applies to the url two
                     // lines above. With the narrower map predicate these two disagreed on one
                     // row: `?key=` was masked inside the url and printed in clear here, for
                     // every Google API, and the value is the author's literal - the commonest
                     // way a key reaches this node.
-                    reportedQuery.put(param.key(), ReportedParams.isCredentialQueryParam(param.key())
+                    // `value` is already reported through the workspace-variable rule.
+                    reportedQuery.put(key, ReportedParams.isCredentialQueryParam(key)
                         ? ReportedParams.WITHHELD_CREDENTIAL
-                        : ReportedParams.value(param.value()));
-                }
+                        : value));
                 inputData.put("queryParams", reportedQuery);
             }
 
@@ -233,7 +263,7 @@ public class HttpRequestNode extends BaseNode {
             HttpEntity<Object> request = new HttpEntity<>(body, httpHeaders);
 
             // Use per-node timeout if configured, otherwise use shared RestTemplate
-            RestTemplate effectiveRestTemplate = resolveRestTemplate();
+            RestTemplate effectiveRestTemplate = resolveRestTemplate(effectiveTimeout);
 
             // F2.3 - execute the call asynchronously and poll the run's cancel
             // key every 200ms so a STOP arriving mid-request releases the
@@ -290,10 +320,16 @@ public class HttpRequestNode extends BaseNode {
             return successResult;
 
         } catch (Exception e) {
-            logger.error("HTTP Request failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
+            String reason = ReportedParams.scrubUrl(e.getMessage(), calledUrl, printableUrl);
+            if (java.util.Objects.equals(reason, e.getMessage())) {
+                logger.error("HTTP Request failed: nodeId={}, error={}", nodeId, reason, e);
+            } else {
+                // The stack trace would print the raw message again: name the chain instead.
+                logger.error("HTTP Request failed: nodeId={}, error={} ({})", nodeId, reason, e.getClass().getName());
+            }
             Map<String, Object> failOutput = new HashMap<>();
             failOutput.put("resolved_params", ReportedParams.forReport(inputData));
-            return NodeExecutionResult.failureWithOutput(nodeId, "HTTP Request failed: " + e.getMessage(), failOutput, 0);
+            return NodeExecutionResult.failureWithOutput(nodeId, "HTTP Request failed: " + reason, failOutput, 0);
         }
     }
 
@@ -325,7 +361,19 @@ public class HttpRequestNode extends BaseNode {
         }
     }
 
-    private String appendQueryParams(String url, ExecutionContext context) {
+    /** An auth NAME as reported: withheld when its configured expression pulled a workspace variable. */
+    private static String reportedName(String configured, String resolved) {
+        return String.valueOf(ReportedParams.valueFrom(configured, resolved));
+    }
+
+    /**
+     * @param reportedOut each resolved pair as it may be REPORTED (a value pulled from a workspace
+     *        variable is withheld); the url itself carries the real value
+     * @param workspaceVariableParams filled with the encoded names whose value came from a
+     *        workspace variable, so the reported url can withhold them too
+     */
+    private String appendQueryParams(String url, ExecutionContext context, Map<String, Object> reportedOut,
+                                     java.util.Set<String> workspaceVariableParams) {
         if (queryParams.isEmpty()) {
             return url;
         }
@@ -335,6 +383,10 @@ public class HttpRequestNode extends BaseNode {
             String key = resolveExpression(param.key(), context);
             String value = resolveExpression(param.value(), context);
             if (key != null && !key.isBlank()) {
+                reportedOut.put(key, ReportedParams.valueFrom(param.value(), value != null ? value : ""));
+                if (ReportedParams.referencesAnyWorkspaceVariable(param.value())) {
+                    workspaceVariableParams.add(URLEncoder.encode(key, StandardCharsets.UTF_8));
+                }
                 // Pre-fix encoded only the VALUE; a key like "foo bar" or
                 // "weird&key" would be pasted raw and produce a malformed
                 // query string ("?foo bar=v" → URI parser fails) or worse
@@ -460,7 +512,25 @@ public class HttpRequestNode extends BaseNode {
      * doesn't allocate a fresh RestTemplate + factory per call. Same timeout
      * value across nodes shares the same template.
      */
+    /** The timeout (ms) of this call: configured, or the plan's template resolved to a whole number. */
+    private Integer effectiveTimeout(ExecutionContext context) {
+        String template = deferredScalar("httpRequest", "timeout");
+        if (template == null) {
+            return timeout;
+        }
+        long resolved = resolveDeferredLong("httpRequest", "timeout", template, context);
+        if (resolved <= 0 || resolved > Integer.MAX_VALUE) {
+            throw new IllegalStateException("httpRequest.timeout '" + template + "' resolved to " + resolved
+                + ": it must be a positive number of milliseconds");
+        }
+        return (int) resolved;
+    }
+
     private RestTemplate resolveRestTemplate() {
+        return resolveRestTemplate(timeout);
+    }
+
+    private RestTemplate resolveRestTemplate(Integer timeout) {
         if (timeout == null || timeout <= 0) {
             return restTemplate;
         }
@@ -476,7 +546,7 @@ public class HttpRequestNode extends BaseNode {
         });
     }
 
-    private HttpHeaders prepareHeaders(ExecutionContext context) {
+    private HttpHeaders prepareHeaders(ExecutionContext context, Map<String, String> resolvedAuthNames) {
         HttpHeaders httpHeaders = new HttpHeaders();
 
         // Add custom headers
@@ -507,12 +577,13 @@ public class HttpRequestNode extends BaseNode {
         }
 
         // Apply authentication
-        applyAuthentication(httpHeaders, context);
+        applyAuthentication(httpHeaders, context, resolvedAuthNames);
 
         return httpHeaders;
     }
 
-    private void applyAuthentication(HttpHeaders httpHeaders, ExecutionContext context) {
+    private void applyAuthentication(HttpHeaders httpHeaders, ExecutionContext context,
+                                     Map<String, String> resolvedAuthNames) {
         if (authConfig == null || "none".equals(authType)) {
             return;
         }
@@ -520,6 +591,7 @@ public class HttpRequestNode extends BaseNode {
         switch (authType) {
             case "basic" -> {
                 String username = resolveExpression(authConfig.username(), context);
+                if (username != null) resolvedAuthNames.put("username", reportedName(authConfig.username(), username));
                 String password = resolveExpression(authConfig.password(), context);
                 if (username != null && password != null) {
                     String credentials = username + ":" + password;
@@ -536,8 +608,11 @@ public class HttpRequestNode extends BaseNode {
             case "api-key" -> {
                 // Query location is handled by appendApiKeyQueryParam(), only add header here
                 String location = authConfig.apiKeyLocation();
+                String apiKeyName = resolveExpression(authConfig.apiKeyName(), context);
+                // Reported for BOTH locations: the query one is appended by appendApiKeyQueryParam
+                // under this same resolved name.
+                if (apiKeyName != null) resolvedAuthNames.put("apiKeyName", reportedName(authConfig.apiKeyName(), apiKeyName));
                 if (!"query".equalsIgnoreCase(location)) {
-                    String apiKeyName = resolveExpression(authConfig.apiKeyName(), context);
                     String apiKeyValue = resolveExpression(authConfig.apiKeyValue(), context);
                     if (apiKeyName != null && apiKeyValue != null) {
                         httpHeaders.add(apiKeyName, apiKeyValue);
@@ -546,6 +621,7 @@ public class HttpRequestNode extends BaseNode {
             }
             case "custom-header" -> {
                 String headerName = resolveExpression(authConfig.headerName(), context);
+                if (headerName != null) resolvedAuthNames.put("headerName", reportedName(authConfig.headerName(), headerName));
                 String headerValue = resolveExpression(authConfig.headerValue(), context);
                 if (headerName != null && headerValue != null) {
                     httpHeaders.add(headerName, headerValue);
@@ -719,20 +795,9 @@ public class HttpRequestNode extends BaseNode {
         if (expression == null || expression.isBlank()) {
             return null;
         }
-
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object value = resolved.get("__expr__");
-                return value != null ? value.toString() : null;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression: {} - {}", expression, e.getMessage());
-                return expression;
-            }
-        }
-
-        return expression;
+        // One resolver for every field of every node: typed, JSON for a structure, never the
+        // configured template in place of a value (BaseNode#resolveTemplateValue).
+        return resolveTemplateString(expression, context);
     }
 
     // Getters

@@ -2,14 +2,13 @@
 
 import * as React from 'react';
 import type { Node } from 'reactflow';
-import { Info } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
 import { OptionalSection } from '../OptionalSection';
 import type { BuilderNodeData } from '../../../types';
 import type { Connection } from '../useInspectorConnections';
 import { useTranslations } from 'next-intl';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 interface WhileGroupParametersFormProps {
   node: Node<BuilderNodeData>;
@@ -71,18 +70,11 @@ export function WhileGroupParametersForm({
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">
               {t('conditionLabel')}
             </span>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                  <Info className="h-3 w-3 text-slate-400" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <p className="text-xs text-slate-600 dark:text-slate-300">
-                  Expression that evaluates to true/false. The loop continues while this is true.
-                </p>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label={t('conditionLabel')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+              <p className="text-xs text-slate-600 dark:text-slate-300">
+                Expression that evaluates to true/false. The loop continues while this is true.
+              </p>
+            </InfoPopover>
           </div>
           <span className="text-sm text-slate-500 dark:text-slate-400">{t('conditionRequired')}</span>
         </div>
@@ -117,18 +109,11 @@ export function WhileGroupParametersForm({
               <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">
                 {t('maxIterationsLabel')}
               </span>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                    <Info className="h-3 w-3 text-slate-400" />
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                  <p className="text-xs text-slate-600 dark:text-slate-300">
-                    Maximum number of iterations before the loop stops (default: 10).
-                  </p>
-                </PopoverContent>
-              </Popover>
+              <InfoPopover label={t('maxIterationsLabel')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+                <p className="text-xs text-slate-600 dark:text-slate-300">
+                  Maximum number of iterations before the loop stops (default: 10).
+                </p>
+              </InfoPopover>
             </div>
             <span className="text-sm text-slate-400 dark:text-slate-500">{t('maxIterationsOptional')}</span>
           </div>

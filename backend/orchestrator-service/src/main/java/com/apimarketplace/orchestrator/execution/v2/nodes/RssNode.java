@@ -53,9 +53,17 @@ public class RssNode extends BaseNode {
         // Captured outside the try so failure paths still surface the resolved inputs
         // to the inspector "Resolved parameters" panel.
         String url = null;
-        int maxItems = rssConfig != null ? rssConfig.maxItems() : 20;
+        String maxItemsTemplate = deferredScalar("rss", "maxItems");
+        // Until it resolves, a templated maxItems is reported as the template it is.
+        Object reportedMaxItems = maxItemsTemplate != null ? maxItemsTemplate
+            : (rssConfig != null ? rssConfig.maxItems() : 20);
 
         try {
+            Core.RssConfig cfg = withDeferredScalars("rss", rssConfig, Core.RssConfig.class, context);
+            int maxItems = cfg != null ? cfg.maxItems() : 20;
+            reportedMaxItems = maxItemsTemplate != null
+                ? ReportedParams.valueFrom(maxItemsTemplate, maxItems) : maxItems;
+
             // Resolve the URL expression
             url = resolveExpression(
                 rssConfig != null ? rssConfig.url() : null, context);
@@ -86,7 +94,7 @@ public class RssNode extends BaseNode {
             result.put("item_index", context.itemIndex());
             result.put("itemIndex", context.itemIndex());
             result.put("item_id", context.itemId());
-            result.put("resolved_params", buildInputDataMap(url, maxItems));
+            result.put("resolved_params", buildInputDataMap(url, reportedMaxItems));
 
             logger.info("RSS completed: nodeId={}, itemCount={}, format={}",
                 nodeId, feedResult.items.size(), feedResult.feedFormat);
@@ -99,7 +107,7 @@ public class RssNode extends BaseNode {
             failOutput.put("item_index", context.itemIndex());
             failOutput.put("itemIndex", context.itemIndex());
             failOutput.put("item_id", context.itemId());
-            failOutput.put("resolved_params", buildInputDataMap(url, maxItems));
+            failOutput.put("resolved_params", buildInputDataMap(url, reportedMaxItems));
             failOutput.put("error", e.getMessage());
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failOutput, 0L);
         }
@@ -337,23 +345,12 @@ public class RssNode extends BaseNode {
         if (expression == null || expression.isBlank()) {
             return null;
         }
-
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object result = resolved.get("__expr__");
-                return result != null ? String.valueOf(result) : expression;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression '{}': {}", expression, e.getMessage());
-                return expression;
-            }
-        }
-
-        return expression;
+        // One resolver for every field of every node: typed, JSON for a structure, never the
+        // configured template in place of a value (BaseNode#resolveTemplateValue).
+        return resolveTemplateString(expression, context);
     }
 
-    private Map<String, Object> buildInputDataMap(String url, int maxItems) {
+    private Map<String, Object> buildInputDataMap(String url, Object maxItems) {
         Map<String, Object> inputData = new LinkedHashMap<>();
         // Masked like every other reported url: a feed url can carry its token in the
         // query string, and download_file and http_request both mask theirs.

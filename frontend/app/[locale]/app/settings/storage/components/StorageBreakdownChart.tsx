@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { storageApi } from '@/lib/api';
 import type { StorageHistoryPoint, StorageCategory, StorageBreakdown } from '@/lib/api';
 import { mergeStorageHistories } from '../storageAggregation';
+import { storageGrowth, daysUntilFull } from '../storageInsights';
 import { STORAGE_CATEGORY_HEX } from '@/lib/api';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { useCurrentOrgStore } from '@/lib/stores/current-org-store';
@@ -57,9 +58,15 @@ interface StorageBreakdownChartProps {
    * Takes precedence over {@link orgId}.
    */
   allWorkspaceIds?: string[];
+  /**
+   * What the allowance is measured against, and the allowance, when a projection is honest: the
+   * trend shown must be the growth of that same total (the page passes these only when the view
+   * covers the whole account). Omitted = no "full in" figure.
+   */
+  projection?: { usedBytes: number; limitBytes: number };
 }
 
-export default function StorageBreakdownChart({ className, currentBreakdown = [], orgId, allWorkspaceIds }: StorageBreakdownChartProps) {
+export default function StorageBreakdownChart({ className, currentBreakdown = [], orgId, allWorkspaceIds, projection }: StorageBreakdownChartProps) {
   const t = useTranslations('storage');
   const isDark = useIsDarkMode();
   const currentOrgId = useCurrentOrgStore((s) => s.currentOrgId);
@@ -137,6 +144,13 @@ export default function StorageBreakdownChart({ className, currentBreakdown = []
     }
     return CATEGORY_ORDER.filter(c => cats.has(c));
   }, [displayHistory]);
+
+  // From the loaded snapshots only (never the one-point fallback above: a level is not a trend).
+  const growth = useMemo(() => storageGrowth(history), [history]);
+  const fullInDays = growth && projection
+    ? daysUntilFull(projection.usedBytes, projection.limitBytes, growth.perDayBytes)
+    : null;
+  const signedBytes = (bytes: number) => `${bytes > 0 ? '+' : bytes < 0 ? '-' : ''}${formatBytes(Math.abs(bytes))}`;
 
   const getColor = (cat: StorageCategory) => {
     const hex = STORAGE_CATEGORY_HEX[cat];
@@ -243,6 +257,39 @@ export default function StorageBreakdownChart({ className, currentBreakdown = []
           </ResponsiveContainer>
         )}
       </div>
+
+      {/* The trend in numbers: how much the period added, at what pace, and when the allowance
+          fills at that pace. */}
+      {growth && !loading && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4" data-testid="storage-growth">
+          <div className="bg-theme-secondary rounded-xl p-4 border border-theme min-w-0">
+            <p className="text-xs text-theme-secondary truncate">{t('trends.growth')}</p>
+            <p className="text-lg font-semibold text-theme-primary truncate">{signedBytes(growth.growthBytes)}</p>
+            <p className="text-xs text-theme-tertiary truncate">
+              {t('trends.growthRange', { from: formatBytes(growth.startBytes), to: formatBytes(growth.endBytes) })}
+            </p>
+          </div>
+          <div className="bg-theme-secondary rounded-xl p-4 border border-theme min-w-0">
+            <p className="text-xs text-theme-secondary truncate">{t('trends.perDay')}</p>
+            <p className="text-lg font-semibold text-theme-primary truncate">{signedBytes(Math.round(growth.perDayBytes))}</p>
+          </div>
+          {projection && (
+            <div className="bg-theme-secondary rounded-xl p-4 border border-theme min-w-0" data-testid="storage-full-in">
+              <p className="text-xs text-theme-secondary truncate">{t('trends.fullIn')}</p>
+              <p className="text-lg font-semibold text-theme-primary truncate">
+                {projection.usedBytes >= projection.limitBytes
+                  ? t('trends.alreadyFull')
+                  : fullInDays === null
+                  ? t('trends.notFilling')
+                  : fullInDays > 365
+                    ? t('trends.overYear')
+                    : t('trends.days', { count: fullInDays })}
+              </p>
+              <p className="text-xs text-theme-tertiary truncate">{t('trends.atThisPace')}</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

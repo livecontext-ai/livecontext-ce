@@ -86,16 +86,17 @@ class AuthProviderTest {
     class EnumValuesTests {
 
         @Test
-        @DisplayName("should have exactly 4 values")
-        void shouldHaveExactly4Values() {
-            assertThat(AuthProvider.values()).hasSize(4);
+        @DisplayName("should have exactly 5 values")
+        void shouldHaveExactly5Values() {
+            assertThat(AuthProvider.values()).hasSize(5);
         }
 
         @Test
         @DisplayName("should contain all expected values")
         void shouldContainAllExpectedValues() {
             assertThat(AuthProvider.values())
-                    .containsExactly(AuthProvider.GOOGLE, AuthProvider.GITHUB, AuthProvider.LOCAL, AuthProvider.KEYCLOAK);
+                    .containsExactly(AuthProvider.GOOGLE, AuthProvider.GITHUB, AuthProvider.LOCAL, AuthProvider.KEYCLOAK,
+                            AuthProvider.SAML);
         }
     }
 }

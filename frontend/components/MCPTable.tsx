@@ -5,7 +5,7 @@ import { getClientLocale } from '@/lib/utils/locale';
 import { useRouter } from '@/i18n/navigation';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Search, Wrench, Plus, Trash2, FileText } from 'lucide-react';
+import { Search, Plug, Plus, Trash2, FileText } from 'lucide-react';
 import { useUserApis } from '@/hooks/useUserApis';
 import { useTranslations } from 'next-intl';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
@@ -122,11 +122,11 @@ export function MCPTable({ className = '' }: MCPTableProps) {
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-theme-secondary rounded-xl flex items-center justify-center">
-                            <Wrench className="w-5 h-5 text-theme-primary" />
+                            <Plug className="w-5 h-5 text-theme-primary" />
                         </div>
                         <div>
                             <h2 className="text-lg font-semibold text-theme-primary">{t('emptyState.mcp.title')}</h2>
-                            <p className="text-sm text-theme-secondary">{mcps.length} MCP{mcps.length !== 1 ? 's' : ''}</p>
+                            <p className="text-sm text-theme-secondary">{t('emptyState.mcp.count', { count: mcps.length })}</p>
                         </div>
                     </div>
                     {canMutate && (
@@ -274,7 +274,7 @@ export function MCPTable({ className = '' }: MCPTableProps) {
                     </div>
                 ) : filteredMCPs.length === 0 ? (
                     <div className="text-center py-8 text-theme-secondary">
-                        <Wrench className="w-12 h-12 mx-auto mb-4 text-theme-muted" />
+                        <Plug className="w-12 h-12 mx-auto mb-4 text-theme-muted" />
                         <p>{t('emptyState.mcp.noMCPsFound')}</p>
                         <p className="text-sm mt-2 text-theme-muted">
                             {mcps.length === 0

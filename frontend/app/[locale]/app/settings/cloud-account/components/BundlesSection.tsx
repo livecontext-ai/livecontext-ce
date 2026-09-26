@@ -1,32 +1,13 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import Image from "next/image";
-import { SlidersHorizontal, Shield, Sparkles } from "lucide-react";
+import { Plug, SlidersHorizontal, Shield, Sparkles } from "lucide-react";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import CatalogBundlesPanel from "./CatalogBundlesPanel";
 import ApiCatalogBundlesPanel from "./ApiCatalogBundlesPanel";
 import SkillBundlesPanel from "./SkillBundlesPanel";
-
-/**
- * MCP logo (monochrome black asset) for the "MCP catalog" tab - inverted to
- * white in dark mode so it sits next to the lucide icons. Renders with the same
- * className contract as a lucide icon so it drops into the tab list unchanged.
- */
-function McpCatalogIcon({ className }: { className?: string }) {
-  return (
-    <Image
-      src="/mcp_black.png"
-      alt=""
-      width={16}
-      height={16}
-      aria-hidden
-      className={cn(className, "object-contain dark:invert")}
-    />
-  );
-}
 
 /**
  * Signed catalog-bundle distribution (cloud → CE), surfaced as the "Bundles"
@@ -41,7 +22,7 @@ export default function BundlesSection() {
 
   const tabs = [
     { id: "models" as const, label: t("tabModels"), icon: SlidersHorizontal },
-    { id: "apis" as const, label: t("tabApis"), icon: McpCatalogIcon },
+    { id: "apis" as const, label: t("tabApis"), icon: Plug },
     { id: "skills" as const, label: t("tabSkills"), icon: Sparkles },
   ];
 

@@ -2,13 +2,12 @@
 
 import * as React from 'react';
 import Image from 'next/image';
-import { Plus, Trash2, Info, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
 import { ExpressionField, ConnectionProps } from '../ExpressionField';
 import { OptionalSection } from '../OptionalSection';
@@ -17,29 +16,38 @@ import type { SelectedModel } from '@/hooks/useModels';
 import { useTranslations } from 'next-intl';
 import type { BuilderNodeData, GuardrailRule, GuardrailType, GuardrailAction } from '../../../types';
 import { createDefaultGuardrailRules } from '../../../types';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 // Default values
 const DEFAULT_TEMPERATURE = 0.2; // Lower for consistent validation
 const DEFAULT_MAX_TOKENS = 512;
 
-// Guardrail type options with descriptions
-const GUARDRAIL_TYPES: { value: GuardrailType; label: string; description: string }[] = [
-  { value: 'pii_detection', label: 'PII Detection', description: 'Detect personal info (email, phone, SSN)' },
-  { value: 'toxic_language', label: 'Toxic Language', description: 'Detect offensive or harmful content' },
-  { value: 'prompt_injection', label: 'Prompt Injection', description: 'Detect jailbreak attempts' },
-  { value: 'keyword_filter', label: 'Keyword Filter', description: 'Block or allow specific keywords' },
-  { value: 'regex_pattern', label: 'Regex Pattern', description: 'Custom regex validation' },
-  { value: 'length_check', label: 'Length Check', description: 'Validate min/max length' },
-  { value: 'topic_restriction', label: 'Topic Restriction', description: 'Block specific topics (AI)' },
-  { value: 'competitor_mention', label: 'Competitor Mention', description: 'Block competitor names' },
-  { value: 'custom', label: 'Custom Rule', description: 'Custom validation expression' },
+// Guardrail type options. Descriptions are translated in the component
+// (workflowBuilder.forms.guardrail.typeDescriptions.<type>).
+const GUARDRAIL_TYPES: { value: GuardrailType; label: string }[] = [
+  { value: 'pii_detection', label: 'PII Detection' },
+  { value: 'toxic_language', label: 'Toxic Language' },
+  { value: 'prompt_injection', label: 'Prompt Injection' },
+  { value: 'keyword_filter', label: 'Keyword Filter' },
+  { value: 'regex_pattern', label: 'Regex Pattern' },
+  { value: 'length_check', label: 'Length Check' },
+  { value: 'topic_restriction', label: 'Topic Restriction' },
+  { value: 'competitor_mention', label: 'Competitor Mention' },
+  { value: 'custom', label: 'Custom Rule' },
 ];
 
-// Action options
-const GUARDRAIL_ACTIONS: { value: GuardrailAction; label: string; description: string }[] = [
-  { value: 'block', label: 'Block', description: 'Stop and route to Fail output' },
-  { value: 'sanitize', label: 'Sanitize', description: 'Clean content and continue' },
-  { value: 'flag', label: 'Flag', description: 'Add warning but continue' },
+// Rule types the backend checks exactly, without an AI call (a PII address is still
+// judged by the model). Mirrors GuardrailRuleEvaluator on the orchestrator side.
+const DETERMINISTIC_GUARDRAIL_TYPES: ReadonlySet<GuardrailType> = new Set<GuardrailType>([
+  'keyword_filter', 'regex_pattern', 'length_check', 'pii_detection', 'custom', 'competitor_mention',
+]);
+
+// Action options. Descriptions are translated in the component
+// (workflowBuilder.forms.guardrail.actionDescriptions.<action>).
+const GUARDRAIL_ACTIONS: { value: GuardrailAction; label: string }[] = [
+  { value: 'block', label: 'Block' },
+  { value: 'sanitize', label: 'Sanitize' },
+  { value: 'flag', label: 'Flag' },
 ];
 
 // PII types for selection
@@ -177,7 +185,7 @@ export function GuardrailParametersForm({
         config = { minLength: 1, maxLength: 10000 };
         break;
       case 'regex_pattern':
-        config = { pattern: '' };
+        config = { pattern: '', mode: 'require' };
         break;
       case 'topic_restriction':
       case 'competitor_mention':
@@ -244,8 +252,8 @@ export function GuardrailParametersForm({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="block">Block these keywords</SelectItem>
-                  <SelectItem value="allow">Allow only these keywords</SelectItem>
+                  <SelectItem value="block">{t('guardrail.keywordModeBlock')}</SelectItem>
+                  <SelectItem value="allow">{t('guardrail.keywordModeAllow')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -275,6 +283,25 @@ export function GuardrailParametersForm({
 
       case 'regex_pattern':
         return (
+          <div className="space-y-3">
+          <div className="space-y-2">
+            <Label className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('guardrail.mode')}</Label>
+            <Select
+              value={rule.config?.mode === 'block' ? 'block' : 'require'}
+              onValueChange={(value) => handleUpdateRule(rule.id, {
+                config: { ...rule.config, mode: value as 'require' | 'block' },
+              })}
+              disabled={isRunMode}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="require">{t('guardrail.regexModeRequire')}</SelectItem>
+                <SelectItem value="block">{t('guardrail.regexModeBlock')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label className="text-sm font-semibold text-slate-500 dark:text-slate-400">Regex Pattern</Label>
@@ -295,6 +322,7 @@ export function GuardrailParametersForm({
               isRequired={true}
               readOnly={isRunMode}
             />
+          </div>
           </div>
         );
 
@@ -416,18 +444,11 @@ export function GuardrailParametersForm({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <p className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('guardrail.validationRules')}</p>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                  <Info className="h-3 w-3 text-slate-400" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <p className="text-xs text-slate-600 dark:text-slate-300">
-                  {t('guardrail.rulesDescription')}
-                </p>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label={t('guardrail.validationRules')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+              <p className="text-xs text-slate-600 dark:text-slate-300">
+                {t('guardrail.rulesDescription')}
+              </p>
+            </InfoPopover>
           </div>
           <Button
             type="button"
@@ -503,12 +524,17 @@ export function GuardrailParametersForm({
                         </SelectTrigger>
                         <SelectContent>
                           {GUARDRAIL_TYPES.map(type => (
-                            <SelectItem key={type.value} value={type.value} description={type.description}>
+                            <SelectItem key={type.value} value={type.value} description={t(`guardrail.typeDescriptions.${type.value}`)}>
                               {type.label}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
+                      <p className="text-xs text-slate-500 dark:text-slate-400" data-testid={`guardrail-rule-engine-${index}`}>
+                        {DETERMINISTIC_GUARDRAIL_TYPES.has(rule.type)
+                          ? t('guardrail.engineDeterministic')
+                          : t('guardrail.engineModel')}
+                      </p>
                     </div>
 
                     {/* Action selector */}
@@ -524,7 +550,7 @@ export function GuardrailParametersForm({
                         </SelectTrigger>
                         <SelectContent>
                           {GUARDRAIL_ACTIONS.map(action => (
-                            <SelectItem key={action.value} value={action.value} description={action.description}>
+                            <SelectItem key={action.value} value={action.value} description={t(`guardrail.actionDescriptions.${action.value}`)}>
                               {action.label}
                             </SelectItem>
                           ))}
@@ -552,16 +578,9 @@ export function GuardrailParametersForm({
         <div className="space-y-2">
           <div className="flex items-center gap-1.5">
             <Label className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('temperature')}</Label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                  <Info className="h-3 w-3 text-slate-400" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <p className="text-xs text-slate-600 dark:text-slate-300">{t('guardrail.temperatureDescription')}</p>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label={t('temperature')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+              <p className="text-xs text-slate-600 dark:text-slate-300">{t('guardrail.temperatureDescription')}</p>
+            </InfoPopover>
           </div>
           <Input
             type="number"
@@ -578,16 +597,9 @@ export function GuardrailParametersForm({
         <div className="space-y-2">
           <div className="flex items-center gap-1.5">
             <Label className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('maxTokens')}</Label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                  <Info className="h-3 w-3 text-slate-400" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <p className="text-xs text-slate-600 dark:text-slate-300">{t('guardrail.maxTokensDescription')}</p>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label={t('maxTokens')} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+              <p className="text-xs text-slate-600 dark:text-slate-300">{t('guardrail.maxTokensDescription')}</p>
+            </InfoPopover>
           </div>
           <Input
             type="number"

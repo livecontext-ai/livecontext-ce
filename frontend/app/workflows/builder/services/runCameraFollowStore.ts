@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * Whether the canvas camera follows the step that is currently running.
+ * Whether the canvas camera follows the work in progress: the step that is running (or
+ * waiting on the user) during a run, and the nodes an agent adds while it builds.
  *
  * A remembered preference rather than a one-shot action, for the same reason the
  * file-strip toggle is one: the moment you want to state "keep the running node in
@@ -21,7 +22,14 @@
 // `:<orgId|personal>` segment this preference has no business inventing.
 const STORAGE_KEY = 'workflow:runCameraFollow';
 
-let enabled = false;
+/**
+ * ON unless the user switched it off. Following is what makes a run and an agent build
+ * watchable without hunting for the node that moved, so it is the default; a stored
+ * `'false'` is the only thing that turns it off.
+ */
+const DEFAULT_ENABLED = true;
+
+let enabled = DEFAULT_ENABLED;
 let hydrated = false;
 
 type Listener = (value: boolean) => void;
@@ -38,11 +46,12 @@ function hydrate(): void {
   if (hydrated || typeof window === 'undefined') return;
   hydrated = true;
   try {
-    enabled = window.localStorage.getItem(STORAGE_KEY) === 'true';
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (stored === 'true') enabled = true;
+    else if (stored === 'false') enabled = false;
   } catch {
-    // Unreadable storage: stay with the default (off), which is the safe posture.
-    // Following moves the viewport under the user, so it is opt-in, never inherited
-    // from a failure.
+    // Unreadable storage: stay with the default. The toggle still switches it off for
+    // the session.
   }
 }
 
@@ -72,7 +81,7 @@ export function subscribeRunCameraFollow(listener: Listener): () => void {
 
 /** Test seam: drops the in-memory state so each test starts from a known place. */
 export function __resetRunCameraFollowForTests(): void {
-  enabled = false;
+  enabled = DEFAULT_ENABLED;
   hydrated = false;
   listeners.clear();
 }

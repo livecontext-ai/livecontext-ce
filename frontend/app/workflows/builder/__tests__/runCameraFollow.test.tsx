@@ -29,6 +29,7 @@ import {
   WORKFLOW_FOLLOW_NODES_EVENT,
   FOLLOW_DEBOUNCE_MS,
   FOLLOW_MIN_GAP_MS,
+  FOLLOW_WAITING_SETTLE_MS,
 } from '../services/runFollowEvent';
 import { setCanvasNodes } from '../services/canvasNodesStore';
 import { CanvasRunFollowToggleButton } from '../components/CanvasRunFollowToggleButton';
@@ -178,11 +179,18 @@ describe('runCameraFollowStore', () => {
     vi.restoreAllMocks();
   });
 
-  it('defaults to off, because following moves the viewport under the user', () => {
+  it('defaults to ON when nothing is stored, so runs and agent builds are followed out of the box', () => {
+    expect(isRunCameraFollowEnabled()).toBe(true);
+  });
+
+  it('respects a stored OFF across a reload, which is the only way it stays off', () => {
+    setRunCameraFollowEnabled(false);
+    __resetRunCameraFollowForTests();
     expect(isRunCameraFollowEnabled()).toBe(false);
   });
 
   it('SURVIVES a reload, which is the whole point of it being a preference', () => {
+    setRunCameraFollowEnabled(false);
     setRunCameraFollowEnabled(true);
     // Drop every trace of the in-memory state, as a fresh page load would.
     __resetRunCameraFollowForTests();
@@ -197,6 +205,8 @@ describe('runCameraFollowStore', () => {
   });
 
   it('is stored under the documented key, which an e2e and the other builder preferences rely on', () => {
+    setRunCameraFollowEnabled(false);
+    expect(window.localStorage.getItem('workflow:runCameraFollow')).toBe('false');
     setRunCameraFollowEnabled(true);
     expect(window.localStorage.getItem('workflow:runCameraFollow')).toBe('true');
   });
@@ -204,32 +214,31 @@ describe('runCameraFollowStore', () => {
   it('tells subscribers, once per real change', () => {
     const seen: boolean[] = [];
     const unsubscribe = subscribeRunCameraFollow((v) => seen.push(v));
-    setRunCameraFollowEnabled(true);
-    setRunCameraFollowEnabled(true);
-    expect(seen).toEqual([true]);
-    unsubscribe();
     setRunCameraFollowEnabled(false);
-    expect(seen).toEqual([true]);
+    setRunCameraFollowEnabled(false);
+    expect(seen).toEqual([false]);
+    unsubscribe();
+    setRunCameraFollowEnabled(true);
+    expect(seen).toEqual([false]);
   });
 
   it('still works for the session when writing to storage throws', () => {
     const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('blocked');
     });
-    expect(() => setRunCameraFollowEnabled(true)).not.toThrow();
-    expect(isRunCameraFollowEnabled()).toBe(true);
+    expect(() => setRunCameraFollowEnabled(false)).not.toThrow();
+    expect(isRunCameraFollowEnabled()).toBe(false);
     spy.mockRestore();
   });
 
-  it('falls back to off when READING storage throws', () => {
-    // A private window or blocked site data can throw on read too, and the safe
-    // posture is off: following moves the viewport, so it is never inherited from a
-    // failure.
+  it('falls back to the default (on) when READING storage throws', () => {
+    // A private window or blocked site data can throw on read too. The canvas must
+    // still render, with the same default a fresh browser gets.
     const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('blocked');
     });
     expect(() => isRunCameraFollowEnabled()).not.toThrow();
-    expect(isRunCameraFollowEnabled()).toBe(false);
+    expect(isRunCameraFollowEnabled()).toBe(true);
     spy.mockRestore();
   });
 });
@@ -242,10 +251,17 @@ describe('CanvasRunFollowToggleButton', () => {
     previewOnly = false;
   });
 
-  it('renders nothing in edit mode, where no step can be running', () => {
+  it('renders in edit mode too, naming the agent build it follows there', () => {
+    // In edit mode the camera follows the nodes an agent adds, so the control is live
+    // there and its name must say so rather than talk about a running step.
     editMode = true;
-    const { container } = render(<CanvasRunFollowToggleButton />);
-    expect(container.innerHTML).toBe('');
+    render(<CanvasRunFollowToggleButton />);
+    const button = screen.getByTestId('canvas-toggle-run-follow');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(button.getAttribute('aria-label')).toBe('stopFollowingAgentBuild');
+    fireEvent.click(button);
+    expect(isRunCameraFollowEnabled()).toBe(false);
+    expect(button.getAttribute('aria-label')).toBe('followAgentBuild');
   });
 
   it('renders nothing on a read-only preview canvas either', () => {
@@ -256,33 +272,33 @@ describe('CanvasRunFollowToggleButton', () => {
     expect(container.innerHTML).toBe('');
   });
 
-  it('shows the stored preference on mount, or it can never be switched off again', () => {
-    // Not cosmetic. After a reload with following on, a button that renders "off" sends
-    // setRunCameraFollowEnabled(true) on the first click, which the store early-returns
-    // as a no-op, so no listener fires and the user is stuck with a camera that pans
-    // and a control that does nothing.
-    setRunCameraFollowEnabled(true);
+  it('shows the stored preference on mount, or it can never be switched back on again', () => {
+    // Not cosmetic. After a reload with following off, a button that renders "on" sends
+    // setRunCameraFollowEnabled(false) on the first click, which the store early-returns
+    // as a no-op, so no listener fires and the user is stuck with a control that does
+    // nothing.
+    setRunCameraFollowEnabled(false);
     render(<CanvasRunFollowToggleButton />);
-    expect(screen.getByTestId('canvas-toggle-run-follow').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('canvas-toggle-run-follow').getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('flips the stored preference and reports its state', () => {
+  it('starts pressed, flips the stored preference and reports its state', () => {
     render(<CanvasRunFollowToggleButton />);
     const button = screen.getByTestId('canvas-toggle-run-follow');
-    expect(button.getAttribute('aria-pressed')).toBe('false');
-    expect(button.getAttribute('aria-label')).toBe('followRunningNode');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(button.getAttribute('aria-label')).toBe('stopFollowingRunningNode');
 
     fireEvent.click(button);
-    expect(isRunCameraFollowEnabled()).toBe(true);
-    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(isRunCameraFollowEnabled()).toBe(false);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
     // The accessible name carries the ACTION, so it has to change with the state.
-    expect(button.getAttribute('aria-label')).toBe('stopFollowingRunningNode');
+    expect(button.getAttribute('aria-label')).toBe('followRunningNode');
   });
 
   it('shows the state set elsewhere', () => {
     render(<CanvasRunFollowToggleButton />);
-    act(() => setRunCameraFollowEnabled(true));
-    expect(screen.getByTestId('canvas-toggle-run-follow').getAttribute('aria-pressed')).toBe('true');
+    act(() => setRunCameraFollowEnabled(false));
+    expect(screen.getByTestId('canvas-toggle-run-follow').getAttribute('aria-pressed')).toBe('false');
   });
 });
 
@@ -316,6 +332,11 @@ describe('useRunCameraFollow', () => {
   // Past the debounce AND past the spacing floor, so a test that expects a second
   // move is not silently measuring the gap instead. The gap has its own test.
   const settle = () => act(() => { vi.advanceTimersByTime(FOLLOW_DEBOUNCE_MS + FOLLOW_MIN_GAP_MS + 20); });
+  /** Long enough for a WAITING set to settle, twice over for a recheck that re-arms. */
+  const settleWaiting = () => {
+    act(() => { vi.advanceTimersByTime(FOLLOW_WAITING_SETTLE_MS + FOLLOW_MIN_GAP_MS + 20); });
+    act(() => { vi.advanceTimersByTime(FOLLOW_WAITING_SETTLE_MS + FOLLOW_MIN_GAP_MS + 20); });
+  };
 
   it('does not re-render its host when the toggle is off and other canvases publish', () => {
     // The real cost story. The node store notifies on EVERY publish of EVERY canvas, so
@@ -336,6 +357,7 @@ describe('useRunCameraFollow', () => {
       });
       return null;
     }
+    act(() => setRunCameraFollowEnabled(false));
     render(<CountingHost steps={[step('n-a', 'running')]} />);
     const before = renders;
     for (let i = 0; i < 5; i++) {
@@ -471,6 +493,7 @@ describe('useRunCameraFollow', () => {
       });
       return null;
     }
+    act(() => setRunCameraFollowEnabled(false));
     render(<CountingHost steps={[step('n-a', 'running')]} />);
     const before = renders;
     for (let i = 0; i < 5; i++) {
@@ -541,6 +564,7 @@ describe('useRunCameraFollow', () => {
   });
 
   it('stays silent while the toggle is off', () => {
+    act(() => setRunCameraFollowEnabled(false));
     render(<Harness steps={[step('n-a', 'running')]} />);
     settle();
     expect(events).toHaveLength(0);
@@ -745,14 +769,124 @@ describe('useRunCameraFollow', () => {
     expect(events).toHaveLength(0);
   });
 
-  it('does not follow a node parked on a signal, which the stream still calls running', () => {
-    // The trap: a node waiting on an approval keeps reporting `running`, because the
-    // last row written for it is the RUNNING one and yielding never rewrites it. An
-    // earlier version of this test fabricated status 'awaiting_signal' and so
-    // certified a behaviour that never shipped. The parked set is a SECOND channel.
+  it('frames a node parked on a signal once nothing else runs, although the stream calls it running', () => {
+    // The trap: a node waiting on an approval can keep reporting `running`, because the
+    // last row written for it is the RUNNING one. The parked set is a SECOND channel,
+    // and it ranks the node as WAITING: framed, because that is where the run stands.
     act(() => setRunCameraFollowEnabled(true));
     render(<Harness steps={[step('n-a', 'running')]} awaitingSignalAliases={['n-a']} />);
+    settleWaiting();
+    expect(events).toHaveLength(1);
+    expect(events[0].detail.nodeIds).toEqual(['n-a']);
+  });
+
+  it('frames an interface waiting on the user (awaiting_signal) when nothing runs', () => {
+    act(() => setRunCameraFollowEnabled(true));
+    render(<Harness steps={[step('n-a', 'completed'), step('n-b', 'awaiting_signal')]} />);
+    // Not in the first ordinary debounce: a waiting set must SETTLE first.
     settle();
+    expect(events).toHaveLength(0);
+    settleWaiting();
+    expect(events).toHaveLength(1);
+    expect(events[0].detail.nodeIds).toEqual(['n-b']);
+  });
+
+  it('frames a split whose items all wait, read from the status counts', () => {
+    act(() => setRunCameraFollowEnabled(true));
+    render(
+      <Harness
+        steps={[step('n-b', 'pending', { completed: 1, failed: 0, skipped: 0, running: 0, awaitingSignal: 2 })]}
+      />,
+    );
+    settleWaiting();
+    expect(events.map((e) => e.detail.nodeIds)).toEqual([['n-b']]);
+  });
+
+  it('moves on to the next step when the waiting interface continues', () => {
+    act(() => setRunCameraFollowEnabled(true));
+    const { rerender } = render(<Harness steps={[step('n-a', 'awaiting_signal'), step('n-b', 'pending')]} />);
+    settleWaiting();
+    expect(events.map((e) => e.detail.nodeIds)).toEqual([['n-a']]);
+
+    // __continue: the interface completes, a snapshot with nothing running arrives
+    // between the two, then the next step starts.
+    rerender(<Harness steps={[step('n-a', 'completed'), step('n-b', 'pending')]} />);
+    rerender(<Harness steps={[step('n-a', 'completed'), step('n-b', 'running')]} />);
+    settle();
+    expect(events.map((e) => e.detail.nodeIds)).toEqual([['n-a'], ['n-b']]);
+  });
+
+  it('never mixes the tiers: a waiting interface does not widen the frame of the steps running after it', () => {
+    // A non-blocking interface keeps waiting while the rest of the run goes on. A box
+    // spanning both would zoom further out with every step.
+    act(() => setRunCameraFollowEnabled(true));
+    render(<Harness steps={[step('n-a', 'awaiting_signal'), step('n-b', 'running')]} />);
+    settleWaiting();
+    expect(events).toHaveLength(1);
+    expect(events[0].detail.nodeIds).toEqual(['n-b']);
+  });
+
+  // A GRID, for the same reason as the idle-gap grid below: the bounce is phase
+  // dependent. A non-blocking interface keeps waiting while the steps after it run, so
+  // every gap between two steps holds ONLY the waiting tier.
+  for (const [runMs, gapMs] of [[100, 50], [200, 300], [300, 500], [600, 900]]) {
+    it(`never bounces back to a waiting interface in the gaps between steps (${runMs} ms run, ${gapMs} ms gap)`, () => {
+      act(() => setRunCameraFollowEnabled(true));
+      act(() => setCanvasNodes(
+        [canvasNode('n-a'), canvasNode('n-b', 400), canvasNode('n-c', 800), canvasNode('n-d', 1200)],
+        WF,
+      ));
+      const iface = step('n-a', 'awaiting_signal');
+      const { rerender } = render(<Harness steps={[iface, step('n-b', 'running')]} />);
+      for (const next of ['n-c', 'n-d', 'n-b', 'n-c']) {
+        act(() => { vi.advanceTimersByTime(runMs); });
+        rerender(<Harness steps={[iface]} />);
+        act(() => { vi.advanceTimersByTime(gapMs); });
+        rerender(<Harness steps={[iface, step(next, 'running')]} />);
+      }
+      settle();
+      expect(events.length).toBeGreaterThan(0);
+      expect(events.map((e) => e.detail.nodeIds).flat(), 'the camera went back to the interface').not.toContain('n-a');
+    });
+  }
+
+  it('does not go back to a waiting interface while a step this canvas does not draw is running', () => {
+    // A sub-workflow's inner step, say: nothing to frame, but the run is moving, so the
+    // wait has not settled.
+    act(() => setRunCameraFollowEnabled(true));
+    const iface = step('n-a', 'awaiting_signal');
+    const { rerender } = render(<Harness steps={[iface, step('n-b', 'completed')]} />);
+    act(() => { vi.advanceTimersByTime(300); });
+    rerender(<Harness steps={[iface, step('undrawn', 'running')]} />);
+    settleWaiting();
+    expect(events).toHaveLength(0);
+  });
+
+  it('frames the interface once the steps after it are done and it is still waiting', () => {
+    act(() => setRunCameraFollowEnabled(true));
+    const iface = step('n-a', 'awaiting_signal');
+    const { rerender } = render(<Harness steps={[iface, step('n-b', 'running')]} />);
+    settle();
+    rerender(<Harness steps={[iface, step('n-b', 'completed')]} />);
+    settleWaiting();
+    expect(events.map((e) => e.detail.nodeIds)).toEqual([['n-b'], ['n-a']]);
+  });
+
+  it('reaches a waiting node even when a running move was armed as the step before it ended', () => {
+    // The running move keeps its aim through what looks like a gap; when that gap is a
+    // real wait, the recheck after it lands is the only thing that frames the waiting node.
+    act(() => setRunCameraFollowEnabled(true));
+    const { rerender } = render(<Harness steps={[step('n-b', 'running')]} />);
+    act(() => { vi.advanceTimersByTime(50); });
+    rerender(<Harness steps={[step('n-b', 'completed'), step('n-a', 'awaiting_signal')]} />);
+    settleWaiting();
+    expect(events.map((e) => e.detail.nodeIds)).toEqual([['n-b'], ['n-a']]);
+  });
+
+  it('does not frame a node left waiting by a run that has ended', () => {
+    act(() => setRunCameraFollowEnabled(true));
+    render(<Harness steps={[step('n-a', 'awaiting_signal')]} isRunActive={false} />);
+    settleWaiting();
     expect(events).toHaveLength(0);
   });
 

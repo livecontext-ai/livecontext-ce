@@ -4,7 +4,6 @@ import * as React from 'react';
 import clsx from 'clsx';
 import { Handle, NodeProps, Position, useReactFlow, useStore, useStoreApi } from 'reactflow';
 import { Eye, EyeOff, AppWindow } from 'lucide-react';
-import { useQueryClient } from '@tanstack/react-query';
 import { ResizableNodeWrapper } from './ResizableNodeWrapper';
 import { ItemNavigator } from '../inspector/outputs/ItemNavigator';
 
@@ -15,6 +14,7 @@ import { getNodeVisual } from '../../data/nodeVisuals';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { useRun } from '@/contexts/WorkflowRunContext';
 import { useInterfaceRender, useInterfaceById } from '../../hooks/useInterfaces';
+import { useInterfaceTemplateSync } from '../../hooks/useInterfaceTemplateSync';
 import { InterfaceThumbnail } from '../interface/InterfaceThumbnail';
 import { DEFAULT_FORMAT_VIEWPORT, resolveInterfaceFormat } from '@/lib/interfaces/interfaceFormats';
 import {
@@ -116,76 +116,24 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
   }, [id, data]);
 
   // Load interface details from DB for edit mode (auto-loading template on page reload)
-  const queryClient = useQueryClient();
   const { data: interfaceDetails, isLoading: isLoadingInterface } = useInterfaceById(
     !isRunMode && interfaceId ? interfaceId : null
   );
-
-  // Auto-load template from DB when interface is loaded (only once per mount/reload)
-  // Tracks the interfaceId we've loaded for, resets when editorExpression becomes empty
-  const loadedTemplateForRef = React.useRef<string | null>(null);
-
-  // Live sync: when LLM updates interface via chat, invalidate cache and reload template
-  React.useEffect(() => {
-    if (!interfaceId) return;
-    const handleInterfaceModified = () => {
-      // Invalidate React Query cache so useInterfaceById re-fetches from DB
-      queryClient.invalidateQueries({ queryKey: ['interface', interfaceId] });
-      // Reset the loaded ref so the useEffect below will reload the template
-      loadedTemplateForRef.current = null;
-    };
-    window.addEventListener('interfaceModified', handleInterfaceModified);
-    return () => window.removeEventListener('interfaceModified', handleInterfaceModified);
-  }, [interfaceId, queryClient]);
 
   // Get interface data from local node data (for edit mode)
   const interfaceData = (data as any)?.interfaceData || {};
   const editorExpression = interfaceData.editorExpression || '';
   const hasActionMapping = interfaceData?.actionMapping && Object.keys(interfaceData.actionMapping).length > 0;
 
-  // Reset when editorExpression becomes empty (workflow reload clears it)
-  if (!editorExpression && loadedTemplateForRef.current === interfaceId) {
-    loadedTemplateForRef.current = null;
-  }
-
-  const shouldLoadTemplate = !isRunMode &&
-    interfaceId &&
-    interfaceDetails &&
-    !isLoadingInterface &&
-    loadedTemplateForRef.current !== interfaceId &&
-    data.onNodeUpdate;
-
-  React.useEffect(() => {
-    if (!shouldLoadTemplate) return;
-
-    const templateFromDb = interfaceDetails!.htmlTemplate || interfaceDetails!.editorExpression || '';
-    const hasLocalTemplate = editorExpression && editorExpression.trim() !== '';
-
-    // Load template from DB if local is empty
-    if (templateFromDb && !hasLocalTemplate) {
-      loadedTemplateForRef.current = interfaceId!;
-      data.onNodeUpdate!({
-        ...data,
-        interfaceData: {
-          ...interfaceData,
-          editorExpression: templateFromDb,
-          dataSourceId: interfaceDetails!.dataSourceId ?? null,
-        },
-      });
-    } else if (hasLocalTemplate) {
-      // Mark as loaded, but still sync dataSourceId if missing
-      loadedTemplateForRef.current = interfaceId!;
-      if (interfaceDetails!.dataSourceId != null && interfaceData.dataSourceId == null) {
-        data.onNodeUpdate!({
-          ...data,
-          interfaceData: {
-            ...interfaceData,
-            dataSourceId: interfaceDetails!.dataSourceId,
-          },
-        });
-      }
-    }
-  }, [shouldLoadTemplate, interfaceId, interfaceDetails, editorExpression, interfaceData, data]);
+  // Keeps the node's copy of the page in step with the stored interface (see the hook).
+  useInterfaceTemplateSync({
+    enabled: !isRunMode,
+    interfaceId,
+    interfaceDetails,
+    isLoadingInterface,
+    data: data as Record<string, any>,
+    onNodeUpdate: data.onNodeUpdate,
+  });
 
   // Spawn item pagination - local to this node, resets when viewing epoch changes
   const [currentPage, setCurrentPage] = React.useState(0);

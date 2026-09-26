@@ -135,4 +135,54 @@ class AgentObservabilityPostHogEventTest {
         assertFalse(p.containsKey("terminal_category"));
         assertFalse(p.containsKey("stop_reason_inferred"));
     }
+
+    // ── key_route / model_replaced (analytics v2) ─────────────────────────────
+
+    @Test
+    @DisplayName("key_route is the run's key route lowercased (own_key / platform), omitted when unpinned")
+    void keyRoute() {
+        AgentObservabilityRequest req = new AgentObservabilityRequest();
+        req.setStatus("COMPLETED");
+
+        req.setKeyRoute("OWN_KEY");
+        assertEquals("own_key", AgentObservabilityService.buildAgentRunStoppedProps(req, null, null).get("key_route"));
+        req.setKeyRoute("PLATFORM");
+        assertEquals("platform", AgentObservabilityService.buildAgentRunStoppedProps(req, null, null).get("key_route"));
+        req.setKeyRoute(null);
+        assertFalse(AgentObservabilityService.buildAgentRunStoppedProps(req, null, null).containsKey("key_route"));
+    }
+
+    @Test
+    @DisplayName("model_replaced + replaced_model when swapped; false without replaced_model when resolution ran; absent when unknown")
+    void modelReplaced() {
+        AgentObservabilityRequest req = new AgentObservabilityRequest();
+        req.setStatus("COMPLETED");
+        req.setModel("claude-opus-4-9");
+
+        Map<String, Object> unknown = AgentObservabilityService.buildAgentRunStoppedProps(req, null, null);
+        assertFalse(unknown.containsKey("model_replaced"), "unknown must never be reported as false");
+        assertFalse(unknown.containsKey("replaced_model"));
+
+        AgentObservabilityService.stampModelReplacement(req, java.util.Optional.empty());
+        Map<String, Object> notReplaced = AgentObservabilityService.buildAgentRunStoppedProps(req, null, null);
+        assertEquals(false, notReplaced.get("model_replaced"));
+        assertFalse(notReplaced.containsKey("replaced_model"));
+
+        AgentObservabilityService.stampModelReplacement(req, java.util.Optional.of(
+            new ModelReplacementResolver.Substitution("anthropic", "claude-opus-4-9", "anthropic", "claude-opus-4-8", true)));
+        Map<String, Object> replaced = AgentObservabilityService.buildAgentRunStoppedProps(req, null, null);
+        assertEquals(true, replaced.get("model_replaced"));
+        assertEquals("claude-opus-4-8", replaced.get("replaced_model"));
+        assertEquals("claude-opus-4-9", replaced.get("model"));
+    }
+
+    @Test
+    @DisplayName("stampModelReplacement with an unknown outcome (null) leaves the request untouched")
+    void stampUnknownIsNoop() {
+        AgentObservabilityRequest req = new AgentObservabilityRequest();
+        AgentObservabilityService.stampModelReplacement(req, null);
+        assertEquals(null, req.getModelReplaced());
+        assertEquals(null, req.getReplacedModel());
+        AgentObservabilityService.stampModelReplacement(null, java.util.Optional.empty()); // no throw
+    }
 }

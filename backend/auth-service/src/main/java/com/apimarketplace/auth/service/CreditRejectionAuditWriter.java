@@ -9,10 +9,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Writes the audit row for a refused consumption, in a transaction of its own.
  *
- * <p><b>Why it cannot stay in the caller's transaction.</b> The rejection row carries the
- * {@code source_id} of the turn that was refused, and {@code idx_cl_source_id_unique} is unique on
- * that column alone. An agent that retries a turn it has no credits for therefore writes the same
- * key twice, which is not an edge case: it is what a retry loop does, every time. Inside
+ * <p><b>Why it cannot stay in the caller's transaction.</b> The rejection row carries a key derived
+ * from the {@code source_id} of the turn that was refused ({@link #rejectionSourceId}), and
+ * {@code idx_cl_source_id_unique} is unique on that column alone. An agent that retries a turn it
+ * has no credits for therefore writes the same key twice, which is not an edge case: it is what a retry loop does, every time. Inside
  * {@link CreditService#deductCredits}'s transaction the second write raised, PostgreSQL put the
  * transaction in {@code ERROR} state and Spring flagged it rollback-only, and the comment sitting
  * beside the catch ("if the save throws, the caller still receives insufficientCredits") stopped
@@ -46,6 +46,54 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class CreditRejectionAuditWriter {
+
+    /**
+     * Suffix of the key a rejection audit row is stored under. A refusal never sits on the
+     * {@code source_id} of the turn it refused, because that key belongs to the CHARGE: the turn
+     * already ran, and once the wallet is topped up the dead-letter replay has to be able to
+     * write the real debit there. Until 2026-09-25 the audit row took the bare key, so the
+     * replay hit {@code idx_cl_source_id_unique}, answered HTTP 500 ten times and ended FAILED:
+     * work that had already happened became work that could never be billed.
+     *
+     * <p>The key stays deterministic, so a second refusal of the same turn still collides with
+     * the first one and is dropped here, exactly as before (one row per refused turn).
+     */
+    public static final String REJECTION_KEY_SUFFIX = ":rejected";
+
+    /** Same width as {@code credit_ledger.source_id} (V101). */
+    private static final int SOURCE_ID_MAX_LENGTH = 512;
+
+    /**
+     * The key the rejection audit row for {@code sourceId} is written under, or {@code null}
+     * when the refused call carried no key (null or blank). An oversized key keeps a prefix plus a SHA-256 of
+     * the WHOLE id (never the suffix is cut), so it fits the column, stays stable, and two long
+     * ids sharing a prefix still get distinct keys.
+     */
+    public static String rejectionSourceId(String sourceId) {
+        // A blank key is no key: ":rejected" would be ONE key shared by every payer's keyless
+        // refusal, so all of them after the first would be dropped as duplicates.
+        if (sourceId == null || sourceId.isBlank()) return null;
+        int room = SOURCE_ID_MAX_LENGTH - REJECTION_KEY_SUFFIX.length();
+        if (sourceId.length() <= room) return sourceId + REJECTION_KEY_SUFFIX;
+        String hash = sha256Hex(sourceId);
+        return sourceId.substring(0, room - hash.length() - 1) + "#" + hash + REJECTION_KEY_SUFFIX;
+    }
+
+    private static String sha256Hex(String value) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is mandatory on every JVM", e);
+        }
+    }
+
+    /** True for a {@code <sourceType>_REJECTED} audit row. */
+    public static boolean isRejectionRow(CreditLedgerEntry entry) {
+        return entry != null && entry.getSourceType() != null
+                && entry.getSourceType().endsWith("_REJECTED");
+    }
 
     private final CreditLedgerRepository ledgerRepository;
 

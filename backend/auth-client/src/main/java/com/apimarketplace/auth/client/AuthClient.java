@@ -16,6 +16,8 @@ import com.apimarketplace.auth.client.dto.CeLinkEntitlementsResult;
 import com.apimarketplace.auth.client.dto.OrgRestrictionDto;
 import com.apimarketplace.auth.client.dto.PublisherProfileDto;
 import com.apimarketplace.common.auth.UserSummaryDto;
+import com.apimarketplace.common.plan.CeLinkAccess;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -50,6 +52,8 @@ public class AuthClient {
     // pattern in interface/agent/datasource clients (auditor v3.3
     // chunks 2+3 must-fix).
     private final RestTemplate boundedRestTemplate;
+    // Used ONLY by {@link #sendNotificationMail}: long enough for an SMTP send.
+    private final RestTemplate mailRestTemplate = createMailRestTemplate();
     private final String baseUrl;
 
     // Simple in-memory cache for user summaries (userId → CachedUserSummary).
@@ -238,6 +242,82 @@ public class AuthClient {
         }
     }
 
+    /**
+     * Tells auth-service this user just created a workflow, for the lifecycle emails
+     * ({@code user.activated}). Idempotent on the auth side: only the first call per account
+     * does anything. Bounded (2 s / 3 s) and <b>never throws</b>: callers fire it after a save
+     * and a lifecycle signal must never fail one.
+     *
+     * @return true when auth-service acknowledged the call
+     */
+    public boolean reportActivation(String userId) {
+        if (userId == null || userId.isBlank()) return false;
+        String url = baseUrl + "/api/internal/auth/lifecycle/activation";
+        HttpEntity<Void> entity = new HttpEntity<>(buildHeaders(userId));
+        try {
+            boundedRestTemplate.exchange(url, HttpMethod.POST, entity, Void.class);
+            return true;
+        } catch (Exception e) {
+            log.debug("Lifecycle activation not reported for user {}: {}", userId, e.getMessage());
+            return false;
+        }
+    }
+
+    /** What auth-service did with a {@link #emitLifecycleEvent} call. */
+    public enum LifecycleEventResult {
+        /** Taken: queued for Resend. */
+        ACCEPTED,
+        /**
+         * Not sent because lifecycle emails are off in auth-service (no key, kill switch; 204).
+         * Nothing to retry now, but a sender that records "sent" must not record it.
+         */
+        INACTIVE,
+        /** Refused for good (400 / 404 only): unknown user, or an event / payload off auth-service's allow-list. Do not retry. */
+        REFUSED,
+        /** Not taken right now (busy, unreachable, or any other 4xx / 5xx): the caller may retry later. */
+        RETRY_LATER
+    }
+
+    /**
+     * Sends one lifecycle email event for this user ({@code badge.unlocked},
+     * {@code recap.monthly}). {@code payload} carries facts only (codes, counts, a month):
+     * auth-service turns them into the user's language. Bounded (2 s / 3 s) and <b>never
+     * throws</b>: a lifecycle email must never fail the work that triggered it.
+     */
+    public LifecycleEventResult emitLifecycleEvent(String userId, String event, Map<String, Object> payload) {
+        if (userId == null || userId.isBlank() || event == null || event.isBlank()) {
+            return LifecycleEventResult.REFUSED;
+        }
+        String url = baseUrl + "/api/internal/auth/lifecycle/events";
+        Map<String, Object> body = new HashMap<>();
+        body.put("event", event);
+        body.put("payload", payload != null ? payload : Map.of());
+        try {
+            ResponseEntity<Void> response = boundedRestTemplate.exchange(url, HttpMethod.POST,
+                    new HttpEntity<>(body, buildHeaders(userId)), Void.class);
+            return response != null && response.getStatusCode().value() == 204
+                    ? LifecycleEventResult.INACTIVE
+                    : LifecycleEventResult.ACCEPTED;
+        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            int status = e.getStatusCode().value();
+            // Only what auth-service answers about THIS event is final: 400 (event or payload off
+            // its allow-list) and 404 (unknown user). Any other 4xx (401/403 wiring, 409, 422, 429)
+            // says nothing about the event, so it is retried later rather than dropped for good.
+            if (status == 400 || status == 404) {
+                log.debug("Lifecycle event {} refused for user {}: {}", event, userId, e.getStatusCode());
+                return LifecycleEventResult.REFUSED;
+            }
+            if (status != 429) {
+                log.warn("Lifecycle event {} for user {} answered {}: will retry later", event, userId,
+                        e.getStatusCode());
+            }
+            return LifecycleEventResult.RETRY_LATER;
+        } catch (Exception e) {
+            log.debug("Lifecycle event {} not sent for user {}: {}", event, userId, e.getMessage());
+            return LifecycleEventResult.RETRY_LATER;
+        }
+    }
+
     private Map<String, Integer> fetchLogRetentionChunk(List<String> organizationIds) {
         String url = baseUrl + "/api/internal/auth/log-retention";
         HttpEntity<List<String>> entity =
@@ -256,18 +336,31 @@ public class AuthClient {
     }
 
     /**
-     * Cloud-side authorization check for CE LLM relay calls. The caller is the
-     * authenticated cloud user and the install id is the CE instance presenting
-     * the bearer token. Returns false on any malformed id or transport failure.
+     * Cloud-side "linked AND paid" check for every CE-link-gated relay: true only when
+     * {@link #ceLinkAccess} answers {@link CeLinkAccess#ACTIVE}. A suspended link (the
+     * account fell back to a non-paid plan) answers false. Callers that must tell the CE
+     * WHY (plan required vs not linked) use {@link #ceLinkAccess} and
+     * {@link com.apimarketplace.common.plan.CeLinkRefusal}.
      */
     public boolean userOwnsActiveCeLink(String userId, String installId) {
+        return ceLinkAccess(userId, installId).isActive();
+    }
+
+    /**
+     * Resolve what {@code userId} may do through the CE link of {@code installId}: ACTIVE
+     * (linked and paid), PLAN_REQUIRED (linked, suspended until the account pays) or
+     * NOT_LINKED. Fail-closed: a malformed id, a transport failure or a non-2xx answer is
+     * NOT_LINKED. An auth-service that predates the {@code reason} field is read through its
+     * {@code active} flag alone.
+     */
+    public CeLinkAccessResult ceLinkAccess(String userId, String installId) {
         if (userId == null || userId.isBlank() || installId == null || installId.isBlank()) {
-            return false;
+            return CeLinkAccessResult.notLinked();
         }
         try {
             UUID.fromString(installId);
         } catch (IllegalArgumentException invalidInstallId) {
-            return false;
+            return CeLinkAccessResult.notLinked();
         }
         String url = baseUrl + "/api/internal/auth/ce-link/" + installId + "/active";
         HttpEntity<Void> entity = new HttpEntity<>(buildHeaders(userId));
@@ -276,13 +369,20 @@ public class AuthClient {
                     url, HttpMethod.GET, entity,
                     new ParameterizedTypeReference<>() {});
             Map<String, Object> body = response.getBody();
-            return response.getStatusCode().is2xxSuccessful()
-                    && body != null
-                    && Boolean.TRUE.equals(body.get("active"));
+            if (!response.getStatusCode().is2xxSuccessful() || body == null) {
+                return CeLinkAccessResult.notLinked();
+            }
+            String planCode = body.get("planCode") instanceof String s && !s.isBlank() ? s : null;
+            if (CeLinkAccess.PLAN_REQUIRED.name().equals(body.get("reason"))) {
+                return CeLinkAccessResult.planRequired(planCode);
+            }
+            return Boolean.TRUE.equals(body.get("active")) && body.get("reason") == null
+                    ? CeLinkAccessResult.active(planCode)
+                    : CeLinkAccessResult.notLinked();
         } catch (Exception e) {
             log.warn("Failed to validate CE link installId={} userId={}: {}",
                     installId, userId, e.getMessage());
-            return false;
+            return CeLinkAccessResult.notLinked();
         }
     }
 
@@ -736,6 +836,103 @@ public class AuthClient {
             log.warn("Failed to fetch badge profile for user {}: {}", userId, e.getMessage());
             return null;
         }
+    }
+
+    // ========== Locale context ==========
+
+    /**
+     * The language and time zone a user reads messages in.
+     *
+     * @param locale   the app locale reported by the user's browser or picked in the UI, {@code en} when unknown
+     * @param timeZone an IANA zone id, {@code UTC} when unknown
+     * @param fallback true when auth-service could not answer (unknown user, unreachable, bad body):
+     *                 the two values are then the defaults, not the user's, and a caller that
+     *                 caches should not keep them
+     */
+    public record LocaleContext(String locale, String timeZone, boolean fallback) {
+        public static final LocaleContext FALLBACK = new LocaleContext("en", "UTC", true);
+    }
+
+    /**
+     * Reads a user's locale and time zone, for the messages sent to them off-request (emails,
+     * chat notices). Never throws: any failure answers {@link LocaleContext#FALLBACK}, so a
+     * message goes out in English with UTC times rather than not at all.
+     */
+    public LocaleContext getLocaleContext(String userId) {
+        if (userId == null || userId.isBlank()) return LocaleContext.FALLBACK;
+        String url = baseUrl + "/api/internal/auth/users/" + userId.trim() + "/locale-context";
+        try {
+            ResponseEntity<Map<String, Object>> response = boundedRestTemplate.exchange(
+                    url, HttpMethod.GET, new HttpEntity<>(buildHeaders(userId)),
+                    new ParameterizedTypeReference<>() {});
+            Map<String, Object> body = response.getBody();
+            if (body == null) return LocaleContext.FALLBACK;
+            Object locale = body.get("locale");
+            Object timeZone = body.get("timeZone");
+            return new LocaleContext(
+                    locale instanceof String l && !l.isBlank() ? l : "en",
+                    timeZone instanceof String z && !z.isBlank() ? z : "UTC",
+                    false);
+        } catch (Exception e) {
+            log.debug("Locale context for user {} unavailable: {}", userId, e.getMessage());
+            return LocaleContext.FALLBACK;
+        }
+    }
+
+    // ========== Notification email ==========
+
+    /**
+     * Outcome of a notification email: {@code SENT}, {@code NO_ADDRESS} (the
+     * account has no usable email) or {@code FAILED} (SMTP refused it, or
+     * auth-service could not be reached), with a short reason.
+     */
+    public record NotificationMailResult(String status, String detail) {
+        public boolean sent() {
+            return "SENT".equals(status);
+        }
+    }
+
+    /**
+     * Asks auth-service, which owns the address and the mailer, to email one
+     * notification to a user. Synchronous on purpose, so the caller can record
+     * whether it really went out; callers run it off the request path.
+     *
+     * <p>Its own timeouts: the SMTP relay alone may take up to three 10 s
+     * windows, which the 3 s read timeout of the bounded template would cut off
+     * while the mail was still being sent.
+     *
+     * @param actionPath in-app path starting with {@code /}; auth-service prefixes the public origin
+     */
+    public NotificationMailResult sendNotificationMail(String userId, String subject, List<String> lines,
+                                                       String actionPath, String actionLabel) {
+        String url = baseUrl + "/api/internal/auth/notification-mail";
+        Map<String, Object> body = new HashMap<>();
+        body.put("userId", userId);
+        body.put("subject", subject);
+        body.put("lines", lines);
+        body.put("actionPath", actionPath);
+        body.put("actionLabel", actionLabel);
+        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, buildHeaders(userId));
+        try {
+            ResponseEntity<Map<String, Object>> response = mailRestTemplate.exchange(
+                    url, HttpMethod.POST, entity, new ParameterizedTypeReference<>() {});
+            Map<String, Object> out = response.getBody();
+            if (out == null) return new NotificationMailResult("FAILED", "empty response");
+            Object status = out.get("status");
+            Object detail = out.get("detail");
+            return new NotificationMailResult(status != null ? status.toString() : "FAILED",
+                    detail != null ? detail.toString() : null);
+        } catch (Exception e) {
+            log.warn("Notification mail for user={} could not be handed to auth-service: {}", userId, e.getMessage());
+            return new NotificationMailResult("FAILED", e.getClass().getSimpleName());
+        }
+    }
+
+    private static RestTemplate createMailRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Duration.ofSeconds(3));
+        factory.setReadTimeout(Duration.ofSeconds(40));
+        return new RestTemplate(factory);
     }
 
     private static HttpHeaders buildHeaders(String tenantId) {

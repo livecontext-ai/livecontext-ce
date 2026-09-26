@@ -252,6 +252,21 @@ public class PlatformCredentialRepository {
     }
 
     /**
+     * Every row other than {@code excludedRowId} that holds {@code clientId} and that a credential
+     * of {@code tenantId} can refresh against: the tenant's own BYOK rows in any workspace and the
+     * platform-wide rows. Any integration, no LIMIT: a missed row would over-revoke.
+     */
+    public List<PlatformCredential> findRowsHoldingClient(String clientId, String tenantId, Long excludedRowId) {
+        String sql = """
+            SELECT * FROM auth.platform_credentials
+            WHERE client_id = ?
+              AND (tenant_id = ? OR tenant_id IS NULL)
+              AND id <> ?
+            """;
+        return jdbc.query(sql, new PlatformCredentialRowMapper(), clientId, tenantId, excludedRowId);
+    }
+
+    /**
      * List BYOK rows owned by {@code tenantId} in scope {@code organizationId}
      * (strict isolation, NULL-safe match) - workspace rows in a workspace,
      * personal (org NULL) rows in personal scope. Mirrors the strict-isolation
@@ -505,13 +520,13 @@ public class PlatformCredentialRepository {
                 client_id, client_secret, api_key, username, password,
                 auth_url, token_url, default_scopes,
                 icon_slug, category, description, show_unverified_app_warning, is_enabled, created_by, custom_fields,
-                default_markup_credits, max_calls_per_run, tenant_id, variant, organization_id
+                default_markup_credits, max_calls_per_run, tenant_id, variant, organization_id, selected_scopes
             ) VALUES (
                 :integration_name, :display_name, :auth_type,
                 :client_id, :client_secret, :api_key, :username, :password,
                 :auth_url, :token_url, :default_scopes,
                 :icon_slug, :category, :description, :show_unverified_app_warning, :is_enabled, :created_by, :custom_fields,
-                :default_markup_credits, :max_calls_per_run, :tenant_id, :variant, :organization_id
+                :default_markup_credits, :max_calls_per_run, :tenant_id, :variant, :organization_id, :selected_scopes
             )
             """;
 
@@ -545,6 +560,7 @@ public class PlatformCredentialRepository {
                 custom_fields = :custom_fields,
                 default_markup_credits = :default_markup_credits,
                 max_calls_per_run = :max_calls_per_run,
+                selected_scopes = :selected_scopes,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = :id
             """;
@@ -570,7 +586,8 @@ public class PlatformCredentialRepository {
                 .addValue("default_markup_credits",
                         credential.defaultMarkupCredits() != null ? credential.defaultMarkupCredits() : BigDecimal.ZERO)
                 .addValue("max_calls_per_run",
-                        credential.maxCallsPerRun() != null ? credential.maxCallsPerRun() : 500);
+                        credential.maxCallsPerRun() != null ? credential.maxCallsPerRun() : 500)
+                .addValue("selected_scopes", credential.selectedScopes());
 
         namedJdbc.update(sql, params);
         log.info("Updated platform credential: {} (id={})", credential.integrationName(), credential.id());
@@ -612,7 +629,8 @@ public class PlatformCredentialRepository {
                         credential.variant() != null && !credential.variant().isBlank()
                                 ? credential.variant()
                                 : PlatformCredential.DEFAULT_VARIANT)
-                .addValue("organization_id", credential.organizationId());
+                .addValue("organization_id", credential.organizationId())
+                .addValue("selected_scopes", credential.selectedScopes());
     }
 
     /**
@@ -961,7 +979,8 @@ public class PlatformCredentialRepository {
                     rs.getString("created_by"),
                     rs.getString("tenant_id"),
                     variant,
-                    rs.getString("organization_id")
+                    rs.getString("organization_id"),
+                    rs.getString("selected_scopes")
             );
         }
     }

@@ -4,6 +4,7 @@ import com.apimarketplace.auth.domain.User;
 import com.apimarketplace.auth.repository.ChangelogEntryFirstSeenRepository;
 import com.apimarketplace.auth.repository.UserChangelogSeenRepository;
 import com.apimarketplace.auth.repository.UserRepository;
+import com.apimarketplace.auth.service.ChangelogSeenService.SeenOutcome;
 import com.apimarketplace.auth.service.ChangelogSeenService.ChangelogState;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -86,7 +87,7 @@ class ChangelogSeenServiceTest {
     @Test
     @DisplayName("disabled: an acknowledgement is refused and nothing is written")
     void disabledMarkSeenWritesNothing() {
-        assertThat(service(false).markSeen(42L, ENTRY)).isFalse();
+        assertThat(service(false).markSeen(42L, ENTRY)).isEqualTo(SeenOutcome.DISABLED);
 
         verify(seenRepository, never()).acknowledge(anyLong(), anyString());
         verify(seenRepository, never()).save(any());
@@ -236,7 +237,9 @@ class ChangelogSeenServiceTest {
     @Test
     @DisplayName("an acknowledgement is ONE upsert, so two tabs cannot race into a duplicate key")
     void acknowledgementIsASingleUpsert() {
-        assertThat(service(true).markSeen(42L, ENTRY)).isTrue();
+        when(seenRepository.acknowledge(42L, ENTRY)).thenReturn(1);
+
+        assertThat(service(true).markSeen(42L, ENTRY)).isEqualTo(SeenOutcome.RECORDED);
 
         // Read-then-write would race: the @Id is assigned, so save() selects then inserts, and two
         // concurrent first acknowledgements both see "no row". The upsert is what removes that.
@@ -250,7 +253,9 @@ class ChangelogSeenServiceTest {
     void olderKeyIsAcceptedOnRollback() {
         // No monotonic guard on purpose: after a rollback the running build announces its own,
         // older entry, and the user must be able to dismiss THAT one for good.
-        assertThat(service(true).markSeen(42L, "2026-08-entry")).isTrue();
+        when(seenRepository.acknowledge(42L, "2026-08-entry")).thenReturn(1);
+
+        assertThat(service(true).markSeen(42L, "2026-08-entry")).isEqualTo(SeenOutcome.RECORDED);
 
         verify(seenRepository).acknowledge(42L, "2026-08-entry");
     }
@@ -259,11 +264,29 @@ class ChangelogSeenServiceTest {
     @DisplayName("re-acknowledging the same key is idempotent: same statement, still one row")
     void reAcknowledgingIsIdempotent() {
         ChangelogSeenService service = service(true);
+        when(seenRepository.acknowledge(42L, ENTRY)).thenReturn(1);
 
-        assertThat(service.markSeen(42L, ENTRY)).isTrue();
-        assertThat(service.markSeen(42L, ENTRY)).isTrue();
+        assertThat(service.markSeen(42L, ENTRY)).isEqualTo(SeenOutcome.RECORDED);
+        assertThat(service.markSeen(42L, ENTRY)).isEqualTo(SeenOutcome.RECORDED);
 
         verify(seenRepository, times(2)).acknowledge(42L, ENTRY);
+    }
+
+    @Test
+    @DisplayName("changelog seen for a deleted user: the upsert writes 0 rows and the outcome says UNKNOWN_USER")
+    void changelogSeenForDeletedUserIsUnknownUserNotAnError() {
+        // Prod 2026-09-22: a session that outlived the deletion of its account (the gateway caches
+        // user resolution) sent its old id, the insert tripped the foreign key and the request
+        // answered 500. The upsert now writes nothing for an absent user; the service must read
+        // that 0 as its own outcome rather than claim the acknowledgement was stored.
+        when(seenRepository.acknowledge(404L, ENTRY)).thenReturn(0);
+
+        assertThat(service(true).markSeen(404L, ENTRY)).isEqualTo(SeenOutcome.UNKNOWN_USER);
+
+        verify(seenRepository).acknowledge(404L, ENTRY);
+        // No separate existence read: the check lives inside the one statement, so there is no
+        // window for a delete to land between a read and the write.
+        verifyNoInteractions(userRepository);
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.execution.v2.async;
 
 import com.apimarketplace.orchestrator.domain.execution.AgentResultMessage;
+import com.apimarketplace.orchestrator.lifecycle.OrchestratorLifecycleGate;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -39,14 +40,20 @@ public class AgentResultSubscriber implements MessageListener {
     private final RedisMessageListenerContainer listenerContainer;
     private final AgentAsyncCompletionService agentAsyncCompletionService;
     private final ObjectMapper objectMapper;
+    private final OrchestratorLifecycleGate lifecycleGate;
+    private final PendingAgentRegistry registry;
 
     public AgentResultSubscriber(
             RedisMessageListenerContainer listenerContainer,
             AgentAsyncCompletionService agentAsyncCompletionService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            OrchestratorLifecycleGate lifecycleGate,
+            PendingAgentRegistry registry) {
         this.listenerContainer = listenerContainer;
         this.agentAsyncCompletionService = agentAsyncCompletionService;
         this.objectMapper = objectMapper;
+        this.lifecycleGate = lifecycleGate;
+        this.registry = registry;
     }
 
     @PostConstruct
@@ -62,6 +69,19 @@ public class AgentResultSubscriber implements MessageListener {
             // Extract correlationId from channel name: "agent:result:channel:{correlationId}"
             String channel = new String(message.getChannel(), StandardCharsets.UTF_8);
             String correlationId = channel.substring(RESULT_CHANNEL_PREFIX.length());
+
+            // A draining instance only takes results for agents IT dispatched (its local
+            // registry, which the shutdown drain is waiting on). Every result is broadcast to
+            // every replica, and consuming one for another replica's agent would stage a
+            // delivery here that the drain may already have stopped counting, so it would be
+            // cut by the shutdown. Left alone, it is consumed by a live replica, or picked up by
+            // the recovery scan from the result key.
+            if (lifecycleGate != null && lifecycleGate.isDraining()
+                    && (registry == null || registry.peek(correlationId).isEmpty())) {
+                logger.debug("[AgentResultSubscriber] Draining - leaving result for another replica: correlationId={}",
+                    correlationId);
+                return;
+            }
 
             String json = new String(message.getBody(), StandardCharsets.UTF_8);
 

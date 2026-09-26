@@ -1,21 +1,39 @@
 import * as React from 'react';
 import { Node, Edge } from 'reactflow';
 import { BuilderNodeData } from '../types';
+import type { WorkflowLayoutDirection } from '@/contexts/WorkflowLayoutDirectionContext';
 import { computeGraphSignature } from './graphSignature';
 
 interface HistoryEntry {
   nodes: Node<BuilderNodeData>[];
   edges: Edge[];
+  /** The reading direction the entry's positions were placed in. */
+  layoutDirection?: WorkflowLayoutDirection;
   /** Signature of the entry, so "did this change?" never re-derives it. */
   signature: string;
 }
 
-function snapshot(nodes: Node<BuilderNodeData>[], edges: Edge[]): HistoryEntry {
+function snapshot(
+  nodes: Node<BuilderNodeData>[],
+  edges: Edge[],
+  layoutDirection?: WorkflowLayoutDirection,
+): HistoryEntry {
   return {
     nodes: JSON.parse(JSON.stringify(nodes)),
     edges: JSON.parse(JSON.stringify(edges)),
-    signature: computeGraphSignature(nodes, edges),
+    layoutDirection,
+    signature: computeGraphSignature(nodes, edges, layoutDirection),
   };
+}
+
+/**
+ * The canvas's reading direction, when the caller tracks it. A direction change re-lays
+ * every node out, so it is one undo step: undoing it must put the direction back WITH the
+ * positions, or the canvas would draw the old positions with the new handles.
+ */
+export interface HistoryLayoutDirection {
+  value: WorkflowLayoutDirection;
+  set: (direction: WorkflowLayoutDirection) => void;
 }
 
 /**
@@ -40,19 +58,23 @@ export function useHistory(
   edges: Edge[],
   setNodes: (nodes: Node<BuilderNodeData>[]) => void,
   setEdges: (edges: Edge[]) => void,
-  workflowLoaded: boolean = true
+  workflowLoaded: boolean = true,
+  layoutDirection?: HistoryLayoutDirection,
 ) {
-  const [history, setHistory] = React.useState<HistoryEntry[]>(() => [snapshot(nodes, edges)]);
+  const directionValue = layoutDirection?.value;
+  const setDirectionRef = React.useRef(layoutDirection?.set);
+  setDirectionRef.current = layoutDirection?.set;
+  const [history, setHistory] = React.useState<HistoryEntry[]>(() => [snapshot(nodes, edges, directionValue)]);
   const [historyIndex, setHistoryIndex] = React.useState(0);
   const isUndoRedoRef = React.useRef(false);
   const historyIndexRef = React.useRef(0);
 
   // Keep track of the latest nodes/edges in a ref for the timeout callback
-  const nodesEdgesRef = React.useRef({ nodes, edges });
+  const nodesEdgesRef = React.useRef({ nodes, edges, layoutDirection: directionValue });
 
   React.useEffect(() => {
-    nodesEdgesRef.current = { nodes, edges };
-  }, [nodes, edges]);
+    nodesEdgesRef.current = { nodes, edges, layoutDirection: directionValue };
+  }, [nodes, edges, directionValue]);
 
   // Sync ref with state
   React.useEffect(() => {
@@ -65,8 +87,8 @@ export function useHistory(
   // calls setNodes/setEdges and setWorkflowLoaded(true) in the same batch).
   React.useEffect(() => {
     if (!workflowLoaded) return;
-    const { nodes: loadedNodes, edges: loadedEdges } = nodesEdgesRef.current;
-    setHistory([snapshot(loadedNodes, loadedEdges)]);
+    const { nodes: loadedNodes, edges: loadedEdges, layoutDirection: loadedDirection } = nodesEdgesRef.current;
+    setHistory([snapshot(loadedNodes, loadedEdges, loadedDirection)]);
     setHistoryIndex(0);
     historyIndexRef.current = 0;
   }, [workflowLoaded]);
@@ -82,7 +104,9 @@ export function useHistory(
 
     const timeoutId = setTimeout(() => {
       const currentState = nodesEdgesRef.current;
-      const currentSignature = computeGraphSignature(currentState.nodes, currentState.edges);
+      const currentSignature = computeGraphSignature(
+        currentState.nodes, currentState.edges, currentState.layoutDirection,
+      );
 
       setHistory((prevHistory) => {
         const currentIndex = historyIndexRef.current;
@@ -93,7 +117,7 @@ export function useHistory(
 
         if (currentSignature !== currentHistoryState.signature) {
           const newHistory = prevHistory.slice(0, currentIndex + 1);
-          const newState = snapshot(currentState.nodes, currentState.edges);
+          const newState = snapshot(currentState.nodes, currentState.edges, currentState.layoutDirection);
           // Limit history to 50 states
           const updatedHistory = [...newHistory, newState].slice(-50);
           setHistoryIndex(updatedHistory.length - 1);
@@ -104,7 +128,7 @@ export function useHistory(
     }, 300);
 
     return () => clearTimeout(timeoutId);
-  }, [nodes, edges, workflowLoaded]); // Run when nodes or edges change
+  }, [nodes, edges, directionValue, workflowLoaded]); // Run when nodes, edges or the direction change
 
   const undo = React.useCallback(
     (onUndoStart?: () => void) => {
@@ -113,6 +137,7 @@ export function useHistory(
         const prevState = history[historyIndex - 1];
         setNodes(JSON.parse(JSON.stringify(prevState.nodes)));
         setEdges(JSON.parse(JSON.stringify(prevState.edges)));
+        if (prevState.layoutDirection) setDirectionRef.current?.(prevState.layoutDirection);
         setHistoryIndex(historyIndex - 1);
         // Only call if it's actually a function (not an event object from onClick)
         if (typeof onUndoStart === 'function') onUndoStart();
@@ -131,6 +156,7 @@ export function useHistory(
         const nextState = history[historyIndex + 1];
         setNodes(JSON.parse(JSON.stringify(nextState.nodes)));
         setEdges(JSON.parse(JSON.stringify(nextState.edges)));
+        if (nextState.layoutDirection) setDirectionRef.current?.(nextState.layoutDirection);
         setHistoryIndex(historyIndex + 1);
         // Only call if it's actually a function (not an event object from onClick)
         if (typeof onRedoStart === 'function') onRedoStart();

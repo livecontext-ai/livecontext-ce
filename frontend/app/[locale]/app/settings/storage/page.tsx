@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { HardDrive, Workflow, Database, FileText, Sparkles, Layers, Bot, BarChart3, RefreshCw, AlertTriangle, User, Play, Activity, Layout, MessageSquare, Settings, Table2, Globe } from 'lucide-react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { storageApi, StorageQuota, TenantStats } from '@/lib/api';
 import type { StorageBreakdown, StorageCategory } from '@/lib/api';
@@ -16,6 +16,8 @@ import { useQuery } from '@tanstack/react-query';
 import StorageBreakdownChart from './components/StorageBreakdownChart';
 import { WorkspaceScopeSelect, ALL_WORKSPACES_SCOPE } from '@/components/settings/WorkspaceScopeSelect';
 import { aggregateWorkspaces, workspacePartFromSettled } from './storageAggregation';
+import { categoryRows } from './storageInsights';
+import { LargestItems } from './components/LargestItems';
 
 // Plan storage limits in bytes - defense-in-depth fallback when the
 // /billing/plans response is unavailable. Values must mirror the seed in
@@ -53,6 +55,7 @@ export default function StoragePage() {
     const t = useTranslations('storage');
     const tSettings = useTranslations('settings');
     const tDashboard = useTranslations('dashboard');
+    const locale = useLocale();
     const { isLoading: authLoading, isAuthenticated, loginWithRedirect } = useAuth();
     const { subscription, isLoading: subscriptionLoading } = useSubscription();
     const { plans } = usePlans();
@@ -297,6 +300,9 @@ export default function StoragePage() {
         return `${(safe / (1024 * 1024 * 1024)).toFixed(2)} GB`;
     };
 
+    const formatShare = (share: number) =>
+        new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 1 }).format(share);
+
     // The account's shared pool, when one applies to this view.
     //
     // The plan's allowance belongs to the ACCOUNT: every workspace it owns draws on the same
@@ -364,6 +370,27 @@ export default function StoragePage() {
                 return 'bg-black dark:bg-white';
         }
     };
+
+    // What the bar measures, and the room left in it. "Available" is only stated where the page
+    // knows the total the allowance is measured against: the account pool, the aggregate of the
+    // owner's workspaces, or a personal scope. Anything else (a member, or an owner's workspace
+    // the server reports no pool for) shows one workspace's bytes, and "limit minus those" would
+    // promise room the pool shared with the other workspaces does not have.
+    const measuredBytes = quota ? (accountPool ? accountPool.used : quota.usedBytes) : 0;
+    // An aggregate missing a workspace it could not read is a partial total: no "available" then.
+    const knowsAccountTotal = (isAll && unreadableWorkspaces === 0) || !isOrgScope || accountPool !== null;
+    const availableBytes = quota && !isUnlimited && knowsAccountTotal
+        ? Math.max(0, (planStorageLimit || quota.maxBytes) - measuredBytes)
+        : null;
+
+    // A projection ("full in N days") needs the TREND of that same total. The trend chart reads
+    // the history of the workspaces in view, so it is only the account's when the view covers
+    // every workspace the account owns: the aggregate, a sole workspace, or a personal scope.
+    const projection = quota && !isUnlimited && (isAll || !isOrgScope || (ownsScopedWorkspace && enterableOrgIds.length === 1))
+        ? { usedBytes: measuredBytes, limitBytes: planStorageLimit || quota.maxBytes }
+        : undefined;
+
+    const categories = useMemo(() => categoryRows(breakdown), [breakdown]);
 
     // Compute breakdown total for stacked bar percentages
     const breakdownTotal = useMemo(() => {
@@ -513,17 +540,30 @@ export default function StoragePage() {
                     Status colors (red/amber) take over once a soft/hard limit
                     is breached. */}
                 <div className="space-y-2">
-                    <div className="h-1.5 bg-theme-tertiary rounded-full overflow-hidden">
+                    <div className="relative">
+                        <div className="h-1.5 bg-theme-tertiary rounded-full overflow-hidden">
+                            {!isUnlimited && (
+                                <div
+                                    className={`h-full ${getProgressColor(effectiveStatus)} transition-all duration-500`}
+                                    style={{ width: `${usagePercentage}%` }}
+                                />
+                            )}
+                        </div>
+                        {/* Where the warning starts (80%), so the bar says how close that is. */}
                         {!isUnlimited && (
                             <div
-                                className={`h-full ${getProgressColor(effectiveStatus)} transition-all duration-500`}
-                                style={{ width: `${usagePercentage}%` }}
+                                className="absolute top-[-3px] h-3 w-px bg-amber-500"
+                                style={{ left: '80%' }}
+                                title={t('usage.softLimitMarker')}
+                                data-testid="storage-soft-limit-marker"
                             />
                         )}
                     </div>
 
                     <div className="flex justify-between text-xs text-theme-muted">
-                        <span>0 GB</span>
+                        <span data-testid="storage-available">
+                            {availableBytes !== null ? t('usage.available', { free: formatBytes(availableBytes) }) : '0 GB'}
+                        </span>
                         <span>{displayLimit}</span>
                     </div>
                 </div>
@@ -541,7 +581,9 @@ export default function StoragePage() {
                     </div>
                 </div>
 
-                {breakdown.length > 0 ? (
+                {/* On what holds something, not on the raw list: a fresh install reports every
+                    category at 0, which would draw an empty bar and an empty box. */}
+                {categories.length > 0 ? (
                     <>
                         {/* Stacked Bar - same h-1.5 / bg-theme-tertiary track
                             as the Storage Usage gauge above; per-category
@@ -564,23 +606,36 @@ export default function StoragePage() {
                                 })}
                         </div>
 
-                        {/* Category Cards */}
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                            {breakdown.map((b) => {
-                                const Icon = CATEGORY_ICONS[b.category] || Database;
-                                const colorClass = STORAGE_CATEGORY_COLORS[b.category as StorageCategory] || 'bg-gray-400';
+                        {/* Categories, largest first: size, share, how many items and their average
+                            size, which says whether the space goes to a few big things or to many
+                            small ones. */}
+                        <div className="bg-theme-secondary rounded-xl border border-theme divide-y divide-[var(--border-color)]" data-testid="storage-categories">
+                            {categories.map((c) => {
+                                const Icon = CATEGORY_ICONS[c.category] || Database;
+                                const colorClass = STORAGE_CATEGORY_COLORS[c.category as StorageCategory] || 'bg-gray-400';
+                                const label = t(`categories.${c.category}` as any);
                                 return (
-                                    <div key={b.category} className="bg-theme-secondary rounded-xl p-4">
-                                        <div className="flex items-center gap-3">
-                                            <div className={`w-3 h-3 rounded-full ${colorClass} flex-shrink-0`} />
-                                            <div className="min-w-0">
-                                                <p className="text-sm font-semibold text-theme-primary truncate">
-                                                    {formatBytes(b.usedBytes)}
-                                                </p>
-                                                <p className="text-xs text-theme-secondary truncate">
-                                                    {t(`categories.${b.category}` as any)}
-                                                </p>
+                                    <div key={c.category} className="px-4 py-3 flex items-center gap-3" data-testid="storage-category-row">
+                                        <Icon className="h-3.5 w-3.5 text-theme-secondary shrink-0" />
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-baseline justify-between gap-3">
+                                                <p className="text-sm text-theme-primary truncate" title={label}>{label}</p>
+                                                <p className="text-sm font-semibold text-theme-primary whitespace-nowrap">{formatBytes(c.usedBytes)}</p>
                                             </div>
+                                            <div className="mt-1.5 flex items-center gap-3">
+                                                <div className="h-1 flex-1 bg-theme-tertiary rounded-full overflow-hidden">
+                                                    <div className={`h-full ${colorClass}`} style={{ width: `${Math.min(100, c.share * 100)}%` }} />
+                                                </div>
+                                                <span className="text-xs text-theme-tertiary w-12 text-right shrink-0">{formatShare(c.share)}</span>
+                                            </div>
+                                            {c.itemCount > 0 && (
+                                                <p className="text-xs text-theme-tertiary mt-1 truncate">
+                                                    {t('breakdown.itemsAvg', {
+                                                        count: c.itemCount,
+                                                        avg: formatBytes(Math.round(c.avgItemBytes ?? 0)),
+                                                    })}
+                                                </p>
+                                            )}
                                         </div>
                                     </div>
                                 );
@@ -599,7 +654,11 @@ export default function StoragePage() {
                 currentBreakdown={breakdown}
                 orgId={isAll ? null : scopeOrgId}
                 allWorkspaceIds={isAll ? enterableOrgIds : undefined}
+                projection={projection}
             />
+
+            {/* What to clean up first. One workspace at a time (the explorer lists one). */}
+            {!isAll && <LargestItems orgId={scopeOrgId} formatBytes={formatBytes} />}
 
             {/* Quick Stats */}
             <div>

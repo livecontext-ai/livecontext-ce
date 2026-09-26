@@ -63,8 +63,8 @@ Browser (:3000)
 |-----------|-------|-----------|---------|
 | `livecontext-db` | `pgvector/pgvector:pg16` | 5432 (internal) | Database with vector extension |
 | `livecontext-redis` | `redis:7-alpine` | 6379 (internal) | Cache, pub/sub, streaming |
-| `livecontext-minio` | `minio/minio` | 9000 (internal) | S3-compatible file storage |
-| `livecontext-minio-init` | `minio/mc` | - | Creates `workflow-files` bucket, then exits |
+| `livecontext-minio` | `pgsty/minio` | 9000 (internal) | S3-compatible file storage |
+| `livecontext-minio-init` | `pgsty/mc` | - | Creates `workflow-files` bucket, then exits |
 | `livecontext-bridge` | `ghcr.io/livecontext-ai/livecontext-ce-bridge` | 8093 (internal) | CLI adapters + MCP tools |
 | `livecontext-app` | `ghcr.io/livecontext-ai/livecontext-ce` | **8080** | All backend services in one JAR |
 | `livecontext-frontend` | `ghcr.io/livecontext-ai/livecontext-ce-frontend` | **3000** | Next.js app (embedded auth) |

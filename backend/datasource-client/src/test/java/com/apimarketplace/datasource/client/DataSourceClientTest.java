@@ -1,6 +1,14 @@
 package com.apimarketplace.datasource.client;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.apimarketplace.datasource.client.dto.DataSourceDto;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -135,6 +143,116 @@ class DataSourceClientTest {
             assertThat(entityCaptor.getValue().getHeaders().getFirst("X-User-ID")).isEqualTo(TENANT_ID);
             assertThat(entityCaptor.getValue().getHeaders().getFirst("X-Organization-ID"))
                     .isEqualTo(organizationId);
+        }
+    }
+
+    @Nested
+    @DisplayName("single-table lookups: log level by failure kind")
+    class LookupLogLevel {
+
+        private ListAppender<ILoggingEvent> logs;
+        private ch.qos.logback.classic.Logger clientLogger;
+
+        @BeforeEach
+        void capture() {
+            clientLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(DataSourceClient.class);
+            logs = new ListAppender<>();
+            logs.start();
+            clientLogger.addAppender(logs);
+        }
+
+        @org.junit.jupiter.api.AfterEach
+        void release() {
+            clientLogger.detachAppender(logs);
+            logs.stop();
+        }
+
+        private List<Level> levels() {
+            return logs.list.stream().map(ILoggingEvent::getLevel).toList();
+        }
+
+        private void respond(Exception failure) {
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(DataSourceDto.class)))
+                    .thenThrow(failure);
+        }
+
+        @Test
+        @DisplayName("findByIdAndTenantId: 404 is a normal not-found answer, logged at WARN, returns null")
+        void findByIdNotFoundIsWarn() {
+            respond(HttpClientErrorException.create(HttpStatus.NOT_FOUND, "Not Found", null, null, null));
+
+            assertThat(dataSourceClient.findByIdAndTenantId(42L, TENANT_ID, "org-1")).isNull();
+            assertThat(levels()).containsExactly(Level.WARN);
+        }
+
+        @Test
+        @DisplayName("getDataSource: 404 is logged at WARN, returns null")
+        void getDataSourceNotFoundIsWarn() {
+            respond(HttpClientErrorException.create(HttpStatus.NOT_FOUND, "Not Found", null, null, null));
+
+            assertThat(dataSourceClient.getDataSource(42L, TENANT_ID)).isNull();
+            assertThat(levels()).containsExactly(Level.WARN);
+        }
+
+        @Test
+        @DisplayName("a 5xx stays ERROR")
+        void serverErrorStaysError() {
+            respond(HttpServerErrorException.create(HttpStatus.INTERNAL_SERVER_ERROR, "boom", null, null, null));
+
+            assertThat(dataSourceClient.findByIdAndTenantId(42L, TENANT_ID, "org-1")).isNull();
+            assertThat(levels()).containsExactly(Level.ERROR);
+        }
+
+        @Test
+        @DisplayName("another 4xx (403) stays ERROR: it is not a not-found answer")
+        void forbiddenStaysError() {
+            respond(HttpClientErrorException.create(HttpStatus.FORBIDDEN, "Forbidden", null, null, null));
+
+            assertThat(dataSourceClient.getDataSource(42L, TENANT_ID, "org-1")).isNull();
+            assertThat(levels()).containsExactly(Level.ERROR);
+        }
+
+        @Test
+        @DisplayName("an I/O failure stays ERROR")
+        void ioFailureStaysError() {
+            respond(new ResourceAccessException("Connection refused"));
+
+            assertThat(dataSourceClient.getDataSource(42L, TENANT_ID)).isNull();
+            assertThat(levels()).containsExactly(Level.ERROR);
+        }
+    }
+
+    @Nested
+    @DisplayName("getDataSource")
+    class GetDataSource {
+
+        @Test
+        @DisplayName("the org-aware overload sets X-Organization-ID explicitly (no request to forward it from)")
+        void orgAwareOverloadSetsOrganizationHeader() {
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(DataSourceDto.class)))
+                    .thenReturn(ResponseEntity.ok(null));
+
+            dataSourceClient.getDataSource(7L, TENANT_ID, "org-1");
+
+            ArgumentCaptor<HttpEntity> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+            verify(restTemplate).exchange(eq(BASE_URL + "/api/internal/datasource/7/get"),
+                    eq(HttpMethod.GET), entityCaptor.capture(), eq(DataSourceDto.class));
+            assertThat(entityCaptor.getValue().getHeaders().getFirst("X-User-ID")).isEqualTo(TENANT_ID);
+            assertThat(entityCaptor.getValue().getHeaders().getFirst("X-Organization-ID")).isEqualTo("org-1");
+        }
+
+        @Test
+        @DisplayName("the 2-arg overload sends no org header off a request thread (unchanged)")
+        void legacyOverloadSendsNoOrganizationHeader() {
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(DataSourceDto.class)))
+                    .thenReturn(ResponseEntity.ok(null));
+
+            dataSourceClient.getDataSource(7L, TENANT_ID);
+
+            ArgumentCaptor<HttpEntity> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+            verify(restTemplate).exchange(eq(BASE_URL + "/api/internal/datasource/7/get"),
+                    eq(HttpMethod.GET), entityCaptor.capture(), eq(DataSourceDto.class));
+            assertThat(entityCaptor.getValue().getHeaders().containsKey("X-Organization-ID")).isFalse();
         }
     }
 }

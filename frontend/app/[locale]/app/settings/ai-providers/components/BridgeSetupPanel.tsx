@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { credentialService } from "@/lib/api/orchestrator/credential.service";
 import type { BridgeStatusResponse } from "@/lib/api/orchestrator/types";
 import { cn } from "@/lib/utils";
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 interface BridgeSetupPanelProps {
   cli: "claudeCode" | "codex" | "geminiCli" | "mistralVibe";
@@ -83,7 +84,7 @@ export default function BridgeSetupPanel({ cli, t }: BridgeSetupPanelProps) {
       {/* Header */}
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 bg-theme-tertiary rounded-lg flex items-center justify-center">
-          <img
+          <ServiceLogo
             src={CLI_ICON_MAP[cli]?.src}
             alt={CLI_ICON_MAP[cli]?.alt}
             className="w-5 h-5"

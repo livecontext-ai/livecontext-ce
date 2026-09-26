@@ -40,6 +40,13 @@ public class WorkflowBuilderSession {
     // Schedule configuration
     private Map<String, Object> schedule;
 
+    /**
+     * The canvas reading direction stored in the plan ({@code "horizontal"} or
+     * {@code "vertical"}), null when the plan carries none. Written back by
+     * {@link #buildPlanMap()} so an agent edit keeps the direction the user saved.
+     */
+    private String layoutDirection;
+
     // Plan components
     @Builder.Default
     private List<Map<String, Object>> triggers = new ArrayList<>();
@@ -93,8 +100,21 @@ public class WorkflowBuilderSession {
      */
     private boolean loadedWorkflowIsApplication;
 
-    /** Snapshot of the plan at load time, used for version archiving on save */
+    /**
+     * The stored plan as this session last read it (load) or wrote it (auto-save,
+     * draft creation). {@link WorkflowBuilderLoader#resyncWithStoredPlan} compares the
+     * live {@code workflows.plan} against it: a difference means someone else saved
+     * in between, and the session is rebuilt before it writes again.
+     */
     private Map<String, Object> loadedPlanSnapshot;
+
+    /**
+     * True once {@link #loadedPlanSnapshot} is kept up to date on every write of this
+     * session. A session stored before that rule held the plan as first LOADED, which
+     * its own auto-saves have since moved away from: comparing against it would report
+     * the session's own work as an outside save.
+     */
+    private boolean baselineTracksWrites;
 
     @Builder.Default
     private Map<String, Map<String, Object>> pendingLoopExits = new LinkedHashMap<>();
@@ -156,6 +176,44 @@ public class WorkflowBuilderSession {
 
     public void touch() {
         this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Replaces this session's workflow content with {@code source}'s, keeping the
+     * session's identity (id, tenant, org, conversation, loaded workflow id).
+     *
+     * <p>Used when the stored plan was saved by someone else (the builder canvas) after
+     * this session last read or wrote it: the session is rebuilt from what is stored so
+     * its next save does not put its older copy back over that save. The undo and redo
+     * stacks are cleared because they describe states that predate the external save,
+     * so an undo would restore the overwritten content.
+     */
+    public void adoptPlanContentFrom(WorkflowBuilderSession source) {
+        this.workflowName = source.workflowName;
+        this.workflowDescription = source.workflowDescription;
+        this.schedule = source.schedule;
+        this.layoutDirection = source.layoutDirection;
+        this.loadedWorkflowIsApplication = source.loadedWorkflowIsApplication;
+        this.triggers = source.triggers;
+        this.mcps = source.mcps;
+        this.cores = source.cores;
+        this.edges = source.edges;
+        this.interfaces = source.interfaces;
+        this.tables = source.tables;
+        this.notes = source.notes;
+        this.nodeSchemas = source.nodeSchemas;
+        this.nodeParentLoop = source.nodeParentLoop;
+        this.linkedInterfaces = source.linkedInterfaces;
+        this.missingCredentials = source.missingCredentials;
+        this.pendingLoopExits = source.pendingLoopExits;
+        this.webhookTokens = source.webhookTokens;
+        this.lastAddedNodeId = null;
+        this.actionHistory = new ArrayList<>();
+        this.redoStack = new ArrayList<>();
+        // The finders index the lists replaced above; rebuilt lazily on next use.
+        this.nodeFinder = null;
+        this.edgeManager = null;
+        touch();
     }
 
     public static String normalizeLabel(String label) {
@@ -270,7 +328,16 @@ public class WorkflowBuilderSession {
         SessionPlanBuilder planBuilder = new SessionPlanBuilder(
                 workflowName, workflowDescription, schedule,
                 triggers, mcps, cores, interfaces, tables, notes, getEdgeManager());
-        return planBuilder.buildPlanMap();
+        Map<String, Object> plan = planBuilder.buildPlanMap();
+        if (layoutDirection != null) {
+            plan.put("layoutDirection", layoutDirection);
+        }
+        return plan;
+    }
+
+    /** {@code value} when it is a direction the canvas knows, null otherwise. */
+    public static String validLayoutDirection(Object value) {
+        return "horizontal".equals(value) || "vertical".equals(value) ? (String) value : null;
     }
 
     @JsonIgnore

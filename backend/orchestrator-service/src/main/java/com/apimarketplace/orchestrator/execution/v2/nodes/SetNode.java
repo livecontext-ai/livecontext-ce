@@ -55,12 +55,15 @@ public class SetNode extends BaseNode {
     @SuppressWarnings("unchecked")
     public NodeExecutionResult execute(ExecutionContext context) {
         long startTime = System.currentTimeMillis();
+        // This execution's own value: a {{...}} keepOnlySet resolves below, never the shared field.
+        boolean keepOnlySet = this.keepOnlySet;
+        String keepOnlySetTemplate = deferredScalar("set", "keepOnlySet");
         logger.info("Set node executing: nodeId={}, assignments={}, keepOnlySet={}, inputExpr={}, itemId={}",
             nodeId, assignments.size(), keepOnlySet, inputExpression, context.itemId());
 
         // Build resolved_params early so every exit path can include it
         Map<String, Object> earlyResolvedParams = new LinkedHashMap<>();
-        earlyResolvedParams.put("keepOnlySet", keepOnlySet);
+        earlyResolvedParams.put("keepOnlySet", keepOnlySetTemplate != null ? keepOnlySetTemplate : keepOnlySet);
         // `input` on both exit paths: the early one carries the expression the
         // node was configured with, the success one the data it resolved to. Two
         // names for one setting is the drift this alignment work removes.
@@ -75,6 +78,12 @@ public class SetNode extends BaseNode {
         }
 
         try {
+            if (keepOnlySetTemplate != null) {
+                Core.SetConfig effective = withDeferredScalars("set",
+                    new Core.SetConfig(assignments, this.keepOnlySet, inputExpression), Core.SetConfig.class, context);
+                keepOnlySet = effective.keepOnlySet();
+                earlyResolvedParams.put("keepOnlySet", ReportedParams.valueFrom(keepOnlySetTemplate, keepOnlySet));
+            }
             // Resolve the (optional) input expression - when not provided, input data is empty
             Map<String, Object> inputData = new LinkedHashMap<>();
             if (inputExpression != null && !inputExpression.isBlank()) {
@@ -144,7 +153,8 @@ public class SetNode extends BaseNode {
             // Bounded: the upstream input is whatever the predecessor produced, with no
             // ceiling, and this map is persisted on the row of every item of every split.
             resolvedParams.put("input", ReportedParams.reportValue(inputData));
-            resolvedParams.put("keepOnlySet", keepOnlySet);
+            resolvedParams.put("keepOnlySet", keepOnlySetTemplate != null
+                ? ReportedParams.valueFrom(keepOnlySetTemplate, keepOnlySet) : keepOnlySet);
             // Each assignment under its own name, with the value the node assigned - unless
             // the author pulled it from a workspace variable, which can be declared secret
             // and whose scalar value must not be copied into a persisted, rendered map.
@@ -187,7 +197,9 @@ public class SetNode extends BaseNode {
         String stringValue = String.valueOf(value);
         try {
             return switch (type.toLowerCase()) {
-                case "string" -> stringValue;
+                // A map or list typed "string" is its JSON, never Java's {a=1} / [x, y], which
+                // reads as a template that did not resolve and no downstream parser accepts.
+                case "string" -> com.apimarketplace.orchestrator.services.TemplateEngine.asText(value);
                 case "number" -> {
                     if (value instanceof Number n) yield n;
                     if (stringValue.contains(".")) yield Double.parseDouble(stringValue);

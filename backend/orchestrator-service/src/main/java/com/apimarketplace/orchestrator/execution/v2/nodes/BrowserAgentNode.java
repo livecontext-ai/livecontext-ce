@@ -185,7 +185,12 @@ public class BrowserAgentNode extends BaseNode {
             nodeId, context.itemId());
 
         // Snapshot the resolved config for the inspector regardless of outcome.
-        Map<String, Object> resolvedParams = resolveParams(context);
+        Map<String, Object> resolvedParams;
+        try {
+            resolvedParams = resolveParams(context);
+        } catch (IllegalStateException e) {
+            return NodeExecutionResult.failure(nodeId, e.getMessage(), System.currentTimeMillis() - startTime);
+        }
 
         if (browserAgentModule == null) {
             // Cloud-linked CE path: relay the browse to the linked cloud (which owns
@@ -401,9 +406,12 @@ public class BrowserAgentNode extends BaseNode {
         }
         try {
             return new LinkedHashMap<>(templateAdapter.resolveTemplates(nodeConfig, context));
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
+            // Fail rather than browse with the raw config: the task and the start url went out
+            // as the literal {{...}} text, and the panel reported them as what the node ran with.
             logger.warn("Template resolution failed for browser agent {}: {}", nodeId, e.getMessage());
-            return new LinkedHashMap<>(nodeConfig);
+            throw new IllegalStateException(
+                "Could not resolve the browser agent's parameters: " + e.getMessage(), e);
         }
     }
 
@@ -446,11 +454,54 @@ public class BrowserAgentNode extends BaseNode {
         out.putIfAbsent("node_type", "BROWSER_AGENT");
         // Masked and bounded: this map is built from the plan entry, whose `llm` block
         // carries an api_key and whose `session` holds a saved browser session (cookies).
-        out.put("resolved_params", ReportedParams.forReport(resolvedParams));
+        out.put("resolved_params", ReportedParams.forReport(withTaskReportedWhole(resolvedParams, context)));
         out.put("item_index", context.itemIndex());
         out.put("itemIndex", context.itemIndex());
         out.put("item_id", context.itemId());
         return out;
+    }
+
+    /**
+     * The params with the TASK wrapped to be reported whole: it is the instruction the browser
+     * model received, and the generic 2,000-character budget cut it to its first 120. A
+     * workspace variable in it is withheld, from the configured template.
+     */
+    // Package-private for BrowserAgentNodeTest: execute() needs the live browser module.
+    Map<String, Object> withTaskReportedWhole(Map<String, Object> resolvedParams, ExecutionContext context) {
+        if (resolvedParams == null) {
+            return null;
+        }
+        if (!(resolvedParams.get("task") instanceof String task)) {
+            Map<String, Object> copy = new LinkedHashMap<>(resolvedParams);
+            withVariablesWithheld(copy);
+            return copy;
+        }
+        String reported = task;
+        if (nodeConfig.get("task") instanceof String template && ReportedParams.referencesAnyWorkspaceVariable(template)) {
+            try {
+                reported = resolveTemplateString(ReportedParams.maskWorkspaceReferences(template), context);
+            } catch (RuntimeException e) {
+                // Never fail the node from its report, never fall back to the clear value.
+                reported = ReportedParams.WITHHELD_WORKSPACE_VARIABLE;
+            }
+        }
+        Map<String, Object> copy = new LinkedHashMap<>(resolvedParams);
+        copy.put("task", new ReportedParams.ModelInput(reported));
+        withVariablesWithheld(copy);
+        return copy;
+    }
+
+    /**
+     * Every param other than the task: withheld (a scalar) or described by shape (a
+     * structure) when its configured template pulls a workspace variable, as other nodes do.
+     */
+    private void withVariablesWithheld(Map<String, Object> params) {
+        for (Map.Entry<String, Object> entry : params.entrySet()) {
+            Object configured = nodeConfig.get(entry.getKey());
+            if (!"task".equals(entry.getKey()) && configured != null) {
+                entry.setValue(ReportedParams.valueFromConfigured(configured, entry.getValue()));
+            }
+        }
     }
 
     private Map<String, Object> buildFailureOutput(ExecutionContext context,
@@ -467,7 +518,7 @@ public class BrowserAgentNode extends BaseNode {
         out.put("item_id", context.itemId());
         // Masked and bounded: this map is built from the plan entry, whose `llm` block
         // carries an api_key and whose `session` holds a saved browser session (cookies).
-        out.put("resolved_params", ReportedParams.forReport(resolvedParams));
+        out.put("resolved_params", ReportedParams.forReport(withTaskReportedWhole(resolvedParams, context)));
         if (errorMessage != null) {
             out.put("error", errorMessage);
         }

@@ -54,6 +54,11 @@ class CeDownloadControllerTest {
     private static final UUID PUB_ID = UUID.fromString("11111111-1111-4111-8111-111111111111");
     private static final Long CLOUD_USER_ID = 42L;
     private static final String CLOUD_ORG_ID = "33333333-3333-4333-8333-333333333333";
+    /**
+     * The ledger key of CLOUD_USER_ID's purchase of PUB_ID, spelled out literally (not through
+     * SourceIdBuilder) so a change of format fails here instead of being followed silently.
+     */
+    private static final String PURCHASE_KEY = "marketplace-purchase:" + CLOUD_ORG_ID + ":" + PUB_ID;
 
     @BeforeEach
     void setUp() {
@@ -184,7 +189,7 @@ class CeDownloadControllerTest {
             when(publicationRepository.findById(PUB_ID)).thenReturn(Optional.of(publication(17)));
             when(authClient.getDefaultOrganizationIdForUser(CLOUD_USER_ID.toString())).thenReturn(CLOUD_ORG_ID);
             when(receiptRepository.existsByOrganizationIdAndPublicationId(CLOUD_ORG_ID, PUB_ID)).thenReturn(false);
-            when(creditClient.consumeFixedCredits(CLOUD_USER_ID.toString(), PUB_ID.toString(), 17))
+            when(creditClient.consumeFixedCredits(CLOUD_USER_ID.toString(), PURCHASE_KEY, 17))
                     .thenReturn(Map.of("success", true));
 
             ResponseEntity<Map<String, Object>> response = controller.acquireWithAuth(PUB_ID, CLOUD_USER_ID);
@@ -192,7 +197,7 @@ class CeDownloadControllerTest {
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).containsEntry("creditsPaid", 17);
             assertThat(response.getBody()).containsEntry("planSnapshot", Map.of("triggers", "raw"));
-            verify(creditClient).consumeFixedCredits(CLOUD_USER_ID.toString(), PUB_ID.toString(), 17);
+            verify(creditClient).consumeFixedCredits(CLOUD_USER_ID.toString(), PURCHASE_KEY, 17);
 
             // Receipt is RESERVED (saveAndFlush) before charging, and kept on success.
             ArgumentCaptor<PublicationReceiptEntity> receipt =
@@ -203,6 +208,51 @@ class CeDownloadControllerTest {
             assertThat(receipt.getValue().getPublicationId()).isEqualTo(PUB_ID);
             assertThat(receipt.getValue().getCreditsPaid()).isEqualTo(17);
             assertThat(receipt.getValue().getOrganizationId()).isEqualTo(CLOUD_ORG_ID);
+        }
+
+        @Test
+        @DisplayName("regression: two different buyers of the same paid publication are charged on two different ledger keys, neither the bare publication id")
+        void twoBuyersOfOnePublicationAreChargedOnDistinctKeys() {
+            // Pre-fix both charges were keyed on the publication id, which the ledger holds unique
+            // across every user: the second buyer's debit hit idx_cl_source_id_unique, answered
+            // 500, and the purchase failed. Only the first buyer of a paid publication could pay.
+            Long otherUser = 77L;
+            String otherOrg = "44444444-4444-4444-8444-444444444444";
+            when(publicationRepository.findById(PUB_ID)).thenReturn(Optional.of(publication(17)));
+            when(authClient.getDefaultOrganizationIdForUser(CLOUD_USER_ID.toString())).thenReturn(CLOUD_ORG_ID);
+            when(authClient.getDefaultOrganizationIdForUser(otherUser.toString())).thenReturn(otherOrg);
+            when(creditClient.consumeFixedCredits(anyString(), anyString(), anyInt()))
+                    .thenReturn(Map.of("success", true));
+
+            assertThat(controller.acquireWithAuth(PUB_ID, CLOUD_USER_ID).getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(controller.acquireWithAuth(PUB_ID, otherUser).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+            ArgumentCaptor<String> keys = ArgumentCaptor.forClass(String.class);
+            verify(creditClient, org.mockito.Mockito.times(2)).consumeFixedCredits(anyString(), keys.capture(), anyInt());
+            assertThat(keys.getAllValues()).containsExactly(
+                    PURCHASE_KEY, "marketplace-purchase:" + otherOrg + ":" + PUB_ID);
+            assertThat(keys.getAllValues()).doesNotContain(PUB_ID.toString());
+        }
+
+        @Test
+        @DisplayName("regression: a retry after a charge whose outcome was lost re-sends the SAME ledger key, so the ledger answers it as a replay, not a second charge")
+        void retryAfterALostChargeResponseReusesTheSameKey() {
+            // The charge may have committed on the ledger while its response was lost (timeout):
+            // the receipt is rolled back and the buyer retries with a NEW receipt. The key must
+            // not follow the receipt, or the retry would be a second debit.
+            when(publicationRepository.findById(PUB_ID)).thenReturn(Optional.of(publication(17)));
+            when(authClient.getDefaultOrganizationIdForUser(CLOUD_USER_ID.toString())).thenReturn(CLOUD_ORG_ID);
+            when(receiptRepository.existsByOrganizationIdAndPublicationId(CLOUD_ORG_ID, PUB_ID)).thenReturn(false);
+            when(creditClient.consumeFixedCredits(CLOUD_USER_ID.toString(), PURCHASE_KEY, 17))
+                    .thenReturn(Map.of("success", false, "error", "Read timed out"),
+                            Map.of("success", true));
+
+            assertThat(controller.acquireWithAuth(PUB_ID, CLOUD_USER_ID).getStatusCode())
+                    .isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+            assertThat(controller.acquireWithAuth(PUB_ID, CLOUD_USER_ID).getStatusCode())
+                    .isEqualTo(HttpStatus.OK);
+
+            verify(creditClient, org.mockito.Mockito.times(2)).consumeFixedCredits(CLOUD_USER_ID.toString(), PURCHASE_KEY, 17);
         }
 
         @Test
@@ -252,7 +302,7 @@ class CeDownloadControllerTest {
             when(publicationRepository.findById(PUB_ID)).thenReturn(Optional.of(publication(17)));
             when(authClient.getDefaultOrganizationIdForUser(CLOUD_USER_ID.toString())).thenReturn(CLOUD_ORG_ID);
             when(receiptRepository.existsByOrganizationIdAndPublicationId(CLOUD_ORG_ID, PUB_ID)).thenReturn(false);
-            when(creditClient.consumeFixedCredits(CLOUD_USER_ID.toString(), PUB_ID.toString(), 17))
+            when(creditClient.consumeFixedCredits(CLOUD_USER_ID.toString(), PURCHASE_KEY, 17))
                     .thenReturn(Map.of("success", false, "error", "402 Insufficient credits"));
 
             ResponseEntity<Map<String, Object>> response = controller.acquireWithAuth(PUB_ID, CLOUD_USER_ID);
@@ -376,7 +426,7 @@ class CeDownloadControllerTest {
             when(publicationRepository.findById(PUB_ID)).thenReturn(Optional.of(publication(17)));
             when(authClient.getDefaultOrganizationIdForUser(CLOUD_USER_ID.toString())).thenReturn(CLOUD_ORG_ID);
             when(receiptRepository.existsByOrganizationIdAndPublicationId(CLOUD_ORG_ID, PUB_ID)).thenReturn(false);
-            when(creditClient.consumeFixedCredits(CLOUD_USER_ID.toString(), PUB_ID.toString(), 17))
+            when(creditClient.consumeFixedCredits(CLOUD_USER_ID.toString(), PURCHASE_KEY, 17))
                     .thenReturn(Map.of("success", false, "error", "Service timeout"));
 
             ResponseEntity<Map<String, Object>> response = controller.acquireWithAuth(PUB_ID, CLOUD_USER_ID);

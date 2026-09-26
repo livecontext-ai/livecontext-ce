@@ -186,7 +186,7 @@ export interface StreamError {
 }
 
 export interface ToolVisualization {
-  type: 'datasource' | 'table' | 'interface' | 'workflow' | 'workflow_run' | 'credential' | 'application' | 'web_search' | 'agent' | 'agent_browse';
+  type: 'datasource' | 'table' | 'interface' | 'workflow' | 'workflow_run' | 'present_application' | 'present_run' | 'present_table' | 'present_workflow' | 'present_interface' | 'present_agent' | 'present_file' | 'credential' | 'application' | 'web_search' | 'agent' | 'agent_browse';
   id: string;
   title?: string;
   /** For workflow_run: the run ID */

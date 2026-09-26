@@ -126,7 +126,7 @@ public class ConversationAgentService {
      * it has its own response surface and is not a browsable conversation page.
      */
     private static final java.util.Set<String> CONVERSATION_STREAMING_SYNC_SOURCES =
-            java.util.Set.of("SCHEDULE", "WEBHOOK", "TASK", "TASK_REVIEW");
+            java.util.Set.of("SCHEDULE", "WEBHOOK", "TASK", "TASK_REVIEW", "CHANNEL_REPLY");
 
     /**
      * CLI-bridge access enforcer. Required on the conversation bridge path because
@@ -200,8 +200,11 @@ public class ConversationAgentService {
         // Replaces the previous 3 independent UUID.randomUUID() mints (one per concern).
         String executionId = UUID.randomUUID().toString();
         try {
-            Double creditBudget = fetchCreditBudget(request.getUserId());
             AgentLoopContext context = contextBuilder.build(request, conversationId, streamId, executionId);
+            // Built first so the budget is asked about the model the turn really runs on
+            // (after any agent-config override): on the Free plan the monthly credits count
+            // only on a free-tier model (V512).
+            Double creditBudget = fetchCreditBudget(request.getUserId(), context.provider(), context.model());
             AgentExecutionRequestDto dto = buildExecutionRequest(context, streamId, conversationId, creditBudget,
                 request.getTaskId(), request.getSource(), executionId);
 
@@ -239,6 +242,22 @@ public class ConversationAgentService {
     // ========== Synchronous Execution (for webhook / schedule) ==========
 
     /**
+     * The id a sync run is recorded under: the caller's when it sent a well-formed UUID, else a
+     * new one. Anything else is ignored rather than trusted, since it becomes a primary key.
+     */
+    public static String callerExecutionIdOrNew(ChatRequest request) {
+        String given = request != null ? request.getExecutionId() : null;
+        if (given != null && !given.isBlank()) {
+            try {
+                return UUID.fromString(given.trim()).toString();
+            } catch (IllegalArgumentException ignored) {
+                // Not an id: a fresh one below.
+            }
+        }
+        return UUID.randomUUID().toString();
+    }
+
+    /**
      * Execute an agent conversation synchronously - no streaming, returns the result directly.
      * Same pipeline as executeRemote: context building, agent execution, persistence, observability.
      * Used by webhook and schedule via /api/internal/chat/sync.
@@ -256,8 +275,9 @@ public class ConversationAgentService {
         AgentExecutionRequestDto resolvedDto = null;
         // Mint at the OUTER boundary so failure paths (catch + 402 + null-response) can
         // surface the same executionId in fleet events. Single source of truth across
-        // success and failure branches.
-        String executionId = UUID.randomUUID().toString();
+        // success and failure branches. A caller that already locked a task to an id passes
+        // it, so the run is recorded under the id the task points at.
+        String executionId = callerExecutionIdOrNew(request);
 
         // Conversation streaming for sync (schedule/webhook/task) runs. Eligible sources get a
         // REAL stream id so the run can be registered as a reconnectable stream and stream live
@@ -274,8 +294,11 @@ public class ConversationAgentService {
         String emulatedStreamId = null;
 
         try {
-            Double creditBudget = fetchCreditBudget(request.getUserId());
             AgentLoopContext context = contextBuilder.build(request, conversationId, streamId, executionId);
+            // Built first so the budget is asked about the model the turn really runs on
+            // (after any agent-config override): on the Free plan the monthly credits count
+            // only on a free-tier model (V512).
+            Double creditBudget = fetchCreditBudget(request.getUserId(), context.provider(), context.model());
 
             AgentExecutionRequestDto dto = buildExecutionRequest(context, streamId, conversationId, creditBudget,
                 request.getTaskId(), request.getSource(), executionId);
@@ -369,7 +392,7 @@ public class ConversationAgentService {
                         "FAILED", "Agent execution failed: no response from agent transport",
                         context.userPrompt(),
                         "[Error] Agent execution failed: no response from agent transport",
-                        dto.provider(), dto.model());
+                        dto.provider(), dto.model(), executionId);
                 finalizeBridgeSyncStream(emulatedStreamId, conversationId, dto.model(), false, null,
                         "Agent execution failed: no response from agent transport");
                 return Map.of("success", false, "error", "Agent execution failed: no response", "conversationId", conversationId);
@@ -434,7 +457,11 @@ public class ConversationAgentService {
                         "FAILED", e.getMessage(),
                         request.getMessage(),
                         "[Error] " + (e.getMessage() != null ? e.getMessage() : "Agent execution failed"),
-                        providerForRecord, modelForRecord);
+                        providerForRecord, modelForRecord,
+                        // Deliberately NOT the run id: this exception can come after agent-service
+                        // already recorded the run (a read timeout), and a failure row under the same
+                        // id would overwrite it. A fresh id costs the task link on this path only.
+                        null);
             }
             if (emulatedStreamId != null) {
                 String modelForStream = resolvedDto != null ? resolvedDto.model() : request.getModel();
@@ -1504,10 +1531,10 @@ public class ConversationAgentService {
 
     // ========== Helpers ==========
 
-    private Double fetchCreditBudget(String userId) {
+    private Double fetchCreditBudget(String userId, String provider, String model) {
         if (userId == null || userId.isBlank()) return null;
         try {
-            java.math.BigDecimal balance = creditClient.fetchLlmSpendableBalance(userId);
+            java.math.BigDecimal balance = creditClient.fetchLlmSpendableBalance(userId, provider, model);
             return balance != null ? balance.doubleValue() : null;
         } catch (Exception e) {
             log.warn("Failed to fetch credit balance for remote budget, proceeding without: {}", e.getMessage());

@@ -4,7 +4,9 @@ public enum AuthProvider {
     GOOGLE("google"),
     GITHUB("github"),
     LOCAL("local"),
-    KEYCLOAK("keycloak");
+    KEYCLOAK("keycloak"),
+    /** A workspace SAML identity provider brokered by Keycloak (alias {@code org-<uuid>-saml}). */
+    SAML("saml");
 
     private final String provider;
 

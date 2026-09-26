@@ -391,6 +391,27 @@ class ProjectServiceTest {
         }
 
         @Test
+        @DisplayName("Assigns a teammate's table: the lookup carries the workspace org, so it is found")
+        void assignsTeammatesTableThroughOrgScopedLookup() {
+            ProjectEntity project = createProject(PROJECT_ID, "Test", OWNER_ID);
+            project.setOrganizationId("org-acme");
+            when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(project));
+            when(orgAccessService.canAccess("org-acme", OTHER_ID, "project", PROJECT_ID.toString(), "MEMBER"))
+                    .thenReturn(true);
+            when(orgAccessService.canWrite("org-acme", OTHER_ID, "project", PROJECT_ID.toString(), "MEMBER"))
+                    .thenReturn(true);
+            when(orgAccessService.canWrite("org-acme", OTHER_ID, "datasource", "7", "MEMBER")).thenReturn(true);
+            when(dataSourceClient.getDataSource(7L, OTHER_ID, "org-acme")).thenReturn(
+                    new com.apimarketplace.datasource.client.dto.DataSourceDto(7L, OWNER_ID, "Leads", null, null, null,
+                            null, null, null, null, null, null, null, null, null, "org-acme"));
+
+            boolean result = service.assignResource(PROJECT_ID, "table", "7", OTHER_ID, "org-acme", "MEMBER");
+
+            assertThat(result).isTrue();
+            verify(dataSourceClient).updateProjectId(7L, PROJECT_ID, OTHER_ID);
+        }
+
+        @Test
         @DisplayName("Returns false (400, no throw) when assigning to a genuinely not-found project")
         void shouldReturnFalseForGenuinelyNotFoundProjectOnAssign() {
             UUID agentId = UUID.randomUUID();

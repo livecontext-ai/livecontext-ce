@@ -23,6 +23,10 @@ const h = vi.hoisted(() => ({
   verdict: { prefersFreeTierModels: false, verdictReady: false },
   models: [] as Array<Record<string, unknown>>,
   selected: { provider: '', id: '' },
+  // False keeps the opening hook quiet, so the panel's OWN default effect is what the
+  // older specs measure; the restore-aware specs below set it.
+  selectionRestored: false,
+  defaultModel: 'opus',
   setSelectedModel: vi.fn(),
 }));
 
@@ -50,7 +54,7 @@ vi.mock('@/hooks/useModels', async (importOriginal) => {
     ...actual,
     useVisibleModels: () => ({
       models: h.models,
-      defaultModel: 'opus',
+      defaultModel: h.defaultModel,
       isLoading: false,
       error: null,
     }),
@@ -58,7 +62,7 @@ vi.mock('@/hooks/useModels', async (importOriginal) => {
 });
 vi.mock('@/contexts/UnifiedAppContext', () => ({
   useUnifiedAppSafe: () => ({
-    state: { selectedModel: h.selected },
+    state: { selectedModel: h.selected, selectionRestored: h.selectionRestored },
     setSelectedModel: h.setSelectedModel,
   }),
 }));
@@ -83,15 +87,20 @@ vi.mock('@/lib/sidePanelChat', () => ({ subscribeAiChatMessages: () => () => {} 
 vi.mock('@/lib/api/conversationApi', () => ({ conversationApi: {} }));
 
 import { ChatPanelContent } from '../ChatPanelContent';
+import { resetFreeTierOpeningForTests } from '@/lib/hooks/usePreferFreeTierModel';
 
 const OPUS = { id: 'opus', name: 'Opus', provider: 'anthropic', freeTierEnabled: false };
 const HAIKU = { id: 'haiku', name: 'Haiku', provider: 'anthropic', freeTierEnabled: true };
+const DEEPSEEK_FLASH = { id: 'deepseek-flash', name: 'DeepSeek Flash', provider: 'deepseek', freeTierEnabled: true };
 
 beforeEach(() => {
   h.verdict = { prefersFreeTierModels: false, verdictReady: false };
   h.models = [OPUS, HAIKU];
   h.selected = { provider: '', id: '' };
   h.setSelectedModel = vi.fn();
+  h.selectionRestored = false;
+  h.defaultModel = 'opus';
+  resetFreeTierOpeningForTests();
 });
 
 afterEach(cleanup);
@@ -133,5 +142,49 @@ describe('ChatPanelContent - the default it writes', () => {
     view.rerender(<ChatPanelContent />);
 
     expect(h.setSelectedModel).toHaveBeenCalledWith({ provider: 'anthropic', id: 'haiku' });
+  });
+
+  it('moves a RESTORED lower-ranked free model to the free #1 on a Free account', () => {
+    // The reported bug: the stored selection is browser-wide, so a Free account opened
+    // on the previous account's DeepSeek. It is valid and free-tier, so the panel's own
+    // "fix an invalid selection" effect never touched it.
+    h.models = [OPUS, HAIKU, DEEPSEEK_FLASH];
+    h.selected = { provider: 'deepseek', id: 'deepseek-flash' };
+    h.selectionRestored = true;
+    h.verdict = { prefersFreeTierModels: true, verdictReady: true };
+
+    render(<ChatPanelContent />);
+
+    expect(h.setSelectedModel).toHaveBeenCalledWith({ provider: 'anthropic', id: 'haiku' });
+  });
+
+  it('keeps a restored model on a paid account', () => {
+    h.models = [OPUS, HAIKU, DEEPSEEK_FLASH];
+    h.selected = { provider: 'deepseek', id: 'deepseek-flash' };
+    h.selectionRestored = true;
+    h.verdict = { prefersFreeTierModels: false, verdictReady: true };
+
+    render(<ChatPanelContent />);
+
+    expect(h.setSelectedModel).not.toHaveBeenCalled();
+  });
+
+  it('its own fallback default is the free #1, not a lower-ranked covered catalogue default', () => {
+    // The opening hook stays quiet here (restore not done), so this measures the panel
+    // effect alone: an invalid selection on a Free account falls back to the free #1
+    // even when the admin default is itself covered but ranked lower.
+    h.models = [OPUS, HAIKU, DEEPSEEK_FLASH];
+    h.defaultModel = 'deepseek-flash';
+    h.selected = { provider: 'gone', id: 'removed-model' };
+    h.verdict = { prefersFreeTierModels: true, verdictReady: true };
+
+    render(<ChatPanelContent />);
+
+    // The mocked selection never updates, so the effect may write more than once:
+    // what matters is that every write is the free #1, never the admin default.
+    expect(h.setSelectedModel).toHaveBeenCalled();
+    for (const [written] of h.setSelectedModel.mock.calls) {
+      expect(written).toEqual({ provider: 'anthropic', id: 'haiku' });
+    }
   });
 });

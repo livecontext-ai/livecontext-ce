@@ -72,7 +72,7 @@ class ResponseNodeTest {
             node.setTemplateAdapter(mockTemplateAdapter);
 
             when(mockTemplateAdapter.resolveTemplates(any(), any()))
-                .thenReturn(Map.of("__message__", "Hello World Resolved"));
+                .thenAnswer(TemplateResolutionStubs.every("Hello World Resolved"));
 
             NodeExecutionResult result = node.execute(context);
 

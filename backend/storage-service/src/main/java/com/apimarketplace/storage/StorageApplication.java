@@ -5,7 +5,12 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
 import org.springframework.context.annotation.ComponentScan;
 
-@SpringBootApplication
+// UserDetailsServiceAutoConfiguration excluded, as MonolithApplication does: SecurityConfig
+// permits every request and uses no form or basic login, so the in-memory user it creates is
+// never used, and its only effect was a generated password printed at INFO on every boot.
+@SpringBootApplication(exclude = {
+    org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration.class
+})
 @EnableDiscoveryClient
 @org.springframework.scheduling.annotation.EnableScheduling
 @ComponentScan(basePackages = {

@@ -317,6 +317,9 @@ public class ModelCatalogSyncService {
             String mid  = strOf(m.get("modelId"));
             if (prov == null || mid == null) continue;
             ModelConfigOverrideEntity row = existing.get(key(prov, mid));
+            if (row != null && row.isRetired()) {
+                continue; // the merge leaves it untouched (V533), so the preview must not count it
+            }
             if (row == null) {
                 added.add(m);
                 continue;
@@ -556,6 +559,7 @@ public class ModelCatalogSyncService {
 
             ModelConfigOverrideEntity row = existing.get(key(prov, mid));
             if (row == null) continue;  // new model - no baseline to compare.
+            if (row.isRetired()) continue; // never merged (V533), so never withheld either
 
             BigDecimal oldIn = row.getPriceInput();
             BigDecimal oldOut = row.getPriceOutput();
@@ -665,7 +669,9 @@ public class ModelCatalogSyncService {
      * permanent phantom "updated" on every row an admin has ever touched. The
      * honest caveat: because {@code MergeOptions.forSync} uses
      * {@code partialUpdate=false}, {@code applyFields} still nulls those on an
-     * UNPROTECTED row, and this method hides that. In practice the admin UI
+     * UNPROTECTED row, and this method hides that. {@code enabled} is the
+     * exception: a feed sync never writes it on update (a nulled enabled reads
+     * as ON, which auto-exposed models inserted disabled). In practice the admin UI
      * marks exactly these as {@code user_modified_fields} when it writes them,
      * which is what actually protects them - not this exclusion list.
      *

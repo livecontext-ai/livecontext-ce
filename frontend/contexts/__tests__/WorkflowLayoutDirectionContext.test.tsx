@@ -12,6 +12,7 @@ import React from 'react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import {
+  WorkflowCanvasDirectionScope,
   WorkflowLayoutDirectionProvider,
   useWorkflowLayoutDirection,
   useWorkflowLayoutDirectionSafe,
@@ -151,6 +152,94 @@ describe('WorkflowLayoutDirectionContext', () => {
     // And its setter is an inert no-op rather than an exception.
     expect(() => act(() => screen.getByText('set').click())).not.toThrow();
     expect(screen.getByTestId('safe-direction')).toHaveTextContent('horizontal');
+  });
+
+  describe('WorkflowCanvasDirectionScope', () => {
+    /** One canvas: shows its direction and flips it the way the loader or the toggle does. */
+    function Canvas({ name }: { name: string }) {
+      const { direction, defaultDirection, isPinned, setWorkflowDirection } = useWorkflowLayoutDirection();
+      return (
+        <div>
+          <span data-testid={`${name}-direction`}>{direction}</span>
+          <span data-testid={`${name}-default`}>{defaultDirection}</span>
+          <span data-testid={`${name}-pinned`}>{String(isPinned)}</span>
+          <button onClick={() => setWorkflowDirection('vertical')}>{`${name}-vertical`}</button>
+          <button onClick={() => setWorkflowDirection('horizontal')}>{`${name}-horizontal`}</button>
+        </div>
+      );
+    }
+
+    function TwoCanvases() {
+      return (
+        <WorkflowLayoutDirectionProvider>
+          <WorkflowCanvasDirectionScope>
+            <Canvas name="parent" />
+          </WorkflowCanvasDirectionScope>
+          <WorkflowCanvasDirectionScope>
+            <Canvas name="child" />
+          </WorkflowCanvasDirectionScope>
+          <Probe />
+        </WorkflowLayoutDirectionProvider>
+      );
+    }
+
+    it('regression: a sub-workflow opened beside its parent does not re-orient the parent', () => {
+      // The defect: ONE app-wide direction. Opening a horizontal sub-workflow in the side
+      // panel flipped the vertical parent behind it, whose next Save stamped the wrong
+      // direction into its plan for good.
+      render(<TwoCanvases />);
+      act(() => screen.getByText('parent-vertical').click());
+      act(() => screen.getByText('child-horizontal').click());
+
+      expect(screen.getByTestId('parent-direction')).toHaveTextContent('vertical');
+      expect(screen.getByTestId('child-direction')).toHaveTextContent('horizontal');
+    });
+
+    it('never writes the account default from a canvas', () => {
+      render(<TwoCanvases />);
+      act(() => screen.getByText('parent-vertical').click());
+
+      expect(screen.getByTestId('direction')).toHaveTextContent('horizontal');
+      expect(screen.getByTestId('parent-default')).toHaveTextContent('horizontal');
+      expect(window.localStorage.getItem(KEY('personal'))).toBeNull();
+    });
+
+    it('follows the account default until the canvas has a direction of its own', () => {
+      render(<TwoCanvases />);
+      act(() => screen.getByText('parent-horizontal').click());
+      // Settings changes the default: the canvas that resolved its own direction keeps it,
+      // the one still waiting for its plan follows the new default.
+      act(() => screen.getByText('vertical').click());
+
+      expect(screen.getByTestId('parent-direction')).toHaveTextContent('horizontal');
+      expect(screen.getByTestId('child-direction')).toHaveTextContent('vertical');
+      expect(screen.getByTestId('child-default')).toHaveTextContent('vertical');
+    });
+
+    it('stays on the pin of a pinned surface and ignores writes (marketplace preview)', () => {
+      render(
+        <WorkflowLayoutDirectionProvider forcedDirection="vertical">
+          <WorkflowCanvasDirectionScope>
+            <Canvas name="preview" />
+          </WorkflowCanvasDirectionScope>
+        </WorkflowLayoutDirectionProvider>,
+      );
+      act(() => screen.getByText('preview-horizontal').click());
+
+      expect(screen.getByTestId('preview-direction')).toHaveTextContent('vertical');
+      expect(screen.getByTestId('preview-pinned')).toHaveTextContent('true');
+    });
+
+    it('works without a provider, starting from the historical default', () => {
+      render(
+        <WorkflowCanvasDirectionScope>
+          <Canvas name="bare" />
+        </WorkflowCanvasDirectionScope>,
+      );
+      expect(screen.getByTestId('bare-direction')).toHaveTextContent('horizontal');
+      act(() => screen.getByText('bare-vertical').click());
+      expect(screen.getByTestId('bare-direction')).toHaveTextContent('vertical');
+    });
   });
 
   describe('isWorkflowLayoutDirection', () => {

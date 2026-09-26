@@ -88,6 +88,8 @@ public class SortNode extends BaseNode {
             Object resolvedValue = resolved.get("__input__");
 
             List<Map<String, Object>> items = convertToMapList(resolvedValue);
+            // A failure from here on reports the input the node RESOLVED, not its {{...}} text.
+            earlyInputData.put("input", ReportedParams.reportValue(items != null ? items : List.of()));
 
             if (items == null || items.isEmpty()) {
                 logger.info("🔀 Sort node: no items to sort, returning empty list. nodeId={}", nodeId);

@@ -308,6 +308,149 @@ class SubWorkflowNodeTest {
         }
 
         @Test
+        @DisplayName("regression: an inputMapping that fails to resolve fails the node instead of sending the PARENT's trigger data")
+        void inputMappingFailureDoesNotFireWithParentData() {
+            Core.SubWorkflowConfig config = new Core.SubWorkflowConfig(
+                WORKFLOW_ID, "{{json(core:x.output.text)}}", 60, 5);
+            SubWorkflowNode node = createNode(config);
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            when(adapter.resolveTemplates(anyMap(), any())).thenAnswer(inv -> {
+                Map<String, Object> in = inv.getArgument(0);
+                if (String.valueOf(in.values()).contains("json(")) {
+                    throw new IllegalArgumentException("json() could not parse");
+                }
+                return new HashMap<>(in);
+            });
+            node.setTemplateAdapter(adapter);
+
+            WorkflowEntity entity = createMockEntity();
+            when(workflowRepository.findById(UUID.fromString(WORKFLOW_ID))).thenReturn(Optional.of(entity));
+            stubActiveRun(createMockRun(RunStatus.WAITING_TRIGGER));
+
+            NodeExecutionResult execResult = node.execute(context);
+
+            assertFalse(execResult.isSuccess());
+            assertTrue(execResult.errorMessage().orElse("").contains("json() could not parse"),
+                execResult.errorMessage().orElse(""));
+            verify(reusableTriggerService, never()).executeTriggerInternal(any(), anyString(), any(), any(),
+                org.mockito.ArgumentMatchers.anyBoolean(), anyMap());
+        }
+
+        @Test
+        @DisplayName("reports what the child received beside the mapping expression")
+        @SuppressWarnings("unchecked")
+        void reportsResolvedInputMapping() {
+            Core.SubWorkflowConfig config = new Core.SubWorkflowConfig(
+                WORKFLOW_ID, "{{core:build.output.payload}}", 60, 5);
+            SubWorkflowNode node = createNode(config);
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            when(adapter.resolveTemplates(anyMap(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(
+                    Map.of("{{core:build.output.payload}}", Map.of("order", 42))));
+            node.setTemplateAdapter(adapter);
+
+            WorkflowEntity entity = createMockEntity();
+            when(workflowRepository.findById(UUID.fromString(WORKFLOW_ID))).thenReturn(Optional.of(entity));
+            WorkflowRunEntity run = createMockRun(RunStatus.WAITING_TRIGGER);
+            stubActiveRun(run);
+            when(reusableTriggerService.executeTriggerInternal(
+                eq(run), anyString(), any(), any(), eq(true), anyMap())).thenReturn(createSuccessTriggerResult(1));
+            when(workflowStepDataRepository.findCompletedOutputRefsByRunIdAndEpoch(RUN_ID_PUBLIC, 1))
+                .thenReturn(List.of());
+
+            NodeExecutionResult execResult = node.execute(context);
+
+            assertTrue(execResult.isSuccess(), String.valueOf(execResult.errorMessage()));
+            Map<String, Object> params = (Map<String, Object>) execResult.output().get("resolved_params");
+            assertEquals("{{core:build.output.payload}}", params.get("inputMapping"));
+            assertEquals(Map.of("order", 42), params.get("inputMappingResolved"));
+        }
+
+        @Test
+        @DisplayName("regression: a {{...}} timeoutSeconds is resolved and reported; it used to drop the whole subWorkflow config")
+        @SuppressWarnings("unchecked")
+        void templatedTimeoutIsResolved() {
+            Core.SubWorkflowConfig config = new Core.SubWorkflowConfig(WORKFLOW_ID, null, 300, 5);
+            SubWorkflowNode node = createNode(config);
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            when(adapter.resolveTemplates(anyMap(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:x.output.secs}}", "42")));
+            node.setTemplateAdapter(adapter);
+            node.setDeferredScalars(Map.of("subWorkflow", Map.of("timeoutSeconds", "{{core:x.output.secs}}")));
+
+            WorkflowEntity entity = createMockEntity();
+            when(workflowRepository.findById(UUID.fromString(WORKFLOW_ID))).thenReturn(Optional.of(entity));
+            WorkflowRunEntity run = createMockRun(RunStatus.WAITING_TRIGGER);
+            stubActiveRun(run);
+            when(reusableTriggerService.executeTriggerInternal(
+                eq(run), anyString(), any(), any(), eq(true), anyMap())).thenReturn(createSuccessTriggerResult(1));
+            when(workflowStepDataRepository.findCompletedOutputRefsByRunIdAndEpoch(RUN_ID_PUBLIC, 1))
+                .thenReturn(List.of());
+
+            NodeExecutionResult execResult = node.execute(context);
+
+            assertTrue(execResult.isSuccess(), String.valueOf(execResult.errorMessage()));
+            Map<String, Object> params = (Map<String, Object>) execResult.output().get("resolved_params");
+            assertEquals(42, params.get("timeoutSeconds"));
+        }
+
+        @Test
+        @DisplayName("a {{...}} maxDepth resolving to a non-number fails before firing, naming the config")
+        void templatedMaxDepthNotANumberFails() {
+            Core.SubWorkflowConfig config = new Core.SubWorkflowConfig(WORKFLOW_ID, null, 300, 5);
+            SubWorkflowNode node = createNode(config);
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            when(adapter.resolveTemplates(anyMap(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:x.output.depth}}", "deep")));
+            node.setTemplateAdapter(adapter);
+            node.setDeferredScalars(Map.of("subWorkflow", Map.of("maxDepth", "{{core:x.output.depth}}")));
+
+            NodeExecutionResult execResult = node.execute(context);
+
+            assertFalse(execResult.isSuccess());
+            assertTrue(execResult.errorMessage().orElse("").contains("subWorkflow"), execResult.errorMessage().orElse(""));
+            verify(reusableTriggerService, never()).executeTriggerInternal(any(), anyString(), any(), any(),
+                org.mockito.ArgumentMatchers.anyBoolean(), anyMap());
+        }
+
+        @Test
+        @DisplayName("a {{$vars.payload}} inputMapping is handed to the child but its values are withheld in Params")
+        @SuppressWarnings("unchecked")
+        void workspaceVariableInputMappingIsDescribedNotPrinted() {
+            Core.SubWorkflowConfig config = new Core.SubWorkflowConfig(WORKFLOW_ID, "{{$vars.payload}}", 60, 5);
+            SubWorkflowNode node = createNode(config);
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            when(adapter.resolveTemplates(anyMap(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(
+                    Map.of("{{$vars.payload}}", Map.of("apiToken", "s3cr3t-value"))));
+            node.setTemplateAdapter(adapter);
+
+            WorkflowEntity entity = createMockEntity();
+            when(workflowRepository.findById(UUID.fromString(WORKFLOW_ID))).thenReturn(Optional.of(entity));
+            WorkflowRunEntity run = createMockRun(RunStatus.WAITING_TRIGGER);
+            stubActiveRun(run);
+            when(reusableTriggerService.executeTriggerInternal(
+                eq(run), anyString(), any(), any(), eq(true), anyMap())).thenReturn(createSuccessTriggerResult(1));
+            when(workflowStepDataRepository.findCompletedOutputRefsByRunIdAndEpoch(RUN_ID_PUBLIC, 1))
+                .thenReturn(List.of());
+
+            NodeExecutionResult execResult = node.execute(context);
+
+            assertTrue(execResult.isSuccess(), String.valueOf(execResult.errorMessage()));
+            verify(reusableTriggerService).executeTriggerInternal(eq(run), anyString(), any(),
+                argThat(input -> input instanceof Map<?, ?> m && "s3cr3t-value".equals(m.get("apiToken"))),
+                eq(true), anyMap());
+            Map<String, Object> params = (Map<String, Object>) execResult.output().get("resolved_params");
+            assertFalse(String.valueOf(params.get("inputMappingResolved")).contains("s3cr3t-value"),
+                "described by shape, never printed: " + params.get("inputMappingResolved"));
+        }
+
+        @Test
         @DisplayName("Should include mandatory metadata in output")
         void shouldIncludeMandatoryMetadata() {
             Core.SubWorkflowConfig config = new Core.SubWorkflowConfig(WORKFLOW_ID, null, 60, 5);

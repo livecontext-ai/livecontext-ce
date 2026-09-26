@@ -193,6 +193,7 @@ describe('NodeConfigurationRule', () => {
       'approval_delegation_missing_credential',
       'approval_delegation_missing_chat_id',
       'approval_delegation_multi_approvals',
+      'approval_delegation_allowlist_unenforceable',
     ];
 
     it('emits NO delegation issue when delegation is not configured', () => {
@@ -232,16 +233,63 @@ describe('NodeConfigurationRule', () => {
       ).toHaveLength(0);
     });
 
-    it('warns (not errors) when delegation is enabled with a blank chat ID', () => {
+    it.each(['telegram', 'slack', 'discord', 'whatsapp', 'teams'])(
+      'REGRESSION (missing-chat-id rule removed): a blank chat ID on %s is valid, the connected destination is used',
+      (channel) => {
+        const ctx = buildContext(
+          [makeDelegatedApprovalNode({ approvalDelegation: { channel, chatId: '   ' } })],
+          [],
+        );
+        const result = rule.validate(ctx);
+
+        expect(
+          result.issues.filter((i) => delegationRules.includes(i.context?.rule as string)),
+        ).toHaveLength(0);
+      },
+    );
+
+    it('warns on Teams with allowed user IDs: a link does not say who opened it', () => {
       const ctx = buildContext(
-        [makeDelegatedApprovalNode({ approvalDelegation: { channel: 'telegram', credentialId: 42, chatId: '   ' } })],
+        [makeDelegatedApprovalNode({ approvalDelegation: { channel: 'teams', allowedUserIds: ['u1'] } })],
         [],
       );
       const result = rule.validate(ctx);
 
-      const issues = result.issues.filter((i) => i.context?.rule === 'approval_delegation_missing_chat_id');
+      const issues = result.issues.filter((i) => i.context?.rule === 'approval_delegation_allowlist_unenforceable');
       expect(issues).toHaveLength(1);
       expect(issues[0].severity).toBe('warning');
+    });
+
+    it.each(['#ops', '@alice'])('warns on a Slack destination given by name (%s): a press comes back with the ID', (named) => {
+      const ctx = buildContext(
+        [makeDelegatedApprovalNode({ approvalDelegation: { channel: 'slack', chatId: named } })],
+        [],
+      );
+      const result = rule.validate(ctx);
+
+      expect(result.issues.filter((i) => i.context?.rule === 'approval_delegation_chat_name')).toHaveLength(1);
+    });
+
+    it('does not warn on a Slack channel ID', () => {
+      const ctx = buildContext(
+        [makeDelegatedApprovalNode({ approvalDelegation: { channel: 'slack', chatId: 'C0123' } })],
+        [],
+      );
+
+      expect(rule.validate(ctx).issues.filter((i) => i.context?.rule === 'approval_delegation_chat_name'))
+        .toHaveLength(0);
+    });
+
+    it('does NOT warn about allowed user IDs on a service that identifies the presser', () => {
+      const ctx = buildContext(
+        [makeDelegatedApprovalNode({ approvalDelegation: { channel: 'slack', allowedUserIds: ['U1'] } })],
+        [],
+      );
+      const result = rule.validate(ctx);
+
+      expect(
+        result.issues.filter((i) => i.context?.rule === 'approval_delegation_allowlist_unenforceable'),
+      ).toHaveLength(0);
     });
 
     it('warns when delegation is enabled and requiredApprovals > 1 (channel counts as ONE approver decision)', () => {
@@ -293,15 +341,16 @@ describe('NodeConfigurationRule', () => {
       ).toHaveLength(0);
     });
 
-    it('emits ONLY the missing-chat-id warning for a bare enabled delegation (no credential warning: credential is optional)', () => {
+    it('emits nothing for a bare enabled delegation: credential and chat are both optional', () => {
       const ctx = buildContext(
         [makeDelegatedApprovalNode({ approvalDelegation: { channel: 'telegram' } })],
         [],
       );
       const result = rule.validate(ctx);
 
-      expect(result.issues.filter((i) => i.context?.rule === 'approval_delegation_missing_credential')).toHaveLength(0);
-      expect(result.issues.filter((i) => i.context?.rule === 'approval_delegation_missing_chat_id')).toHaveLength(1);
+      expect(
+        result.issues.filter((i) => delegationRules.includes(i.context?.rule as string)),
+      ).toHaveLength(0);
       expect(result.hasErrors).toBe(false);
     });
   });
@@ -616,6 +665,32 @@ describe('NodeConfigurationRule', () => {
         (i) => i.context?.rule === 'guardrail_missing_input' || i.context?.rule === 'guardrail_missing_rules'
       );
       expect(guardIssues).toHaveLength(2);
+    });
+
+    it('flags a typed guardrail rule whose config is empty, and accepts a description-only (model-judged) rule', () => {
+      // The backend now checks keyword, regex, length, custom and competitor rules with their
+      // config and fails the node when it is empty; the builder says so before the run.
+      const guardrailNode = {
+        id: 'guardrail-test-2',
+        type: 'guardrailNode',
+        position: { x: 0, y: 0 },
+        data: {
+          id: 'guardrail-test-2',
+          label: 'My Guard',
+          kind: 'guardrail' as const,
+          paramExpressions: { guardrailParams: '{{trigger:hook.output.text}}' },
+          guardrailRules: [
+            { id: 'r1', type: 'keyword_filter', action: 'block', config: { keywordsExpression: '', mode: 'block' } },
+            { id: 'r2', type: 'regex_pattern', action: 'block', config: { pattern: '^ok$' } },
+            { id: 'r3', type: 'keyword_filter', action: 'flag', config: { description: 'Block spam messages' } },
+          ],
+        },
+      } as any;
+      const ctx = buildContext([guardrailNode], []);
+      const result = rule.validate(ctx);
+      const configIssues = result.issues.filter((i) => i.context?.rule === 'guardrail_rule_missing_config');
+      expect(configIssues).toHaveLength(1);
+      expect(configIssues[0].message).toContain('Guardrail rule 1');
     });
 
     it('should error when classify is missing prompt and has fewer than 2 categories', () => {

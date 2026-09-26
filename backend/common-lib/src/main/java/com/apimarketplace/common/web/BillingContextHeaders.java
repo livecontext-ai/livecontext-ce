@@ -57,7 +57,10 @@ public final class BillingContextHeaders {
             // analytics fields; the shape check there rejects malformed values but has
             // no way to tell a forged well-formed id from a real one.
             "X-Lc-Workflow-Id",
-            "X-Lc-Node-Id"
+            "X-Lc-Node-Id",
+            // How the result is shaped: marks a workflow STEP's output, which lifts the
+            // catalog's 4 KB text clip to 1 MB. Only StepNode / FindNode may say so.
+            "X-Lc-Step-Output"
     );
 
     /**

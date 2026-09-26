@@ -413,6 +413,111 @@ class AgentRemoteExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("regression V515: a DISABLED model runs on its replacement, the replacement's execution link routes it, and it is billed as the replacement")
+    void disabledModelRunsOnReplacementThroughTheReplacementsLink() {
+        // anthropic/claude-opus-4-8 is disabled with replacement anthropic/claude-opus-4-9,
+        // and 4-9 is linked to the claude-code CLI. Pre-fix the disabled pair was sent as-is:
+        // no link matched it, so it went to the Anthropic API on a model the admin had
+        // turned off. Real resolver + real router: only the stores are mocked.
+        com.apimarketplace.agent.repository.ModelConfigOverrideRepository repo =
+            org.mockito.Mockito.mock(com.apimarketplace.agent.repository.ModelConfigOverrideRepository.class);
+        com.apimarketplace.agent.domain.ModelConfigOverrideEntity row = new com.apimarketplace.agent.domain.ModelConfigOverrideEntity();
+        row.setProvider("anthropic");
+        row.setModelId("claude-opus-4-8");
+        row.setEnabled(false);
+        row.setReplacementProvider("anthropic");
+        row.setReplacementModel("claude-opus-4-9");
+        when(repo.findDisabledOrDeprecated()).thenReturn(List.of(row));
+        when(modelCatalogService.isModelAvailable("anthropic", "claude-opus-4-9")).thenReturn(true);
+        com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+            new com.apimarketplace.agent.service.ModelReplacementResolver(repo, modelCatalogService);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "modelReplacementResolver", resolver);
+
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("anthropic"),
+                org.mockito.ArgumentMatchers.eq("claude-opus-4-9"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("claude-code", "claude-opus-4-9")));
+        wireExecutionLinks(linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+        ArgumentCaptor<AgentExecutionRequestDto> dispatched = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
+        when(bridgeDispatcher.dispatchRaw(dispatched.capture(), any(), anyBoolean()))
+            .thenReturn(new AgentExecutionResponseDto(
+                true, "done", "done", List.of(), 1, Map.of("totalTokens", 1),
+                null, 10, "claude-code", "claude-opus-4-9", List.of(),
+                "COMPLETED", Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
+
+        AgentExecutionRequestDto dto = request(Map.of(), UUID.randomUUID().toString(), "CHAT")
+            .withExecutionTarget("anthropic", "claude-opus-4-8");
+        AgentExecutionResponseDto response = service.executeAgent(dto, "USER");
+
+        // Executed on the replacement's link target, as a ROUTED (not chosen) bridge run.
+        assertThat(dispatched.getValue().provider()).isEqualTo("claude-code");
+        assertThat(dispatched.getValue().model()).isEqualTo("claude-opus-4-9");
+        verify(bridgeDispatcher).dispatchRaw(any(), any(), org.mockito.ArgumentMatchers.eq(true));
+        verify(linkService, never()).resolve(org.mockito.ArgumentMatchers.eq("anthropic"),
+            org.mockito.ArgumentMatchers.eq("claude-opus-4-8"), org.mockito.ArgumentMatchers.any());
+        // Billed as the replacement, never as the disabled model.
+        assertThat(response.provider()).isEqualTo("anthropic");
+        assertThat(response.model()).isEqualTo("claude-opus-4-9");
+        // The swap rides on the metrics for the observability producer (bridge path).
+        assertThat(response.metrics())
+            .containsEntry(AgentRemoteExecutionService.MODEL_REPLACED_METRIC, true)
+            .containsEntry(AgentRemoteExecutionService.REPLACED_MODEL_METRIC, "claude-opus-4-8");
+    }
+
+    @Test
+    @DisplayName("replacement metrics: unknown (resolver not wired) stamps nothing, no swap stamps false, a swap names the disabled model")
+    void replacementMetrics() {
+        AgentExecutionResponseDto base = new AgentExecutionResponseDto(
+            true, "done", "done", List.of(), 1, Map.of("totalTokens", 1),
+            null, 10, "deepseek", "deepseek-chat", List.of(),
+            "COMPLETED", Map.of("keyRoute", "PLATFORM"), List.of(), List.of(), List.of(), List.of(), List.of(), null);
+
+        assertThat(AgentRemoteExecutionService.withReplacementMetrics(base, null).metrics())
+            .doesNotContainKeys(AgentRemoteExecutionService.MODEL_REPLACED_METRIC,
+                AgentRemoteExecutionService.REPLACED_MODEL_METRIC);
+
+        assertThat(AgentRemoteExecutionService.withReplacementMetrics(base, java.util.Optional.empty()).metrics())
+            .containsEntry(AgentRemoteExecutionService.MODEL_REPLACED_METRIC, false)
+            .doesNotContainKey(AgentRemoteExecutionService.REPLACED_MODEL_METRIC)
+            .containsEntry("keyRoute", "PLATFORM");
+
+        assertThat(AgentRemoteExecutionService.withReplacementMetrics(base, java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelReplacementResolver.Substitution(
+                    "deepseek", "deepseek-chat", "deepseek", "deepseek-old", true))).metrics())
+            .containsEntry(AgentRemoteExecutionService.MODEL_REPLACED_METRIC, true)
+            .containsEntry(AgentRemoteExecutionService.REPLACED_MODEL_METRIC, "deepseek-old")
+            .containsEntry("keyRoute", "PLATFORM");
+
+        assertThat(AgentRemoteExecutionService.withReplacementMetrics(null, java.util.Optional.empty())).isNull();
+    }
+
+    @Test
+    @DisplayName("V515: provider normalisation runs on the REPLACEMENT, so a CLI replacement stored under an API slug still reaches the bridge access check")
+    void providerNormalisationRunsOnTheReplacement() {
+        com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+            org.mockito.Mockito.mock(com.apimarketplace.agent.service.ModelReplacementResolver.class);
+        when(resolver.substituteIfDisabled("deepseek", "deepseek-old")).thenReturn(java.util.Optional.of(
+            new com.apimarketplace.agent.service.ModelReplacementResolver.Substitution(
+                "deepseek", "deepseek-chat", "deepseek", "deepseek-old", true)));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "modelReplacementResolver", resolver);
+        when(agentLoopService.execute(any(AgentLoopContext.class), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        AgentExecutionResponseDto response = service.executeAgent(request(Map.of(), UUID.randomUUID().toString())
+            .withExecutionTarget("deepseek", "deepseek-old"), "USER");
+
+        // Direct-loop path: the swap rides on the metrics too.
+        assertThat(response.metrics())
+            .containsEntry(AgentRemoteExecutionService.MODEL_REPLACED_METRIC, true)
+            .containsEntry(AgentRemoteExecutionService.REPLACED_MODEL_METRIC, "deepseek-old");
+        verify(modelCatalogService).resolveProvider("deepseek", "deepseek-chat");
+        verify(modelCatalogService, never()).resolveProvider("deepseek", "deepseek-old");
+    }
+
+    @Test
     @DisplayName("A link to a CLI BRIDGE is dropped when the bridge transport is unavailable: the BILLED model runs on its own provider (no failed bridge dispatch)")
     void bridgeLinkDroppedWhenBridgeUnavailable() {
         ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);

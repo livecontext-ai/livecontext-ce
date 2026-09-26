@@ -4,7 +4,7 @@ import com.apimarketplace.auth.credential.domain.PlatformCredentialModels.AuthTy
 import com.apimarketplace.auth.credential.domain.PlatformCredentialModels.CreatePlatformCredentialRequest;
 import com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential;
 import com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredentialResponse;
-import com.apimarketplace.auth.credential.service.CredentialService;
+import com.apimarketplace.auth.credential.service.ByokDeleteService;
 import com.apimarketplace.auth.credential.service.PlatformCredentialPricingService;
 import com.apimarketplace.auth.credential.service.PlatformCredentialService;
 import com.apimarketplace.auth.credential.service.TooManyByokAppsException;
@@ -23,6 +23,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -69,7 +70,7 @@ class PlatformCredentialsControllerMyEndpointsTest {
     private PlatformCredentialPricingService pricingService;
 
     @Mock
-    private CredentialService credentialService;
+    private ByokDeleteService byokDeleteService;
 
     @Mock
     private TenantResolver tenantResolver;
@@ -287,26 +288,27 @@ class PlatformCredentialsControllerMyEndpointsTest {
     @Test
     @DisplayName("GET /my/{name}/delete-impact returns 401 when X-Authenticated is missing")
     void deleteImpact_unauthenticatedReturns401() {
-        ResponseEntity<?> response = controller.deleteImpact(null, TENANT, "gmail");
+        ResponseEntity<?> response = controller.deleteImpact(httpRequest, null, TENANT, "gmail");
         assertThat(response.getStatusCode().value()).isEqualTo(401);
-        verifyNoInteractions(credentialService);
+        verifyNoInteractions(byokDeleteService);
     }
 
     @Test
     @DisplayName("GET /my/{name}/delete-impact returns 400 when X-User-ID is blank")
     void deleteImpact_blankTenantReturns400() {
-        ResponseEntity<?> response = controller.deleteImpact("true", "", "gmail");
+        ResponseEntity<?> response = controller.deleteImpact(httpRequest, "true", "", "gmail");
         assertThat(response.getStatusCode().value()).isEqualTo(400);
-        verifyNoInteractions(credentialService);
+        verifyNoInteractions(byokDeleteService);
     }
 
     @Test
-    @DisplayName("GET /my/{name}/delete-impact returns affected count and untruncated flag for normal tenants")
+    @DisplayName("GET /my/{name}/delete-impact returns the impact of THIS workspace's row, untruncated")
     @SuppressWarnings("unchecked")
     void deleteImpact_returnsAffectedCount() {
-        when(credentialService.countDependentForByokDelete(TENANT, "gmail")).thenReturn(3);
+        when(tenantResolver.resolveOrgId(httpRequest)).thenReturn(ORG);
+        when(byokDeleteService.impact("gmail", TENANT, ORG)).thenReturn(3);
 
-        ResponseEntity<?> response = controller.deleteImpact("true", TENANT, "gmail");
+        ResponseEntity<?> response = controller.deleteImpact(httpRequest, "true", TENANT, "gmail");
 
         Map<String, Object> body = (Map<String, Object>) response.getBody();
         assertThat(body.get("integrationName")).isEqualTo("gmail");
@@ -318,9 +320,10 @@ class PlatformCredentialsControllerMyEndpointsTest {
     @DisplayName("GET /my/{name}/delete-impact caps the displayed count at 999 with truncated=true so a precise tenant-size signal cannot be fingerprinted")
     @SuppressWarnings("unchecked")
     void deleteImpact_truncatesAt999() {
-        when(credentialService.countDependentForByokDelete(TENANT, "gmail")).thenReturn(1500);
+        when(tenantResolver.resolveOrgId(httpRequest)).thenReturn(ORG);
+        when(byokDeleteService.impact("gmail", TENANT, ORG)).thenReturn(1500);
 
-        ResponseEntity<?> response = controller.deleteImpact("true", TENANT, "gmail");
+        ResponseEntity<?> response = controller.deleteImpact(httpRequest, "true", TENANT, "gmail");
 
         Map<String, Object> body = (Map<String, Object>) response.getBody();
         assertThat(body.get("affectedCredentialCount")).isEqualTo(999);
@@ -328,36 +331,19 @@ class PlatformCredentialsControllerMyEndpointsTest {
     }
 
     @Test
-    @DisplayName("DELETE /my/{name} runs cascade-revoke BEFORE deleting the BYOK row - order matters so a partial failure leaves BYOK intact for retry")
+    @DisplayName("DELETE /my/{name} delegates to the workspace-scoped cascade and reports its outcome")
     @SuppressWarnings("unchecked")
-    void deleteMy_cascadeOrderIsRevokeThenDelete() {
+    void deleteMy_reportsTheCascadeOutcome() {
         when(tenantResolver.resolveOrgId(httpRequest)).thenReturn(ORG);
-        when(credentialService.revokeForByokDelete(TENANT, "gmail")).thenReturn(2);
-        when(service.deleteCredential("gmail", TENANT, ORG)).thenReturn(true);
+        when(byokDeleteService.deleteWithCascade("gmail", TENANT, ORG))
+                .thenReturn(new ByokDeleteService.Result(true, 2));
 
         ResponseEntity<?> response = controller.deleteMy(httpRequest, "true", TENANT, "gmail");
-
-        // Order assertion: revokeForByokDelete must run STRICTLY BEFORE deleteCredential.
-        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(credentialService, service);
-        inOrder.verify(credentialService).revokeForByokDelete(TENANT, "gmail");
-        inOrder.verify(service).deleteCredential("gmail", TENANT, ORG);
 
         Map<String, Object> body = (Map<String, Object>) response.getBody();
         assertThat(body.get("deleted")).isEqualTo(true);
         assertThat(body.get("revokedCredentialCount")).isEqualTo(2);
         assertThat(body.get("integrationName")).isEqualTo("gmail");
-    }
-
-    @Test
-    @DisplayName("DELETE /my/{name} scopes the row removal to the active workspace")
-    void deleteMy_scopesDeleteToActiveWorkspace() {
-        when(tenantResolver.resolveOrgId(httpRequest)).thenReturn(ORG);
-        when(credentialService.revokeForByokDelete(TENANT, "gmail")).thenReturn(0);
-        when(service.deleteCredential("gmail", TENANT, ORG)).thenReturn(true);
-
-        controller.deleteMy(httpRequest, "true", TENANT, "gmail");
-
-        verify(service).deleteCredential("gmail", TENANT, ORG);
         verify(service, never()).deleteCredential(any(), any());
     }
 
@@ -366,8 +352,7 @@ class PlatformCredentialsControllerMyEndpointsTest {
     void deleteMy_unauthenticatedReturns401() {
         ResponseEntity<?> response = controller.deleteMy(httpRequest, null, TENANT, "gmail");
         assertThat(response.getStatusCode().value()).isEqualTo(401);
-        verifyNoInteractions(credentialService);
-        verify(service, never()).deleteCredential(any(), any(), any());
+        verifyNoInteractions(byokDeleteService);
     }
 
     private PlatformCredential buildCredential(Long id, String integrationName,

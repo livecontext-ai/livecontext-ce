@@ -84,7 +84,7 @@ class BridgeModelDeriverTest {
     }
 
     @Test
-    @DisplayName("New gemini family versions auto-discover; codex gpt-5.5 derives via the curated floor (no codex pattern)")
+    @DisplayName("New gemini family versions auto-discover; codex gpt-5.5 derives via the curated floor (numeric ids never match the codex pattern)")
     void autoDiscoversGeminiAndDerivesCuratedCodex() {
         List<Map<String, Object>> feed = List.of(
                 cloud("openai", "gpt-5.5", "3", "12"),          // curated codex id
@@ -92,14 +92,14 @@ class BridgeModelDeriverTest {
 
         List<Map<String, Object>> rows = deriver.derive(feed);
 
-        // gpt-5.5 is now a curated MODELS["codex"] id, so it derives via the
-        // curated floor (codex has no discovery pattern).
+        // gpt-5.5 is a curated MODELS["codex"] id, so it derives via the
+        // curated floor (the codex pattern only matches codenamed tiers).
         assertThat(find(rows, "codex", "gpt-5.5")).as("gpt-5.5 under codex (curated floor)").isNotNull();
         assertThat(find(rows, "gemini-cli", "gemini-3.2-pro")).as("gemini-3.2-pro under gemini-cli").isNotNull();
     }
 
     @Test
-    @DisplayName("Codex is curated-only: the real gpt-5.6 tiers derive, the phantom bare gpt-5.6 never does")
+    @DisplayName("Codex: the real gpt-5.6 tiers derive, the phantom bare gpt-5.6 never does")
     void codexTiersDeriveButBareGpt56IsNeverDerived() {
         List<Map<String, Object>> feed = List.of(
                 cloud("openai", "gpt-5.6-sol", "5", "30"),      // curated tier
@@ -117,6 +117,37 @@ class BridgeModelDeriverTest {
         // with a ChatGPT account) must NEVER become a codex bridge row.
         assertThat(find(rows, "codex", "gpt-5.6")).as("phantom bare gpt-5.6 must not derive under codex").isNull();
         assertThat(find(rows, "codex", "gpt-5.1")).as("non-curated gpt-5.1 must not derive under codex").isNull();
+    }
+
+    @Test
+    @DisplayName("Codex derives GPT-6 Sol and Luna from the openai feed with no allow-list entry - regression for the 2026-09 gap")
+    void codexDerivesNewCodenamedTiersFromTheFeed() {
+        // Mirrors the prod feed of 2026-09-24: the openai rows gpt-6-sol and gpt-6-luna
+        // existed, codex had neither because it was curated-only.
+        List<Map<String, Object>> feed = List.of(
+                cloud("openai", "gpt-6-sol", "2", "10"),
+                cloud("openai", "gpt-6-luna", "0.1", "0.5"),
+                cloud("openai", "gpt-6", "2", "10"),              // bare - NOT codex-routable
+                cloud("openai", "gpt-5.6-cyber", "12.5", "75")); // API-only variant
+
+        List<Map<String, Object>> rows = deriver.derive(feed);
+
+        Map<String, Object> sol = find(rows, "codex", "gpt-6-sol");
+        assertThat(sol).as("gpt-6-sol under codex").isNotNull();
+        assertThat(sol.get("providerKind")).isEqualTo("bridge");
+        assertThat(sol.get("priceInput")).as("price copied from the openai row").isEqualTo("2");
+        assertThat(sol.get("displayName")).isEqualTo("GPT 6-sol");
+        assertThat(find(rows, "codex", "gpt-6-luna")).as("gpt-6-luna under codex").isNotNull();
+        assertThat(find(rows, "codex", "gpt-6")).as("bare gpt-6 must not derive under codex").isNull();
+        assertThat(find(rows, "codex", "gpt-5.6-cyber")).as("cyber is not a Codex model").isNull();
+    }
+
+    @Test
+    @DisplayName("A curated codenamed codex id that also matches the pattern is emitted exactly once")
+    void codexCuratedCodenameIsNotDerivedTwice() {
+        List<Map<String, Object>> rows = deriver.derive(List.of(cloud("openai", "gpt-6-astra", "10", "60")));
+
+        assertThat(count(rows, "codex", "gpt-6-astra")).isEqualTo(1);
     }
 
     @Test
@@ -150,7 +181,7 @@ class BridgeModelDeriverTest {
     }
 
     @Test
-    @DisplayName("Codex curated-only - unrelated OpenAI models are not derived")
+    @DisplayName("Codex - unrelated OpenAI models are not derived")
     void codexDoesNotDeriveNonCuratedOpenAiModels() {
         List<Map<String, Object>> feed = List.of(
                 cloud("openai", "gpt-5.3-chat-latest", "3", "12"),

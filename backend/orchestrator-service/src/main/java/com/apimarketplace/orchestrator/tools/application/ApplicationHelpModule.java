@@ -160,7 +160,8 @@ public class ApplicationHelpModule implements ToolModule {
             "get_run_macro", "run_id, status, plan_version, execution_mode, started_at, ended_at, dags (DAG summary), epochs (list of epoch headers)",
             "get_run_epoch", "run_id, epoch, status, nodes (lightweight per-node summaries: id, label, type, status), NEXT hint",
             "get_node_output", "run_id, epoch, node_id, label, type, output (full data), resolved_params, error. Split nodes: execution_count, items[] in list mode. With field=<dot-path>: output_field {field, content, offset, returned_bytes, original_length, truncated, NEXT}",
-            "runs_list", "run_id, status, plan_version, started_at, ended_at, duration_ms, total_nodes, execution_mode"
+            "runs_list", "run_id, status, plan_version, started_at, ended_at, duration_ms, total_nodes, epoch_count (trigger fires in that run), execution_mode",
+            "plan_note", "Added to get_run and get_node_output when the plan version the run used is no longer kept: node ids, labels and types then come from the current plan and may differ from what that run executed; statuses, counts and outputs are still the run's own."
         ));
         return g;
     }

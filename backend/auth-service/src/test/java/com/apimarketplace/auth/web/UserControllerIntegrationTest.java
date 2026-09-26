@@ -219,6 +219,46 @@ class UserControllerIntegrationTest {
                             .content(objectMapper.writeValueAsString(request)))
                     .andExpect(status().isBadRequest());
         }
+
+        @Test
+        @DisplayName("should return 400 with the reason when the update tries to change an identity field")
+        void shouldReturn400WhenIdentityChangeIsRefused() throws Exception {
+            User user = createTestUser(1L, "testuser");
+            UserProfileUpdateRequest request = new UserProfileUpdateRequest();
+            request.setEmail("victim@example.com");
+
+            when(userService.findById(1L)).thenReturn(Optional.of(user));
+            when(userService.updateProfile(eq(user), any(UserProfileUpdateRequest.class)))
+                    .thenThrow(new IllegalArgumentException("The email address cannot be changed through the profile"));
+
+            mockMvc.perform(put("/api/users/profile")
+                            .header("X-User-ID", "1")
+                            .header("X-Provider-ID", "f47ac10b-58cc-4372-a567-0e02b2c3d479")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("The email address cannot be changed through the profile"));
+        }
+
+        @Test
+        @DisplayName("should return 400 (not 500) with the validator message when the username is taken")
+        void shouldReturn400WhenUsernameValidationFails() throws Exception {
+            User user = createTestUser(1L, "testuser");
+            UserProfileUpdateRequest request = new UserProfileUpdateRequest();
+            request.setUsername("taken");
+
+            when(userService.findById(1L)).thenReturn(Optional.of(user));
+            when(userService.updateProfile(eq(user), any(UserProfileUpdateRequest.class)))
+                    .thenThrow(new IllegalArgumentException("Username is already taken"));
+
+            mockMvc.perform(put("/api/users/profile")
+                            .header("X-User-ID", "1")
+                            .header("X-Provider-ID", "f47ac10b-58cc-4372-a567-0e02b2c3d479")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("Username is already taken"));
+        }
     }
 
     // ===== DELETE /api/users/profile =====

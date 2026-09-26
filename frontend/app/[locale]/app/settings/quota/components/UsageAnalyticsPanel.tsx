@@ -2,11 +2,11 @@
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { getClientLocale } from '@/lib/utils/locale';
-import { BarChart3, TrendingUp, Calendar, Zap } from 'lucide-react';
+import { BarChart3, TrendingUp, TrendingDown, Calendar, Zap, Hash, Cpu, Gauge, Hourglass } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { quotaApi, UsageAnalytics, DailyUsageEntry } from '@/lib/api';
-import { isCeMode, creditsToUsd } from '@/lib/format-cost';
+import { isCeMode, creditsToUsd, formatCost } from '@/lib/format-cost';
 import { useCurrentOrgStore } from '@/lib/stores/current-org-store';
 import {
   AreaChart,
@@ -20,7 +20,17 @@ import {
 } from 'recharts';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { CREDIT_SOURCE_LABEL_KEYS } from '@/lib/billing/creditSourceTypes';
-import { modelLabelFor, providerOptionLabels, useModelNameIndex } from './modelLabels';
+import { modelLabelFor, providerOptionLabels, useModelNameIndex, ProviderModelCell } from './modelLabels';
+import {
+  periodTotals,
+  previousTotals,
+  relativeChange,
+  usageByType,
+  usageByModel,
+  topWithRest,
+  peakDay,
+  runwayDays,
+} from './usageAnalyticsStats';
 
 // Ledger amounts are stored in credits; CE displays spend in dollars (1 credit = $0.001),
 // Cloud keeps raw credits. Applied at the aggregation source so the chart, axis, tooltip and
@@ -62,6 +72,12 @@ const SOURCE_TYPE_COLORS: Record<string, string> = {
 
 const DEFAULT_COLOR = '#94a3b8';
 
+/** What the chart stacks per day. */
+type ChartMetric = 'credits' | 'calls' | 'tokens';
+
+/** Rows the by-model table lists before folding the rest into one line. */
+const TOP_MODELS = 8;
+
 interface ChartDataPoint {
   date: string;
   [sourceType: string]: number | string;
@@ -80,9 +96,14 @@ interface UsageAnalyticsPanelProps {
    * workspaces" view). Sends `allWorkspaces=true` and drops the org override.
    */
   allWorkspaces?: boolean;
+  /**
+   * The wallet balance in credits, when the page knows one (cloud). Turns the average daily spend
+   * into "how long the balance lasts at this pace". Omitted in CE, where nothing is metered.
+   */
+  balance?: number | null;
 }
 
-export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false }: UsageAnalyticsPanelProps = {}) {
+export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false, balance }: UsageAnalyticsPanelProps = {}) {
   const t = useTranslations('quota');
 
   const [analytics, setAnalytics] = useState<UsageAnalytics | null>(null);
@@ -91,6 +112,7 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false }: Us
   const [filterSourceType, setFilterSourceType] = useState('');
   const [filterProvider, setFilterProvider] = useState('');
   const [filterModel, setFilterModel] = useState('');
+  const [metric, setMetric] = useState<ChartMetric>('credits');
   // The filters list the ids the ledger stored; this names them the way the
   // rest of the app does. See ./modelLabels.
   const modelNames = useModelNameIndex();
@@ -146,18 +168,22 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false }: Us
     fetchAnalytics();
   }, [fetchAnalytics]);
 
-  // Transform daily usage into stacked chart data
+  // Transform daily usage into stacked chart data, for the metric picked above the chart.
   const { chartData, sourceTypesInData } = useMemo(() => {
     if (!analytics?.dailyUsage?.length) return { chartData: [], sourceTypesInData: [] as string[] };
 
     const dateMap = new Map<string, ChartDataPoint>();
     const typesSet = new Set<string>();
+    const valueOf = (entry: DailyUsageEntry) =>
+      metric === 'credits' ? toDisplayAmount(Number(entry.credits))
+        : metric === 'calls' ? Number(entry.count) || 0
+          : Number(entry.tokens) || 0;
 
     for (const entry of analytics.dailyUsage) {
       if (!includeSourceType(entry.sourceType)) continue;
       typesSet.add(entry.sourceType);
       const existing = dateMap.get(entry.date) ?? { date: entry.date };
-      existing[entry.sourceType] = (Number(existing[entry.sourceType] ?? 0)) + toDisplayAmount(Number(entry.credits));
+      existing[entry.sourceType] = (Number(existing[entry.sourceType] ?? 0)) + valueOf(entry);
       dateMap.set(entry.date, existing);
     }
 
@@ -172,54 +198,33 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false }: Us
     }
 
     return { chartData: data, sourceTypesInData: types };
-  }, [analytics]);
+  }, [analytics, metric]);
 
-  // Summary stats
-  const summaryStats = useMemo(() => {
+  // Every figure below the chart, in credits (converted at display). CE-hidden types are left out
+  // everywhere so the cards, the tables and the chart add up to the same total.
+  const stats = useMemo(() => {
     if (!analytics?.dailyUsage?.length) return null;
-
-    // Exclude CE-hidden source types (WORKFLOW_NODE) so the totals match the chart.
-    const entries = analytics.dailyUsage.filter((e) => includeSourceType(e.sourceType));
-    if (!entries.length) return null;
-
-    const totalCredits = entries.reduce((sum, e) => sum + toDisplayAmount(Number(e.credits)), 0);
+    const totals = periodTotals(analytics.dailyUsage, includeSourceType);
+    if (totals.credits <= 0 && totals.calls <= 0) return null;
+    const previous = previousTotals(analytics.previousModelUsage, includeSourceType);
     const days = Number(period);
-
-    // Most active source type
-    const typeTotals = new Map<string, number>();
-    for (const entry of entries) {
-      typeTotals.set(entry.sourceType, (typeTotals.get(entry.sourceType) ?? 0) + Number(entry.credits));
-    }
-    let mostActive = '';
-    let maxCredits = 0;
-    for (const [type, total] of typeTotals) {
-      if (total > maxCredits) {
-        mostActive = type;
-        maxCredits = total;
-      }
-    }
-
-    // Peak day
-    const dayTotals = new Map<string, number>();
-    for (const entry of entries) {
-      dayTotals.set(entry.date, (dayTotals.get(entry.date) ?? 0) + Number(entry.credits));
-    }
-    let peakDay = '';
-    let peakCredits = 0;
-    for (const [date, total] of dayTotals) {
-      if (total > peakCredits) {
-        peakDay = date;
-        peakCredits = total;
-      }
-    }
-
+    const avgDaily = totals.credits / days;
     return {
-      totalCredits,
-      avgDaily: totalCredits / days,
-      mostActive,
-      peakDay,
+      totals,
+      creditsChange: relativeChange(totals.credits, previous?.credits),
+      callsChange: relativeChange(totals.calls, previous?.calls),
+      avgDaily,
+      avgPerCall: totals.calls > 0 ? totals.credits / totals.calls : 0,
+      peak: peakDay(analytics.dailyUsage, includeSourceType),
+      // The balance is the whole wallet, so it may only be divided by the whole spend: under a
+      // type, provider or model filter the pace is a slice and the runway would be inflated.
+      runway: filterSourceType || filterProvider || filterModel ? null : runwayDays(balance, avgDaily),
+      byType: usageByType(analytics.dailyUsage, includeSourceType),
+      byModel: analytics.modelUsage
+        ? topWithRest(usageByModel(analytics.modelUsage, includeSourceType), TOP_MODELS)
+        : null,
     };
-  }, [analytics, period]);
+  }, [analytics, period, balance, filterSourceType, filterProvider, filterModel]);
 
   const formatDate = (dateStr: string) => {
     try {
@@ -241,6 +246,21 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false }: Us
     const key = CREDIT_SOURCE_LABEL_KEYS[type];
     return key ? t(key) : type;
   };
+
+  const locale = getClientLocale();
+  // The app's cost formatter: dollars with sub-cent precision in CE (an average LLM call is a
+  // fraction of a cent and would otherwise read "$0"), credits on cloud.
+  const formatAmount = (credits: number) => formatCost(credits);
+  const formatCount = (n: number) => n.toLocaleString(locale);
+  const formatCompact = (n: number) =>
+    new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 1 }).format(n);
+  const formatShare = (share: number) =>
+    new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 1 }).format(share);
+  const formatChartValue = (value: number) =>
+    metric === 'credits'
+      // Sub-dollar CE days keep 4 decimals, as the cards do, instead of reading "$0.00".
+      ? `${isCeMode ? '$' : ''}${value.toLocaleString(locale, { maximumFractionDigits: isCeMode && Math.abs(value) < 1 ? 4 : 2 })}`
+      : value.toLocaleString(locale, { maximumFractionDigits: 0 });
 
   return (
     <div>
@@ -313,6 +333,28 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false }: Us
 
       {/* Chart */}
       <div className="bg-theme-secondary rounded-xl p-4 border border-theme">
+        {/* What the chart stacks: the spend is the default, calls and tokens say whether a rise
+            comes from doing more or from each call costing more. */}
+        <div className="flex justify-end mb-3" role="group" aria-label={t('analytics.chartMetric')}>
+          <div className="inline-flex rounded-lg border border-theme p-0.5 bg-theme-primary">
+            {(['credits', 'calls', 'tokens'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={metric === m}
+                onClick={() => setMetric(m)}
+                data-testid={`analytics-metric-${m}`}
+                className={`px-2.5 h-7 rounded-md text-sm font-medium transition-colors ${
+                  metric === m ? 'bg-theme-secondary text-theme-primary' : 'text-theme-secondary hover:text-theme-primary'
+                }`}
+              >
+                {m === 'credits'
+                  ? (isCeMode ? t('analytics.metricCost') : t('analytics.metricCredits'))
+                  : m === 'calls' ? t('analytics.metricCalls') : t('analytics.metricTokens')}
+              </button>
+            ))}
+          </div>
+        </div>
         {loading ? (
           <div className="h-[300px] flex items-center justify-center">
             <div className="animate-pulse text-sm text-theme-secondary">{t('analytics.title')}...</div>
@@ -338,10 +380,7 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false }: Us
               />
               <Tooltip
                 labelFormatter={formatDate}
-                formatter={(value: number, name: string) => [
-                  `${isCeMode ? '$' : ''}${value.toLocaleString(getClientLocale(), { maximumFractionDigits: 2 })}`,
-                  formatSourceType(name),
-                ]}
+                formatter={(value: number, name: string) => [formatChartValue(value), formatSourceType(name)]}
                 contentStyle={{
                   backgroundColor: 'var(--bg-secondary)',
                   border: '1px solid var(--border-color)',
@@ -369,50 +408,261 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false }: Us
         )}
       </div>
 
-      {/* Summary stats */}
-      {summaryStats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-          <div className="bg-theme-secondary rounded-xl p-4 border border-theme">
-            <div className="flex items-center gap-2 mb-1">
-              <Zap className="h-3.5 w-3.5 text-theme-secondary" />
-              <p className="text-xs text-theme-secondary">{isCeMode ? t('analytics.totalCost') : t('analytics.totalCredits')}</p>
-            </div>
-            <p className="text-lg font-semibold text-theme-primary">
-              {isCeMode ? '$' : ''}{summaryStats.totalCredits.toLocaleString(getClientLocale(), { maximumFractionDigits: 2 })}
-            </p>
-          </div>
-
-          <div className="bg-theme-secondary rounded-xl p-4 border border-theme">
-            <div className="flex items-center gap-2 mb-1">
-              <TrendingUp className="h-3.5 w-3.5 text-theme-secondary" />
-              <p className="text-xs text-theme-secondary">{t('analytics.avgDaily')}</p>
-            </div>
-            <p className="text-lg font-semibold text-theme-primary">
-              {isCeMode ? '$' : ''}{summaryStats.avgDaily.toLocaleString(getClientLocale(), { maximumFractionDigits: 2 })}
-            </p>
-          </div>
-
-          <div className="bg-theme-secondary rounded-xl p-4 border border-theme">
-            <div className="flex items-center gap-2 mb-1">
-              <Calendar className="h-3.5 w-3.5 text-theme-secondary" />
-              <p className="text-xs text-theme-secondary">{t('analytics.peakDay')}</p>
-            </div>
-            <p className="text-lg font-semibold text-theme-primary">
-              {summaryStats.peakDay ? formatDate(summaryStats.peakDay) : '-'}
-            </p>
-          </div>
-
-          <div className="bg-theme-secondary rounded-xl p-4 border border-theme">
-            <div className="flex items-center gap-2 mb-1">
-              <BarChart3 className="h-3.5 w-3.5 text-theme-secondary" />
-              <p className="text-xs text-theme-secondary">{t('analytics.mostActive')}</p>
-            </div>
-            <p className="text-lg font-semibold text-theme-primary">
-              {summaryStats.mostActive ? formatSourceType(summaryStats.mostActive) : '-'}
-            </p>
-          </div>
+      {/* Key figures of the period */}
+      {stats && (
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-4" data-testid="analytics-kpis">
+          <KpiCard
+            icon={Zap}
+            label={isCeMode ? t('analytics.totalCost') : t('analytics.totalCredits')}
+            value={formatAmount(stats.totals.credits)}
+            change={stats.creditsChange}
+            changeLabel={t('analytics.vsPrevious')}
+            locale={locale}
+          />
+          <KpiCard
+            icon={Hash}
+            label={t('analytics.calls')}
+            value={formatCount(stats.totals.calls)}
+            change={stats.callsChange}
+            changeLabel={t('analytics.vsPrevious')}
+            locale={locale}
+          />
+          <KpiCard
+            icon={Cpu}
+            label={t('analytics.tokens')}
+            value={stats.totals.tokens > 0 ? formatCompact(stats.totals.tokens) : '-'}
+            title={formatCount(stats.totals.tokens)}
+            locale={locale}
+          />
+          <KpiCard
+            icon={Gauge}
+            label={t('analytics.avgPerCall')}
+            value={stats.totals.calls > 0 ? formatAmount(stats.avgPerCall) : '-'}
+            locale={locale}
+          />
+          <KpiCard
+            icon={TrendingUp}
+            label={t('analytics.avgDaily')}
+            value={formatAmount(stats.avgDaily)}
+            // The peak gets its own card when there is no runway to show; only then is it a hint here.
+            hint={stats.peak && stats.runway !== null
+              ? t('analytics.peakOn', { date: formatDate(stats.peak.date), amount: formatAmount(stats.peak.credits) })
+              : undefined}
+            locale={locale}
+          />
+          {/* With a known balance, the pace becomes a date the reader can act on; without one
+              (CE, or the wallet not loaded) the peak day is the more useful last figure. */}
+          {stats.runway !== null ? (
+            <KpiCard
+              icon={Hourglass}
+              label={t('analytics.runway')}
+              value={stats.runway > 365 ? t('analytics.runwayOverYear') : t('analytics.runwayDays', { count: stats.runway })}
+              hint={t('analytics.runwayHint')}
+              locale={locale}
+            />
+          ) : (
+            <KpiCard
+              icon={Calendar}
+              label={t('analytics.peakDay')}
+              value={stats.peak ? formatDate(stats.peak.date) : '-'}
+              hint={stats.peak ? formatAmount(stats.peak.credits) : undefined}
+              locale={locale}
+            />
+          )}
         </div>
       )}
+
+      {/* Where the spend went: by kind of spend, and by model. A row filters the chart on it. */}
+      {stats && (
+        <div className={`grid grid-cols-1 gap-4 mt-4 ${stats.byModel ? 'lg:grid-cols-2' : ''}`}>
+          <BreakdownTable
+            testId="analytics-by-type"
+            title={t('analytics.byType')}
+            nameHeader={t('analytics.sourceType')}
+            amountHeader={isCeMode ? t('analytics.metricCost') : t('analytics.metricCredits')}
+            callsHeader={t('analytics.calls')}
+            filterHint={t('analytics.filterOn')}
+            rows={stats.byType.map((r) => ({
+              key: r.sourceType,
+              name: formatSourceType(r.sourceType),
+              color: SOURCE_TYPE_COLORS[r.sourceType] ?? DEFAULT_COLOR,
+              amount: formatAmount(r.credits),
+              calls: formatCount(r.calls),
+              share: r.share,
+              active: filterSourceType === r.sourceType,
+              onSelect: () => setFilterSourceType(filterSourceType === r.sourceType ? '' : r.sourceType),
+            }))}
+            formatShare={formatShare}
+          />
+          {stats.byModel && (
+            <BreakdownTable
+              testId="analytics-by-model"
+              title={t('analytics.byModel')}
+              nameHeader={t('analytics.model')}
+              amountHeader={isCeMode ? t('analytics.metricCost') : t('analytics.metricCredits')}
+              callsHeader={t('analytics.calls')}
+              filterHint={t('analytics.filterOn')}
+              rows={[
+                ...stats.byModel.top.map((r) => {
+                  const model = r.model;
+                  return {
+                    key: `${r.provider ?? ''}/${model ?? ''}`,
+                    name: model
+                      ? <ProviderModelCell provider={r.provider} model={model} index={modelNames} />
+                      : t('analytics.noModel'),
+                    amount: formatAmount(r.credits),
+                    calls: formatCount(r.calls),
+                    share: r.share,
+                    active: !!model && filterModel === model,
+                    // A row with no model has nothing to filter on.
+                    onSelect: model ? () => setFilterModel(filterModel === model ? '' : model) : undefined,
+                  };
+                }),
+                ...(stats.byModel.rest
+                  ? [{
+                      key: '__rest__',
+                      name: t('analytics.otherModels', { count: stats.byModel.rest.count }),
+                      amount: formatAmount(stats.byModel.rest.credits),
+                      calls: formatCount(stats.byModel.rest.calls),
+                      share: stats.byModel.rest.share,
+                      active: false,
+                    }]
+                  : []),
+              ]}
+              formatShare={formatShare}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KpiCard({
+  icon: Icon,
+  label,
+  value,
+  title,
+  hint,
+  change,
+  changeLabel,
+  locale,
+}: {
+  icon: React.ElementType;
+  label: string;
+  value: string;
+  title?: string;
+  hint?: string;
+  /** Relative change vs the previous period; null or undefined = nothing to compare to, not shown. */
+  change?: number | null;
+  changeLabel?: string;
+  locale: string;
+}) {
+  return (
+    <div className="bg-theme-secondary rounded-xl p-4 border border-theme min-w-0">
+      <div className="flex items-center gap-2 mb-1">
+        <Icon className="h-3.5 w-3.5 text-theme-secondary shrink-0" />
+        <p className="text-xs text-theme-secondary truncate">{label}</p>
+      </div>
+      <p className="text-lg font-semibold text-theme-primary truncate" title={title ?? value}>{value}</p>
+      {change != null && (
+        <p className="flex items-center gap-1 text-xs text-theme-tertiary mt-0.5" data-testid="kpi-change">
+          {change >= 0 ? <TrendingUp className="h-3 w-3 shrink-0" /> : <TrendingDown className="h-3 w-3 shrink-0" />}
+          <span className="font-medium text-theme-secondary">
+            {new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 0, signDisplay: 'exceptZero' }).format(change)}
+          </span>
+          <span className="truncate">{changeLabel}</span>
+        </p>
+      )}
+      {hint && <p className="text-xs text-theme-tertiary mt-0.5 truncate" title={hint}>{hint}</p>}
+    </div>
+  );
+}
+
+interface BreakdownRow {
+  key: string;
+  name: React.ReactNode;
+  color?: string;
+  amount: string;
+  calls: string;
+  share: number;
+  active: boolean;
+  onSelect?: () => void;
+}
+
+function BreakdownTable({
+  testId,
+  title,
+  nameHeader,
+  amountHeader,
+  callsHeader,
+  filterHint,
+  rows,
+  formatShare,
+}: {
+  testId: string;
+  title: string;
+  nameHeader: string;
+  amountHeader: string;
+  callsHeader: string;
+  filterHint: string;
+  rows: BreakdownRow[];
+  formatShare: (share: number) => string;
+}) {
+  return (
+    <div className="bg-theme-secondary rounded-xl p-4 border border-theme min-w-0" data-testid={testId}>
+      <h3 className="text-sm font-semibold text-theme-primary mb-3">{title}</h3>
+      <table className="w-full table-fixed text-sm">
+        <colgroup>
+          <col />
+          <col className="w-[104px]" />
+          <col className="w-[72px]" />
+        </colgroup>
+        <thead>
+          <tr className="text-xs text-theme-secondary">
+            <th className="text-left font-medium pb-2">{nameHeader}</th>
+            <th className="text-right font-medium pb-2">{amountHeader}</th>
+            <th className="text-right font-medium pb-2">{callsHeader}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.key} data-testid={`${testId}-row`} className="align-top">
+              <td className="py-1.5 pr-3">
+                {r.onSelect ? (
+                  <button
+                    type="button"
+                    onClick={r.onSelect}
+                    aria-pressed={r.active}
+                    title={filterHint}
+                    className={`flex items-center gap-2 max-w-full text-left hover:underline ${r.active ? 'font-semibold' : ''}`}
+                  >
+                    {r.color && <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: r.color }} />}
+                    <span className="truncate text-theme-primary">{r.name}</span>
+                  </button>
+                ) : (
+                  <span className="flex items-center gap-2 max-w-full">
+                    {r.color && <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: r.color }} />}
+                    <span className="truncate text-theme-secondary">{r.name}</span>
+                  </span>
+                )}
+                {/* How much of the period this row is, readable at a glance. */}
+                <div className="mt-1 flex items-center gap-2">
+                  <div className="h-1 flex-1 bg-theme-tertiary rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: `${Math.min(100, r.share * 100)}%`, backgroundColor: r.color ?? 'var(--text-secondary)' }}
+                    />
+                  </div>
+                  <span className="text-xs text-theme-tertiary w-12 text-right shrink-0">{formatShare(r.share)}</span>
+                </div>
+              </td>
+              <td className="py-1.5 text-right text-theme-primary whitespace-nowrap overflow-hidden text-ellipsis" title={r.amount}>{r.amount}</td>
+              <td className="py-1.5 text-right text-theme-secondary whitespace-nowrap overflow-hidden text-ellipsis" title={r.calls}>{r.calls}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

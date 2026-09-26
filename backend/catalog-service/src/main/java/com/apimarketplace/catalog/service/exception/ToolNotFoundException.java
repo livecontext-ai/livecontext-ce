@@ -7,12 +7,18 @@ import java.util.UUID;
  */
 public class ToolNotFoundException extends CatalogServiceException {
 
+    /**
+     * The code every surface answers a missing tool with (the 404 body's {@code error}),
+     * and the one an agent-facing caller keys its "search again" answer on.
+     */
+    public static final String ERROR_CODE = "TOOL_NOT_FOUND";
+
     public ToolNotFoundException(UUID toolId) {
-        super("Tool not found: " + toolId, "TOOL_NOT_FOUND");
+        super("Tool not found: " + toolId, ERROR_CODE);
     }
 
     public ToolNotFoundException(String toolIdOrSlug) {
-        super("Tool not found: " + toolIdOrSlug, "TOOL_NOT_FOUND");
+        super("Tool not found: " + toolIdOrSlug, ERROR_CODE);
     }
 
     public static ToolNotFoundException byId(UUID toolId) {

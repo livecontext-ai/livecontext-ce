@@ -1229,6 +1229,8 @@ public class ApplicationCrudModule implements ToolModule {
         try {
             var page = workflowRunRepository.findRunSummariesByWorkflowId(
                     workflowId, OffsetLimitPageable.of(bounds.offset(), bounds.limit()));
+            Map<String, Long> epochCounts = agentWorkflowFireService.countEpochsByRunIds(page.getContent().stream()
+                    .map(com.apimarketplace.orchestrator.repository.WorkflowRunSummaryProjection::getRunIdPublic).toList());
 
             List<Map<String, Object>> runs = page.getContent().stream().map(r -> {
                 Map<String, Object> m = new LinkedHashMap<>();
@@ -1239,6 +1241,9 @@ public class ApplicationCrudModule implements ToolModule {
                 m.put("ended_at", r.getEndedAt() != null ? r.getEndedAt().toString() : null);
                 m.put("duration_ms", r.getDurationMs());
                 m.put("total_nodes", r.getTotalNodes());
+                if (epochCounts != null) {
+                    m.put("epoch_count", epochCounts.getOrDefault(r.getRunIdPublic(), 0L));
+                }
                 m.put("execution_mode", r.getExecutionMode() != null ? r.getExecutionMode().name() : null);
                 return m;
             }).toList();
@@ -1277,14 +1282,17 @@ public class ApplicationCrudModule implements ToolModule {
             }
 
             WorkflowEntity workflow = run.getWorkflow();
-            WorkflowPlan plan = resolvePlanForRun(run, workflow, tenantId);
+            WorkflowPlanVersionService.RunPlan runPlan =
+                    planVersionService.resolvePlanForRun(workflow.getId(), run.getPlanVersion(), tenantId);
 
             Integer epoch = getIntParamNullable(parameters, "epoch");
             Map<String, Object> result;
             if (epoch != null) {
-                result = agentWorkflowFireService.buildEpochDetailReport(run, plan, epoch, tenantId);
+                result = runPlan.annotate(agentWorkflowFireService.buildEpochDetailReport(
+                        run, runPlan.plan(), epoch, tenantId));
             } else {
-                result = agentWorkflowFireService.buildRunMacroReport(run, plan, tenantId);
+                result = runPlan.annotate(agentWorkflowFireService.buildRunMacroReport(
+                        run, runPlan.plan(), tenantId));
             }
 
             // Override NEXT hints to point to application() instead of workflow()
@@ -1338,11 +1346,12 @@ public class ApplicationCrudModule implements ToolModule {
             }
 
             WorkflowEntity workflow = run.getWorkflow();
-            WorkflowPlan plan = resolvePlanForRun(run, workflow, tenantId);
+            WorkflowPlanVersionService.RunPlan runPlan =
+                    planVersionService.resolvePlanForRun(workflow.getId(), run.getPlanVersion(), tenantId);
 
-            Map<String, Object> result = agentWorkflowFireService.buildNodeOutputReport(
-                    run, plan, epoch, nodeId, tenantId, itemIndex, iteration, spawn,
-                    expandField, fieldOffset, fieldMaxBytes);
+            Map<String, Object> result = runPlan.annotate(agentWorkflowFireService.buildNodeOutputReport(
+                    run, runPlan.plan(), epoch, nodeId, tenantId, itemIndex, iteration, spawn,
+                    expandField, fieldOffset, fieldMaxBytes));
 
             overrideNextHints(result);
             return ToolExecutionResult.success(result);
@@ -1389,21 +1398,6 @@ public class ApplicationCrudModule implements ToolModule {
         } catch (Exception e) {
             return false;
         }
-    }
-
-    /**
-     * Resolve the plan for a specific run: prefer the versioned plan, fallback to current workflow plan.
-     * Same pattern as WorkflowCrudModule.resolvePlanForRun.
-     */
-    private WorkflowPlan resolvePlanForRun(WorkflowRunEntity run, WorkflowEntity workflow, String tenantId) {
-        if (run.getPlanVersion() != null && workflow.getId() != null) {
-            var versionOpt = planVersionService.getVersion(workflow.getId(), run.getPlanVersion());
-            if (versionOpt.isPresent()) {
-                return WorkflowPlan.fromMap(versionOpt.get().getPlan(),
-                        workflow.getId().toString(), tenantId);
-            }
-        }
-        return WorkflowPlan.fromMap(workflow.getPlan(), workflow.getId().toString(), tenantId);
     }
 
     /**

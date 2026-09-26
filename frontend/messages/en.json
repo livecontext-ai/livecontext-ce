@@ -280,6 +280,7 @@
     "invalidBody": "This invitation link is invalid, expired, or has already been used."
   },
   "common": {
+    "infoAbout": "About {label}",
     "addToFavorites": "Add to favorites",
     "removeFromFavorites": "Remove from favorites",
     "favoriteErrorTitle": "Could not update favorites",
@@ -478,7 +479,16 @@
     "sso": {
       "redirecting": "Redirecting to your SSO provider...",
       "invalid": "This SSO link is invalid.",
-      "failed": "Could not start SSO sign-in."
+      "failed": "Could not start SSO sign-in.",
+      "title": "Sign in with SSO",
+      "subtitle": "Enter your work email and we will send you to your company's sign-in page.",
+      "emailLabel": "Work email",
+      "emailPlaceholder": "you@company.com",
+      "continue": "Continue",
+      "looking": "Looking up your company...",
+      "notFound": "No SSO is set up for this email domain. Sign in another way, or ask your workspace admin.",
+      "lookupFailed": "We could not check SSO right now. Try again in a moment.",
+      "ceUnavailable": "SSO sign-in is only available on LiveContext Cloud."
     },
     "register": {
       "title": "Create your account",
@@ -776,11 +786,11 @@
       "samplePreview": "Sample"
     },
     "home": {
-      "title1": "How can I help you?",
-      "title2": "What should we automate today?",
-      "title3": "Got an idea? Let's build it.",
-      "title4": "Need a workflow that just works?",
-      "title5": "What's eating your time? Let's fix it.",
+      "title1": "Hi, I'm Orbi. How can I help?",
+      "title2": "What should Orbi automate for you today?",
+      "title3": "Got an idea? Orbi will build it with you.",
+      "title4": "Need a workflow that just works? Ask Orbi.",
+      "title5": "What's eating your time? Let Orbi handle it.",
       "suggestions": {
         "summarizeInbox": "Summarize my inbox each morning",
         "summarizeInboxPrompt": "Every weekday at 8am, fetch my unread Gmail messages, group them by sender, and post a short summary of the top conversations to my #morning Slack channel.",
@@ -883,11 +893,15 @@
           "WEBHOOK_TRIGGER_DISABLED": "{count, plural, one {# disabled trigger} other {# disabled triggers}}",
           "CRED_EXPIRED": "{count, plural, one {# expired credential} other {# expired credentials}}",
           "AGENT_TASK_ASSIGNED": "{count, plural, one {# task assigned} other {# tasks assigned}}",
+          "AGENT_AUTHORIZATION_UNREACHABLE": "{count, plural, one {# agent with nobody to ask} other {# agents with nobody to ask}}",
           "AGENT_TASK_AWAITING_REVIEW": "{count, plural, one {# task awaiting your review} other {# tasks awaiting your review}}",
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# low-credit bridge} other {# low-credit bridges}}",
           "ORG_INVITATION_PENDING": "{count, plural, one {# organization invitation} other {# organization invitations}}",
           "BADGE_UNLOCKED": "{count, plural, one {# new trophy} other {# new trophies}}",
-          "BUDGET_REACHED": "{count, plural, one {# workflow stopped on its spending cap} other {# workflows stopped on their spending cap}}"
+          "BUDGET_REACHED": "{count, plural, one {# workflow stopped on its spending cap} other {# workflows stopped on their spending cap}}",
+          "CREDIT_LOW": "{count, plural, one {Credits running low} other {Credits running low (#)}}",
+          "CREDIT_EXHAUSTED": "{count, plural, one {Out of credits} other {Out of credits (#)}}",
+          "AGENT_TASK_MENTION": "{count, plural, one {# task mention} other {# task mentions}}"
         },
         "approvalOpen": "Open",
         "approvalReview": "Review",
@@ -924,6 +938,8 @@
       }
     },
     "placeholder": "Type a message...",
+    "placeholderOrbi": "Message Orbi...",
+    "orbiPoke": "Poke Orbi",
     "send": "Send",
     "stop": "Stop",
     "queue": {
@@ -990,7 +1006,7 @@
       "close": "Close"
     },
     "toolSelector": {
-      "title": "Select MCP Tools",
+      "title": "Select integration tools",
       "smartModeHint": "Smart Mode: Tools will be automatically selected based on your request",
       "manualModeHint": "Manual Mode: Select the tools you want to use",
       "display": "Display:",
@@ -1155,8 +1171,6 @@
       "passageNumber": "Passage {number}",
       "inputData": "Input data",
       "outputData": "Output data",
-      "readOnly": "Read only",
-      "loadedPassages": "{loaded} / {total} passages loaded",
       "loadMore": "Load more passages",
       "loading": "Loading logs…",
       "emptyEpoch": "No nodes executed in this epoch yet.",
@@ -2298,13 +2312,10 @@
       "title": "Welcome gift",
       "subtitle": "You are on the Free plan. Here is what it gives you, every month.",
       "features": {
-        "freeCredits": "Workflow credits",
-        "freeCreditsDetail": "They run your workflows.",
-        "freeAiCredits": "AI credits",
-        "freeAiCreditsDetail": "They pay for chat and agent turns, on the models open to the free plan."
+        "freeCredits": "Monthly credits",
+        "freeCreditsDetail": "They run your workflows, and chat and agent turns on the models marked Free."
       },
-      "renewal": "Both refill at the start of every month, automatically. No card needed.",
-      "renewalSingle": "They refill at the start of every month, automatically. No card needed.",
+      "renewal": "They refill at the start of every month, automatically. No card needed.",
       "cta": "Start exploring"
     },
     "suggestedApps": {
@@ -2317,7 +2328,7 @@
     "insufficientCredits": {
       "title": "You've run out of credits",
       "description": "Your credit balance is insufficient to perform this action. Upgrade your plan to continue.",
-      "freeScopeNote": "On the Free plan, your monthly credits power workflow runs. Chat and agents draw your separate monthly AI allowance, on the models opened to the free tier; once it is spent they need a credit top-up or a paid plan.",
+      "freeScopeNote": "On the Free plan, your monthly credits pay for workflow runs, and for chat and agent turns on the models marked Free. Other models, web search and image generation need a credit top-up or a paid plan.",
       "recommended": "Recommended",
       "currentPlan": "Current Plan",
       "upgrade": "Upgrade",
@@ -2332,7 +2343,6 @@
       },
       "features": {
         "freeCredits": "1,000 credits/month",
-        "freeAiCredits": "{credits} AI credits/month",
         "freeConcurrent": "1 concurrent execution",
         "freeStorage": "100 MB storage",
         "creditsPerMonth": "credits/month",
@@ -2362,7 +2372,6 @@
       "features": {
         "freeStorage": "100 MB storage",
         "freeCredits": "1,000 credits/month",
-        "freeAiCredits": "{credits} AI credits/month",
         "starterStorage": "1 GB storage",
         "starterCredits": "5,000 credits/month",
         "proStorage": "10 GB storage",
@@ -2639,9 +2648,19 @@
       "inactivityTimeoutLabel": "Inactivity Timeout (s)",
       "inactivityTimeoutInfo": "How long this agent may stay silent (no token, thinking, tool call, or result) before the watchdog stops it. Use 0 to disable, or 10-7200s; leave at 300 for the 5-minute default. Independent of the total execution timeout.",
       "advancedModeLabel": "Advanced mode",
-      "sensitiveActionsLabel": "Sensitive actions",
-      "sensitiveActionsAlwaysOn": "Always allowed",
-      "sensitiveActionsLockedInfo": "Agents run sensitive actions (install, execute, sub-agents, catalog calls) without asking for approval. This is always on for agents and can't be turned off.",
+      "sensitiveActionsAskHint": "Installs, runs, sub-agents and catalog calls: the request reaches you on this destination. Without an answer, the action is not done.",
+      "sensitiveActionsSaveFailed": "The agent was saved, but its sensitive-actions setting could not be.",
+      "channelCardTitle": "Reach me outside the app",
+      "channelCardDescription": "Its permission requests and questions reach you on a chat when it runs without you",
+      "channelCardUnavailable": "Connect a channel first (Telegram, Slack, WhatsApp, Discord or Teams)",
+      "channelCardConnect": "Connect a channel",
+      "channelCardLoading": "Loading your channels...",
+      "channelCardError": "Your channels could not be loaded. Try again in a moment.",
+      "armedWithoutChannel": "This agent asks permission before sensitive actions, but has no channel to ask on: those actions are not done.",
+      "armedWithoutChannelDisarm": "Stop asking",
+      "sensitiveActionsAskLabel": "Ask my permission before a sensitive action",
+      "channelDestinationLabel": "Destination",
+      "channelDestinationHint": "When it runs without you (on a schedule or from a webhook), its requests and questions are sent here.",
       "creditBudgetLabel": "Credit Budget",
       "creditBudgetInfo": "Maximum credits this agent can consume. Leave empty for unlimited.",
       "unlimited": "Unlimited",
@@ -2653,7 +2672,7 @@
       "resetCredits": "Reset Credits",
       "resetCreditsConfirm": "Are you sure you want to reset the credits consumed for this agent?",
       "systemPromptInfo": "Instructions that define the agent's behavior, personality, and capabilities.",
-      "toolsLabel": "Available MCP Tools",
+      "toolsLabel": "Available integration tools",
       "selectAll": "Select all",
       "deselectAll": "Deselect all",
       "grant_none": "None",
@@ -2666,8 +2685,8 @@
       "noToolsAvailable": "No tools available",
       "searchApis": "Search APIs...",
       "noSearchResults": "No results found",
-      "allTools": "All MCP tools",
-      "noTools": "No MCP tools",
+      "allTools": "All integration tools",
+      "noTools": "No integration tools",
       "offTools": "No tools at all",
       "customToolsOption": "Custom selection (max {max})",
       "customTools": "Custom ({count}/{max})",
@@ -3199,6 +3218,10 @@
       "vectorSearch": {
         "label": "Vector columns and similarity search",
         "description": "Embedding columns, similarity queries (RAG) and installing marketplace apps that use them. Embeddings share the managed database, so the bar is a paid plan rather than a free-for-all."
+      },
+      "notificationEmail": {
+        "label": "Email alerts",
+        "description": "Workflow failures, account issues and tasks by email. Credit alerts are always emailed, on every plan, because a Free account that runs out must be told. Channel alerts and the in-app bell are never gated."
       }
     }
   },
@@ -3574,7 +3597,8 @@
       "hideKey": "Hide key",
       "useMyKey": "Use my key",
       "noProviders": "No provider on this workspace accepts your own key yet.",
-      "requiresPlan": "Own keys start on the {plan} plan.",
+      "requiresPlan": "Own keys start on the {plan} plan",
+      "requiresPlanDescription": "Until then your saved keys stay read-only and your agents keep running on the LiveContext key. Upgrade to {plan} to switch them onto your own key.",
       "upgrade": "Upgrade to {plan}",
       "fees": {
         "open": "See the price per turn",
@@ -3788,7 +3812,10 @@
       "bundleShipOff": "CE: off",
       "bundleShipTooltip": "What the CE bundle ships for this model, independent of the enabled toggle: auto follows it, on ships the model enabled to self-hosted installs even when disabled here, off ships it disabled.",
       "freeTierChip": "Free",
-      "freeTierTooltip": "Whether a Free-plan account may spend its monthly AI allowance on this model. That allowance is a separate pot from the monthly credits, which fund workflows. Off by default: a Free account then needs a top-up to run this model.",
+      "freeTierTooltip": "Whether a Free-plan account may spend its monthly credits on chat and agent turns with this model. Off by default: a Free account then needs a top-up to run this model.",
+      "replacedBy": "Replaced by",
+      "replacementDefault": "Platform default",
+      "replacementTooltip": "While this model is disabled, the agents, workflow nodes and chats that still use it run on this model instead (and are billed for it). Platform default = the model the platform uses when none is chosen.",
       "notConfigured": "Not configured",
       "notConfiguredTooltip": "Listed so you can rank and price it, but not usable yet: no API key for this provider (or the cloud relay cannot run it). Add a key to use it.",
       "custom": "custom",
@@ -3800,12 +3827,45 @@
       "filterByProvider": "Filter by provider",
       "selectAll": "Select every model shown",
       "selectRow": "Select",
+      "rankEdit": "Change position",
       "bulkSelected": "{count} selected",
       "bulkEnable": "Enable",
       "bulkDisable": "Disable",
       "bulkTier": "Set tier",
       "bulkClear": "Clear selection",
       "bulkPartial": "{action}: {failed} of {total} failed. {reason}",
+      "releasedOn": "Released {date}",
+      "releaseUnknown": "Release date unknown",
+      "sort": {
+        "label": "Sort order",
+        "rank": "By rank",
+        "oldest": "Oldest release first",
+        "newest": "Newest release first"
+      },
+      "retire": {
+        "action": "Retire",
+        "bulk": "Retire selected ({count})",
+        "confirmOne": "Retire \"{name}\"? It leaves every model list and picker, is no longer sent to self-hosted installs, and no catalog refresh can bring it back. You can restore it later from Retired models.",
+        "confirmMany": "Retire {count} models? They leave every model list and picker, are no longer sent to self-hosted installs, and no catalog refresh can bring them back. You can restore them later from Retired models.",
+        "doneTitle": "Models retired: {count}",
+        "doneMessage": "They are gone from every model list. Restore them from Retired models if you need them again.",
+        "error": "Could not retire the models"
+      },
+      "retired": {
+        "title": "Retired models",
+        "titleWithCount": "Retired models ({count})",
+        "hint": "Retired models are hidden everywhere and are never brought back by a catalog refresh. A restored model comes back disabled.",
+        "empty": "No retired models.",
+        "loadError": "Could not load the retired models.",
+        "restore": "Restore",
+        "restoreSelected": "Restore selected ({count})",
+        "selectAll": "Select all retired models",
+        "selectRow": "Select",
+        "retiredOn": "Retired {date}",
+        "restoredTitle": "Models restored: {count}",
+        "restoredMessage": "A restored model comes back disabled. Enable it in the model list before anyone can use it.",
+        "restoreError": "Could not restore the models"
+      },
       "searchPlaceholder": "Search a model",
       "filterByTier": "Tier",
       "allTiers": "All tiers",
@@ -3854,7 +3914,7 @@
           "hint": "Models available to the Browser Agent. Rank sets the default order; disable removes the model from Browser Agent runs."
         }
       },
-      "freeTierNoneOpen": "No model on this tab is open to the free tier, so the monthly AI allowance the pricing page advertises cannot pay for a turn of this kind: a Free account is refused. Open at least one model with the Free chip above."
+      "freeTierNoneOpen": "No model on this tab is open to the free tier, so the monthly credits the pricing page advertises for chat and agents cannot pay for a turn of this kind: a Free account is refused. Open at least one model with the Free chip above."
     },
     "executionLinks": {
       "title": "Model execution links",
@@ -3878,7 +3938,7 @@
       "sameAsBilled": "Same as billed model",
       "appliesTo": "Applies to",
       "scopeAll": "All surfaces",
-      "scopeChat": "General chat",
+      "scopeChat": "Orbi",
       "scopeWorkflow": "Workflow node",
       "scopeWebhook": "Webhook",
       "scopeWidget": "Widget",
@@ -4308,7 +4368,8 @@
         "customFieldRequired": "{field} is required",
         "saveFailed": "Failed to save credential",
         "oauthConfigFailed": "Failed to save OAuth configuration",
-        "oauthUrlsRequired": "Authorization URL and Token URL are required"
+        "oauthUrlsRequired": "Authorization URL and Token URL are required",
+        "byokScopesRequired": "Tick at least one scope."
       },
       "oauthConfig": {
         "authUrl": "Authorization URL",
@@ -4322,7 +4383,9 @@
         "scopes": "Scopes",
         "scopesPlaceholder": "e.g. read write (space-separated)",
         "tokenUrl": "Token URL",
-        "tokenUrlPlaceholder": "https://provider.com/oauth/token"
+        "tokenUrlPlaceholder": "https://provider.com/oauth/token",
+        "scopePickerTitle": "Scopes to request",
+        "scopePickerHint": "Untick any scope your OAuth app has not been given. TikTok, Figma and LinkedIn refuse the whole connection over a single scope the app does not have. A tool that needs an unticked scope says which one is missing: tick it here, save, and reconnect."
       },
       "platformKey": {
         "title": "You do not have to add a key",
@@ -5362,11 +5425,8 @@
         "processing": "Processing…"
       },
       "features": {
-        "creditsFree": "1,000 workflow credits per month",
-        "creditsFreeTooltip": "These credits run your workflows, and only your workflows: **{nodeCredits} credit** per node a run executes. Chat and agents never touch them, they draw the separate monthly AI allowance on the line below, and add-ons such as web search or image generation need a top-up.",
-        "aiCreditsFree": "{credits} AI credits per month",
-        "aiCreditsFreeUnknown": "Monthly AI credits",
-        "aiCreditsFreeTooltip": "A separate monthly allowance for chat and agent turns, on the models open to the free plan: about **{exchangeCredits} credits** for a short exchange with a configured agent, its whole context included, on a lightweight model such as {basisModel}. An estimate from real usage, not a cap. It refills every month and never touches your workflow credits.",
+        "creditsFree": "1,000 credits per month",
+        "creditsFreeTooltip": "One monthly pool for your workflows and your agents: **{nodeCredits} credit** per node a run executes, and about **{exchangeCredits} credits** for a short exchange with a configured agent on a lightweight model such as {basisModel} (an estimate from real usage, not a cap). Chat and agents are covered on the models marked Free; any other model, and add-ons such as web search or image generation, stay available with a top-up. Resets every month.",
         "creditsPerMonth": "{credits} credits per month",
         "creditsCustom": "Custom credits",
         "users1": "1 user",
@@ -5401,6 +5461,8 @@
         "cePlatformCredsTooltip": "A cloud-linked self-hosted install can run third-party integrations with LiveContext platform credentials, no API keys of your own needed. A small per-call markup in credits applies.",
         "vectorSearch": "Vector search and RAG on cloud",
         "vectorSearchTooltip": "Embedding columns and similarity search on your tables, for retrieval-augmented generation. Embeddings share the managed database, so on cloud they start at Pro. A self-hosted install has them on every plan, because it owns its own database.",
+        "emailAlerts": "Email alerts",
+        "emailAlertsTooltip": "Failed workflows, account issues and assigned tasks reach your inbox, without the flood: one email when a workflow breaks, at most one reminder a day, one when it recovers. Every plan gets these alerts in the app and in a connected chat channel, and credit alerts by email.",
         "browserAgent": "Browser Agent node",
         "browserAgentTooltip": "An LLM that drives a real browser: navigate, fill forms, extract structured data from sites with no API. It holds a browser session for the length of the task, a scarce resource on shared infrastructure, so it starts at Pro.",
         "priorityExecution": "Priority execution",
@@ -5451,8 +5513,6 @@
       },
       "dimensions": {
         "credits": "Monthly credits",
-        "aiCredits": "AI credits",
-        "aiCreditsTooltip": "A separate monthly allowance for chat and agent turns, on the models open to the free plan: about **{exchangeCredits} credits** for a short exchange with a configured agent, its whole context included, on a lightweight model such as {basisModel}. An estimate from real usage, not a cap. Paid plans do not need one: their credits already fund agents, where the free plan's credits run workflows only.",
         "nodes": "Nodes and integrations",
         "nodesTooltip": "Only publishing is held back: posting to YouTube, Instagram, TikTok, X, LinkedIn and 13 other platforms needs a paid plan. Reading from them, and every other node, is on every plan.",
         "concurrent": "Concurrent executions",
@@ -5466,9 +5526,7 @@
         "creditsTooltip": "About **{exchangeCredits} credits** for a short exchange with a configured agent, its whole context included, on a lightweight model such as {basisModel}. An estimate from real usage, not a cap; a top-tier model costs more."
       },
       "values": {
-        "creditsFree": "1,000 / month (workflows)",
-        "aiCreditsFree": "{credits} / month",
-        "aiCreditsIncluded": "Included in credits",
+        "creditsFree": "1,000 / month",
         "creditsDynamic": "From {credits} / month",
         "creditsCustom": "Custom",
         "nodesCore": "All but publishing",
@@ -5707,7 +5765,9 @@
       "title": "Storage Usage",
       "usedOf": "{used} of {total} used",
       "thisWorkspace": "{used} used in this workspace",
-      "accountPool": "Account: {used} of {total} shared across your workspaces"
+      "accountPool": "Account: {used} of {total} shared across your workspaces",
+      "available": "{free} available",
+      "softLimitMarker": "Warning starts at 80%"
     },
     "breakdown": {
       "title": "Storage Breakdown",
@@ -5715,7 +5775,8 @@
       "workflows": "Workflows",
       "tables": "Tables",
       "files": "Files",
-      "noData": "No breakdown data yet. Click recalculate to generate."
+      "noData": "No breakdown data yet. Click recalculate to generate.",
+      "itemsAvg": "{count, plural, one {# item} other {# items}}, {avg} on average"
     },
     "trends": {
       "title": "Usage Trends",
@@ -5724,7 +5785,16 @@
       "period30d": "30d",
       "period90d": "90d",
       "noHistory": "Trend data will appear after the first daily snapshot.",
-      "totalItems": "{count} items"
+      "totalItems": "{count} items",
+      "growth": "Change over the period",
+      "growthRange": "From {from} to {to}",
+      "perDay": "Average per day",
+      "fullIn": "Full in",
+      "days": "~{count, plural, one {# day} other {# days}}",
+      "overYear": "Over a year",
+      "notFilling": "Not filling up",
+      "alreadyFull": "Already full",
+      "atThisPace": "At this period's pace"
     },
     "categories": {
       "STEP_OUTPUTS": "Step Outputs",
@@ -5758,6 +5828,12 @@
       "title": "Need more storage?",
       "description": "Upgrade your plan to get more space.",
       "button": "Upgrade plan"
+    },
+    "largest": {
+      "title": "Largest items",
+      "subtitle": "What takes the most space in this workspace",
+      "openFiles": "Open Files",
+      "unnamed": "Untitled"
     }
   },
   "runMode": {
@@ -5965,7 +6041,11 @@
       "noHistory": "No usage history yet",
       "filterAll": "All types",
       "page": "Page {current} of {total}",
-      "ownKeyBadge": "Your key"
+      "previousPage": "Previous page",
+      "nextPage": "Next page",
+      "ownKeyBadge": "Your key",
+      "fullscreen": "Full screen",
+      "exitFullscreen": "Exit full screen"
     },
     "error": {
       "loadFailed": "Failed to load quota data"
@@ -5992,7 +6072,26 @@
       "avgDaily": "Avg. Daily",
       "mostActive": "Most Active",
       "noData": "No usage data for this period",
-      "credits": "Credits"
+      "credits": "Credits",
+      "chartMetric": "Chart metric",
+      "metricCredits": "Credits",
+      "metricCost": "Cost",
+      "metricCalls": "Calls",
+      "metricTokens": "Tokens",
+      "calls": "Calls",
+      "tokens": "Tokens",
+      "avgPerCall": "Avg. per call",
+      "vsPrevious": "vs previous period",
+      "peakOn": "Peak {amount} on {date}",
+      "runway": "Balance lasts",
+      "runwayDays": "~{count, plural, one {# day} other {# days}}",
+      "runwayOverYear": "Over a year",
+      "runwayHint": "At this period's average daily spend",
+      "byType": "By type",
+      "byModel": "By model",
+      "filterOn": "Filter the chart on this row",
+      "noModel": "No model (API calls and tools)",
+      "otherModels": "{count, plural, one {# other model} other {# other models}}"
     },
     "upgrade": {
       "title": "Usage Analytics",
@@ -6020,7 +6119,41 @@
     "capExceededTokens": "Member quota exceeded: {consumed} of {cap} LLM tokens used this cycle. Ask your organization admin to raise this cap.",
     "capExceededGeneric": "Member quota exceeded ({dimension}): {consumed} of {cap}. Ask your organization admin to raise this cap."
   },
+  "twoFactorNudge": {
+    "title": "Protect your team with two-factor",
+    "body": "You own this team workspace: its connected apps, credentials and billing. Turn on two-factor so a stolen password is not enough to get in.",
+    "cta": "Turn on two-factor",
+    "dismiss": "Dismiss"
+  },
   "settings": {
+    "twoFactor": {
+      "title": "Two-factor authentication",
+      "description": "Ask for a code from an authenticator app at every sign-in, on top of your password or your Google or GitHub login.",
+      "stateOn": "On",
+      "stateOff": "Off",
+      "loading": "Loading two-factor status...",
+      "error": "Your two-factor status could not be loaded. Please try again.",
+      "requiredForAdmins": "Two-factor authentication is required for administrator accounts, so your last authenticator app cannot be removed.",
+      "requiredForAdminsPending": "Two-factor authentication is required for administrator accounts. Turn it on now, or you will be asked to at your next sign-in.",
+      "unnamedDevice": "Authenticator app",
+      "addedOn": "Added {date}",
+      "remove": "Remove",
+      "turnOn": "Turn on",
+      "unavailable": "Two-factor authentication is not available for this account.",
+      "recoveryTitle": "Recovery codes",
+      "recoveryNone": "None yet. If you lose your phone, you will not be able to sign in.",
+      "recoveryLeft": "{remaining} of {total} codes left. Each works once if you lose your phone.",
+      "recoveryLow": "Only {remaining} left. Generate a new set before you run out.",
+      "recoverySet": "Set up. Each code works once if you lose your phone.",
+      "recoveryCreate": "Create recovery codes",
+      "recoveryRegenerate": "Generate new codes"
+    },
+    "emailUpdates": {
+      "title": "Email updates",
+      "description": "Occasional news and offers from LiveContext. Emails about your account, such as getting started or running out of credits, are sent either way.",
+      "label": "Send me LiveContext news and offers by email. You can unsubscribe in one click.",
+      "error": "Your email preference could not be loaded or saved. Please try again."
+    },
     "nav": {
       "scrollLeft": "Scroll left",
       "scrollRight": "Scroll right"
@@ -6029,8 +6162,8 @@
     "mustBeLoggedIn": "You must be logged in to access settings.",
     "signIn": "Sign In",
     "agentDefaults": {
-      "title": "Agents & chat defaults",
-      "subtitle": "Default options applied to every agent conversation and every new general chat in this workspace."
+      "title": "Agent & Orbi defaults",
+      "subtitle": "Default options applied to every agent conversation and every new conversation with Orbi in this workspace."
     },
     "bundles": {
       "title": "Catalog Bundles",
@@ -6038,7 +6171,7 @@
       "adminOnly": "Only the platform administrator can manage catalog bundles.",
       "adminOnlyBadge": "Admin only",
       "tabModels": "Model catalog",
-      "tabApis": "MCP catalog",
+      "tabApis": "Integrations catalog",
       "tabSkills": "Skills",
       "skills": {
         "loading": "Loading skill bundles...",
@@ -6297,6 +6430,7 @@
       "email": "Email",
       "accountType": "Account Type",
       "localAccount": "Email/Password",
+      "ssoAccount": "Single sign-on (SAML)",
       "plan": "Plan",
       "editBio": "Edit Bio",
       "editBioDesc": "Tell us about yourself",
@@ -6365,7 +6499,7 @@
       "chatDefaultsLink": "Open agent & chat settings",
       "savePreferences": "Save Preferences",
       "workflowLayoutDirection": "Workflow layout",
-      "workflowLayoutDirectionDescription": "Direction the workflow builder reads in: left to right, or top to bottom. Sets where node connections and buttons sit, and how auto-layout arranges the graph.",
+      "workflowLayoutDirectionDescription": "Direction a new workflow starts in: left to right, or top to bottom. A saved workflow keeps its own direction, which you change from its canvas settings, and the marketplace shows each workflow the way its author laid it out.",
       "workflowLayoutDirectionHorizontal": "Left to right",
       "workflowLayoutDirectionVertical": "Top to bottom",
       "inspectorDock": "Node inspector",
@@ -6378,15 +6512,60 @@
       "inspectorOpenModeAdvanced": "Settings, input and output"
     },
     "notifications": {
-      "title": "Notification Preferences",
-      "description": "Manage how we contact you",
-      "email": "Email Notifications",
-      "emailDescription": "Receive important notifications by email",
-      "comingSoon": "Coming soon",
-      "push": "Push Notifications",
-      "pushDescription": "Receive push notifications in the browser",
-      "marketing": "Marketing Emails",
-      "marketingDescription": "Receive information about new tools and features"
+      "title": "Notifications",
+      "description": "Choose where each kind of alert reaches you in this workspace. The bell in the app always gets everything.",
+      "antiSpamInfo": "How alerts are limited",
+      "antiSpamTitle": "No flood",
+      "antiSpamBreaks": "One message when a workflow breaks.",
+      "antiSpamReminder": "At most one reminder a day while it stays broken.",
+      "antiSpamRecovered": "One message when it works again.",
+      "antiSpamDigest": "Account and task updates arrive together in one daily summary.",
+      "antiSpamCap": "An inbox never gets more than 10 alerts a day.",
+      "loading": "Loading your notification settings...",
+      "loadFailed": "Your notification settings could not be loaded.",
+      "retry": "Try again",
+      "saveFailed": "That change was not saved. Try again.",
+      "channelTitle": "Where channel alerts go",
+      "channelIntro": "Channel alerts are sent to this workspace's default chat.",
+      "channelPrivacy": "Everyone in this chat can read these alerts.",
+      "channelLoading": "Loading the connected chats...",
+      "channelLoadFailed": "The connected chats could not be loaded.",
+      "noDefault": "Chats are connected to this workspace but none is the default, so channel alerts are not sent.",
+      "defaultOff": "The default chat of this workspace is switched off, so channel alerts are not sent.",
+      "changeLabel": "Send the alerts to another chat",
+      "changeHint": "The chat you choose becomes the default of this workspace: approvals and agent questions that follow the default go there too.",
+      "changeFailed": "The default chat was not changed. Try again.",
+      "changeReadOnly": "Your role in this workspace is read-only: only a member who can edit it can choose another chat.",
+      "manageChannels": "Manage channels",
+      "noChannel": "No chat channel is connected to this workspace, so the channel options are not available yet.",
+      "connectChannel": "Connect a channel",
+      "emailNeedsPlan": "Email alerts are included from the {plan} plan.",
+      "personScoped": "Applies in all your workspaces. Channel alerts go to your personal workspace's channel.",
+      "deliversNothing": "With this choice nothing leaves the app: the bell still shows it.",
+      "topics": {
+        "failures": {
+          "title": "Workflow failures",
+          "description": "A production workflow you own failed or stopped on its spending cap."
+        },
+        "credits": {
+          "title": "Credits",
+          "description": "Your credits are running low or have run out."
+        },
+        "account": {
+          "title": "Account issues",
+          "description": "A credential expired or a trigger was switched off. Sent in the daily summary."
+        },
+        "tasks": {
+          "title": "Tasks",
+          "description": "A task was assigned to you, mentions you or waits for your review. Sent in the daily summary."
+        }
+      },
+      "delivery": {
+        "both": "Email and channel",
+        "email": "Email",
+        "channel": "Channel",
+        "off": "Bell only"
+      }
     },
     "advanced": {
       "deleteTitle": "Delete Account",
@@ -6588,6 +6767,27 @@
           "ACTIVE": "Active",
           "ERROR": "Error",
           "DISABLED": "Disabled"
+        },
+        "domains": {
+          "title": "Verified email domains",
+          "description": "SSO sign-in works only for addresses on a domain this workspace has proven it owns. \"Sign in with SSO\" sends people with those addresses to your identity provider.",
+          "noneVerified": "No verified domain yet: nobody can sign in through SSO until one is verified.",
+          "verified": "Verified",
+          "pending": "Pending",
+          "verify": "Check now",
+          "remove": "Remove {domain}",
+          "verifiedAt": "Verified on {date}",
+          "instructions": "Add this TXT record at your DNS provider, then click Check now. DNS changes can take a few minutes to appear.",
+          "recordName": "Name",
+          "recordValue": "Value",
+          "copy": "Copy",
+          "copied": "Copied",
+          "lastChecked": "Last checked {date}",
+          "placeholder": "company.com",
+          "add": "Add domain",
+          "verifiedNotice": "{domain} is verified.",
+          "notFoundYet": "The TXT record for {domain} was not found yet. Check the record and try again in a few minutes.",
+          "error": "Something went wrong. Try again."
         }
       },
       "cancel": "Cancel",
@@ -6936,7 +7136,6 @@
       "loopOutput": "Loop Output",
       "previousIterationExplanation": "This output comes from the previous loop iteration. You can use it to build logic that accumulates or depends on results from earlier iterations.",
       "loopOutputExplanation": "This output comes from this node in the loop. After the loop completes, it contains the result from the last iteration.",
-      "clickForInfo": "Click for more info",
       "goToNode": "Go to {label}",
       "downloadFile": "Download file",
       "clickToExpand": "Click to expand",
@@ -6992,7 +7191,7 @@
         "signalBrowserTakeover": "Browser takeover",
         "signalExpiresAt": "expires {date}",
         "noResolvedParams": "No resolved parameters",
-        "configuredParamsTitle": "Launched with"
+        "configuredParamsTitle": "Configured values (not resolved)"
       },
       "moreActions": "More actions",
       "tablesTrigger": {
@@ -7624,6 +7823,7 @@
       "scopeLatestEpoch": "This step's latest epoch"
     },
     "canvas": {
+      "validationSummary": "{errors, plural, one {# error} other {# errors}}, {warnings, plural, one {# warning} other {# warnings}}",
       "portSingleTargetHint": "This output is already connected. One port goes to a single node - add a Fork node to run several in parallel.",
       "loadErrorTitle": "Failed to load this workflow",
       "loadErrorMessage": "The workflow could not be loaded. Check your connection and try again.",
@@ -7658,6 +7858,8 @@
       "mockRun": "Mock run",
       "followRunningNode": "Follow the running step",
       "stopFollowingRunningNode": "Stop following the running step",
+      "followAgentBuild": "Follow the nodes the agent adds",
+      "stopFollowingAgentBuild": "Stop following the nodes the agent adds",
       "runWorkflow": "Run workflow",
       "runAuto": "Run (auto)",
       "runStepByStep": "Step-by-step (debug)",
@@ -7666,6 +7868,7 @@
       "runsHistory": "Runs history",
       "backToHome": "Back to home",
       "searchPlaceholder": "Search {context}...",
+      "searchIntegrations": "Search integrations...",
       "frequentlyUsed": "Frequently Used",
       "coreTriggers": "Core triggers",
       "appTriggerShortcuts": "Application triggers",
@@ -7682,7 +7885,7 @@
       "paletteCategories": "Categories",
       "paletteNodes": "Nodes",
       "paletteIntegrations": "Integrations",
-      "mcp": "MCP",
+      "mcp": "Integrations",
       "noApiFound": "No API found",
       "noToolFound": "No tool found",
       "createTable": "Create Table",
@@ -8288,7 +8491,6 @@
       },
       "manual": {
         "configuration": "Manual Configuration",
-        "moreInfo": "Click for more info",
         "title": "Manual Trigger",
         "description": "Trigger the workflow manually by clicking the play button.",
         "availableOutputs": "Available outputs:",
@@ -8297,7 +8499,6 @@
       },
       "workflowTrigger": {
         "configuration": "Workflow Configuration",
-        "moreInfo": "Click for more info",
         "title": "Workflow Trigger",
         "description": "This workflow is triggered when another workflow completes and calls it.",
         "availableOutputs": "Available outputs:",
@@ -8307,7 +8508,6 @@
       },
       "errorTrigger": {
         "configuration": "Error Trigger Configuration",
-        "moreInfo": "Click for more info",
         "title": "Error Trigger",
         "description": "Fires when the watched workflow run ends in FAILED or PARTIAL_SUCCESS. That covers any kind of failure: an unhandled node exception (HTTP error, code crash, tool throw), a stop_on_error node, a timeout, or partial-success when some branches failed but others succeeded. Use it to alert ops, log failures, retry, or fall back. Anti-loop: if this handler itself fails, no further error handler is triggered.",
         "availableOutputs": "Available outputs:",
@@ -8318,7 +8518,6 @@
       },
       "chat": {
         "configuration": "Chat Configuration",
-        "moreInfo": "Click for more info",
         "title": "Chat Trigger",
         "description": "Trigger the workflow from conversation input in the chat panel.",
         "availableOutputs": "Available outputs:",
@@ -8375,7 +8574,7 @@
         "promptPlaceholder": "What do you want the agent to do?",
         "tools": "Tools",
         "allTools": "All tools",
-        "connectToolsHint": "Connect MCP tools to restrict which tools the agent can use",
+        "connectToolsHint": "Connect integration tools to restrict which tools the agent can use",
         "systemPrompt": "System Prompt",
         "systemPromptPlaceholder": "You are a helpful assistant...",
         "systemPromptInfo": "Instructions that define the agent's behavior and personality.",
@@ -8390,9 +8589,32 @@
         "addRule": "Add rule",
         "inputToValidate": "Input to Validate",
         "validationRules": "Validation Rules",
-        "rulesDescription": "Define validation rules for the guardrail.",
+        "rulesDescription": "Keyword, regex, length, PII (except addresses), competitor and custom rules are checked exactly, without an AI call. The other rules are judged by the AI model.",
         "temperatureDescription": "Controls randomness in validation. Lower values make validation more strict.",
-        "maxTokensDescription": "Maximum number of tokens for AI validation response."
+        "maxTokensDescription": "Maximum number of tokens for AI validation response.",
+        "mode": "Mode",
+        "keywordModeBlock": "Block these keywords",
+        "keywordModeAllow": "Allow only if one of these keywords appears",
+        "regexModeRequire": "The content must match",
+        "regexModeBlock": "The content must not contain a match",
+        "engineDeterministic": "Checked exactly, without an AI call",
+        "engineModel": "Judged by the AI model",
+        "typeDescriptions": {
+          "pii_detection": "Detects emails, phone numbers, SSNs and card numbers exactly; addresses are judged by the AI",
+          "toxic_language": "Judged by the AI: offensive or harmful content",
+          "prompt_injection": "Judged by the AI: attempts to override instructions",
+          "keyword_filter": "Blocks, or requires, whole-word keywords",
+          "regex_pattern": "The content must match, or must not contain, a regex",
+          "length_check": "Minimum and maximum length in characters",
+          "topic_restriction": "Judged by the AI: topics the content must not discuss",
+          "competitor_mention": "Blocks the listed names (whole words)",
+          "custom": "Boolean expression: #input is the content, true means valid"
+        },
+        "actionDescriptions": {
+          "block": "Fail the check and route to the Fail output",
+          "sanitize": "Fail the check and replace the matched text with [REDACTED] in the sanitized output",
+          "flag": "Fail the check and list the violation, without redacting"
+        }
       },
       "approval": {
         "contextLabel": "Approval context",
@@ -8410,24 +8632,31 @@
         "delegation": {
           "title": "Delegate via external channel",
           "infoTitle": "External channel delegation",
-          "infoBody": "Sends the pending approval to a Telegram chat as a message with approve and reject buttons. Tapping a button resolves the approval, in addition to the in-app decision.",
+          "infoBody": "Sends the pending approval to Telegram, Slack, Discord, WhatsApp or Microsoft Teams as a message with approve and reject buttons. Pressing a button resolves the approval, in addition to the in-app decision.",
           "infoOptional": "Optional. The approval also stays available in the app.",
           "enableAria": "Enable external channel delegation",
           "channelLabel": "Channel",
-          "credentialHint": "Optional. Leave empty to send with your default Telegram credential, or select one to use a specific bot.",
-          "chatIdLabel": "Chat ID",
-          "chatIdHint": "Destination chat or group ID. Supports '{{...}}' expressions.",
+          "credentialHint": "Optional. Leave empty to use the {channel} account connected in Settings > Channels, or select one to use a specific account.",
+          "chatIdLabel": "Destination",
+          "chatIdHint": "Optional. Leave empty to send to the {channel} destination connected in Settings > Channels. Supports expressions.",
           "messageLabel": "Message template",
           "messagePlaceholder": "Defaults to the approval context",
           "imageLabel": "Image",
           "imageHint": "Optional. A file output from another node (for example an interface screenshot) or an image URL. When set, the message is sent as a photo with the text as its caption. Supports '{{...}}' expressions.",
           "allowedUserIdsLabel": "Allowed user IDs",
-          "allowedUserIdsHint": "Comma-separated Telegram user IDs. Leave empty to let anyone in the chat decide.",
+          "allowedUserIdsHint": "Comma-separated {channel} user IDs. Leave empty to let anyone in the chat decide.",
           "approveLabelLabel": "Approve button",
           "approveLabelPlaceholder": "✅ Approve",
           "rejectLabelLabel": "Reject button",
           "rejectLabelPlaceholder": "❌ Reject",
-          "buttonLabelsHint": "Optional. Custom text for the approve and reject buttons. Leave empty to keep the defaults. Only the button text changes. Supports '{{...}}' expressions."
+          "buttonLabelsHint": "Optional. Custom text for the approve and reject buttons. Leave empty to keep the defaults. Only the button text changes. Supports '{{...}}' expressions.",
+          "channelHint": "Connect a service once, and approvals can reach it without any other setting.",
+          "manageChannels": "Manage channels",
+          "destinationLabel": "Destination",
+          "destinationHint": "Picked like a credential: the workspace default, a connected destination, or another chat named by hand.",
+          "customDestination": "Another chat (advanced)",
+          "credentialDescription": "{channel} account used to send the approval message",
+          "anonymousPressNote": "On {channel} the buttons are links to a confirmation page, which cannot tell who opened them, so anyone in the chat can decide."
         }
       }
     },
@@ -8655,7 +8884,6 @@
     },
     "availableOutputs": "Available outputs:",
     "manageInSettings": "Manage in Settings",
-    "moreInfo": "More info",
     "loadingEndpoint": "Loading endpoint...",
     "formUrl": "Form URL",
     "copyUrl": "Copy URL",
@@ -8786,16 +9014,17 @@
       "description": "Create your first table to get started, or check out our guided tutorials below"
     },
     "mcp": {
-      "title": "MCPs",
-      "searchPlaceholder": "Search MCPs by name, description...",
-      "addButton": "Add MCP",
-      "noMCPsFound": "No MCPs found",
-      "addFirstMCP": "Add your first MCP from the marketplace",
-      "noMatchingMCPs": "No MCPs match your search criteria",
+      "title": "Integrations",
+      "count": "{count, plural, one {# integration} other {# integrations}}",
+      "searchPlaceholder": "Search integrations by name, description...",
+      "addButton": "Add integration",
+      "noMCPsFound": "No integrations found",
+      "addFirstMCP": "Add your first integration from the marketplace",
+      "noMatchingMCPs": "No integrations match your search criteria",
       "deleteCount": "Delete ({count})",
-      "deleteTitle": "Delete MCPs",
-      "deleteConfirmation": "Are you sure you want to delete {count} MCP(s)? This action cannot be undone.",
-      "deleteFailed": "Unable to delete the selected MCPs.",
+      "deleteTitle": "Delete integrations",
+      "deleteConfirmation": "Are you sure you want to delete {count} integration(s)? This action cannot be undone.",
+      "deleteFailed": "Unable to delete the selected integrations.",
       "tools": "Tools",
       "added": "Added"
     }
@@ -8979,9 +9208,9 @@
     "error": "Error",
     "repeat": "repeat",
     "overview": "Overview",
-    "overviewDesc": "Combined metrics across all agents and general chat",
-    "generalChat": "General Chat",
-    "generalChatDesc": "Metrics for conversations without an agent selected",
+    "overviewDesc": "Combined metrics across all agents and Orbi",
+    "generalChat": "Orbi",
+    "generalChatDesc": "Conversations with Orbi, no agent selected",
     "agentPerformanceDesc": "Per-agent execution statistics",
     "toolStatsDesc": "Usage and performance of agent tools",
     "dailyActivity": "Daily Activity",
@@ -9115,6 +9344,7 @@
     "noAnswer": "No answer yet"
   },
   "onboarding": {
+    "marketingConsent": "Send me LiveContext news and offers by email. You can unsubscribe in one click.",
     "emailVerification": {
       "title": "Verify Your Email",
       "description": "We sent a 6-digit code to {email}",
@@ -9127,7 +9357,8 @@
       "tooManyAttempts": "Too many attempts, please request a new code",
       "rateLimited": "Too many requests, please wait",
       "codeSent": "Code sent!",
-      "verified": "Email verified!"
+      "verified": "Email verified!",
+      "wrongEmail": "Not your address? Sign out"
     },
     "step": "Step",
     "of": "of",
@@ -9143,7 +9374,7 @@
     "displayNameHint": "Letters, numbers, spaces, and hyphens only. Visible to other users.",
     "displayNameRequired": "Display name is required",
     "displayNameTaken": "This display name is already taken",
-    "displayNameCheckError": "Could not verify display name availability",
+    "displayNameCheckError": "Could not verify display name availability. You can continue anyway.",
     "role": "What's your role?",
     "customRolePlaceholder": "Enter your role...",
     "companySize": "Company Size",
@@ -9156,10 +9387,13 @@
     "step3Required": "Answer both questions to finish",
     "loginRequired": "Sign In Required",
     "loginRequiredDescription": "Please sign in to complete your profile setup",
+    "ceLinkLoginRequiredDescription": "Sign in or create a LiveContext Cloud account to connect your self-hosted install.",
     "signIn": "Sign In",
     "errorTitle": "Something went wrong",
     "errorDescription": "We couldn't load the onboarding page. Please try again.",
     "retry": "Try Again",
+    "signOut": "Sign out",
+    "signOutFailed": "Could not sign out. Please try again.",
     "ce": {
       "role": "Your CE role",
       "teamSize": "Local team size",
@@ -9619,8 +9853,6 @@
       "breakdown": {
         "sub": "Subscription",
         "payg": "PAYG top-up",
-        "ai": "AI allowance",
-        "aiHint": "For agents and chat, on the models available to the free plan. Renews monthly.",
         "paygHintPersists": "Persists across renewal cycles."
       },
       "monthlyCycle": {
@@ -9653,8 +9885,7 @@
     "freeTier": {
       "label": "Free",
       "srLabel": "included in your plan",
-      "tooltip": "Included in your Free plan: your monthly AI allowance pays for chat and agent turns on this model.",
-      "tooltipWithCredits": "Included in your Free plan: {credits} AI credits a month, which pay for chat and agent turns on this model."
+      "tooltip": "Included in your Free plan: your monthly credits pay for chat and agent turns on this model."
     },
     "upgradeRequired": {
       "label": "Paid credits required",
@@ -9663,6 +9894,7 @@
       "cta": "See plans or top up"
     },
     "planLocked": {
+      "infoLabel": "Why this node needs the {plan} plan",
       "nodeNotice": "This node is available from the {plan} plan. It will fail when the workflow runs until you upgrade."
     }
   },
@@ -10704,9 +10936,9 @@
     "dismiss": "Got it",
     "learnMore": "See all updates",
     "latest": {
-      "title": "A typed classifier, and your own model keys",
-      "body": "The Classify node runs on a decision model now: TypeSafe Jev picks one of your categories and gives each one a probability, instead of asking a chat model to write the name of one. Same categories, same branches, one provider change. And your own provider keys drive everything, agents, chats and nodes alike: every run is pinned to the key it actually used, and when a provider refuses your key mid-run you read its own words, not ours.",
-      "mediaAlt": "Two icons side by side: the TypeSafe mark, captioned as a typed engine for Classify, and a key, captioned as your own keys for agents, chats and nodes"
+      "title": "Your agents can reach you in your chat app",
+      "body": "Agents, approval steps and unattended runs no longer wait on a card nobody sees. Connect Telegram, Slack, Discord, WhatsApp or Microsoft Teams on the Channels page of your settings, and a question or an approval arrives in the chat you already read: you answer from there and the run continues. Alerts can leave the app too, on a channel or by email, in your language (on the cloud, email alerts start with the Starter plan). A channel can be connected by hand, without the assistant and without spending credits.",
+      "mediaAlt": "Two icons side by side: a chat bubble, captioned as chat channels for Telegram, Slack, Discord, WhatsApp and Teams, and a bell, captioned as alerts by email or on a channel"
     }
   },
   "optionalComponents": {
@@ -11444,7 +11676,10 @@
       "NIGHT_OWL": "Night shift",
       "PUBLISHER": "Publishing",
       "SHARER": "Sharing",
-      "POPULARITY": "Reach"
+      "POPULARITY": "Reach",
+      "REACHABLE": "Reachable",
+      "MULTICHANNEL": "Multichannel",
+      "REMOTE_CONTROL": "Remote control"
     },
     "tier": {
       "BRONZE": "Bronze",
@@ -11465,7 +11700,10 @@
       "PUBLICATIONS_PUBLISHED": "Publish {count} items to the marketplace",
       "PUBLICATIONS_PUBLIC": "Make {count} publications public",
       "PUBLICATION_USES": "Have your publications installed {count} times",
-      "DAYS_UNTIL_JOIN_CUTOFF": "Join LiveContext early"
+      "DAYS_UNTIL_JOIN_CUTOFF": "Join LiveContext early",
+      "CHANNELS_CONNECTED": "Connect {count} chat destinations that receive your messages",
+      "CHANNEL_SERVICES": "Get reached on {count} different chat services",
+      "REMOTE_DECISIONS": "Get {count} of your requests answered from a chat instead of the app"
     },
     "item": {
       "founder_2026": {
@@ -11615,6 +11853,30 @@
       },
       "popularity_50000": {
         "name": "Household Name"
+      },
+      "reachable_1": {
+        "name": "Within Reach"
+      },
+      "reachable_5": {
+        "name": "Everywhere at Once"
+      },
+      "multichannel_2": {
+        "name": "Two Lines Open"
+      },
+      "multichannel_4": {
+        "name": "Switchboard"
+      },
+      "remote_1": {
+        "name": "First Call"
+      },
+      "remote_25": {
+        "name": "Pocket Pilot"
+      },
+      "remote_250": {
+        "name": "Mission Control"
+      },
+      "remote_2500": {
+        "name": "Command Center"
       }
     }
   },
@@ -11720,10 +11982,6 @@
       "clear": "Clear"
     },
     "untitled": "Untitled creation",
-    "look": {
-      "toDarkroom": "Switch to the darkroom view",
-      "toApp": "Switch back to the app view"
-    },
     "thread": {
       "loading": "Loading this studio thread"
     },
@@ -12002,9 +12260,9 @@
       },
       "hero": {
         "eyebrow": "The AI Automation platform",
-        "titleLineOne": "One message <u>in</u>.",
-        "titleLineTwo": "A working automation <u>out</u>.",
-        "lead": "{integrations} integrations and every major LLM, cloud or self-hosted. Build, deploy, and run your agents visually, in chat, or with code, and add a human in the loop wherever you want.",
+        "titleLineOne": "Say it <u>once</u>.",
+        "titleLineTwo": "Never do it <u>again</u>.",
+        "lead": "One message builds your automation, and you stay in control: every step logged and auditable, your secrets encrypted, a human approval wherever you want. AI runs only where it pays off, so you pay less than for an agent guessing its way through every step.",
         "startFree": "Start free"
       },
       "integrations": {
@@ -12049,8 +12307,8 @@
         "lead": "Pick a plan, choose your credit tier, and set a budget per agent it cannot exceed. You only pay for what you run, with no hidden fees and no surprise overages."
       },
       "finalCta": {
-        "titleLineOne": "Stop juggling tools.",
-        "titleLineTwo": "Start with one.",
+        "titleLineOne": "Build prod.",
+        "titleLineTwo": "Not god.",
         "lead": "Chat with it. Build with it. Ship with it. Send it to do the work for you."
       }
     },
@@ -15023,6 +15281,254 @@
       "running": "Running",
       "waiting": "Waiting",
       "completed": "Completed"
+    }
+  },
+  "channelsSettings": {
+    "title": "Channels",
+    "subtitle": "Where your approvals and your agents' questions reach you when you are not in the app.",
+    "loading": "Loading...",
+    "error": "Something went wrong",
+    "connectedTitle": "Connected destinations",
+    "emptyTitle": "No channel connected yet",
+    "emptyHint": "Pick a service below and the assistant will guide you through the setup.",
+    "defaultBadge": "Default",
+    "statusWorking": "Working: a message was delivered here.",
+    "statusNotDelivered": "Not working yet: nothing has been delivered here.",
+    "sentByBot": "Sent by the bot @{bot}",
+    "restricted": "{count, plural, one {# person may decide} other {# people may decide}}",
+    "troubleshoot": "Fix with the assistant",
+    "makeDefault": "Make default",
+    "disconnect": "Disconnect",
+    "disconnectTitle": "Disconnect this destination?",
+    "disconnectMessage": "Approvals and questions will stop arriving in {chat}. If it is the default, the default moves to another working destination.",
+    "servicesTitle": "Add a channel",
+    "servicesHint": "Each service needs a few steps in its own console. The assistant walks you through them one at a time, and you can ask it anything along the way.",
+    "setUpWithAssistant": "Set up with the assistant",
+    "setUpManually": "Set up manually",
+    "readOnly": "Your role in this workspace is read-only: you can see where it is reached, not change it.",
+    "manual": {
+      "title": "Connect {channel}",
+      "intro": "The same steps as the assistant, as a form. It uses no credits.",
+      "stepAccount": "Your {channel} account",
+      "stepHello": "Say hello to your bot",
+      "stepDestination": "Where messages go",
+      "accountSetting": {
+        "publicKey": {
+          "label": "Application public key",
+          "placeholder": "64 hexadecimal characters",
+          "hint": "Developer Portal, your application, General Information, Public Key."
+        },
+        "phoneNumberId": {
+          "label": "Phone number ID",
+          "placeholder": "106540352242922",
+          "hint": "Meta app, WhatsApp, API Setup, Phone number ID (not the phone number itself)."
+        }
+      },
+      "findChats": "Find my chats",
+      "findChatsHint": {
+        "telegram": "Lists the chats that wrote to your bot recently. Only works before the bot is connected: after that, type the id below.",
+        "slack": "Lists the channels the app was invited to, and your direct messages.",
+        "discord": "Lists the channels of the servers your bot was added to.",
+        "teams": "Lists your Teams chats."
+      },
+      "chatIdLabel": "Chat id",
+      "noChats": {
+        "telegram": "No chat yet: send any message to your bot (or add it to the group), then search again.",
+        "slack": "No channel found: invite the app to a channel with /invite, then search again.",
+        "discord": "No channel found: add the bot to your server, then search again.",
+        "teams": "No chat found: start a chat in Teams, then search again."
+      },
+      "phoneLabel": "Phone number",
+      "phoneHint": "In international format. The person must have sent a message to your WhatsApp number in the last 24 hours.",
+      "connect": "Connect and send a test message",
+      "close": "Close",
+      "delivered": "Connected: the test message arrived.",
+      "notDelivered": "Saved, but the test message did not arrive.",
+      "remaining": "One more step in the service",
+      "typeChatLabel": "Or type the chat id",
+      "typeChatHint": {
+        "telegram": "For a group: its id, which starts with -100. For a public channel: @name. Never your bot's own @name.",
+        "slack": "For a channel not listed: its id (right-click the channel, View channel details, at the bottom).",
+        "discord": "For a channel not listed: its id (Developer Mode on, right-click the channel, Copy Channel ID).",
+        "teams": "For a chat not listed: its conversation id."
+      },
+      "chatIdPlaceholder": {
+        "telegram": "123456789, -1001234567890 or @mychannel",
+        "slack": "C0123456789",
+        "discord": "123456789012345678",
+        "whatsapp": "+33612345678",
+        "teams": "19:abc123@thread.v2"
+      },
+      "accountSettingKept": "This account is already connected: leave empty to keep the saved value.",
+      "details": "Details:",
+      "copy": "Copy",
+      "copied": "Copied",
+      "tryAgain": "Try again",
+      "listUnavailable": {
+        "telegram": "Telegram cannot list the chats of a bot that is already connected. Type the destination below instead: for yourself, the number @userinfobot sends you when you write to it."
+      },
+      "botItself": "That is your bot (@{bot}): a bot cannot send messages to itself. Give the chat that should receive them, for example your numeric id from @userinfobot.",
+      "guide": {
+        "openBot": "Open @{bot} in Telegram",
+        "askAssistant": "Let Orbi guide me",
+        "links": {
+          "botFather": "Open @BotFather",
+          "userInfoBot": "Get my id (@userinfobot)",
+          "discordPortal": "Discord Developer Portal",
+          "metaApps": "Meta for Developers"
+        },
+        "telegram": {
+          "1": "In Telegram, open @BotFather, send /newbot and copy the token it gives you.",
+          "2": "Then connect that token below.",
+          "3": "Open your bot and press Start (for a group: add the bot to the group and send a message there). A bot cannot write to someone who never wrote to it.",
+          "4": "Give the chat to write to: for yourself, your numeric id, which @userinfobot sends you when you write to it."
+        },
+        "slack": {
+          "1": "Connect Slack below and approve the app in your workspace.",
+          "2": "For a channel, type /invite followed by the app name in it. A direct message needs nothing.",
+          "3": "Pick the channel or conversation with Find my chats."
+        },
+        "discord": {
+          "1": "In the Discord Developer Portal, create an application, open Bot and copy its token.",
+          "2": "In OAuth2, URL Generator, tick bot and Send Messages, open the link and add the bot to your server.",
+          "3": "Paste the token below, and the Public Key (General Information page) in the field under it.",
+          "4": "Pick the channel, then paste the Interactions Endpoint URL shown after connecting on the General Information page."
+        },
+        "whatsapp": {
+          "1": "In your Meta app with WhatsApp, API Setup: note the Phone number ID and create a permanent System User token.",
+          "2": "Paste the token below, and the Phone number ID in the field under it.",
+          "3": "From the phone that will answer, send any message to your business number (WhatsApp only allows a reply within 24 hours).",
+          "4": "Type that phone number, then set the callback URL and verify token shown after connecting."
+        },
+        "teams": {
+          "1": "Sign in with Microsoft below.",
+          "2": "Pick the chat with Find my chats.",
+          "3": "Messages are posted as you, and Teams does not notify you about your own messages: pick a chat others read, or another service to be notified yourself."
+        }
+      }
+    },
+    "assistantUnavailable": "The assistant cannot be opened here. Open the chat and ask it to set up the channel.",
+    "setupPrompt": "I want my approvals and my agents' questions to reach me on {channel}. Guide me step by step through the setup (channel: {id}), and check with me after each step.",
+    "troubleshootPrompt": "My {channel} channel \"{chat}\" is not working. Last error: {error}. Help me find out why and fix it.",
+    "services": {
+      "telegram": {
+        "needs": "Your own bot, created in two minutes with BotFather.",
+        "time": "About 3 minutes"
+      },
+      "slack": {
+        "needs": "Nothing to create: approve the app in your workspace and pick a channel.",
+        "time": "About 1 minute"
+      },
+      "discord": {
+        "needs": "Your own Discord application and bot, plus one URL to paste in its portal.",
+        "time": "About 5 minutes"
+      },
+      "whatsapp": {
+        "needs": "A Meta business app with WhatsApp, its phone number ID and an access token.",
+        "time": "About 10 minutes"
+      },
+      "teams": {
+        "needs": "Nothing to create: sign in with Microsoft and pick a chat. Messages go out as you, so they notify the other people in that chat, not you.",
+        "time": "About 1 minute"
+      }
+    }
+  },
+  "channelPicker": {
+    "loading": "Loading destinations...",
+    "error": "The destinations could not be loaded.",
+    "empty": "No channel connected yet.",
+    "connect": "Connect a channel",
+    "defaultOf": "Workspace default ({destination})",
+    "defaultNone": "Workspace default (none yet)",
+    "defaultNoneHint": "This workspace has no default destination yet: nothing is sent until one is connected.",
+    "notWorking": "{destination} (no message received yet)",
+    "gone": "Disconnected destination",
+    "goneHint": "The destination chosen here is no longer connected: nothing is sent until another one is picked.",
+    "manage": "Manage channels"
+  },
+  "setupChecklist": {
+    "pill": "{done}/{total}",
+    "pillAria": "{done}/{total} setup steps done",
+    "title": "Get set up",
+    "subtitle": "{done} of {total} done. Each step ticks itself once it is done.",
+    "statusDone": "done",
+    "statusTodo": "to do",
+    "tasks": {
+      "integration": {
+        "title": "Connect an app",
+        "why": "Your agents can then read and act in it (Gmail, Notion, Slack...)."
+      },
+      "chat": {
+        "title": "Talk to Orbi",
+        "why": "Ask for anything: it builds agents, workflows and apps for you."
+      },
+      "build": {
+        "title": "Create an agent or a workflow",
+        "why": "Something that works for you, even when you are not here."
+      },
+      "channel": {
+        "title": "Get reached outside the app",
+        "why": "Approvals and questions arrive on Telegram, Slack, WhatsApp, Discord or Teams."
+      }
+    }
+  },
+  "toolHealth": {
+    "title": "Tool health",
+    "subtitle": "Tools that failed across the whole platform. The spread over tenants separates a broken catalog entry from one customer credential.",
+    "loading": "Loading...",
+    "window": "Window",
+    "windowAll": "All history",
+    "windowDays": "Last {days} days",
+    "minCalls": "Min calls",
+    "refresh": "Refresh",
+    "summary": "{tools} tools with failures, {suspects} suspected catalog defects",
+    "errorTitle": "Could not load tool health",
+    "empty": "No tool failed often enough to appear in this window.",
+    "tenantsOf": "{affected} of {calling}",
+    "scopeNote": "Counts cover tool calls made by agents. Calls made by a workflow node are not recorded per tool and are not shown here.",
+    "col": {
+      "tool": "Tool",
+      "failures": "Failures",
+      "rate": "Rate",
+      "tenants": "Tenants affected",
+      "lastUsed": "Last call",
+      "error": "Last error"
+    },
+    "verdict": {
+      "ALL_TENANTS": "All tenants",
+      "WIDESPREAD": "Widespread",
+      "ISOLATED": "Isolated",
+      "SINGLE_TENANT": "Single tenant"
+    },
+    "verdictHint": {
+      "ALL_TENANTS": "fails for every tenant that calls it, look at the catalog entry first",
+      "WIDESPREAD": "fails for at least half the tenants calling it",
+      "ISOLATED": "a minority of tenants, most likely their credentials",
+      "SINGLE_TENANT": "only one tenant calls it, nothing can be concluded about the catalog"
+    }
+  },
+  "ceCloudLink": {
+    "expired": "The connection expired, click Connect again.",
+    "planRequired": {
+      "title": "Your LiveContext Cloud link needs a paid plan",
+      "body": "Linking a self-hosted install to LiveContext Cloud requires a paid plan on the cloud account. Choose a plan and this install reconnects automatically, with nothing to link again.",
+      "cta": "View cloud plans",
+      "sidebarBadge": "Paid plan required"
+    },
+    "planRequiredModal": {
+      "title": "Paid plan required",
+      "description": "This install is linked to a LiveContext Cloud account that is not on a paid plan, so the cloud refused the request. Choose a plan on LiveContext Cloud and this install reconnects automatically.",
+      "cta": "View cloud plans",
+      "close": "Close"
+    },
+    "cloud": {
+      "returning": "Returning to your self-hosted install.",
+      "pricingBannerTitle": "Linking your self-hosted install requires a paid plan",
+      "pricingBannerBody": "Choose a plan below. Once your subscription is active, you are taken back to your install to finish connecting it.",
+      "pricingBannerContinue": "I have a paid plan, continue",
+      "pricingBannerStillRequired": "Your current plan is not a paid plan yet. Choose a plan to continue.",
+      "pricingBannerNoPending": "This connection request is no longer available. Click Connect again on your self-hosted install.",
+      "pricingBannerError": "We could not check your plan. Please try again."
     }
   }
 }

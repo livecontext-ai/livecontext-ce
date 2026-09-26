@@ -103,6 +103,14 @@ public class FilterNode extends BaseNode {
                 resolvedItems = List.of();
             }
 
+            // A failure from here on reports the input the node RESOLVED, not its {{...}} text.
+            earlyInputData.put("input", ReportedParams.reportValue(resolvedItems));
+            earlyInputData.put("input_count", resolvedItems.size());
+
+            // The condition values, resolved once: `{{core:x.output.threshold}}` compared as
+            // itself used to match nothing while the same reference resolved fine in `input`.
+            List<Core.FilterCondition> conditions = resolveConditionValues(context);
+
             // Filter each item in the resolved list
             List<Map<String, Object>> filteredItems = new ArrayList<>();
             List<Map<String, Object>> rejectedItems = new ArrayList<>();
@@ -159,7 +167,9 @@ public class FilterNode extends BaseNode {
                 Map<String, Object> reported = new LinkedHashMap<>();
                 reported.put("field", c.field() != null ? c.field() : "");
                 reported.put("operator", c.operator());
-                reported.put("value", String.valueOf(c.value()));
+                // Through the workspace-variable rule: a condition written {{$vars.x}} filters on
+                // the variable and must not print it.
+                reported.put("value", ReportedParams.valueFrom(this.conditions.get(ci).value(), c.value()));
                 // `turned_away`, because both obvious names are taken by this node's own
                 // output and would mean something else: `rejected_items` is the ARRAY of
                 // dropped rows and `rejected_count` is their TOTAL. This is per condition,
@@ -190,6 +200,31 @@ public class FilterNode extends BaseNode {
             failureOutput.put("resolved_params", ReportedParams.forReport(earlyInputData));
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failureOutput, duration);
         }
+    }
+
+    /**
+     * Each condition with its {@code value} resolved against the run. {@code field} is a key read
+     * on every item and stays literal. A value with no {@code {{...}}} is returned untouched.
+     *
+     * <p>A reference to NOTHING fails the node. Compared as empty it made {@code contains} keep
+     * every row and {@code not_contains} drop every row, a green run on a filter that never ran.
+     */
+    private List<Core.FilterCondition> resolveConditionValues(ExecutionContext context) {
+        List<Core.FilterCondition> resolved = new ArrayList<>(this.conditions.size());
+        for (Core.FilterCondition c : this.conditions) {
+            String value = c.value();
+            if (value != null && value.contains("{{")) {
+                String configured = value;
+                value = resolveTemplateString(configured, context);
+                if (value == null || value.isEmpty()) {
+                    throw new IllegalStateException("The condition value '" + configured + "' on field '"
+                        + c.field() + "' resolved to nothing. Check that the referenced node ran and"
+                        + " that the path exists.");
+                }
+            }
+            resolved.add(new Core.FilterCondition(c.field(), c.operator(), value));
+        }
+        return resolved;
     }
 
     private boolean evaluateCondition(Core.FilterCondition condition, Map<String, Object> data) {

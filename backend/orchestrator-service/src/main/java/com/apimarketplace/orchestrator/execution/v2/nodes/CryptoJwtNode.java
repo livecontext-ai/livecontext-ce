@@ -95,9 +95,9 @@ public class CryptoJwtNode extends BaseNode {
             // unconditionally would show `hex` on a generateUuid node that never looks
             // at it.
             putEncodingIfKeyed(inputData, operation, resolved);
-            if (resolved.value() != null) inputData.put("value", resolved.value());
+            if (resolved.value() != null) inputData.put("value", ReportedParams.valueFrom(config.value(), resolved.value()));
             if (resolved.token() != null) inputData.put("token", resolved.token());
-            if (resolved.payload() != null) inputData.put("payload", resolved.payload());
+            if (resolved.payload() != null) inputData.put("payload", reportedPayload(config, resolved));
             // Intentionally omit secret and key for security
             // Through the gate: `token` here is a SIGNED JWT - a bearer credential under the
             // exact name the masking rule exists for - and `payload` has no size limit.
@@ -118,9 +118,9 @@ public class CryptoJwtNode extends BaseNode {
             failInputData.put("operation", operation);
             if (resolved != null) {
                 if (resolved.algorithm() != null) failInputData.put("algorithm", resolved.algorithm());
-                if (resolved.value() != null) failInputData.put("value", resolved.value());
+                if (resolved.value() != null) failInputData.put("value", ReportedParams.valueFrom(config.value(), resolved.value()));
                 if (resolved.token() != null) failInputData.put("token", resolved.token());
-                if (resolved.payload() != null) failInputData.put("payload", resolved.payload());
+                if (resolved.payload() != null) failInputData.put("payload", reportedPayload(config, resolved));
                 // Here above all: a key that is right but read with the wrong encoding
                 // throws, and this is the map the reader gets when it does.
                 putEncodingIfKeyed(failInputData, operation, resolved);
@@ -139,9 +139,91 @@ public class CryptoJwtNode extends BaseNode {
             resolveTemplateString(config.key(), context),
             resolveTemplateString(config.secret(), context),
             resolveTemplateString(config.token(), context),
-            config.payload(),
+            // Only the operation that signs a payload reads it. A stale payload left in the form of
+            // a hash or hmac node must not fail a node that never looks at it.
+            "jwtCreate".equals(config.operation()) ? resolvePayload(config.payload(), context) : null,
             config.encoding()
         );
+    }
+
+    /**
+     * The JWT payload with every {@code {{...}}} in it resolved, as a Map.
+     *
+     * <p>It used to be passed through untouched, so a claim written
+     * {@code "sub": "{{trigger:in.output.user_id}}"} was signed as that literal text while the
+     * same reference resolved in {@code secret} next to it. A payload typed in the builder arrives
+     * as TEXT: it is resolved as text (a reference inside a quoted claim becomes that claim's
+     * value) and then read as a JSON object. One that is a whole reference to an object resolves
+     * to that object directly.
+     *
+     * @throws IllegalArgumentException when the result is not a JSON object
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> resolvePayload(Object payload, ExecutionContext context) {
+        if (payload == null) {
+            return null;
+        }
+        // JSON text (what the builder saves) is PARSED FIRST, then resolved claim by claim.
+        // Resolving the text first spliced upstream data into the JSON before it was read, so a
+        // webhook body holding `","admin":true,"x":"` added a claim to a SIGNED token.
+        Object source = payload;
+        if (payload instanceof String text && isJsonObjectLiteral(text)) {
+            try {
+                source = objectMapper.readValue(text, LinkedHashMap.class);
+            } catch (Exception notJson) {
+                // Refused rather than resolved-then-parsed: an unquoted reference
+                // (`{"n": {{x}} }`) only becomes JSON once upstream data is spliced into it, which
+                // is exactly how `1,"admin":true` would add a claim to a signed token.
+                throw new IllegalArgumentException("JWT payload must be a JSON object before its "
+                    + "references are resolved: put each {{...}} inside quotes (\"sub\": \"{{...}}\"), or "
+                    + "make the whole payload one reference to an object. " + notJson.getMessage(), notJson);
+            }
+        }
+        Object resolved = resolveTemplateValue(source, context);
+        if (resolved == null) {
+            return null;
+        }
+        if (resolved instanceof Map<?, ?> map) {
+            return new LinkedHashMap<>((Map<String, Object>) map);
+        }
+        if (resolved instanceof String text) {
+            if (text.isBlank()) {
+                return null;
+            }
+            try {
+                Object parsed = objectMapper.readValue(text, Object.class);
+                if (parsed instanceof Map<?, ?> map) {
+                    return new LinkedHashMap<>((Map<String, Object>) map);
+                }
+            } catch (Exception e) {
+                throw new IllegalArgumentException(
+                    "JWT payload must be a JSON object; could not read it as JSON: " + e.getMessage(), e);
+            }
+        }
+        throw new IllegalArgumentException(
+            "JWT payload must be a JSON object, got " + resolved.getClass().getSimpleName());
+    }
+
+    /**
+     * The payload as reported: withheld (by shape) when any claim pulled a workspace variable,
+     * whose claim NAME says nothing the credential word rules can read.
+     */
+    private Object reportedPayload(Core.CryptoJwtConfig configured, Core.CryptoJwtConfig resolved) {
+        Object source = configured.payload();
+        if (source instanceof String text && isJsonObjectLiteral(text)) {
+            try {
+                source = objectMapper.readValue(text, LinkedHashMap.class);
+            } catch (Exception unreadable) {
+                // Refused by resolvePayload before any report is built.
+            }
+        }
+        return ReportedParams.valueFromConfigured(source, resolved.payload());
+    }
+
+    /** Object JSON text, as opposed to a whole-value reference like {@code {{core:x.output.claims}}}. */
+    private static boolean isJsonObjectLiteral(String text) {
+        String t = text.trim();
+        return t.startsWith("{") && !t.startsWith("{{");
     }
 
     // ========================================================================
@@ -282,7 +364,11 @@ public class CryptoJwtNode extends BaseNode {
 
     private String executeJwtCreate(Core.CryptoJwtConfig config) throws Exception {
         String secret = requireNonEmpty(config.secret(), "secret");
-        Map<String, Object> payload = config.payload();
+        // Normalized to a Map by resolvePayload; anything else here is a config that was
+        // never resolved, which is the same "no payload" for the purpose of this check.
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = config.payload() instanceof Map<?, ?> map
+            ? (Map<String, Object>) map : null;
         if (payload == null || payload.isEmpty()) {
             throw new IllegalArgumentException("JWT payload is required for jwtCreate");
         }

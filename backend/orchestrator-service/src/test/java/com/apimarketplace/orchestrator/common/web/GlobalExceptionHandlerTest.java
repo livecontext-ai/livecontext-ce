@@ -172,6 +172,21 @@ class GlobalExceptionHandlerTest {
             Map<String, Object> needsParam(@RequestParam("workflowId") String workflowId) {
                 return Map.of("workflowId", workflowId);
             }
+
+            @GetMapping("/gone")
+            @SuppressWarnings("unused")
+            Map<String, Object> gone() {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.GONE, "this resource was retired");
+            }
+
+            @GetMapping("/disconnect")
+            @SuppressWarnings("unused")
+            Map<String, Object> disconnect()
+                    throws org.springframework.web.context.request.async.AsyncRequestNotUsableException {
+                throw new org.springframework.web.context.request.async.AsyncRequestNotUsableException(
+                        "ServletOutputStream failed to write: java.io.IOException: disconnected client");
+            }
         }
 
         private org.springframework.test.web.servlet.MockMvc mockMvc() {
@@ -253,6 +268,49 @@ class GlobalExceptionHandlerTest {
                             .jsonPath("$.errorCode").value("MISSING_PARAMETER"))
                     .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                             .jsonPath("$.message").value(org.hamcrest.Matchers.containsString("workflowId")));
+        }
+
+        @Test
+        @DisplayName("a framework ErrorResponse with no dedicated handler answers its own status, not 500")
+        void unhandledErrorResponseAnswersItsOwnStatus() throws Exception {
+            // A ResponseStatusException is an ErrorResponse no explicit handler here names. The
+            // catch-all used to turn its 410 into a 500 + ERROR; the ErrorResponse branch now
+            // answers the status it carries, with the handler's own body.
+            mockMvc().perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                            .get("/gone"))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                            .status().isGone())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                            .jsonPath("$.errorCode").value("GONE"))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                            .jsonPath("$.message").value("this resource was retired"));
+        }
+
+        @Test
+        @DisplayName("a client disconnect is logged at WARN, never answered 500 nor logged ERROR")
+        void clientDisconnectIsWarnOnly() throws Exception {
+            ch.qos.logback.classic.Logger handlerLogger = (ch.qos.logback.classic.Logger)
+                    org.slf4j.LoggerFactory.getLogger(GlobalExceptionHandler.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            handlerLogger.addAppender(appender);
+            try {
+                var response = mockMvc().perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                                .get("/disconnect"))
+                        .andReturn().getResponse();
+
+                assertThat(response.getStatus()).isNotEqualTo(500);
+                assertThat(response.getContentAsString()).isEmpty();
+                assertThat(appender.list).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+                assertThat(appender.list)
+                        .filteredOn(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+                        .singleElement()
+                        .satisfies(e -> assertThat(e.getFormattedMessage()).contains("disconnected client"));
+            } finally {
+                handlerLogger.detachAppender(appender);
+                appender.stop();
+            }
         }
 
         @Test

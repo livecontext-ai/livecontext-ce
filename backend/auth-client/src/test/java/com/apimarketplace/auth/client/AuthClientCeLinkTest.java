@@ -1,5 +1,7 @@
 package com.apimarketplace.auth.client;
 
+import com.apimarketplace.common.plan.CeLinkAccess;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.ParameterizedTypeReference;
@@ -9,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,5 +62,76 @@ class AuthClientCeLinkTest {
                 eq(HttpMethod.GET),
                 any(HttpEntity.class),
                 any(ParameterizedTypeReference.class));
+    }
+
+    private void stubActiveProbe(Map<String, Object> body) {
+        when(restTemplate.exchange(
+                eq(BASE_URL + "/api/internal/auth/ce-link/" + INSTALL_ID + "/active"),
+                eq(HttpMethod.GET),
+                any(HttpEntity.class),
+                any(ParameterizedTypeReference.class)))
+                .thenReturn(ResponseEntity.ok(body));
+    }
+
+    @Test
+    @DisplayName("ceLinkAccess reads PLAN_REQUIRED with its plan code, and userOwnsActiveCeLink is then false")
+    void planRequiredIsReadWithPlanCode() {
+        Map<String, Object> body = new HashMap<>();
+        body.put("active", false);
+        body.put("reason", "PLAN_REQUIRED");
+        body.put("planCode", "FREE");
+        stubActiveProbe(body);
+
+        CeLinkAccessResult access = client.ceLinkAccess("42", INSTALL_ID);
+
+        assertThat(access.access()).isEqualTo(CeLinkAccess.PLAN_REQUIRED);
+        assertThat(access.planCode()).isEqualTo("FREE");
+        assertThat(client.userOwnsActiveCeLink("42", INSTALL_ID)).isFalse();
+    }
+
+    @Test
+    @DisplayName("ceLinkAccess reads a linked and paid answer as ACTIVE with the plan")
+    void activeIsReadWithPlanCode() {
+        Map<String, Object> body = new HashMap<>();
+        body.put("active", true);
+        body.put("reason", null);
+        body.put("planCode", "PRO");
+        stubActiveProbe(body);
+
+        CeLinkAccessResult access = client.ceLinkAccess("42", INSTALL_ID);
+
+        assertThat(access.access()).isEqualTo(CeLinkAccess.ACTIVE);
+        assertThat(access.planCode()).isEqualTo("PRO");
+    }
+
+    @Test
+    @DisplayName("ceLinkAccess reads NOT_LINKED, and an inconsistent active=true with a reason stays closed")
+    void notLinkedAndInconsistentBodiesFailClosed() {
+        Map<String, Object> notLinked = new HashMap<>();
+        notLinked.put("active", false);
+        notLinked.put("reason", "NOT_LINKED");
+        stubActiveProbe(notLinked);
+        assertThat(client.ceLinkAccess("42", INSTALL_ID).access()).isEqualTo(CeLinkAccess.NOT_LINKED);
+
+        Map<String, Object> inconsistent = new HashMap<>();
+        inconsistent.put("active", true);
+        inconsistent.put("reason", "NOT_LINKED");
+        stubActiveProbe(inconsistent);
+        assertThat(client.ceLinkAccess("42", INSTALL_ID).access()).isEqualTo(CeLinkAccess.NOT_LINKED);
+    }
+
+    @Test
+    @DisplayName("ceLinkAccess fails closed as NOT_LINKED on transport error, empty body and malformed ids")
+    void ceLinkAccessFailsClosed() {
+        when(restTemplate.exchange(
+                eq(BASE_URL + "/api/internal/auth/ce-link/" + INSTALL_ID + "/active"),
+                eq(HttpMethod.GET),
+                any(HttpEntity.class),
+                any(ParameterizedTypeReference.class)))
+                .thenThrow(new RestClientException("auth down"));
+
+        assertThat(client.ceLinkAccess("42", INSTALL_ID).access()).isEqualTo(CeLinkAccess.NOT_LINKED);
+        assertThat(client.ceLinkAccess("42", "not-a-uuid").access()).isEqualTo(CeLinkAccess.NOT_LINKED);
+        assertThat(client.ceLinkAccess(" ", INSTALL_ID).access()).isEqualTo(CeLinkAccess.NOT_LINKED);
     }
 }

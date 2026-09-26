@@ -111,6 +111,54 @@ class RunCloneServiceCloneStorageTest {
     }
 
     @Test
+    @DisplayName("clone keeps each step row's is_mocked flag (V526), so a cloned mock is not a real call")
+    @SuppressWarnings("unchecked")
+    void cloneRunKeepsTheMockedFlagOfEveryStepRow() {
+        // The tool-health dashboard excludes mocked rows by this column. A clone that dropped it
+        // would turn a showcase run's mocked `error` steps into real failures of the tool.
+        com.apimarketplace.orchestrator.domain.WorkflowRunEntity sourceRun =
+                new com.apimarketplace.orchestrator.domain.WorkflowRunEntity();
+        sourceRun.setRunIdPublic("run-source-2");
+        sourceRun.setTenantId("tenant-pub");
+        sourceRun.setMetadata(new java.util.HashMap<>());
+
+        com.apimarketplace.orchestrator.domain.WorkflowStepDataEntity mocked =
+                new com.apimarketplace.orchestrator.domain.WorkflowStepDataEntity();
+        mocked.setStepAlias("send_mail");
+        mocked.setToolId("gmail/send-message");
+        mocked.setStatus("FAILED");
+        mocked.setMocked(true);
+        com.apimarketplace.orchestrator.domain.WorkflowStepDataEntity real =
+                new com.apimarketplace.orchestrator.domain.WorkflowStepDataEntity();
+        real.setStepAlias("fetch");
+        real.setToolId("gmail/list-messages");
+        real.setStatus("COMPLETED");
+
+        org.mockito.Mockito.when(workflowRunRepository.findByRunIdPublic("run-source-2"))
+                .thenReturn(Optional.of(sourceRun));
+        org.mockito.Mockito.when(workflowRunRepository.save(
+                org.mockito.ArgumentMatchers.any(com.apimarketplace.orchestrator.domain.WorkflowRunEntity.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        org.mockito.Mockito.when(workflowStepDataRepository.findByWorkflowRunIdOrderByIdAsc(
+                org.mockito.ArgumentMatchers.any())).thenReturn(List.of(mocked, real));
+        org.mockito.Mockito.lenient().when(interfaceClient.getSnapshotsForRun(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(List.of());
+
+        runCloneService.cloneRun("run-source-2", "showcase", null);
+
+        ArgumentCaptor<List<com.apimarketplace.orchestrator.domain.WorkflowStepDataEntity>> saved =
+                ArgumentCaptor.forClass(List.class);
+        org.mockito.Mockito.verify(workflowStepDataRepository).saveAll(saved.capture());
+        assertThat(saved.getValue())
+                .extracting(com.apimarketplace.orchestrator.domain.WorkflowStepDataEntity::getStepAlias,
+                        com.apimarketplace.orchestrator.domain.WorkflowStepDataEntity::isMocked)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("send_mail", true),
+                        org.assertj.core.groups.Tuple.tuple("fetch", false));
+    }
+
+    @Test
     @DisplayName("clone preserves organization_id on org-scoped source row")
     void preservesOrgIdOnOrgScopedSource() {
         UUID sourceId = UUID.randomUUID();

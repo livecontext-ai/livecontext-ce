@@ -1,7 +1,6 @@
 'use client';
 
-import { Info } from 'lucide-react';
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { renderBoldMarkup } from '@/lib/utils/boldMarkup';
 
 /**
@@ -9,8 +8,8 @@ import { renderBoldMarkup } from '@/lib/utils/boldMarkup';
  * optional tooltip via the "label||tooltip" delimiter, the shared convention
  * across the landing pricing section, the settings pricing page (PlanSelector),
  * the plan-comparison table and the insufficient-credits modal. When a tooltip
- * is present a small info "i" icon reveals it on hover / keyboard focus (Radix
- * tooltip, portalled so it is never clipped by a card or a scrolling modal).
+ * is present a small info "i" icon reveals it on click (the app-wide
+ * `InfoPopover`, portalled so it is never clipped by a card or a scrolling modal).
  *
  * <p><b>The "i" is pinned to the RIGHT of the row, always.</b> It used to sit
  * immediately after the label, which reads as right-aligned only while every
@@ -42,24 +41,15 @@ export default function FeatureLabel({ feature }: { feature: string }) {
     <span className="flex flex-1 min-w-0 items-start justify-between gap-1.5">
       <span>{label}</span>
       {tooltip ? (
-        <TooltipProvider delayDuration={150}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={label}
-                // `mt-0.5` keeps the icon optically centred on the FIRST line of
-                // a label that wraps, rather than floating above its cap height.
-                className="inline-flex items-center mt-0.5 shrink-0 text-theme-muted hover:text-theme-secondary cursor-help"
-              >
-                <Info className="h-3.5 w-3.5 shrink-0" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-[16rem] whitespace-normal text-xs leading-snug">
-              {renderBoldMarkup(tooltip)}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <InfoPopover
+          label={label}
+          // `mt-0.5` keeps the icon optically centred on the FIRST line of
+          // a label that wraps, rather than floating above its cap height.
+          triggerClassName="mt-0.5 p-0"
+          contentClassName="w-auto max-w-[16rem]"
+        >
+          {renderBoldMarkup(tooltip)}
+        </InfoPopover>
       ) : null}
     </span>
   );

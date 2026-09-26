@@ -285,4 +285,95 @@ class ChatStreamInitializerTest {
             verify(pubSubService).publish(eq("stream-api"), any());
         }
     }
+
+    @Nested
+    @DisplayName("stream-create failure log levels")
+    class CreateFailureLogLevels {
+
+        private ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> capture(
+                Runnable action) {
+            ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                    org.slf4j.LoggerFactory.getLogger(ChatStreamInitializer.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            try {
+                action.run();
+            } finally {
+                logger.detachAppender(appender);
+            }
+            return appender;
+        }
+
+        private ChatRequest request(String conversationId) {
+            ChatRequest request = new ChatRequest();
+            request.setMessage("Hello");
+            request.setModel("gpt-4o");
+            request.setProvider("openai");
+            request.setConversationId(conversationId);
+            return request;
+        }
+
+        @Test
+        @DisplayName("retries exhausted -> exactly ONE ERROR, naming the conversation")
+        void exhaustedRetriesLogOneError() {
+            AtomicInteger attempts = new AtomicInteger();
+            when(stateService.createStream("user-1", "conv-down", "gpt-4o", "openai"))
+                    .thenReturn(Mono.defer(() -> {
+                        attempts.incrementAndGet();
+                        return Mono.error(new QueryTimeoutException("Redis command timed out"));
+                    }));
+
+            var appender = capture(() -> StepVerifier.create(
+                            initializer.initializeStreamAsync(request("conv-down"), "user-1"))
+                    .assertNext(r -> assertThat(r.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE))
+                    .verifyComplete());
+
+            assertThat(attempts).hasValue(3);
+            assertThat(appender.list)
+                    .filteredOn(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR)
+                    .singleElement()
+                    .satisfies(e -> assertThat(e.getFormattedMessage())
+                            .contains("conv-down")
+                            .contains("retries exhausted"));
+        }
+
+        @Test
+        @DisplayName("a failure the retry absorbs -> no ERROR at all")
+        void absorbedRetryLogsNoError() {
+            StreamMetadata metadata = StreamMetadata.create("stream-ok", "user-1", "conv-ok", "gpt-4o", "openai");
+            AtomicInteger attempts = new AtomicInteger();
+            when(stateService.createStream("user-1", "conv-ok", "gpt-4o", "openai"))
+                    .thenReturn(Mono.defer(() -> attempts.incrementAndGet() == 1
+                            ? Mono.error(new QueryTimeoutException("Redis command timed out"))
+                            : Mono.just(metadata)));
+            when(pubSubService.publish(eq("stream-ok"), any())).thenReturn(Mono.just(1L));
+
+            var appender = capture(() -> StepVerifier.create(
+                            initializer.initializeStreamAsync(request("conv-ok"), "user-1"))
+                    .assertNext(r -> assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK))
+                    .verifyComplete());
+
+            assertThat(appender.list)
+                    .noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+        }
+
+        @Test
+        @DisplayName("a non-retryable failure -> one ERROR marked not retryable, error propagates")
+        void nonRetryableFailureLogsOneError() {
+            when(stateService.createStream("user-1", "conv-bad", "gpt-4o", "openai"))
+                    .thenReturn(Mono.error(new IllegalStateException("serialization bug")));
+
+            var appender = capture(() -> StepVerifier.create(
+                            initializer.initializeStreamAsync(request("conv-bad"), "user-1"))
+                    .expectError(IllegalStateException.class)
+                    .verify());
+
+            assertThat(appender.list)
+                    .filteredOn(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR)
+                    .singleElement()
+                    .satisfies(e -> assertThat(e.getFormattedMessage()).contains("not retryable"));
+        }
+    }
 }

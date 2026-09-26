@@ -1181,4 +1181,37 @@ class NamespaceResolverTest {
             assertEquals("https://api.example.com", result);
         }
     }
+
+    @Nested
+    @DisplayName("adapter path references resolve like the condition path")
+    class ConditionPathParityTests {
+
+        private NamespaceResolver realResolver;
+        private WorkflowExecutionContext realContext;
+
+        @BeforeEach
+        void setUpReal() {
+            realResolver = new NamespaceResolver(new PathNavigator());
+            realContext = new WorkflowExecutionContext("plan-1", "run-1", "tenant-1");
+        }
+
+        @Test
+        @DisplayName("regression: a bare step alias with a path ({{check_status.output.ok}}) resolves through the alias")
+        void bareAliasPathResolves() {
+            realContext.setStepOutput("check_status", Map.of("output", Map.of("ok", true)));
+
+            assertEquals(true, realResolver.resolveVariable("check_status.output.ok", realContext));
+        }
+
+        @Test
+        @DisplayName("regression: {{item_index}} is the item this node runs for, not the trigger output's item_index")
+        void itemIndexIsTheCurrentItem() {
+            realContext.setStepOutput("trigger:start", Map.of("output", Map.of("item_index", 0, "item_id", "trigger-item")));
+            realContext.setCurrentItemIndex(2);
+            realContext.setGlobalVariable("item_id", "item-2");
+
+            assertEquals(2, realResolver.resolveVariable("item_index", realContext));
+            assertEquals("item-2", realResolver.resolveVariable("item_id", realContext));
+        }
+    }
 }

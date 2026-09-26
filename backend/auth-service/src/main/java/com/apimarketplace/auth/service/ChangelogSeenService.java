@@ -136,22 +136,37 @@ public class ChangelogSeenService {
      * ordering to enforce here, because after a rollback the entry actually displayed is an older
      * one.
      *
-     * @return false when the feature is off, in which case nothing is written.
+     * @return {@link SeenOutcome#DISABLED} when the feature is off and
+     *         {@link SeenOutcome#UNKNOWN_USER} when no account has this id (a session that outlived
+     *         the deletion of its account); nothing is written in either case.
      * @throws IllegalArgumentException when the key is not a shape this service stores. Validated
      *         here and not only at the edge: this is the method that writes the row, and a caller
      *         added later would otherwise put an over-long key straight into a constraint
      *         violation at flush time instead of a clean rejection.
      */
     @Transactional
-    public boolean markSeen(Long userId, String entryKey) {
+    public SeenOutcome markSeen(Long userId, String entryKey) {
         if (!isValidKey(entryKey)) {
             throw new IllegalArgumentException("invalid changelog entry key");
         }
         if (!enabled) {
-            return false;
+            return SeenOutcome.DISABLED;
         }
-        seenRepository.acknowledge(userId, entryKey);
-        return true;
+        // The upsert itself checks that the user exists (see the repository): a separate
+        // existsById first would leave a window for the delete to land in between.
+        return seenRepository.acknowledge(userId, entryKey) > 0
+                ? SeenOutcome.RECORDED
+                : SeenOutcome.UNKNOWN_USER;
+    }
+
+    /** What {@link #markSeen} did. */
+    public enum SeenOutcome {
+        /** The acknowledgement is stored. */
+        RECORDED,
+        /** The deployment has the feature off; nothing was written. */
+        DISABLED,
+        /** No account has this user id; nothing was written. */
+        UNKNOWN_USER
     }
 
     /**

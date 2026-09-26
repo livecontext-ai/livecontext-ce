@@ -184,6 +184,18 @@ public class PasswordResetMailer {
         }
     }
 
+    /**
+     * Runs right after {@code shutdownNow()} in {@link #shutdown()}. A no-op in production;
+     * a test uses it to let the interrupted send finish (its finally decrements
+     * {@code pending}) before shutdown goes on, which is the interleaving where a count
+     * taken AFTER {@code shutdownNow()} reads 0 for a mail that was lost.
+     */
+    private Runnable afterShutdownNowForTest = () -> { };
+
+    void setAfterShutdownNowForTest(Runnable hook) {
+        this.afterShutdownNowForTest = hook;
+    }
+
     /** Submitted and not yet finished. Package-private so the accounting is testable. */
     int unsentCount() {
         return pending.get();
@@ -208,14 +220,18 @@ public class PasswordResetMailer {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        sendPool.shutdownNow();
-        // pending, not shutdownNow().size(): the latter counts only what never
-        // started, so a message in flight at this moment would go unreported.
+        // Counted BEFORE shutdownNow(): interrupting the in-flight send runs its
+        // finally, which decrements pending, so a count taken after it raced that
+        // thread and could read 0 for a mail that was lost (reported nothing in
+        // exactly the case this line exists for). pending, not shutdownNow().size():
+        // the latter counts only what never started, missing the one in flight.
         int abandoned = pending.get();
+        sendPool.shutdownNow();
+        afterShutdownNowForTest.run();
         if (abandoned > 0) {
             logger.error("Shutting down with {} password reset e-mail(s) unsent (queued or in "
-                    + "flight). Those users hold a live token they never received and are still "
-                    + "locked out.", abandoned);
+                    + "flight). Those users hold a live token they may not have received and may "
+                    + "still be locked out.", abandoned);
         }
     }
 

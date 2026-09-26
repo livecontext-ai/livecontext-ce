@@ -43,6 +43,7 @@ vi.mock('next/link', () => ({
 }));
 
 import UserKeysPanel from '../UserKeysPanel';
+import { track } from '@/lib/analytics/analytics';
 
 const t = (key: string, values?: Record<string, string>) => (values ? `${key}:${JSON.stringify(values)}` : key);
 
@@ -213,11 +214,30 @@ describe('UserKeysPanel', () => {
     render(<UserKeysPanel definitions={[anthropic]} t={t} pricingHref="/pricing" />);
 
     expect(await screen.findByText('yourKeys.requiresPlan:{"plan":"PRO"}')).toBeInTheDocument();
+    expect(screen.getByText('yourKeys.requiresPlanDescription:{"plan":"PRO"}')).toBeInTheDocument();
+    // The upgrade card closes the panel, after the provider rows (the Settings > Organization
+    // pattern), and the old amber status bar above the rows is gone.
+    const card = screen.getByText('yourKeys.requiresPlan:{"plan":"PRO"}');
+    const row = screen.getByTestId('own-key-route-anthropic');
+    expect(row.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
     expect(screen.getByRole('link', { name: 'yourKeys.upgrade:{"plan":"PRO"}' })).toHaveAttribute('href', '/pricing');
+    fireEvent.click(screen.getByRole('link', { name: 'yourKeys.upgrade:{"plan":"PRO"}' }));
+    expect(track).toHaveBeenCalledWith('byok_upgrade_clicked', { required_plan: 'pro' });
     // Even a saved key does not run: the platform key serves until the plan allows it.
     expect(screen.getByTestId('own-key-route-anthropic')).toHaveTextContent('yourKeys.route.platformSaved');
     expect(screen.queryByRole('switch')).toBeNull();
     expect(screen.getByPlaceholderText('yourKeys.replaceKey')).toBeDisabled();
+  });
+
+  it('on a plan that allows own keys there is no upgrade card', async () => {
+    credentialService.getAllCredentials.mockResolvedValue([savedKey('no_proxy')]);
+
+    render(<UserKeysPanel definitions={[anthropic]} t={t} pricingHref="/pricing" />);
+
+    expect(await screen.findByText('yourKeys.route.mine')).toBeInTheDocument();
+    expect(screen.queryByText(/yourKeys\.requiresPlan/)).toBeNull();
+    expect(screen.queryByRole('link', { name: /yourKeys\.upgrade/ })).toBeNull();
   });
 
   it('a key the provider rejects is never saved; an accepted one is saved in no_proxy mode and made the default', async () => {

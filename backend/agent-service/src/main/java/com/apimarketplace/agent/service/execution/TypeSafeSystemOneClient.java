@@ -189,18 +189,22 @@ public class TypeSafeSystemOneClient {
     public ClassifyResponseDto classify(ClassifyRequestDto request, String provider, long startedAtMillis) {
         String model = request.model();
         String instructions = instructionsOf(request);
+        // What the observability trace records as the USER turn: the whole request, never the
+        // instructions alone. The instructions are the smallest of its three parts, so the trace
+        // used to show neither the text that was judged nor the categories it was judged against.
+        String sent = describeRequest(request, instructions);
         try {
             requireDeclaredModel(model);
             List<String> labels = declaredLabels(request);
             Map<String, Object> body = buildBody(request, labels, instructions);
             Map<String, Object> response = post(body);
-            return readAnswer(response, labels, provider, model, instructions,
+            return readAnswer(response, labels, provider, model, sent,
                     System.currentTimeMillis() - startedAtMillis);
         } catch (ClassifyInputException e) {
             // The node was configured in a way the endpoint cannot be asked about. Reported
             // as a failure rather than a thrown exception so the message reaches the run.
             log.warn("Classify rejected before dispatch: {}", e.getMessage());
-            return failure(e.getMessage(), provider, model, instructions,
+            return failure(e.getMessage(), provider, model, sent,
                     System.currentTimeMillis() - startedAtMillis);
         } catch (HttpStatusCodeException e) {
             String message = describeHttpFailure(e);
@@ -209,7 +213,7 @@ public class TypeSafeSystemOneClient {
             // user's content. The run's owner sees it in the returned error, where it
             // belongs; the platform log does not need it to diagnose a status code.
             log.warn("TypeSafe classify failed with status {}", e.getStatusCode().value());
-            return failure(message, provider, model, instructions,
+            return failure(message, provider, model, sent,
                     System.currentTimeMillis() - startedAtMillis);
         } catch (org.springframework.web.client.ResourceAccessException e) {
             // TRANSPORT failure: the request never produced an HTTP response at all - the
@@ -223,7 +227,7 @@ public class TypeSafeSystemOneClient {
             log.error("TypeSafe classify transport failure after {} ms: {}: {} (cause: {})",
                     System.currentTimeMillis() - startedAtMillis,
                     e.getClass().getSimpleName(), e.getMessage(), rootCauseOf(e));
-            return failure(describeTransportFailure(e), provider, model, instructions,
+            return failure(describeTransportFailure(e), provider, model, sent,
                     System.currentTimeMillis() - startedAtMillis);
         } catch (Exception e) {
             // The TYPE only, and no stacktrace, for the same reason the branch above logs no
@@ -232,7 +236,7 @@ public class TypeSafeSystemOneClient {
             // Logging the class still says which failure mode this was; the detail reaches
             // the run's owner in the returned error, which is where it belongs.
             log.error("TypeSafe classify failed: {}", e.getClass().getSimpleName());
-            return failure("Classification error: " + e.getMessage(), provider, model, instructions,
+            return failure("Classification error: " + e.getMessage(), provider, model, sent,
                     System.currentTimeMillis() - startedAtMillis);
         }
     }
@@ -329,6 +333,9 @@ public class TypeSafeSystemOneClient {
         return body;
     }
 
+    /** The instructions sent when the node carries no instruction of its own. */
+    static final String DEFAULT_INSTRUCTIONS = "Classify this content into exactly one of the categories.";
+
     /**
      * The content being judged. The classify node carries {@code content} and {@code prompt}
      * separately but the LLM path concatenates them into one prompt, because a chat model
@@ -338,21 +345,62 @@ public class TypeSafeSystemOneClient {
      * the default below.
      */
     private String stateOf(ClassifyRequestDto request) {
+        String state = stateOrNull(request);
+        if (state == null) {
+            throw new ClassifyInputException("Classify needs content or a prompt to classify");
+        }
+        return state;
+    }
+
+    private static String stateOrNull(ClassifyRequestDto request) {
         if (request.content() != null && !request.content().isBlank()) {
             return request.content();
         }
         if (request.prompt() != null && !request.prompt().isBlank()) {
             return request.prompt();
         }
-        throw new ClassifyInputException("Classify needs content or a prompt to classify");
+        return null;
     }
 
     private String instructionsOf(ClassifyRequestDto request) {
         boolean hasContent = request.content() != null && !request.content().isBlank();
-        if (hasContent && request.prompt() != null && !request.prompt().isBlank()) {
-            return request.prompt();
+        // distinctPrompt, not prompt: a node with no content configured arrives with its prompt
+        // in BOTH fields, and sending it as the instructions too put the whole judged text in
+        // front of the model a second time, billed as input on every item.
+        if (hasContent && request.distinctPrompt() != null) {
+            return request.distinctPrompt();
         }
-        return "Classify this content into exactly one of the categories.";
+        return DEFAULT_INSTRUCTIONS;
+    }
+
+    /**
+     * The request as the observability trace shows it: the three fields this endpoint
+     * receives, each under the name it is sent as, with nothing shortened. Built from the same
+     * state and instructions the body is built from, so the trace cannot describe a request
+     * other than the one that left; a category with no description is listed by its label
+     * alone, as the body sends it with a null criterion. Never throws, since it runs before the
+     * refusals in {@link #classify}: a node with nothing to classify, or a null category, still
+     * gets a trace of what was configured.
+     */
+    static String describeRequest(ClassifyRequestDto request, String instructions) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("## instructions").append(NL_CHAR).append(instructions).append(NL_CHAR).append(NL_CHAR);
+        String state = stateOrNull(request);
+        sb.append("## state").append(NL_CHAR).append(state != null ? state : "").append(NL_CHAR).append(NL_CHAR);
+        sb.append("## criteria");
+        if (request.categories() != null) {
+            for (ClassifyRequestDto.CategoryDto category : request.categories()) {
+                if (category == null) {
+                    continue;
+                }
+                sb.append(NL_CHAR).append("- ").append(category.label() != null ? category.label() : "(no label)");
+                String description = category.description();
+                if (description != null && !description.isBlank()) {
+                    sb.append(": ").append(description);
+                }
+            }
+        }
+        return sb.toString();
     }
 
     private Map<String, Object> post(Map<String, Object> body) {
@@ -372,13 +420,13 @@ public class TypeSafeSystemOneClient {
 
     @SuppressWarnings("unchecked")
     private ClassifyResponseDto readAnswer(Map<String, Object> response, List<String> labels,
-                                            String provider, String model, String instructions,
+                                            String provider, String model, String sent,
                                             long durationMs) {
         Map<String, Object> answers = (Map<String, Object>) response.get("answers");
         Object raw = answers != null ? answers.get(QUESTION_KEY) : null;
         if (!(raw instanceof Map)) {
             return failure("TypeSafe returned no answer for the classification", provider, model,
-                    instructions, durationMs);
+                    sent, durationMs);
         }
         Map<String, Object> answer = (Map<String, Object>) raw;
 
@@ -386,7 +434,7 @@ public class TypeSafeSystemOneClient {
         if (choice == null) {
             return failure("TypeSafe returned '" + answer.get("choice")
                     + "', which is not one of the declared categories", provider, model,
-                    instructions, durationMs);
+                    sent, durationMs);
         }
 
         Map<String, Double> probabilities = readProbabilities(answer, labels);
@@ -412,7 +460,7 @@ public class TypeSafeSystemOneClient {
         return new ClassifyResponseDto(true, choice, confidence,
                 describeProbabilities(probabilities), null, durationMs, provider, model,
                 promptTokens + completionTokens, promptTokens, completionTokens,
-                null, List.of(answerTurn(choice, confidence, probabilities)), instructions,
+                null, List.of(answerTurn(choice, confidence, probabilities)), sent,
                 null, probabilities);
     }
 
@@ -539,8 +587,9 @@ public class TypeSafeSystemOneClient {
      * that it never produced, which is the one thing a transcript must not do.
      *
      * <p>No SYSTEM turn goes with it, for the same reason. The System One request has no
-     * system prompt: the instructions travel per question and are already reported as the
-     * USER turn. Inventing one to fill the panel would be the same fabrication.
+     * system prompt: the instructions travel per question, and the whole request (instructions,
+     * state and criteria) is already reported as the USER turn. Inventing one to fill the panel
+     * would be the same fabrication.
      */
     private ConversationMessageDto answerTurn(String choice, double confidence,
                                                Map<String, Double> probabilities) {
@@ -640,9 +689,9 @@ public class TypeSafeSystemOneClient {
     }
 
     private ClassifyResponseDto failure(String error, String provider, String model,
-                                         String instructions, long durationMs) {
+                                         String sent, long durationMs) {
         return new ClassifyResponseDto(false, null, 0, null, error, durationMs, provider, model,
-                0, 0, 0, null, null, instructions, null, null);
+                0, 0, 0, null, null, sent, null, null);
     }
 
     /** A node configuration this endpoint cannot be asked about. */

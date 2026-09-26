@@ -10,6 +10,7 @@ import { FAMILY_ORDER } from './badgeVisuals';
 import { BadgeCard } from './BadgeCard';
 import { BadgeDetailDialog } from './BadgeDetailDialog';
 import { BadgeMedal } from './BadgeMedal';
+import { trackTrophyViewed, type TrophyEntryPoint } from './badgeAnalytics';
 
 /**
  * The trophy wall. Tighter columns than a card grid would allow, because a bare
@@ -49,6 +50,13 @@ export function BadgeCollection() {
     }
     return map;
   }, [badges]);
+
+  // Opening a trophy from the page itself is what is reported; stepping along the ladder inside
+  // the dialog is not, since that is browsing one trophy's family rather than opening a trophy.
+  const openFrom = (entryPoint: TrophyEntryPoint) => (badge: Badge) => {
+    trackTrophyViewed(badge, entryPoint);
+    setSelectedCode(badge.code);
+  };
 
   const selected = useMemo(
     () => badges.find((badge) => badge.code === selectedCode) ?? null,
@@ -128,10 +136,10 @@ export function BadgeCollection() {
       </header>
 
       {recent.length > 0 && (
-        <MedalStrip title={t('recent')} badges={recent} idPrefix="recent" onSelect={setSelectedCode} />
+        <MedalStrip title={t('recent')} badges={recent} idPrefix="recent" onSelect={openFrom('recent')} />
       )}
       {nextUp.length > 0 && (
-        <MedalStrip title={t('nextUp')} badges={nextUp} idPrefix="next" onSelect={setSelectedCode} />
+        <MedalStrip title={t('nextUp')} badges={nextUp} idPrefix="next" onSelect={openFrom('next')} />
       )}
 
       {FAMILY_ORDER.map((family) => {
@@ -153,7 +161,7 @@ export function BadgeCollection() {
                 <BadgeCard
                   key={badge.code}
                   badge={badge}
-                  onSelect={(picked) => setSelectedCode(picked.code)}
+                  onSelect={openFrom('grid')}
                 />
               ))}
             </div>
@@ -184,7 +192,7 @@ function MedalStrip({
   title: string;
   badges: Badge[];
   idPrefix: string;
-  onSelect: (code: string) => void;
+  onSelect: (badge: Badge) => void;
 }) {
   const t = useTranslations('badges');
   return (
@@ -197,7 +205,7 @@ function MedalStrip({
           <button
             key={badge.code}
             type="button"
-            onClick={() => onSelect(badge.code)}
+            onClick={() => onSelect(badge)}
             className="flex w-20 shrink-0 flex-col items-center gap-1.5 rounded-xl p-1 text-center
                        transition-colors hover:bg-theme-secondary focus-visible:outline-none
                        focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]"

@@ -15,6 +15,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useCallback, useState } from 'react';
+import { isOrbiChat } from '@/components/chat/orbi/isOrbiChat';
 import { useTranslations } from 'next-intl';
 import { useRouter } from '@/i18n/navigation';
 import { useSearchParams } from 'next/navigation';
@@ -41,7 +42,7 @@ import { ModelSelectorDropdown } from '@/components/chat/ModelSelectorDropdown';
 import { modelFilterLabelsFrom } from '@/components/chat/modelFilterLabels';
 import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { UpgradeRequiredNotice } from '@/components/billing/UpgradeRequiredBadge';
-import { ComposerFreeTierBadge } from '@/components/billing/FreeTierBadge';
+import { FreeTierBadge } from '@/components/billing/FreeTierBadge';
 import { useMonthlyCreditsCannotPay } from '@/lib/hooks/useMonthlyCreditsCannotPay';
 import { usePreferFreeTierModel } from '@/lib/hooks/usePreferFreeTierModel';
 import { ComposerLeadingControl } from '@/components/chat/ComposerLeadingControl';
@@ -130,10 +131,9 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
   // even if the composer Options panel is never opened (V312).
   usePrimeUserChatDefaults();
 
-  // V494: open a fresh chat on a model the account can pay for. The selection
-  // starts empty, and an empty selection is sent against the catalogue default -
-  // the admin's global #1, which a free-tier allowance may not cover.
-  usePreferFreeTierModel({ models, selectedModel: state.selectedModel, setSelectedModel: state.setSelectedModel });
+  // A Free account opens on the free tier's best-ranked model, whatever the browser
+  // restored: the stored selection is browser-wide, not scoped to the account.
+  usePreferFreeTierModel(models);
 
   // Message handlers using StreamingContext
   const handlers = useMessageHandlersV2({
@@ -647,7 +647,7 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
           freeTierForModel={freeTierForModel}
           prefersFreeTierModels={prefersFreeTierModels}
           upgradeNotice={<UpgradeRequiredNotice blocked={creditsCannotPay} />}
-          freeTierBadge={<ComposerFreeTierBadge />}
+          freeTierBadge={<FreeTierBadge covered />}
           reasoningEffort={state.reasoningEffort}
           onReasoningEffortChange={state.setReasoningEffort}
           reasoningEffortLabel={t('actions.reasoningEffort')}
@@ -658,6 +658,19 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
     />
   ), [agentAvatarUrl, resolvedAgentId, handleOpenAgentPanel, agentName, showModelSelector, setShowModelSelector, selectedModel, selectedModelData, availableModels, setSelectedModel, t, state.reasoningEffort, state.setReasoningEffort, modelsResolvedEmpty]);
 
+  const orbiConversationId = conversationIdFromParams || currentConversationId || null;
+  // The conversation this page just started from Orbi's home (no agent). It is only loaded once
+  // the first reply is done, and the sidebar list may not have it yet either, so without this
+  // Orbi would vanish the moment the user presses Enter. Adjusted during render, like
+  // OrbiMascot's hop, so Orbi is never gone for a frame.
+  const [orbiStartedId, setOrbiStartedId] = useState<string | null>(null);
+  const [prevOrbiConversationId, setPrevOrbiConversationId] = useState(orbiConversationId);
+  if (prevOrbiConversationId !== orbiConversationId) {
+    setPrevOrbiConversationId(orbiConversationId);
+    const startedHereFromOrbi = prevOrbiConversationId === null && !conversationIdFromParams
+      && !(resolvedAgentId || linkedAgentId);
+    setOrbiStartedId(startedHereFromOrbi ? orbiConversationId : null);
+  }
   const composerProps = {
     inputValue,
     onInputChange: setInputValue,
@@ -683,6 +696,17 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
     // Forward-link agent (with sidebar fallback) so the composer's agent-scoped skills/
     // options match the header, even before the full conversation object has loaded.
     linkedAgentId,
+    // Orbi is the chat with no agent; this page is the one place that knows which it is.
+    // The sidebar list is the fallback, as for linkedAgentId above: a conversation just created
+    // from the home page is listed before it is loaded, and Orbi should not blink out meanwhile.
+    showOrbi: isOrbiChat({
+      conversationId: orbiConversationId,
+      conversation: currentConversation?.id === orbiConversationId
+        ? currentConversation
+        : conversations?.find((c) => c.id === orbiConversationId),
+      agentId: resolvedAgentId || linkedAgentId,
+      startedFromOrbi: orbiStartedId !== null && orbiStartedId === orbiConversationId,
+    }),
   };
 
   const showWelcomeMessage = !conversationIdFromParams && !currentConversationId && messages.length === 0 && !isLoadingConversation && !isStreamingThisConversation && !handlers.isStartingStream;

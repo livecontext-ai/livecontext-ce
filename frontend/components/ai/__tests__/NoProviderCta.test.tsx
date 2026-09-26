@@ -34,11 +34,20 @@ vi.mock('@/lib/edition', () => ({
 vi.mock('@/lib/providers/smart-providers', () => ({
   useOptionalAuth: () => ({ hasRole: (role: string) => role === 'ADMIN' && h.isAdmin }),
 }));
-vi.mock('@/lib/api/cloud-link.service', () => ({
-  cloudLinkService: {
-    getAuthUrl: (...args: unknown[]) => h.getAuthUrl(...args),
-  },
-}));
+// getConnectUrl keeps its REAL startUrl-over-authUrl choice (resolveConnectUrl); only the
+// backend call (getAuthUrl) is stubbed, so these tests see what the button really navigates to.
+vi.mock('@/lib/api/cloud-link.service', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api/cloud-link.service')>(
+    '@/lib/api/cloud-link.service',
+  );
+  return {
+    cloudLinkService: {
+      getAuthUrl: (...args: unknown[]) => h.getAuthUrl(...args),
+      getConnectUrl: async (...args: unknown[]) =>
+        actual.resolveConnectUrl(await h.getAuthUrl(...args)),
+    },
+  };
+});
 vi.mock('@/components/LoadingSpinner', () => ({
   default: () => <span data-testid="spinner" />,
 }));
@@ -98,6 +107,29 @@ describe('NoProviderCta', () => {
     // No returnPath: the backend whitelist only accepts callback-handling pages,
     // so the flow must land on the default (settings cloud-account).
     expect(h.getAuthUrl).toHaveBeenCalledWith();
+
+    Object.defineProperty(window, 'location', { value: originalLocation, writable: true });
+  });
+
+  it('navigates to the cloud onboarding startUrl (not the bare authUrl) when the backend offers one', async () => {
+    h.isAdmin = true;
+    h.getAuthUrl.mockResolvedValue({
+      authUrl: 'https://kc.example/auth?x=1',
+      state: 's',
+      startUrl: 'https://livecontext.ai/onboarding?ce_link=1&state=s',
+    });
+    const originalLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      value: { ...originalLocation, href: 'http://ce.local/en/app/chat' },
+      writable: true,
+    });
+
+    render(<NoProviderCta />);
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`${T}.connectCloud`) }));
+
+    await waitFor(() =>
+      expect(window.location.href).toBe('https://livecontext.ai/onboarding?ce_link=1&state=s'),
+    );
 
     Object.defineProperty(window, 'location', { value: originalLocation, writable: true });
   });

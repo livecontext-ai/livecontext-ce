@@ -211,7 +211,7 @@ class UserResolutionServiceTest {
             UserResolutionResponse response = userResolutionService.resolveUser(providerId, jwt);
 
             assertThat(response).isNotNull();
-            verify(samlLoginService).ensureMembershipForIdentityProvider(user, alias);
+            verify(samlLoginService).ensureMembershipForIdentityProvider(eq(user), eq(alias), anyBoolean());
         }
 
         @Test
@@ -277,7 +277,7 @@ class UserResolutionServiceTest {
             when(userRepository.findByProviderId(providerId)).thenReturn(Optional.of(user));
             doThrow(new RuntimeException("team status unavailable"))
                     .when(samlLoginService)
-                    .ensureMembershipForIdentityProvider(user, alias);
+                    .ensureMembershipForIdentityProvider(eq(user), eq(alias), anyBoolean());
 
             UserResolutionResponse response = userResolutionService.resolveUser(providerId, jwt);
 

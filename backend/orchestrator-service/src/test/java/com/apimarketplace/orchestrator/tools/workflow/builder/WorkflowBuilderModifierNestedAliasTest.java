@@ -398,6 +398,14 @@ class WorkflowBuilderModifierNestedAliasTest {
     }
 
     @Test
+    @DisplayName("a {{...}} reference on a numeric field is stored as written, for the node to resolve at run time")
+    void templateIsStoredAsWritten() {
+        assertThat(modify("timeout_ms", "{{core:settings.output.timeout}}").success()).isTrue();
+
+        assertThat(approvalConfig().get("timeoutMs")).isEqualTo("{{core:settings.output.timeout}}");
+    }
+
+    @Test
     @DisplayName("the ambiguity check does not fire on a node type the table does not cover")
     void ambiguityCheckIgnoresUncoveredTypes() {
         Map<String, Object> node = new LinkedHashMap<>();

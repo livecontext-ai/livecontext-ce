@@ -3,11 +3,9 @@
 import * as React from 'react';
 import { ArrowUp, Loader2, Paperclip, SlidersHorizontal, X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { OrbiMascot } from '@/components/chat/orbi/OrbiMascot';
 import { Button } from '@/components/ui/button';
-import { Popover, PopoverTrigger } from '@/components/ui/popover';
-// A menu opened from the studio is drawn on the studio's own ground: it renders in a portal on
-// the document, so it cannot inherit the surface's tokens and has to be handed them.
-import { StudioPopoverContent } from '@/components/studio/StudioPopoverContent';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 // See components/ui/menu.ts: the bare PopoverContent has no background in this theme.
 import { menuItemClass, menuSurfaceClass } from '@/components/ui/menu';
 import { fileRefToUrl, fileService, isFileRef, isImageFile, normalizeFileRef, type FileRef } from '@/lib/api/orchestrator/file.service';
@@ -84,15 +82,6 @@ export interface StudioComposerProps {
    */
   modeSwitch?: React.ReactNode;
   /**
-   * Which ground the studio draws itself on, as a control.
-   *
-   * <p>Placed here for the same reason the mode switch is, and it is the ONLY place that works: the
-   * composer is the one thing rendered by every studio layout (empty, narrow, and with a thread
-   * open), so a control anywhere else would exist on one screen and vanish on the next. Passed in
-   * rather than built here because the surface owns the preference; this owns where it sits.
-   */
-  lookSwitch?: React.ReactNode;
-  /**
    * Nothing can be sent from here at all - the conversation this composer writes into cannot be
    * read, so its kind is unknown. Distinct from `isRunning`, which is temporary.
    */
@@ -158,7 +147,6 @@ export function StudioComposer({
   isRunning = false,
   notice,
   modeSwitch,
-  lookSwitch,
   disabled = false,
   autoFocus = false,
   credentialSource = 'platform',
@@ -172,6 +160,7 @@ export function StudioComposer({
   // The parameter and file-slot dictionary is shared with every other generation surface: one
   // copy, so a new provider role is named the same way everywhere.
   const tGeneration = useTranslations('generation');
+  const tChat = useTranslations('chat');
   // Bound to `credentials`, which is where the price-unit dictionary lives, and NOT one level
   // deeper: priceUnitLabel prepends `source.` itself, so a translator bound deeper double-prefixes
   // the lookup and next-intl silently returns the key path, on screen, in every locale.
@@ -556,6 +545,19 @@ export function StudioComposer({
     <div className="px-2 sm:px-3 pb-[calc(env(safe-area-inset-bottom,0px)+0.75rem)] sm:pb-4">
       <div className="mx-auto max-w-4xl">
         <div className="relative">
+    {/* Orbi, always on the studio, perched exactly where the chat composer puts it. The same Orbi
+        as the chat: it thinks while a generation runs and hops when it ends. */}
+    <div
+      data-testid="orbi-perch"
+      className="pointer-events-none absolute right-12 bottom-[calc(100%-5px)] z-10 h-8 w-8 text-theme-primary sm:bottom-[calc(100%-6px)] sm:h-10 sm:w-10"
+    >
+      <OrbiMascot
+        isStreaming={isRunning}
+        inputValue={prompt}
+        pokeLabel={tChat('orbiPoke')}
+        className="h-full w-full"
+      />
+    </div>
     <div
       ref={composerRef}
       className="w-full overflow-hidden border border-theme bg-theme-primary shadow-sm"
@@ -616,9 +618,6 @@ export function StudioComposer({
               the row it changes, not after it. `flex-shrink-0` keeps it out of the folding above -
               the parameter toggles give up their words for width, this never does. */}
           {modeSwitch && <div className="flex-shrink-0">{modeSwitch}</div>}
-          {/* Beside the mode switch, and like it never folded: it is already one icon, and the
-              controls that fold do so to give the row width, which this does not cost. */}
-          {lookSwitch && <div className="flex-shrink-0">{lookSwitch}</div>}
           {/* The attachment control exists only where a file can actually go. */}
           {slotCount > 0 && (
             <AddFileControl
@@ -656,7 +655,7 @@ export function StudioComposer({
                   <SlidersHorizontal className="h-4 w-4" />
                 </Button>
               </PopoverTrigger>
-              <StudioPopoverContent
+              <PopoverContent
                 align="start"
                 side="top"
                 className={`${menuSurfaceClass} max-h-[60vh] w-64 overflow-y-auto`}
@@ -682,7 +681,7 @@ export function StudioComposer({
                     <p className="px-3 pt-1 text-xs text-theme-muted">{priceFactorLabel}</p>
                   )}
                 </div>
-              </StudioPopoverContent>
+              </PopoverContent>
             </Popover>
           ) : (
             valueFields.map((field) => (
@@ -907,7 +906,7 @@ function AddFileControl({
           <Paperclip className="h-4 w-4" />
         </Button>
       </PopoverTrigger>
-      <StudioPopoverContent align="start" className={`${menuSurfaceClass} w-64`}>
+      <PopoverContent align="start" className={`${menuSurfaceClass} w-64`}>
         {/* The question, not a title: what follows is a list of jobs, and the reader is picking
             one. Kept even with a single entry, which is the case where the slot's meaning used to
             go unsaid entirely. */}
@@ -954,7 +953,7 @@ function AddFileControl({
             </button>
           );
         })}
-      </StudioPopoverContent>
+      </PopoverContent>
     </Popover>
   );
 }

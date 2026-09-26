@@ -14,6 +14,7 @@ import java.util.*;
 import static com.apimarketplace.agent.tools.common.ToolParamUtils.*;
 import com.apimarketplace.agent.tools.common.ToolParamUtils.InvalidVisibilityException;
 import com.apimarketplace.agent.tools.ToolErrorCode;
+import com.apimarketplace.datasource.services.DataSourceService;
 import com.apimarketplace.agent.config.ToolAccessControl;
 
 /**
@@ -34,9 +35,11 @@ public class TablePublishModule implements ToolModule {
     private static final Set<String> HANDLED_ACTIONS = Set.of("publish", "unpublish");
 
     private final PublicationClient publicationClient;
+    private final DataSourceService dataSourceService;
 
-    public TablePublishModule(PublicationClient publicationClient) {
+    public TablePublishModule(PublicationClient publicationClient, DataSourceService dataSourceService) {
         this.publicationClient = publicationClient;
+        this.dataSourceService = dataSourceService;
     }
 
     @Override
@@ -67,6 +70,11 @@ public class TablePublishModule implements ToolModule {
         if (tableIdStr == null) tableIdStr = stringId(p, "datasource_id");
         var notAllowed = TableToolAccess.denyIfNotAllowed(context, tableIdStr);
         if (notAllowed.isPresent()) return notAllowed;
+        // Listing or withdrawing a table is a write on it: the workspace member rules apply here,
+        // with the same answers as every other table action, before anything leaves this service.
+        var restricted = TableToolAccess.denyIfMemberRestricted(dataSourceService, context, tenantId,
+                parseTableId(tableIdStr), true);
+        if (restricted.isPresent()) return restricted;
 
         return Optional.of(switch (action) {
             case "publish" -> executePublish(parameters, tenantId, context);
@@ -184,5 +192,14 @@ public class TablePublishModule implements ToolModule {
         if (val == null) return null;
         if (val instanceof String s) return s.isBlank() ? null : s;
         return val.toString();
+    }
+
+    private static Long parseTableId(String raw) {
+        if (raw == null) return null;
+        try {
+            return Long.parseLong(raw.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 }

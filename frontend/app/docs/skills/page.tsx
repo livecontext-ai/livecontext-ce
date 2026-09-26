@@ -1,11 +1,11 @@
-import { Bot, Store, Workflow, FolderTree } from 'lucide-react';
+import { Bot, Store, Server } from 'lucide-react';
 import { docsMetadata } from '../_meta';
 import { DocsHero, DocsProse, DocsTable, Callout, Steps, Step, CardGrid, Card } from '../_components';
 
 export const metadata = docsMetadata({
   title: 'Skills',
   description:
-    'Skills in LiveContext: reusable instruction packages for agents, nestable folders, additive assignment up to 10 per agent, default-active with per-user override, global vs personal/org skills, marketplace publishing, and cloud-to-CE signed skill bundles.',
+    'Skills are reusable instruction packages for agents: folders, assignment (up to 10 per agent), default-active skills, scopes, marketplace publishing, and cloud skill bundles.',
   path: '/docs/skills',
 });
 
@@ -15,227 +15,296 @@ export default function SkillsPage() {
       <DocsHero
         eyebrow="AI"
         title="Skills"
-        lead="A skill is a reusable, named instruction package for agents: a short description that's always injected into the agent's system prompt, plus full instructions that load only when the agent actually activates it. Create them in the Skills tab, organize them in nestable folders, and assign the same skill to as many agents as you like."
+        lead="A skill is a reusable, named set of instructions for agents. Its short description is always in the agent's system prompt, and its full instructions load only when the agent needs them. This page covers creating, organizing, assigning, sharing, and publishing skills."
       />
 
       <DocsProse>
         <h2>What a skill is</h2>
         <p>
-          A skill has a <code>name</code>, a <code>description</code>, and full{' '}
-          <code>instructions</code> written in markdown, all required. It's a split-load design
-          that keeps agent prompts small:
+          A skill has a <strong>Name</strong>, a <strong>Description</strong>, and{' '}
+          <strong>Instructions</strong> written in markdown. All three are required. The split keeps
+          agent prompts small:
         </p>
         <DocsTable
+          caption="How the parts of a skill are loaded"
+          rowHeaders
           head={['Field', 'When it loads', 'Purpose']}
           rows={[
             [
-              'description',
-              'Always, injected into the agent’s system prompt.',
-              'A short summary (up to 300 characters in the UI) so the agent knows the skill exists and when to reach for it.',
+              'Description',
+              "Always, in the agent's system prompt.",
+              'A short summary (up to 300 characters in the editor) so the agent knows the skill exists and when to use it.',
             ],
             [
-              'instructions',
-              'Only on demand, when the agent activates the skill.',
-              'The full markdown playbook: no length cap in the editor.',
+              'Instructions',
+              'On demand, when the agent activates the skill.',
+              'The full markdown playbook, with no length limit.',
             ],
           ]}
         />
         <p>
-          Activation is the agent calling <code>skill(action=&apos;get&apos;, skill_id=...)</code>,
-          whose result carries the full <code>instructions</code>. You may see the label
-          &quot;discover_skill&quot; in help text or tooltips describing this activation step,
-          but it's descriptive only: there's no separately callable{' '}
-          <code>discover_skill</code> tool, just <code>skill(action=&apos;get&apos;)</code>.
+          The agent sees each available skill as its name and description, with a hint to load it.
+          Activating a skill means the agent calls <code>skill(action=&apos;get&apos;, skill_id=...)</code>,
+          whose result carries the full instructions. Help text sometimes calls this step
+          &quot;discover_skill&quot;; that is only a label, not a separate tool. Names are limited to
+          255 characters.
         </p>
+        <Callout variant="tip" title="Skills and memory">
+          Skills hold procedures (how to do something). Facts an agent should remember (who, what,
+          preferences) belong in long-term memory instead, which you manage in the{' '}
+          <strong>Memory</strong> tab of the Agents page. See <a href="/agents">Agents</a>.
+        </Callout>
+
+        <h2>Create and edit skills</h2>
         <p>
-          A skill can also carry an <code>icon</code> (a free-form string, up to 100 characters),
-          but it's set only through the API or the <code>skill</code> MCP tool, since the
-          create/edit modal doesn't render an icon field.
+          Skills live in the <strong>Skills</strong> tab of the Agents page, next to the{' '}
+          <strong>Agents</strong>, <strong>Memory</strong>, <strong>Fleet</strong>,{' '}
+          <strong>Metrics</strong>, and <strong>Settings</strong> tabs.
+        </p>
+        <Steps>
+          <Step n={1} title="Open the editor">
+            In the <strong>Skills</strong> tab, select <strong>Create Skill</strong>.
+          </Step>
+          <Step n={2} title="Fill in the three fields">
+            Enter a <strong>Name</strong>, a <strong>Description</strong>, and the{' '}
+            <strong>Instructions</strong>.
+          </Step>
+          <Step n={3} title="Save">
+            Select <strong>Save</strong>. The skill appears in the tree, where you can move it into a
+            folder.
+          </Step>
+        </Steps>
+        <p>
+          Administrators also see a <strong>Make available to everyone (global)</strong> checkbox in
+          the editor (see <a href="#scopes">Scopes</a>).
         </p>
 
-        <h2>Creating &amp; editing (Skills tab)</h2>
+        <h3>Built-in default skills</h3>
         <p>
-          Skills live in the <strong>Skills</strong> tab, alongside Agents and Metrics. The
-          create/edit modal renders three fields, all required to save: <strong>Name</strong>,{' '}
-          <strong>Description</strong> (with a tooltip reminding you it's injected into the
-          system prompt), and <strong>Instructions</strong> (markdown).
+          Every account starts with a set of built-in skills, marked <strong>Default</strong> in the
+          tree. They are added to your list automatically and are active in new chats. You can edit
+          them, and <strong>Reset to default</strong> in the editor restores the original content. A
+          default skill cannot be deleted.
         </p>
-        <p>An agent can drive the same lifecycle through the <code>skill</code> MCP tool:</p>
+
+        <h3>Manage skills from an agent</h3>
+        <p>An agent can manage skills through the <code>skill</code> tool:</p>
         <DocsTable
+          caption="Actions of the skill tool"
+          rowHeaders
           head={['Action group', 'Actions']}
           rows={[
-            ['CRUD', 'create, get, list, update, delete'],
+            ['Skills', 'create, get, list, update, delete'],
             ['Assignment', 'assign'],
             ['Folders', 'create_folder, list_folders, rename_folder, move_folder, delete_folder'],
             ['Marketplace', 'publish, unpublish'],
-            ['Discovery', 'help'],
+            ['Help', 'help'],
           ]}
         />
         <p>
-          <code>list</code> defaults to 25 results per page (<code>limit</code>), starting at
-          offset 0.
+          <code>list</code> returns 25 results per page by default and accepts a{' '}
+          <code>query</code> that filters on name and description. Resetting a default skill and
+          turning <strong>Default-active in new chats</strong> on or off are done in the app, not
+          through the tool.
         </p>
-        <Callout variant="info">
-          A built-in &quot;default&quot; skill (one with a non-null <code>default_key</code>)
-          can't be deleted, only reset to its original content. A regular skill you created can be
-          deleted outright.
-        </Callout>
 
-        <h2>Nestable folders</h2>
+        <h2>Organize skills in folders</h2>
         <p>
-          Skills are organized into folders, and folders can nest inside other folders with no
-          maximum depth. A skill moves into a folder at creation (<code>folder_id</code>) or
-          later via <code>update</code> (pass <code>&apos;root&apos;</code> to move it back out);
-          the UI also supports drag-and-drop, for both skills and whole folders.
+          Folders can nest inside other folders with no depth limit. Drag and drop skills and folders
+          in the tree. A folder cannot be moved into itself or into
+          one of its own subfolders.
         </p>
+        <Callout variant="warn" title="Deleting a folder">
+          Before you delete a folder, move the skills and subfolders you want to keep out of it. The
+          confirmation dialog says skills move to the root, but today deleting a folder removes only
+          the folder: the skills and subfolders that were inside it disappear from the Skills tree.
+          The skills are not deleted, but you can no longer reach them from the tree, and agents may
+          stop seeing them in their list of skills.
+        </Callout>
         <p>
-          Deleting a folder never deletes the skills inside it: they move to the root instead,
-          and any subfolders cascade-delete with it. Moving a folder rejects two cases: moving it
-          into itself, or moving it into one of its own descendants (which would create a cycle).
+          Global skills cannot be moved into a personal or team folder. An administrator can also mark
+          a folder as global; this does not change the skills inside it.
+        </p>
+
+        <h2>Assign skills to agents</h2>
+        <p>
+          Select skills in the agent editor, or let an agent assign them. The{' '}
+          <code>skill(action=&apos;assign&apos;)</code> action is <strong>additive</strong>: it adds
+          skills to an agent and skips the ones already assigned. By contrast, passing{' '}
+          <code>skill_ids</code> when an agent is created or updated <strong>replaces</strong> the
+          whole set.
         </p>
         <Callout variant="warn">
-          Global skills live outside any tenant's folder hierarchy and can't be moved into a
-          tenant folder. A folder itself can also be marked global by an admin, and a global
-          folder can hold a mix of personal and global skills, no cascade of globalness implied.
-        </Callout>
-
-        <h2>Assigning skills to agents</h2>
-        <p>
-          Assignment is <strong>additive</strong>: <code>skill(action=&apos;assign&apos;)</code>{' '}
-          adds skills to an agent without touching its existing set, silently skipping any that
-          are already assigned. Skills can also be attached at agent-creation time via{' '}
-          <code>skill_ids</code>.
-        </p>
-        <Callout variant="warn">
-          There's a hard cap of <strong>10 skills per agent</strong>, configurable via{' '}
-          <code>skill.max-per-agent</code> (default 10). Both the additive assign path and the
-          replace path (<code>PUT /api/agents/{'{agentId}'}/skills</code>, which overwrites the
-          whole set instead of adding to it) enforce the cap.
+          An agent can have at most <strong>10 skills</strong>. Both ways of assigning enforce the
+          limit.
         </Callout>
         <p>
-          A skill can only be assigned if it's visible in the caller's workspace, or if it's an
-          admin-managed global skill; anything else is rejected.
+          You can assign a skill only if it is visible in your workspace, or if it is a global skill.
         </p>
 
-        <h2>Default-active in new chats, with a per-user override</h2>
+        <h2>Default-active skills in new chats</h2>
         <p>
-          Each skill has an <code>is_default_active</code> flag. When true, the skill is
-          automatically included in every new general-chat conversation for everyone who can see
-          it. The owner can flip this freely on a personal skill; on a global skill, the admin
-          gate applies.
+          A skill marked <strong>Default-active in new chats</strong> (in the skill&apos;s menu in the
+          tree) is included automatically in every new general chat for everyone who can see it. You
+          can change this on your own skills; on a global skill only an administrator can.
         </p>
         <p>
-          On top of the default, each person can set a <strong>per-user override</strong>: turn a
-          shared or global default-active skill on or off just for themselves, without changing
-          it for teammates. The resolution rule at chat time is simple: your override wins if you
-          have one, otherwise the skill's own default applies. Clearing your override falls back
-          to that default.
+          Each person can also switch a skill on or off just for themselves with the toggle on its
+          row, without changing it for anyone else. Your own choice wins; if you have not made one,
+          the skill&apos;s default applies.
         </p>
 
-        <h2>Global vs personal/org skills</h2>
-        <p>
-          A skill's visibility is one of three scopes:
-        </p>
+        <h2 id="scopes">Scopes</h2>
         <DocsTable
+          caption="Skill scopes"
+          rowHeaders
           head={['Scope', 'Who sees it', 'Who can edit']}
           rows={[
-            ['Personal', 'Just you, in your own tenant.', 'You.'],
-            [
-              'Org workspace',
-              'Everyone in that organization workspace (skill carries an organization_id).',
-              'Members with write access; VIEWER role is read-only.',
-            ],
-            [
-              'Global (is_global=true)',
-              'Every tenant, everywhere.',
-              'Admins only: creating, editing, deleting, or toggling globalness on a global skill is admin-gated.',
-            ],
+            ['Personal', 'You.', 'You.'],
+            ['Team workspace', 'Everyone in the organization workspace.', 'Members with write access. Viewers are read-only.'],
+            ['Global', 'Every account on the installation.', 'Administrators only.'],
           ]}
         />
         <p>
-          A non-admin who opens a global skill gets a read-only editor with a banner explaining
-          why. Org-level access control also supports per-member deny restrictions: a restricted
-          skill simply reads back as not-found for that member.
+          A non-administrator who opens a global skill sees a read-only editor with a notice
+          explaining why. In a team workspace, a skill can also be restricted for a specific
+          member, in which case it does not appear in that member&apos;s skill list.
         </p>
 
-        <h2>Publishing a skill to the marketplace</h2>
+        <h2>Publish a skill to the marketplace</h2>
         <p>
-          Publishing registers the skill as a marketplace listing. Three things are required:{' '}
-          <code>skill_id</code>, a <code>title</code>, and an <code>interface_id</code>, the
-          landing page shown to people before they acquire it.
+          Publishing creates a marketplace listing. Every listing needs a title and a landing page (an
+          interface people see before they add the skill). See{' '}
+          <a href="/marketplace">Marketplace</a> for listings and reviews.
         </p>
         <DocsTable
+          caption="Skill listing visibility"
+          rowHeaders
           head={['Visibility', 'Who sees it', 'Goes live']}
           rows={[
-            ['Private (default)', 'Only you.', 'Immediately.'],
-            ['Unlisted', 'Anyone with the direct link.', 'Immediately.'],
-            ['Public', 'Listed on the marketplace.', 'After platform review (starts PENDING_REVIEW).'],
+            ['Private', 'Only you.', 'Immediately.'],
+            ['Unlisted', 'Anyone with the direct link.', 'After platform review.'],
+            ['Public', 'Everyone, in the marketplace.', 'After platform review.'],
           ]}
         />
-        <p>
-          An optional <code>credits_per_use</code> (default 0) sets a per-use credit price; the
-          publish call simply forwards that number to the marketplace side, it doesn't itself
-          charge credits.
-        </p>
-        <p>
-          Acquiring a published skill clones a fully self-contained copy, name, description,
-          icon, and instructions, into the acquirer's own tenant, tagged with the source
-          publication. Skills carry no file assets or other referenced resources, so there's
-          nothing else to bring along. Unpublishing marks the listing inactive: existing
-          acquirers keep the copy they already cloned, only new acquisitions are blocked.
-        </p>
-        <Callout variant="info">
-          The Skills tab shows each skill's publish state, published, pending review, or rejected
-          with a reason, alongside Publish and Unshare actions.
+        <ul>
+          <li>
+            Publishing from the <strong>Skills</strong> tab always creates a <strong>Public</strong>{' '}
+            listing, which waits for review.
+          </li>
+          <li>
+            An agent publishing with the <code>skill</code> tool can choose the visibility; if it
+            passes none, the listing is <strong>Private</strong>.
+          </li>
+          <li>
+            A publish request sent through the REST API without a visibility is{' '}
+            <strong>Public</strong>.
+          </li>
+        </ul>
+        <Callout title="Free listings only">
+          New listings must be free. A publish with a per-use credit price above 0 is refused unless
+          paid templates are enabled on the installation, which they are not by default.
         </Callout>
-
-        <h2>Cloud-to-CE signed skill bundles</h2>
         <p>
-          Admin-managed global skills are distributed from the cloud to self-hosted Community
-          Edition installs as a signed, versioned bundle (Ed25519-signed), so a fresh CE install
-          gets the cloud's curated set of globals instead of starting empty.
+          Adding a published skill copies its name, description, icon, and instructions into your own
+          account. Unpublishing stops new people from adding it; existing copies are kept. The Skills
+          tab shows each skill&apos;s publication state (published, <strong>Pending Review</strong>, or
+          rejected with a reason), with <strong>Share</strong> and <strong>Unshare</strong> actions.
+        </p>
+
+        <h2>Global skills on the Community Edition</h2>
+        <Callout title="Requires a cloud link">
+          A self-hosted install receives the cloud&apos;s global skills only while it is linked to the
+          cloud. An install that was never linked has no cloud global skills: nothing is built into a
+          release.
+        </Callout>
+        <p>
+          When the install is linked, it downloads a signed bundle of the cloud&apos;s global skills at
+          startup and then about every 15 minutes. The signature is verified before anything is
+          applied.
         </p>
         <Steps>
-          <Step n={1} title="Bundle applies as global, read-only rows">
-            Applied rows are marked <code>is_global=true</code> and carry the cloud's{' '}
-            <code>is_default_active</code> value exactly, so they auto-activate in new chats just
-            like the cloud original. Each row is keyed by <code>source_bundle_key</code>, the
-            cloud skill's UUID.
+          <Step n={1} title="Skills arrive as global, read-only skills">
+            Each bundled skill becomes a global skill and keeps the cloud&apos;s default-active setting,
+            so it joins new chats the same way. Anyone can switch it off for themselves.
           </Step>
-          <Step n={2} title="Local edits are blocked, not silently overwritten">
-            Any skill with a non-null <code>source_bundle_key</code> can't be edited or deleted
-            locally, even by an admin, because the cloud owns that content and a future re-sync
-            would clobber a local change anyway. A CE user can still hide it for themselves with
-            the per-user override.
+          <Step n={2} title="The cloud owns their content">
+            Bundled skills cannot be edited or deleted locally, even by an administrator.
           </Step>
-          <Step n={3} title="Re-sync is safe by design">
-            Re-syncing upserts by key (so a stable row id preserves any per-user overrides on it),
-            soft-removes rows dropped from the latest bundle (<code>is_global=false</code>,{' '}
-            <code>is_active=false</code>, never a hard delete), refuses to apply an empty payload
-            so the whole global set is never wiped by accident, and is a no-op if the install is
-            already on the latest version.
+          <Step n={3} title="Updates are safe">
+            A new bundle updates skills in place. A skill removed from the bundle is deactivated, not
+            deleted. An empty bundle is refused, and a bundle you already have changes nothing.
           </Step>
         </Steps>
-        <Callout variant="warn">
-          This distribution is a benefit of cloud-linking: the download endpoints require an
-          active cloud link, and an unlinked CE install simply skips the sync (recorded as{' '}
-          <code>NOT_LINKED</code>) rather than failing. Only the signing-key endpoint is public.
-          Sync runs on a schedule and once at startup.
-        </Callout>
 
-        <h2>Where to go next</h2>
+        <h2>Troubleshooting</h2>
+        <DocsTable
+          caption="Skills troubleshooting"
+          rowHeaders
+          head={['Symptom', 'Cause', 'Fix']}
+          rows={[
+            [
+              <>
+                The editor says <em>This is a global skill managed by administrators. You cannot edit it.</em>, or an
+                agent gets <code>Only admins can modify global skills</code>
+              </>,
+              'Global skills can be changed or deleted by administrators only.',
+              'Ask an administrator to make the change, or create your own skill with the instructions you need.',
+            ],
+            [
+              <>
+                Assigning fails with <code>Cannot assign: agent already has 8 skills, adding 3 would exceed limit of 10</code>
+              </>,
+              'An agent can have at most 10 skills, and assign adds to the skills it already has.',
+              <>
+                Remove skills from the agent first, or pass the complete list (10 at most) as <code>skill_ids</code> when
+                you update the agent, which replaces the whole set.
+              </>,
+            ],
+            [
+              <>
+                Deleting fails with <code>Cannot delete default skill</code>
+              </>,
+              'Built-in default skills cannot be deleted.',
+              <>
+                Use <strong>Reset to default</strong> to restore its content, or switch it off for yourself with the
+                toggle on its row.
+              </>,
+            ],
+            [
+              <>
+                On a self-hosted install, a skill says <code>This global skill is provided by the cloud and is read-only on this install</code>
+              </>,
+              'The skill came from the cloud skill bundle, and the cloud owns its content.',
+              'Switch it off for yourself if you do not want it in your new chats. You cannot edit or delete it locally.',
+            ],
+            [
+              <>
+                Publishing fails with <code>interfaceId is required to publish a SKILL (landing page)</code>
+              </>,
+              'Every skill listing needs a landing page.',
+              'Choose an interface as the landing page when you publish.',
+            ],
+            [
+              <>
+                Publishing fails with <code>Paid templates are coming soon. All new publications must be free</code>
+              </>,
+              'A per-use credit price above 0 was set, and paid templates are not enabled on the installation.',
+              'Publish the skill for free (a price of 0).',
+            ],
+          ]}
+        />
+
+        <h2>Related pages</h2>
         <CardGrid cols={3}>
           <Card icon={Bot} title="Agents" href="/agents">
-            Attach skills via skill_ids and the skill tool module.
+            Assign skills to agents and manage long-term memory.
           </Card>
           <Card icon={Store} title="Marketplace" href="/marketplace">
-            Publishing, visibility, and how forking works for any resource.
+            Listings, visibility, and review.
           </Card>
-          <Card icon={Workflow} title="Workflows" href="/workflows">
-            Where agent nodes carrying skills sit in a graph.
-          </Card>
-          <Card icon={FolderTree} title="Self-hosting" href="/self-host">
-            How Community Edition installs link to cloud for bundles.
+          <Card icon={Server} title="Self-hosting" href="/self-host">
+            Link a Community Edition install to the cloud.
           </Card>
         </CardGrid>
       </DocsProse>

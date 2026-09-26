@@ -534,6 +534,73 @@ class StorageServiceTest {
 
             verify(mappingService, never()).resolve(any(), anyString());
         }
+
+        /**
+         * Regression (prod 2026-09-25): a tool with no response mapping put an ERROR on the dashboard
+         * for every storage write of its result. No mapping is the normal state of most tools, so the
+         * row must be saved unmapped with nothing logged at ERROR.
+         */
+        @Test
+        @DisplayName("tool with no mapping: row saved unmapped and NOTHING logged at ERROR")
+        void noMappingForToolIsNotAnError() {
+            UUID toolId = UUID.randomUUID();
+            stubJsonSave(Map.of("key", "value"));
+            when(mappingService.isEnabled()).thenReturn(true);
+            when(mappingService.resolve(eq(toolId), anyString())).thenReturn(MappingResolutionResult.failure(
+                    "No mapping found for tool " + toolId + ". Please create a mapping first."));
+
+            List<ch.qos.logback.classic.spi.ILoggingEvent> events = captureStorageServiceLogs(() ->
+                    storageService.saveJsonWithContext(TENANT_ID, Map.of("key", "value"), "application/json",
+                            null, toolId, null, null, null, 0));
+
+            verify(storageRepository).save(entityCaptor.capture());
+            assertThat(entityCaptor.getValue().getDataMapped()).isNull();
+            assertThat(events).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+        }
+
+        @Test
+        @DisplayName("mapping that THROWS is still logged at ERROR, and the row is still saved")
+        void mappingExceptionStaysAnError() {
+            UUID toolId = UUID.randomUUID();
+            stubJsonSave(Map.of("key", "value"));
+            when(mappingService.isEnabled()).thenReturn(true);
+            when(mappingService.resolve(eq(toolId), anyString())).thenThrow(new IllegalStateException("spec corrupt"));
+
+            List<ch.qos.logback.classic.spi.ILoggingEvent> events = captureStorageServiceLogs(() ->
+                    storageService.saveJsonWithContext(TENANT_ID, Map.of("key", "value"), "application/json",
+                            null, toolId, null, null, null, 0));
+
+            verify(storageRepository).save(any(StorageEntity.class));
+            assertThat(events).anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR
+                    && e.getFormattedMessage().contains(toolId.toString())
+                    && e.getFormattedMessage().contains("spec corrupt"));
+        }
+
+        private void stubJsonSave(Map<String, String> data) {
+            when(storageUtils.calculateSize(data)).thenReturn(20);
+            when(quotaService.checkQuota(TENANT_ID, 20)).thenReturn(QuotaStatus.OK);
+            when(storageUtils.calculateChecksum(data)).thenReturn("chk");
+            when(storageRepository.save(any(StorageEntity.class))).thenAnswer(inv -> {
+                StorageEntity entity = inv.getArgument(0);
+                entity.setId(UUID.randomUUID());
+                return entity;
+            });
+        }
+
+        private List<ch.qos.logback.classic.spi.ILoggingEvent> captureStorageServiceLogs(Runnable action) {
+            ch.qos.logback.classic.Logger logger =
+                    (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(StorageService.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            try {
+                action.run();
+            } finally {
+                logger.detachAppender(appender);
+            }
+            return appender.list;
+        }
     }
 
     @Nested

@@ -27,6 +27,8 @@ import java.util.stream.Collectors;
 public class CompareDatasetsNode extends BaseNode {
 
     private static final Logger logger = LoggerFactory.getLogger(CompareDatasetsNode.class);
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
+        new com.fasterxml.jackson.databind.ObjectMapper();
 
     private final Core.CompareDatasetsConfig compareDatasetsConfig;
 
@@ -50,6 +52,9 @@ public class CompareDatasetsNode extends BaseNode {
             if (config == null) {
                 config = new Core.CompareDatasetsConfig(null, null, List.of(), true, true, true);
             }
+            // returnMatched / returnOnlyA / returnOnlyB written as {{...}} are resolved here; the
+            // typed config held false for them.
+            config = withDeferredScalars("compareDatasets", config, Core.CompareDatasetsConfig.class, context);
 
             // Resolve inputA and inputB expressions
             Object resolvedInputA = resolveExpression(config.inputA(), context);
@@ -59,7 +64,7 @@ public class CompareDatasetsNode extends BaseNode {
             List<Map<String, Object>> datasetA = extractDataset(resolvedInputA, context);
             List<Map<String, Object>> datasetB = extractDataset(resolvedInputB, context);
 
-            List<String> matchFields = config.matchFields() != null ? config.matchFields() : List.of();
+            List<String> matchFields = resolveMatchFields(config.matchFields(), context);
 
             // Build key maps using LinkedHashMap for deterministic ordering
             Map<String, Map<String, Object>> keyMapA = buildKeyMap(datasetA, matchFields);
@@ -127,9 +132,9 @@ public class CompareDatasetsNode extends BaseNode {
             inputData.put("inputA", ReportedParams.reportValue(datasetA));
             inputData.put("inputB", ReportedParams.reportValue(datasetB));
             inputData.put("matchFields", matchFields);
-            inputData.put("returnMatched", config.returnMatched());
-            inputData.put("returnOnlyA", config.returnOnlyA());
-            inputData.put("returnOnlyB", config.returnOnlyB());
+            inputData.put("returnMatched", reportedFlag("returnMatched", config.returnMatched()));
+            inputData.put("returnOnlyA", reportedFlag("returnOnlyA", config.returnOnlyA()));
+            inputData.put("returnOnlyB", reportedFlag("returnOnlyB", config.returnOnlyB()));
             result.put("resolved_params", inputData);
 
             logger.info("CompareDatasets completed: nodeId={}, matched={}, onlyInA={}, onlyInB={}, totalA={}, totalB={}",
@@ -143,10 +148,23 @@ public class CompareDatasetsNode extends BaseNode {
             failOutput.put("item_index", context.itemIndex());
             failOutput.put("itemIndex", context.itemIndex());
             failOutput.put("item_id", context.itemId());
+            // A templated flag that failed to resolve is reported as the template it is.
+            for (String flag : List.of("returnMatched", "returnOnlyA", "returnOnlyB")) {
+                String template = deferredScalar("compareDatasets", flag);
+                if (template != null && !inputData.containsKey(flag)) {
+                    inputData.put(flag, template);
+                }
+            }
             failOutput.put("resolved_params", inputData);
             failOutput.put("error", e.getMessage());
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failOutput, 0L);
         }
+    }
+
+    /** A flag as reported: through the workspace-variable rule when the plan wrote it as a template. */
+    private Object reportedFlag(String field, boolean value) {
+        String template = deferredScalar("compareDatasets", field);
+        return template != null ? ReportedParams.valueFrom(template, value) : value;
     }
 
     /**
@@ -198,6 +216,18 @@ public class CompareDatasetsNode extends BaseNode {
         String resolvedInputKey = String.valueOf(resolvedInput);
         if (resolvedInputKey.isBlank()) {
             return List.of();
+        }
+
+        // A reference whose value is JSON TEXT (an HTTP body, a code node's string output) is
+        // that dataset. It used to be taken for a step-output KEY, found nothing, and compared
+        // an empty dataset while the reference had resolved fine.
+        String trimmed = resolvedInputKey.trim();
+        if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+            try {
+                return extractListFromObject(JSON.readValue(trimmed, Object.class));
+            } catch (Exception notJson) {
+                // Not JSON after all: fall through to the key lookup below.
+            }
         }
 
         Map<String, Object> stepOutputs = context.stepOutputs();
@@ -267,19 +297,33 @@ public class CompareDatasetsNode extends BaseNode {
         if (expression == null || expression.isBlank()) {
             return null;
         }
+        // Typed, and never the configured text in place of a value.
+        return resolveTemplateValue(expression, context);
+    }
 
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                return resolved.getOrDefault("__expr__", expression);
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression '{}': {}", expression, e.getMessage());
-                return expression;
+    /**
+     * The match fields with any {@code {{...}}} resolved. They were used as configured, so a
+     * field named by a reference compared on a key no row has and matched nothing. A reference
+     * to a list contributes each entry; a reference to nothing contributes no field.
+     */
+    private List<String> resolveMatchFields(List<String> configured, ExecutionContext context) {
+        if (configured == null || configured.isEmpty()) {
+            return List.of();
+        }
+        List<String> fields = new ArrayList<>(configured.size());
+        for (String field : configured) {
+            if (field == null || !field.contains("{{")) {
+                fields.add(field);
+                continue;
+            }
+            Object resolved = resolveTemplateValue(field, context);
+            if (resolved instanceof Collection<?> many) {
+                many.forEach(v -> fields.add(String.valueOf(v)));
+            } else if (resolved != null) {
+                fields.add(com.apimarketplace.orchestrator.services.TemplateEngine.asText(resolved));
             }
         }
-
-        return expression;
+        return fields;
     }
 
     // Getters

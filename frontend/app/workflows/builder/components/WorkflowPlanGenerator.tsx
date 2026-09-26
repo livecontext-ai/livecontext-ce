@@ -112,7 +112,8 @@ export function WorkflowPlanGenerator({ nodes, edges, readOnly = false, onNodesC
 
   const generatePlan = React.useCallback(() => {
     try {
-      const plan = generateWorkflowPlan(nodes, edges);
+      // With the direction, so the exported JSON reads the same way once imported elsewhere.
+      const plan = generateWorkflowPlan(nodes, edges, layoutDirection);
       const json = JSON.stringify(plan, null, 2);
       setPlanJson(json);
       setIsOpen(true);
@@ -121,7 +122,7 @@ export function WorkflowPlanGenerator({ nodes, edges, readOnly = false, onNodesC
       setPlanJson(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       setIsOpen(true);
     }
-  }, [nodes, edges]);
+  }, [nodes, edges, layoutDirection]);
 
   const copyToClipboard = React.useCallback(async () => {
     try {
@@ -152,8 +153,11 @@ export function WorkflowPlanGenerator({ nodes, edges, readOnly = false, onNodesC
     try {
       // No isRunMode: this import is only reachable from the paste dialog, which the
       // toolbar hides on a locked (run / read-only) canvas.
+      // Merged into THIS canvas, so drawn in its direction: pasted positions computed the
+      // other way (their stamp, else horizontal) are re-laid out rather than kept.
+      const pastedLayout = { fallbackDirection: layoutDirection, forcedDirection: layoutDirection };
       const result = await WorkflowPlanImporter.importPlan(
-        importJson, nodes, layoutDirection, { queryClient },
+        importJson, nodes, pastedLayout, { queryClient },
       );
       
       if (result.success) {

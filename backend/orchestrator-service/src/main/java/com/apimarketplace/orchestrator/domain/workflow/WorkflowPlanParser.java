@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.domain.workflow;
 
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.utils.LabelNormalizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -564,7 +565,9 @@ public final class WorkflowPlanParser {
         logger.info("[parseTriggers] Parsing {} triggers", triggersData.size());
         return triggersData.stream()
             .map(data -> {
-                logger.info("[parseTriggers] Parsing trigger data: {}", data);
+                // Through forReport: a webhook trigger's params carry its auth secrets
+                // (webhookToken, basicPassword, authHeaderValue, jwtSecretKey) in clear.
+                logger.info("[parseTriggers] Parsing trigger data: {}", ReportedParams.forReport(data));
                 String id = safeString(data.get("id"));
                 if (id == null) id = UUID.randomUUID().toString();
                 String label = safeString(data.get("label"));
@@ -939,8 +942,10 @@ public final class WorkflowPlanParser {
             }
         }
 
+        Map<String, String> crudDeferred = new LinkedHashMap<>();
         Integer limit = null;
         Object limitObj = data.get("limit");
+        if (limitObj instanceof String text && text.contains("{{")) crudDeferred.put("limit", text);
         if (limitObj instanceof Number) limit = ((Number) limitObj).intValue();
         else if (limitObj instanceof String) {
             try { limit = Integer.parseInt((String) limitObj); } catch (NumberFormatException ignored) {}
@@ -948,6 +953,7 @@ public final class WorkflowPlanParser {
 
         Integer offset = null;
         Object offsetObj = data.get("offset");
+        if (offsetObj instanceof String text && text.contains("{{")) crudDeferred.put("offset", text);
         if (offsetObj instanceof Number) offset = ((Number) offsetObj).intValue();
         else if (offsetObj instanceof String) {
             try { offset = Integer.parseInt((String) offsetObj); } catch (NumberFormatException ignored) {}
@@ -972,15 +978,17 @@ public final class WorkflowPlanParser {
             Integer topK = null;
             Object topKObj = simData.get("topK");
             if (topKObj instanceof Number) topK = ((Number) topKObj).intValue();
+            else if (topKObj instanceof String text && text.contains("{{")) crudDeferred.put("topK", text);
             Double threshold = null;
             Object threshObj = simData.get("threshold");
             if (threshObj instanceof Number) threshold = ((Number) threshObj).doubleValue();
+            else if (threshObj instanceof String text && text.contains("{{")) crudDeferred.put("threshold", text);
             if (simColumn != null && queryVector != null) {
                 similarity = new Step.CrudConfig.SimilarityConfig(simColumn, queryVector, topK, threshold);
             }
         }
 
-        return new Step.CrudConfig(where, similarity, set, rows, columns, limit, offset);
+        return new Step.CrudConfig(where, similarity, set, rows, columns, limit, offset, crudDeferred);
     }
 
     // ===== AGENTS =====
@@ -1009,6 +1017,14 @@ public final class WorkflowPlanParser {
                 Integer maxTools = null;
                 if (data.get("maxTools") instanceof Number) maxTools = ((Number) data.get("maxTools")).intValue();
 
+                // A {{...}} in one of those numbers is kept for run time instead of silently
+                // becoming the default (0.7 / 4096 / 10 / 5).
+                Map<String, String> agentDeferred = new LinkedHashMap<>();
+                for (String numeric : List.of("temperature", "maxTokens", "maxIterations", "maxTools")) {
+                    String template = templateOrNull(data.get(numeric));
+                    if (template != null) agentDeferred.put(numeric, template);
+                }
+
                 String agentConfigId = safeString(data.get("agentConfigId"));
                 Boolean withMemory = data.get("withMemory") instanceof Boolean b ? b : null;
 
@@ -1025,7 +1041,7 @@ public final class WorkflowPlanParser {
                     temperature, maxTokens, maxIterations, maxTools,
                     (List<String>) data.get("tools"),
                     safeString(data.get("parentLoopId")),
-                    (Map<String, Object>) data.getOrDefault("params", new HashMap<>()),
+                    agentParams(data),
                     // Classify-specific fields
                     (List<Map<String, Object>>) data.get("classifyCategories"),
                     safeString(data.get("classifyParams")),
@@ -1033,7 +1049,7 @@ public final class WorkflowPlanParser {
                     parseGuardrailRules(data.get("guardrailRules")),
                     safeString(data.get("guardrailParams")),
                     safeString(data.get("graphNodeId"))
-                );
+                , agentDeferred);
             })
             .filter(Objects::nonNull)
             .collect(Collectors.toList());
@@ -1078,7 +1094,8 @@ public final class WorkflowPlanParser {
         if (raw instanceof Map<?, ?> marker) {
             return new Edge.BackEdge(
                 safeString(marker.get("condition")),
-                intOrNull(marker.get("maxIterations")));
+                intOrNull(marker.get("maxIterations")),
+                templateOrNull(marker.get("maxIterations")));
         }
 
         // Legacy: marker stored inside params by an older builder.
@@ -1087,7 +1104,8 @@ public final class WorkflowPlanParser {
                 data.get("from"), data.get("to"));
             return new Edge.BackEdge(
                 safeString(params.get("condition")),
-                intOrNull(params.get("maxIterations")));
+                intOrNull(params.get("maxIterations")),
+                templateOrNull(params.get("maxIterations")));
         }
 
         return null;
@@ -1112,6 +1130,25 @@ public final class WorkflowPlanParser {
         return cleaned;
     }
 
+    /**
+     * The agent's params. A guardrail's node-level {@code action} (the default for rules that set
+     * none, written at the top of the node by the builder) is carried into them: it was never read,
+     * so every guardrail ran on the runtime default whatever the author chose.
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> agentParams(Map<String, Object> data) {
+        Map<String, Object> params = new HashMap<>((Map<String, Object>) data.getOrDefault("params", new HashMap<>()));
+        if ("guardrail".equals(data.get("type")) && data.get("action") instanceof String action
+                && !action.isBlank() && !params.containsKey("action")) {
+            params.put("action", action);
+        }
+        return params;
+    }
+
+    private static String templateOrNull(Object value) {
+        return value instanceof String text && text.contains("{{") ? text : null;
+    }
+
     private static Integer intOrNull(Object value) {
         return value instanceof Number number ? number.intValue() : null;
     }
@@ -1132,6 +1169,8 @@ public final class WorkflowPlanParser {
     private static Core parseCore(Map<String, Object> data) {
         String id = safeString(data.get("id"));
         String type = safeString(data.get("type"));
+        // Numeric / boolean fields holding a {{...}} template, resolved by the node at run time.
+        Map<String, Map<String, String>> deferred = new LinkedHashMap<>();
 
         if (id == null || id.isBlank()) {
             logger.warn("Core with missing id, skipping");
@@ -1177,12 +1216,14 @@ public final class WorkflowPlanParser {
             Object maxIterObj = data.get("maxIterations");
             if (maxIterObj == null) maxIterObj = data.get("maxIteration");
             if (maxIterObj instanceof Number) maxIterations = ((Number) maxIterObj).intValue();
+            else deferTemplate(deferred, "loop", "maxIterations", maxIterObj);
             strategy = safeStringOrDefault(data, "strategy", "continue-anyway");
         } else if ("split".equals(type)) {
             // Accept both "list" (new) and "listExpression" (legacy) for backward compatibility
             list = safeString(data.get("list"));
             if (list == null) list = safeString(data.get("listExpression"));
             if (data.get("maxItems") instanceof Number) maxItems = ((Number) data.get("maxItems")).intValue();
+            else deferTemplate(deferred, "split", "maxItems", data.get("maxItems"));
             splitStrategy = safeStringOrDefault(data, "splitStrategy", "stop-on-error");
         } else if ("fork".equals(type)) {
             forkOutputs = parseForkOutputs((List<Map<String, Object>>) data.get("forkOutputs"));
@@ -1190,6 +1231,7 @@ public final class WorkflowPlanParser {
             transformConfig = parseTransformConfig((Map<String, Object>) data.get("transform"));
         } else if ("wait".equals(type)) {
             waitConfig = parseWaitConfig((Map<String, Object>) data.get("wait"));
+            deferTemplates(deferred, "wait", data.get("wait"), "duration");
         } else if ("download_file".equals(type)) {
             downloadConfig = parseDownloadConfig((Map<String, Object>) data.get("download"));
         } else if ("response".equals(type)) {
@@ -1200,6 +1242,7 @@ public final class WorkflowPlanParser {
             optionChoices = parseOptionChoices((List<Map<String, Object>>) data.get("optionChoices"));
         } else if ("http_request".equals(type)) {
             httpRequestConfig = parseHttpRequestConfig((Map<String, Object>) data.get("httpRequest"));
+            deferTemplates(deferred, "httpRequest", data.get("httpRequest"), "timeout");
         } else if ("data_input".equals(type)) {
             dataInputConfig = parseDataInputConfig((Map<String, Object>) data.get("dataInput"));
         }
@@ -1208,34 +1251,35 @@ public final class WorkflowPlanParser {
         Core.ApprovalConfig approvalConfig = null;
         if ("approval".equals(type)) {
             approvalConfig = parseApprovalConfig((Map<String, Object>) data.get("approval"));
+            deferTemplates(deferred, "approval", data.get("approval"), "requiredApprovals", "timeoutMs");
         }
 
         // Parse new node configs - each reads from its corresponding JSON key
-        Core.FilterConfig filterConfig = parseConfigSafe(data, "filter", Core.FilterConfig.class);
-        Core.SortConfig sortConfig = parseConfigSafe(data, "sort", Core.SortConfig.class);
-        Core.LimitConfig limitConfig = parseConfigSafe(data, "limit", Core.LimitConfig.class);
-        Core.RemoveDuplicatesConfig removeDuplicatesConfig = parseConfigSafe(data, "removeDuplicates", Core.RemoveDuplicatesConfig.class);
-        Core.SummarizeConfig summarizeConfig = parseConfigSafe(data, "summarize", Core.SummarizeConfig.class);
-        Core.DateTimeConfig dateTimeConfig = parseConfigSafe(data, "dateTime", Core.DateTimeConfig.class);
-        Core.CryptoJwtConfig cryptoJwtConfig = parseConfigSafe(data, "cryptoJwt", Core.CryptoJwtConfig.class);
-        Core.XmlConfig xmlConfig = parseConfigSafe(data, "xml", Core.XmlConfig.class);
-        Core.CompressionConfig compressionConfig = parseConfigSafe(data, "compression", Core.CompressionConfig.class);
-        Core.RssConfig rssConfig = parseConfigSafe(data, "rss", Core.RssConfig.class);
-        Core.ConvertToFileConfig convertToFileConfig = parseConfigSafe(data, "convertToFile", Core.ConvertToFileConfig.class);
-        Core.ExtractFromFileConfig extractFromFileConfig = parseConfigSafe(data, "extractFromFile", Core.ExtractFromFileConfig.class);
-        Core.CompareDatasetsConfig compareDatasetsConfig = parseConfigSafe(data, "compareDatasets", Core.CompareDatasetsConfig.class);
-        Core.SubWorkflowConfig subWorkflowConfig = parseConfigSafe(data, "subWorkflow", Core.SubWorkflowConfig.class);
-        Core.RespondToWebhookConfig respondToWebhookConfig = parseConfigSafe(data, "respondToWebhook", Core.RespondToWebhookConfig.class);
-        Core.SendEmailConfig sendEmailConfig = parseConfigSafe(data, "sendEmail", Core.SendEmailConfig.class);
-        Core.EmailInboxConfig emailInboxConfig = parseConfigSafe(data, "emailInbox", Core.EmailInboxConfig.class);
-        Core.CodeConfig codeConfig = parseConfigSafe(data, "code", Core.CodeConfig.class);
-        Core.SetConfig setConfig = parseConfigSafe(data, "set", Core.SetConfig.class);
-        Core.HtmlExtractConfig htmlExtractConfig = parseConfigSafe(data, "htmlExtract", Core.HtmlExtractConfig.class);
-        Core.TaskConfig taskConfig = parseConfigSafe(data, "task", Core.TaskConfig.class);
-        Core.StopOnErrorConfig stopOnErrorConfig = parseConfigSafe(data, "stopOnError", Core.StopOnErrorConfig.class);
-        Core.SshConfig sshConfig = parseConfigSafe(data, "ssh", Core.SshConfig.class);
-        Core.SftpConfig sftpConfig = parseConfigSafe(data, "sftp", Core.SftpConfig.class);
-        Core.DatabaseConfig databaseConfig = parseConfigSafe(data, "database", Core.DatabaseConfig.class);
+        Core.FilterConfig filterConfig = parseConfigSafe(data, "filter", Core.FilterConfig.class, deferred);
+        Core.SortConfig sortConfig = parseConfigSafe(data, "sort", Core.SortConfig.class, deferred);
+        Core.LimitConfig limitConfig = parseConfigSafe(data, "limit", Core.LimitConfig.class, deferred);
+        Core.RemoveDuplicatesConfig removeDuplicatesConfig = parseConfigSafe(data, "removeDuplicates", Core.RemoveDuplicatesConfig.class, deferred);
+        Core.SummarizeConfig summarizeConfig = parseConfigSafe(data, "summarize", Core.SummarizeConfig.class, deferred);
+        Core.DateTimeConfig dateTimeConfig = parseConfigSafe(data, "dateTime", Core.DateTimeConfig.class, deferred);
+        Core.CryptoJwtConfig cryptoJwtConfig = parseConfigSafe(data, "cryptoJwt", Core.CryptoJwtConfig.class, deferred);
+        Core.XmlConfig xmlConfig = parseConfigSafe(data, "xml", Core.XmlConfig.class, deferred);
+        Core.CompressionConfig compressionConfig = parseConfigSafe(data, "compression", Core.CompressionConfig.class, deferred);
+        Core.RssConfig rssConfig = parseConfigSafe(data, "rss", Core.RssConfig.class, deferred);
+        Core.ConvertToFileConfig convertToFileConfig = parseConfigSafe(data, "convertToFile", Core.ConvertToFileConfig.class, deferred);
+        Core.ExtractFromFileConfig extractFromFileConfig = parseConfigSafe(data, "extractFromFile", Core.ExtractFromFileConfig.class, deferred);
+        Core.CompareDatasetsConfig compareDatasetsConfig = parseConfigSafe(data, "compareDatasets", Core.CompareDatasetsConfig.class, deferred);
+        Core.SubWorkflowConfig subWorkflowConfig = parseConfigSafe(data, "subWorkflow", Core.SubWorkflowConfig.class, deferred);
+        Core.RespondToWebhookConfig respondToWebhookConfig = parseConfigSafe(data, "respondToWebhook", Core.RespondToWebhookConfig.class, deferred);
+        Core.SendEmailConfig sendEmailConfig = parseConfigSafe(data, "sendEmail", Core.SendEmailConfig.class, deferred);
+        Core.EmailInboxConfig emailInboxConfig = parseConfigSafe(data, "emailInbox", Core.EmailInboxConfig.class, deferred);
+        Core.CodeConfig codeConfig = parseConfigSafe(data, "code", Core.CodeConfig.class, deferred);
+        Core.SetConfig setConfig = parseConfigSafe(data, "set", Core.SetConfig.class, deferred);
+        Core.HtmlExtractConfig htmlExtractConfig = parseConfigSafe(data, "htmlExtract", Core.HtmlExtractConfig.class, deferred);
+        Core.TaskConfig taskConfig = parseConfigSafe(data, "task", Core.TaskConfig.class, deferred);
+        Core.StopOnErrorConfig stopOnErrorConfig = parseConfigSafe(data, "stopOnError", Core.StopOnErrorConfig.class, deferred);
+        Core.SshConfig sshConfig = parseConfigSafe(data, "ssh", Core.SshConfig.class, deferred);
+        Core.SftpConfig sftpConfig = parseConfigSafe(data, "sftp", Core.SftpConfig.class, deferred);
+        Core.DatabaseConfig databaseConfig = parseConfigSafe(data, "database", Core.DatabaseConfig.class, deferred);
 
         return new Core(id, type, position != null ? new HashMap<>(position) : Map.of(), label,
             decisionConditions, switchExpression, switchCases, loopCondition, maxIterations, strategy,
@@ -1249,7 +1293,7 @@ public final class WorkflowPlanParser {
             sendEmailConfig, emailInboxConfig, codeConfig, setConfig, htmlExtractConfig, taskConfig,
             stopOnErrorConfig, sshConfig, sftpConfig, databaseConfig,
             params, safeString(data.get("graphNodeId"))
-        );
+        , deferred);
     }
 
     private static List<Core.DecisionCondition> parseDecisionConditions(List<Map<String, Object>> data) {
@@ -1314,8 +1358,10 @@ public final class WorkflowPlanParser {
         // Optional custom inline-button labels (template-capable): blank/absent = channel defaults.
         String approveLabel = data.get("approveLabel") instanceof String s ? s : "";
         String rejectLabel = data.get("rejectLabel") instanceof String s ? s : "";
+        // The destination picked like a credential: an id, or "default". Blank = older shape.
+        String linkId = data.get("linkId") instanceof String s ? s : "";
         return new Core.ApprovalDelegation(channel, credentialId, chatId, messageTemplate, imageTemplate, allowedUserIds,
-            approveLabel, rejectLabel);
+            approveLabel, rejectLabel, linkId);
     }
 
     private static Long parseCredentialId(Object value) {
@@ -1535,13 +1581,71 @@ public final class WorkflowPlanParser {
      */
     @SuppressWarnings("unchecked")
     private static <T> T parseConfigSafe(Map<String, Object> data, String key, Class<T> clazz) {
+        return parseConfigSafe(data, key, clazz, null);
+    }
+
+    /**
+     * {@link #parseConfigSafe(Map, String, Class)}, setting aside every numeric or boolean field
+     * whose value is a {@code {{...}}} template into {@code deferred} (config key, field name).
+     *
+     * <p>Jackson cannot put a template in an {@code int}: it threw, and this returned null for the
+     * WHOLE config, so one templated number silently reset every other field of the node to its
+     * default (a templated {@code limit.count} dropped the node's offset too). The template is now
+     * removed from the copy that is converted, the rest of the config parses as written, and the
+     * node resolves the template at run time ({@code BaseNode#withDeferredScalars}).
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> T parseConfigSafe(Map<String, Object> data, String key, Class<T> clazz,
+                                         Map<String, Map<String, String>> deferred) {
         Object raw = data.get(key);
         if (raw == null || !(raw instanceof Map)) return null;
+        Map<String, Object> source = (Map<String, Object>) raw;
+        if (deferred != null && clazz.isRecord()) {
+            Map<String, Object> copy = null;
+            for (java.lang.reflect.RecordComponent component : clazz.getRecordComponents()) {
+                String field = jsonName(component);
+                Object value = source.get(field);
+                if (value instanceof String text && text.contains("{{") && isScalar(component.getType())) {
+                    if (copy == null) copy = new LinkedHashMap<>(source);
+                    copy.remove(field);
+                    deferred.computeIfAbsent(key, k -> new LinkedHashMap<>()).put(field, text);
+                }
+            }
+            if (copy != null) source = copy;
+        }
         try {
-            return CONFIG_MAPPER.convertValue(raw, clazz);
+            return CONFIG_MAPPER.convertValue(source, clazz);
         } catch (Exception e) {
             logger.warn("[parseCore] Failed to parse {} config: {}", key, e.getMessage());
             return null;
+        }
+    }
+
+    private static String jsonName(java.lang.reflect.RecordComponent component) {
+        com.fasterxml.jackson.annotation.JsonProperty json =
+            component.getAnnotation(com.fasterxml.jackson.annotation.JsonProperty.class);
+        return json != null && !json.value().isEmpty() ? json.value() : component.getName();
+    }
+
+    private static boolean isScalar(Class<?> type) {
+        return type.isPrimitive() || Number.class.isAssignableFrom(type) || type == Boolean.class;
+    }
+
+    /** Sets aside {@code value} for {@code configKey.field} when it is a {@code {{...}}} template. */
+    private static void deferTemplate(Map<String, Map<String, String>> deferred, String configKey,
+                                      String field, Object value) {
+        if (value instanceof String text && text.contains("{{")) {
+            deferred.computeIfAbsent(configKey, k -> new LinkedHashMap<>()).put(field, text);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void deferTemplates(Map<String, Map<String, String>> deferred, String configKey,
+                                       Object config, String... fields) {
+        if (config instanceof Map<?, ?> map) {
+            for (String field : fields) {
+                deferTemplate(deferred, configKey, field, ((Map<String, Object>) map).get(field));
+            }
         }
     }
 

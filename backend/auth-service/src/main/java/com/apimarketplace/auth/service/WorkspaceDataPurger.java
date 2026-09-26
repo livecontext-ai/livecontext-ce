@@ -55,7 +55,8 @@ public class WorkspaceDataPurger {
     public static final List<String> PURGED_AUTH_TABLES = List.of(
             "auth.org_resource_restrictions",
             "auth.org_member_quota_limit",
-            "auth.credentials"
+            "auth.credentials",
+            "auth.organization_sso_domain"
     );
 
     /** Where the log rows come from; shows up in {@code auth.purge_log.source}. */
@@ -64,17 +65,39 @@ public class WorkspaceDataPurger {
 
     /**
      * Deletes the auth-schema operational rows of {@code orgId} and logs the purge for every
-     * follower. Idempotent. Must be called inside a transaction.
+     * follower. Idempotent. Must be called inside a transaction. Best-effort per statement:
+     * a failing delete is rolled back to its savepoint and logged (the workspace flow).
      *
      * @param source {@link #SOURCE_WORKSPACE} or {@link #SOURCE_ACCOUNT}
      */
     public void purgeOperationalData(String orgId, String source) {
+        deleteOperationalRows(orgId, null);
+        recordPurge("ORG", orgId, source);
+    }
+
+    /**
+     * The auth-schema half of {@link #purgeOperationalData} without the outbox row, for a caller
+     * that must decide at the end of its transaction whether the purge happens at all (account
+     * deletion: {@link AccountPurgeService}). With a non-null {@code failures} list each failing
+     * statement is appended to it, so the caller can roll the whole purge back instead of
+     * deleting the org row over rows that were never removed; with {@code null} a failure is
+     * only logged, as {@link #purgeOperationalData} has always done.
+     */
+    public void deleteOperationalRows(String orgId, List<String> failures) {
         // org_member_quota_limit.org_id is UUID (not organization_id VARCHAR); it has an
         // ON DELETE CASCADE on the org row, but the workspace flow keeps that row, so we
         // must delete it explicitly here.
-        nativeExec("DELETE FROM auth.org_resource_restrictions WHERE organization_id::text = ?", orgId);
-        nativeExec("DELETE FROM auth.org_member_quota_limit WHERE org_id = ?::uuid", orgId);
-        nativeExec("DELETE FROM auth.credentials WHERE organization_id::text = ?", orgId);
+        nativeExec("DELETE FROM auth.org_resource_restrictions WHERE organization_id::text = ?", orgId, failures);
+        nativeExec("DELETE FROM auth.org_member_quota_limit WHERE org_id = ?::uuid", orgId, failures);
+        nativeExec("DELETE FROM auth.credentials WHERE organization_id::text = ?", orgId, failures);
+        // A deleted workspace keeps its org row, so its verified domains would keep the domain
+        // locked (one verified owner per domain) and routable. Freeing them lets the rightful
+        // owner verify it again elsewhere.
+        nativeExec("DELETE FROM auth.organization_sso_domain WHERE organization_id::text = ?", orgId, failures);
+    }
+
+    /** Logs an ORG purge for the followers; see {@link #recordPurge} for where it must sit. */
+    public void recordOrgPurge(String orgId, String source) {
         recordPurge("ORG", orgId, source);
     }
 
@@ -116,7 +139,7 @@ public class WorkspaceDataPurger {
      * the caller's transaction. Postgres aborts a transaction on any error, so a plain
      * try/catch swallow would NOT keep "best-effort per statement".
      */
-    private int nativeExec(String sql, String orgId) {
+    private int nativeExec(String sql, String orgId, List<String> failures) {
         final int[] rows = {0};
         em.unwrap(org.hibernate.Session.class).doWork(conn -> {
             java.sql.Savepoint sp = conn.setSavepoint();
@@ -131,8 +154,12 @@ public class WorkspaceDataPurger {
                 } catch (java.sql.SQLException ignore) {
                     // savepoint already gone after the rollback - nothing to release
                 }
+                String statement = sql.substring(0, Math.min(sql.length(), 60));
                 logger.warn("Workspace purge statement rolled back [{}] org={}: {}",
-                        sql.substring(0, Math.min(sql.length(), 60)), orgId, e.getMessage());
+                        statement, orgId, e.getMessage());
+                if (failures != null) {
+                    failures.add(statement + " -> " + e.getMessage());
+                }
             }
         });
         return rows[0];

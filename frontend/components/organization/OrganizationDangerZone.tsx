@@ -30,9 +30,9 @@ import { useCurrentOrgStore } from "@/lib/stores/current-org-store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { AlertTriangle, LogOut, Crown, Trash2, Info, ChevronDown, ChevronRight } from "lucide-react";
+import { AlertTriangle, LogOut, Crown, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import LoadingSpinner from "@/components/LoadingSpinner";
+import { InfoPopover } from '@/components/ui/info-popover';
 
 type ModalKind = "leave" | "transfer" | "delete" | null;
 
@@ -234,24 +234,9 @@ function DangerRow({
       <div className="flex items-center gap-2 text-sm font-medium text-theme-primary">
         <span className="text-red-600 dark:text-red-400">{icon}</span>
         <span>{title}</span>
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label={`More info about ${title.toLowerCase()}`}
-              className="p-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 text-theme-muted hover:text-theme-secondary transition-colors"
-            >
-              <Info className="h-3.5 w-3.5" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent
-            side="top"
-            align="start"
-            className="w-80 p-4 text-sm bg-theme-primary border-theme leading-relaxed text-theme-secondary"
-          >
-            {info}
-          </PopoverContent>
-        </Popover>
+        <InfoPopover label={title} side="top" align="start" contentClassName="w-80 p-4">
+          {info}
+        </InfoPopover>
       </div>
       <Button
         size="sm"

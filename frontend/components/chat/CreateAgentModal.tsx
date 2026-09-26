@@ -9,12 +9,12 @@ import {
   Puzzle, MessageCircle, Code, ExternalLink, Palette, Clock, Globe, Zap, Plus,
   AppWindow, Table, Monitor, FileText, ShieldCheck, Sparkles, Trash2, Brain
 } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SELECT_EMPTY_VALUE_SENTINEL } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { orchestratorApi } from '@/lib/api/orchestrator';
 import type { AgentWebhook, AgentSchedule } from '@/lib/api/orchestrator/types';
 import type { Skill } from '@/lib/api';
@@ -24,7 +24,7 @@ import Toast from '@/components/Toast';
 import { useTranslations } from 'next-intl';
 import { useVisibleModels, getModelsCache, isEmptySelectedModel, toNonBridgeSelectedModel } from '@/hooks/useModels';
 import { useMonthlyCreditsCannotPay } from '@/lib/hooks/useMonthlyCreditsCannotPay';
-import { resolveFreeTierPreferredModel } from '@/lib/hooks/usePreferFreeTierModel';
+import { resolveFreeTierPreferredModel } from '@/lib/models/freeTierModel';
 import { ModelPicker } from '@/components/ai/ModelPicker';
 import { useMcpApis, fetchApiTools, ApiTool } from '@/app/workflows/builder/hooks/useMcpData';
 import { apiClient } from '@/lib/api/api-client';
@@ -56,6 +56,10 @@ import { REASONING_EFFORT_LEVELS, supportsReasoningEffort } from '@/lib/ai-provi
 import { useAuth } from '@/lib/providers/smart-providers';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { ModalStepIndicator } from '@/components/ui/ModalStepIndicator';
+import { ChannelDestinationPicker, isWorking, useChatDestinations } from '@/components/app/ChannelDestinationPicker';
+import { getClientLocale } from '@/lib/utils/locale';
+import { track } from '@/lib/analytics/analytics';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 /** Fallback: synthetic Skill objects for defaults not yet seeded in DB */
 const DEFAULT_SKILLS_FALLBACK: Skill[] = DEFAULT_SKILLS.map(ds => ({
@@ -175,6 +179,12 @@ interface AgentData {
   isActive?: boolean;
   /** V340 - opt-in participation in the shared task backlog (default false). */
   backlogEnabled?: boolean;
+  /** V299 - asks permission before a sensitive action in its own unattended runs. */
+  requireToolAuthorization?: boolean;
+  /** V523 - the workspace destination its requests and questions go to; null = the default. */
+  chatChannelLinkId?: string | null;
+  /** V524 - whether it reaches the person outside the app at all (default true). */
+  chatChannelEnabled?: boolean;
   config?: Record<string, unknown>;
   toolsConfig?: {
     mode?: string;
@@ -485,6 +495,19 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
   // V340 - opt-in shared-backlog participation. Default false: a new/edited agent
   // is NOT pulled onto unassigned backlog work unless explicitly enabled here.
   const [backlogEnabled, setBacklogEnabled] = useState(agent?.backlogEnabled ?? false);
+  // Sensitive actions: ask the person first, or run them (the default, as agents always have).
+  const [requireToolAuthorization, setRequireToolAuthorization] = useState(agent?.requireToolAuthorization ?? false);
+  // Where the agent's requests and questions reach the person: null = the workspace default.
+  const [chatChannelLinkId, setChatChannelLinkId] = useState<string | null>(agent?.chatChannelLinkId ?? null);
+  // The channel card's switch. Stored true by default (every existing agent reaches the workspace
+  // default), but it can only be on where a destination actually works.
+  const [chatChannelEnabled, setChatChannelEnabled] = useState(agent?.chatChannelEnabled ?? true);
+  const { destinations: chatDestinations, isLoading: channelsLoading, isError: channelsError } = useChatDestinations();
+  // Loading or unreadable is not "no channel": the card waits, rather than telling a workspace
+  // that has channels to go and connect one.
+  const channelsKnown = !channelsLoading && !channelsError;
+  const channelAvailable = channelsKnown && chatDestinations.some(isWorking);
+  const channelOn = channelAvailable && chatChannelEnabled;
   const [toolsMode, setToolsMode] = useState<ToolsMode>('all');
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
@@ -642,9 +665,9 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
 
   // Fetch providers and models
   const { models, providers, defaultModel, defaultProvider, isLoading: modelsLoading } = useVisibleModels();
-  // V494: which pot pays for this agent's turns. A Free account's chat and agent
-  // turns are funded by the separate AI allowance, and only on the models a
-  // cloud admin opened to the free tier.
+  // Which models this agent's turns can be paid on. A Free account's monthly
+  // credits fund chat and agent turns only on the models a cloud admin opened
+  // to the free tier.
   const { prefersFreeTierModels, verdictReady } = useMonthlyCreditsCannotPay();
 
   // Fetch MCP APIs
@@ -935,11 +958,11 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
     return () => clearTimeout(timer);
   }, [toolsSearchQuery]);
 
-  // V494: a free-tier account creates its agent on a model its allowance covers,
+  // A Free account creates its agent on the free tier's best-ranked model,
   // when one exists. The catalogue default is the admin's global #1, which is the
   // right answer for an account with a wallet and can be a model the Free plan's
-  // AI allowance does not pay for - so a brand-new account would build an agent
-  // that is refused on its first run, which is the moment the allowance is for.
+  // monthly credits do not pay for - so a brand-new account would build an agent
+  // that is refused on its first run.
   // Same resolver as the chat composer and the two side panels, so the four
   // surfaces cannot drift into four answers.
   //
@@ -1598,6 +1621,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
         isPublic: false,
         isActive: isActive,
         backlogEnabled: backlogEnabled,
+        // Sent when it differs from what is stored (always on create when one is picked), so an
+        // untouched agent keeps its column; null goes back to the workspace default.
+        ...(chatChannelLinkId !== (agent?.chatChannelLinkId ?? null) ? { chatChannelLinkId } : {}),
+        ...(chatChannelEnabled !== (agent?.chatChannelEnabled ?? true) ? { chatChannelEnabled } : {}),
         // Advanced turn-limit overrides - sent only when the user changed them from
         // the captured initial value, so an untouched agent keeps NULL columns
         // (backend YAML defaults) instead of being pinned to the UI defaults.
@@ -1619,6 +1646,32 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
         savedAgent = await orchestratorApi.updateAgent(agent.id, payload);
       } else {
         savedAgent = await orchestratorApi.createAgent(payload);
+      }
+
+      // The channel card's three choices, reported only when one of them changed on this save
+      // (an untouched agent, or a new one left on the defaults, reports nothing). The link id
+      // itself is not sent: only whether a specific destination was picked.
+      if (savedAgent?.id && (
+        chatChannelLinkId !== (agent?.chatChannelLinkId ?? null)
+        || chatChannelEnabled !== (agent?.chatChannelEnabled ?? true)
+        || requireToolAuthorization !== (agent?.requireToolAuthorization ?? false)
+      )) {
+        track('agent_channel_configured', {
+          enabled: chatChannelEnabled,
+          destination: chatChannelLinkId ? 'specific' : 'default',
+          sensitive_actions: requireToolAuthorization,
+        });
+      }
+
+      // Sensitive actions: their own endpoint (a partial update must never disarm an agent by
+      // omission), called only when the choice changed. The agent is saved either way.
+      if (savedAgent?.id && requireToolAuthorization !== (agent?.requireToolAuthorization ?? false)) {
+        try {
+          await agentService.setToolAuthorization(savedAgent.id, requireToolAuthorization);
+        } catch (authErr) {
+          console.error('Error setting agent tool authorization:', authErr);
+          addToast({ type: 'error', title: t('error'), message: t('sensitiveActionsSaveFailed') });
+        }
       }
 
       // Handle webhook - create or delete agent webhook token
@@ -2013,19 +2066,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
               <div className="space-y-5 animate-in fade-in-0 slide-in-from-right-4 duration-300">
                 {/* System Prompt */}
                 <div>
-                  <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                     {t('systemPromptLabel')}
-                    <TooltipProvider delayDuration={0}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs">
-                          <p className="text-xs">{t('systemPromptInfo')}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </label>
+                    <InfoPopover label={t('systemPromptLabel')}>{t('systemPromptInfo')}</InfoPopover>
+                  </span>
                   <textarea
                     value={systemPrompt}
                     onChange={(e) => setSystemPrompt(e.target.value)}
@@ -2054,19 +2098,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                 {/* Credit Budget */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                    <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                       {t('creditBudgetLabel')}
-                      <TooltipProvider delayDuration={0}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs">
-                            <p className="text-xs">{t('creditBudgetInfo')}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </label>
+                      <InfoPopover label={t('creditBudgetLabel')}>{t('creditBudgetInfo')}</InfoPopover>
+                    </span>
                     <Input
                       type="number"
                       value={creditBudget ?? ''}
@@ -2130,14 +2165,14 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                   <Select value={toolsMode} onValueChange={(value: ToolsMode) => setToolsMode(value)}>
                     <SelectTrigger className="w-full">
                       <div className="flex items-center gap-2">
-                        <Image src="/mcp_black.png" alt="MCP" width={16} height={16} className="w-4 h-4 dark:invert" />
+                        <Image src="/icons/integration_black.svg" alt="Integration" width={16} height={16} className="w-4 h-4 dark:invert" />
                         <span>{getToolsModeDisplay()}</span>
                       </div>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">
                         <div className="flex items-center gap-2">
-                          <Image src="/mcp_black.png" alt="MCP" width={16} height={16} className="w-4 h-4 dark:invert" />
+                          <Image src="/icons/integration_black.svg" alt="Integration" width={16} height={16} className="w-4 h-4 dark:invert" />
                           <span>{t('allTools')}</span>
                         </div>
                       </SelectItem>
@@ -2227,9 +2262,9 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                                   <div key={apiSlug}>
                                     <div className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-[var(--bg-secondary)] transition-colors" onClick={() => toggleCategory(apiSlug)}>
                                       {api.iconSlug ? (
-                                        <Image src={`/icons/services/${api.iconSlug}.svg`} alt={api.apiName} width={16} height={16} className="w-4 h-4 flex-shrink-0 rounded-md p-0.5 dark:bg-slate-100/10" onError={(e) => { (e.target as HTMLImageElement).src = '/mcp_black.png'; (e.target as HTMLImageElement).classList.add('dark:invert'); }} />
+                                        <ServiceLogo as={Image} src={`/icons/services/${api.iconSlug}.svg`} alt={api.apiName} width={16} height={16} className="w-4 h-4 flex-shrink-0 rounded-md p-0.5 dark:bg-slate-100/10" onError={(e) => { (e.target as HTMLImageElement).src = '/icons/integration_black.svg'; (e.target as HTMLImageElement).classList.add('dark:invert'); }} />
                                       ) : (
-                                        <Image src="/mcp_black.png" alt="MCP" width={16} height={16} className="w-4 h-4 dark:invert flex-shrink-0" />
+                                        <Image src="/icons/integration_black.svg" alt="Integration" width={16} height={16} className="w-4 h-4 dark:invert flex-shrink-0" />
                                       )}
                                       <div className="flex-1 min-w-0">
                                         <span className="text-sm font-medium text-theme-primary truncate block">{api.apiName}</span>
@@ -2282,19 +2317,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
 
                 {/* Skills Selection */}
                 <div>
-                  <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                     {t('skillsLabel')}
-                    <TooltipProvider delayDuration={0}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs">
-                          <p className="text-xs">{t('skillsInfo')}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </label>
+                    <InfoPopover label={t('skillsLabel')}>{t('skillsInfo')}</InfoPopover>
+                  </span>
 
                   <Popover open={skillsPopoverOpen} onOpenChange={setSkillsPopoverOpen}>
                     <PopoverTrigger asChild>
@@ -2367,19 +2393,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                     workspace, so the choice belongs next to the other capability switches
                     rather than buried in an advanced panel. */}
                 <div>
-                  <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                     {t('memoryAccessLabel')}
-                    <TooltipProvider delayDuration={0}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs">
-                          <p className="text-xs">{t('memoryAccessInfo')}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </label>
+                    <InfoPopover label={t('memoryAccessLabel')}>{t('memoryAccessInfo')}</InfoPopover>
+                  </span>
                   <button
                     type="button"
                     onClick={() => setMemoryAccessMode(prev => (prev === 'read' ? 'write' : 'read'))}
@@ -2395,19 +2412,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
 
                 {/* Web Search toggle */}
                 <div>
-                  <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                     {t('webSearchLabel')}
-                    <TooltipProvider delayDuration={0}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs">
-                          <p className="text-xs">{t('webSearchInfo')}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </label>
+                    <InfoPopover label={t('webSearchLabel')}>{t('webSearchInfo')}</InfoPopover>
+                  </span>
                   <button
                     type="button"
                     onClick={() => setWebSearchEnabled(!webSearchEnabled)}
@@ -2423,19 +2431,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
 
                 {/* Resource Access - unified popover for workflows, applications, tables, interfaces, agents */}
                 <div>
-                  <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                     {t('resourceAccessLabel')}
-                    <TooltipProvider delayDuration={0}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs">
-                          <p className="text-xs">{t('resourceAccessInfo')}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </label>
+                    <InfoPopover label={t('resourceAccessLabel')}>{t('resourceAccessInfo')}</InfoPopover>
+                  </span>
                   <Popover open={resourceAccessPopoverOpen} onOpenChange={(open) => { setResourceAccessPopoverOpen(open); if (!open) setResourceSearchQuery(''); }}>
                     <PopoverTrigger asChild>
                       <button type="button" className="flex h-auto min-h-[44px] w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] ring-offset-background focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] focus:ring-offset-0 hover:bg-[var(--bg-secondary)] transition-colors">
@@ -2738,19 +2737,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
 
                       {/* Temperature */}
                       <div>
-                        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                        <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                           {t('temperatureLabel')}
-                          <TooltipProvider delayDuration={0}>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                              </TooltipTrigger>
-                              <TooltipContent side="top" className="max-w-xs">
-                                <p className="text-xs">{t('temperatureInfo')}</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </label>
+                          <InfoPopover label={t('temperatureLabel')}>{t('temperatureInfo')}</InfoPopover>
+                        </span>
                         <div className="space-y-2">
                           <Slider value={[temperature]} onValueChange={(values) => setTemperature(values[0])} min={0} max={2} step={0.1} className="w-full" />
                           <div className="flex justify-between text-xs text-theme-secondary">
@@ -2787,67 +2777,31 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                       {/* Max Tokens, Iterations, Timeout & Inactivity (2x2 grid) */}
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                          <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                             {t('maxTokensLabel')}
-                            <TooltipProvider delayDuration={0}>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="max-w-xs">
-                                  <p className="text-xs">{t('maxTokensInfo')}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          </label>
+                            <InfoPopover label={t('maxTokensLabel')}>{t('maxTokensInfo')}</InfoPopover>
+                          </span>
                           <Input type="number" value={maxTokens} onChange={(e) => setMaxTokens(parseInt(e.target.value) || 1000)} placeholder="1000" className="w-full" min="1" />
                         </div>
                         <div className={toolsMode === 'none' ? 'opacity-50' : ''}>
-                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                          <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                             {t('maxIterationsLabel')}
-                            <TooltipProvider delayDuration={0}>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="max-w-xs">
-                                  <p className="text-xs">{t('maxIterationsInfo')}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          </label>
+                            <InfoPopover label={t('maxIterationsLabel')}>{t('maxIterationsInfo')}</InfoPopover>
+                          </span>
                           <Input type="number" value={maxIterations} onChange={(e) => setMaxIterations(parseInt(e.target.value) || 100)} placeholder="100" className="w-full" min="1" max="1000" disabled={toolsMode === 'none'} />
                         </div>
                         <div>
-                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                          <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                             {t('executionTimeoutLabel')}
-                            <TooltipProvider delayDuration={0}>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="max-w-xs">
-                                  <p className="text-xs">{t('executionTimeoutInfo')}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          </label>
+                            <InfoPopover label={t('executionTimeoutLabel')}>{t('executionTimeoutInfo')}</InfoPopover>
+                          </span>
                           <Input type="number" value={executionTimeout} onChange={(e) => setExecutionTimeout(parseInt(e.target.value) || 3600)} placeholder="3600" className="w-full" min="10" max="7200" />
                         </div>
                         <div>
-                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                          <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                             {t('inactivityTimeoutLabel')}
-                            <TooltipProvider delayDuration={0}>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="max-w-xs">
-                                  <p className="text-xs">{t('inactivityTimeoutInfo')}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          </label>
+                            <InfoPopover label={t('inactivityTimeoutLabel')}>{t('inactivityTimeoutInfo')}</InfoPopover>
+                          </span>
                           <Input type="number" value={inactivityTimeout} onChange={(e) => setInactivityTimeout(parseInt(e.target.value) || 0)} placeholder="300" className="w-full" min="0" max="7200" />
                         </div>
                       </div>
@@ -2857,19 +2811,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                           its own: it covers video, audio, voice and music too, which cost
                           an order of magnitude more per call than an image. */}
                       <div>
-                        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                        <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                           {tc('generationLabel')}
-                          <TooltipProvider delayDuration={0}>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                              </TooltipTrigger>
-                              <TooltipContent side="top" className="max-w-xs">
-                                <p className="text-xs">{tc('generationInfo')}</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </label>
+                          <InfoPopover label={tc('generationLabel')}>{tc('generationInfo')}</InfoPopover>
+                        </span>
                         <button
                           type="button"
                           onClick={() => setGenerationEnabled(!generationEnabled)}
@@ -2891,19 +2836,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                           axis (toolsConfig.mailboxAccessMode), so an inbox scanner can be given
                           the reads without the ability to send. */}
                       <div>
-                        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                        <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                           {tc('mailboxLabel')}
-                          <TooltipProvider delayDuration={0}>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                              </TooltipTrigger>
-                              <TooltipContent side="top" className="max-w-xs">
-                                <p className="text-xs">{tc('mailboxInfo')}</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </label>
+                          <InfoPopover label={tc('mailboxLabel')}>{tc('mailboxInfo')}</InfoPopover>
+                        </span>
                         <button
                           type="button"
                           onClick={() => setMailboxEnabled(!mailboxEnabled)}
@@ -2922,19 +2858,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                           does nothing. */}
                       {mailboxEnabled && (
                         <div>
-                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                          <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                             {tc('mailboxAccessLabel')}
-                            <TooltipProvider delayDuration={0}>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="max-w-xs">
-                                  <p className="text-xs">{tc('mailboxAccessInfo')}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          </label>
+                            <InfoPopover label={tc('mailboxAccessLabel')}>{tc('mailboxAccessInfo')}</InfoPopover>
+                          </span>
                           <button
                             type="button"
                             onClick={() => setMailboxAccessMode(mailboxAccessMode === 'write' ? 'read' : 'write')}
@@ -2949,54 +2876,16 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                         </div>
                       )}
 
-                      {/* Sensitive actions - always on for agent-backed runs (approval gate
-                          exempt); surfaced read-only so the behavior is explicit. */}
-                      <div>
-                        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
-                          {t('sensitiveActionsLabel')}
-                          <TooltipProvider delayDuration={0}>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                              </TooltipTrigger>
-                              <TooltipContent side="top" className="max-w-xs">
-                                <p className="text-xs">{t('sensitiveActionsLockedInfo')}</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </label>
-                        <div
-                          aria-disabled="true"
-                          title={t('sensitiveActionsLockedInfo')}
-                          className="flex h-auto min-h-[44px] w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-theme-secondary cursor-not-allowed"
-                        >
-                          <div className="flex items-center gap-2">
-                            <ShieldCheck className="w-4 h-4 text-theme-secondary" />
-                            <span>{t('sensitiveActionsAlwaysOn')}</span>
-                          </div>
-                          <Switch checked presentational disabled />
-                        </div>
-                      </div>
-
                       {([
                         { label: tc('maxPerResourcePerTurnLabel'), info: tc('maxPerResourcePerTurnInfo'), value: maxPerResourcePerTurn, set: setMaxPerResourcePerTurn, min: 1, max: 100 },
                         { label: tc('loopIdenticalStopLabel'), info: tc('loopIdenticalStopInfo'), value: loopIdenticalStop, set: setLoopIdenticalStop, min: 2, max: 100 },
                         { label: tc('loopConsecutiveStopLabel'), info: tc('loopConsecutiveStopInfo'), value: loopConsecutiveStop, set: setLoopConsecutiveStop, min: 4, max: 200 },
                       ] as const).map((f) => (
                         <div key={f.label} className="flex items-center justify-between gap-3">
-                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
+                          <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
                             <span className="min-w-0">{f.label}</span>
-                            <TooltipProvider delayDuration={0}>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help shrink-0" />
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="max-w-xs">
-                                  <p className="text-xs">{f.info}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          </label>
+                            <InfoPopover label={f.label}>{f.info}</InfoPopover>
+                          </span>
                           <Input
                             type="number"
                             value={f.value}
@@ -3012,19 +2901,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                       ))}
                       {/* V350 - per-agent compaction enable + cadence */}
                       <div className="flex items-center justify-between gap-3 pt-3 border-t border-theme">
-                        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
+                        <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
                           <span className="min-w-0">{tc('compactionEnabledLabel')}</span>
-                          <TooltipProvider delayDuration={0}>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help shrink-0" />
-                              </TooltipTrigger>
-                              <TooltipContent side="top" className="max-w-xs">
-                                <p className="text-xs">{tc('compactionEnabledInfo')}</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </label>
+                          <InfoPopover label={tc('compactionEnabledLabel')}>{tc('compactionEnabledInfo')}</InfoPopover>
+                        </span>
                         <Switch
                           checked={compactionEnabled}
                           onCheckedChange={setCompactionEnabled}
@@ -3033,19 +2913,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                       </div>
                       {compactionEnabled && (
                         <div className="flex items-center justify-between gap-3">
-                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
+                          <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
                             <span className="min-w-0">{tc('compactionAfterTurnsLabel')}</span>
-                            <TooltipProvider delayDuration={0}>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help shrink-0" />
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="max-w-xs">
-                                  <p className="text-xs">{tc('compactionAfterTurnsInfo')}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          </label>
+                            <InfoPopover label={tc('compactionAfterTurnsLabel')}>{tc('compactionAfterTurnsInfo')}</InfoPopover>
+                          </span>
                           <Input
                             type="number"
                             value={compactionAfterTurns}
@@ -3070,19 +2941,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                       {compactionEnabled && (
                         <div className="space-y-2">
                           <div className="flex items-center justify-between gap-3">
-                            <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
+                            <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
                               <span className="min-w-0">{tc('compactionModelLabel')}</span>
-                              <TooltipProvider delayDuration={0}>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help shrink-0" />
-                                  </TooltipTrigger>
-                                  <TooltipContent side="top" className="max-w-xs">
-                                    <p className="text-xs">{tc('compactionModelInfo')}</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                            </label>
+                              <InfoPopover label={tc('compactionModelLabel')}>{tc('compactionModelInfo')}</InfoPopover>
+                            </span>
                             <Switch
                               checked={compactionModelOpen}
                               onCheckedChange={(checked) => {
@@ -3136,6 +2998,98 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                 <p className="text-sm text-theme-secondary text-center">
                   Configure how external systems can interact with your agent. Both options can be enabled simultaneously.
                 </p>
+
+                {/* A run started from here has nobody in front of it: where its questions and
+                    permission requests reach the person, picked like a credential. */}
+                <div className="border border-theme rounded-xl overflow-hidden" data-testid="agent-channel-card">
+                  <button
+                    type="button"
+                    disabled={!channelAvailable}
+                    aria-pressed={channelOn}
+                    data-testid="agent-channel-toggle"
+                    onClick={() => {
+                      const next = !chatChannelEnabled;
+                      setChatChannelEnabled(next);
+                      // Asking permission only exists with a channel to ask on.
+                      if (!next) setRequireToolAuthorization(false);
+                    }}
+                    className={`w-full flex items-center justify-between p-4 transition-colors ${channelOn ? 'bg-[var(--accent-primary)]/10' : 'hover:bg-theme-secondary'} disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${channelOn ? 'bg-[var(--accent-primary)]' : 'bg-theme-tertiary'}`}>
+                        <MessageCircle className={`h-5 w-5 ${channelOn ? 'text-[var(--bg-primary)]' : 'text-theme-secondary'}`} />
+                      </div>
+                      <div className="text-left">
+                        <div className="text-sm font-medium text-theme-primary">{t('channelCardTitle')}</div>
+                        <div className="text-xs text-theme-secondary">
+                          {channelsLoading ? t('channelCardLoading')
+                            : channelsError ? t('channelCardError')
+                            : channelAvailable ? t('channelCardDescription') : t('channelCardUnavailable')}
+                        </div>
+                      </div>
+                    </div>
+                    <Switch checked={channelOn} presentational />
+                  </button>
+                  {channelsKnown && !channelAvailable && (
+                    <div className="px-4 pb-4 space-y-2">
+                      {/* A new tab: leaving would drop what is typed in this modal. */}
+                      <a
+                        href={`/${getClientLocale()}/app/settings/channels`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm font-medium text-[var(--accent-primary)] underline underline-offset-2"
+                        data-testid="agent-channel-connect"
+                      >
+                        {t('channelCardConnect')}
+                      </a>
+                      {requireToolAuthorization && (
+                        // Armed with nowhere to ask: every unattended sensitive action is refused,
+                        // and nothing else on screen would say so.
+                        <div className="flex flex-wrap items-center gap-2 text-sm text-theme-secondary" data-testid="agent-armed-without-channel">
+                          <span>{t('armedWithoutChannel')}</span>
+                          <button
+                            type="button"
+                            onClick={() => setRequireToolAuthorization(false)}
+                            className="text-sm font-medium underline underline-offset-2 text-theme-primary"
+                          >
+                            {t('armedWithoutChannelDisarm')}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {channelOn && (
+                    <div className="p-4 pt-3 space-y-3 border-t border-theme">
+                      <div className="space-y-1">
+                        <span className="text-sm font-medium text-theme-primary">{t('channelDestinationLabel')}</span>
+                        <ChannelDestinationPicker
+                          value={chatChannelLinkId}
+                          onChange={(value) => setChatChannelLinkId(value)}
+                          ariaLabel={t('channelDestinationLabel')}
+                        />
+                        <p className="text-xs text-theme-secondary">{t('channelDestinationHint')}</p>
+                      </div>
+                      {/* Sensitive actions (installs, runs, sub-agents, catalog calls): only offered
+                          here, where the request has somewhere to reach the person. */}
+                      <button
+                        type="button"
+                        onClick={() => setRequireToolAuthorization(!requireToolAuthorization)}
+                        aria-pressed={requireToolAuthorization}
+                        data-testid="sensitive-actions-toggle"
+                        className="flex h-auto min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
+                      >
+                        <div className="flex items-start gap-2 text-left">
+                          <ShieldCheck className="mt-0.5 w-4 h-4 text-theme-secondary shrink-0" />
+                          <div>
+                            <div className="text-sm text-theme-primary">{t('sensitiveActionsAskLabel')}</div>
+                            <div className="text-xs text-theme-secondary">{t('sensitiveActionsAskHint')}</div>
+                          </div>
+                        </div>
+                        <Switch checked={requireToolAuthorization} presentational />
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 {/* Webhook Integration - created on save */}
                 <div className="border border-theme rounded-xl overflow-hidden">
@@ -3368,16 +3322,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                             <div className="flex items-center justify-between p-3 bg-[var(--bg-secondary)] rounded-lg">
                               <div className="flex items-center gap-1.5">
                                 <span className="text-sm font-medium text-theme-primary">{t('backlogEnabled')}</span>
-                                <TooltipProvider delayDuration={0}>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                                    </TooltipTrigger>
-                                    <TooltipContent side="top" className="max-w-xs">
-                                      <p className="text-xs">{t('backlogEnabledHelp')}</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </TooltipProvider>
+                                <InfoPopover label={t('backlogEnabled')}>{t('backlogEnabledHelp')}</InfoPopover>
                               </div>
                               <Switch checked={backlogEnabled} onCheckedChange={(v) => setBacklogEnabled(v)} aria-label={t('backlogEnabled')} />
                             </div>

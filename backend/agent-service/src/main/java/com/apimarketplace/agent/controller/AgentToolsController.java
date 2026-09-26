@@ -85,6 +85,14 @@ public class AgentToolsController {
         if (request.get("streamId") != null) {
             credentials.put("__streamId__", request.get("streamId"));
         }
+        // The arming travels WITH the id, same rule as the grant above: a key not
+        // copied here is gone, and the gate then treats an armed agent as unarmed.
+        if (request.get("requireToolAuthorization") != null) {
+            credentials.put("__requireToolAuthorization__", request.get("requireToolAuthorization"));
+        }
+        if (request.get("unattendedRun") != null) {
+            credentials.put("__unattendedRun__", request.get("unattendedRun"));
+        }
         if (request.get("reviewerExecutionId") != null) {
             credentials.put("__reviewerExecutionId__", request.get("reviewerExecutionId"));
         }

@@ -188,7 +188,8 @@ public class TriggerCreator extends CreatorBase {
         Map<String, String> referenceSyntax = new LinkedHashMap<>();
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> formFields = (List<Map<String, Object>>) parameters.get("fields");
-        buildTriggerSchema(nodeId, type, datasourceId, getMap(parameters, "inputSchema"), formFields, outputs, referenceSyntax, tenantId);
+        buildTriggerSchema(nodeId, type, datasourceId, getMap(parameters, "inputSchema"), formFields, outputs, referenceSyntax, tenantId,
+                session != null ? session.getOrgId() : null);
 
         session.getNodeSchemas().put(nodeId, WorkflowBuilderSession.NodeSchema.builder()
                 .nodeId(nodeId)
@@ -795,7 +796,7 @@ public class TriggerCreator extends CreatorBase {
                                     Map<String, Object> inputSchema,
                                     List<Map<String, Object>> formFields,
                                     Map<String, String> outputs, Map<String, String> referenceSyntax,
-                                    String tenantId) {
+                                    String tenantId, String orgId) {
         if (inputSchema != null && !inputSchema.isEmpty()) {
             for (String field : inputSchema.keySet()) {
                 outputs.put(field, String.valueOf(inputSchema.get(field)));
@@ -850,7 +851,7 @@ public class TriggerCreator extends CreatorBase {
         } else if (datasourceId != null && "datasource".equals(type)) {
             try {
                 Long dsId = Long.parseLong(datasourceId);
-                DataSourceDto ds = dataSourceClient.getDataSource(dsId, tenantId);
+                DataSourceDto ds = dataSourceClient.getDataSource(dsId, tenantId, orgId);
                 if (ds != null) {
                     // Stable event-meta paths - same on every fire, no collision risk:
                     outputs.put("event_type", "string ('row_created'|'row_updated'|'row_deleted')");

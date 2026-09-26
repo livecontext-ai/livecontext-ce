@@ -40,6 +40,20 @@ public class RemoteMarketplaceConfig {
     @Value("${cloud-link.encryption-key:}")
     private String encryptionKey;
 
+    /**
+     * Cloud web app base the onboarding start URL is built on ({@code CLOUD_WEB_URL}). Blank =
+     * derived from {@code marketplace.cloud-api-url} minus a trailing {@code /api}.
+     */
+    @Value("${cloud-link.web-url:}")
+    private String webUrl;
+
+    /**
+     * Lifetime of a pending cloud-link OAuth flow. Long enough for a cloud signup, onboarding and
+     * checkout. Accepts {@code 2h}, {@code 90m} or ISO-8601 ({@code PT2H}).
+     */
+    @Value("${cloud-link.pending-auth-ttl:2h}")
+    private String pendingAuthTtl;
+
     /** CE distribution version stamped on heartbeats + REGISTER audit metadata. */
     @Value("${ce.version:dev}")
     private String ceVersion;
@@ -50,7 +64,19 @@ public class RemoteMarketplaceConfig {
             ObjectMapper objectMapper) {
         return new CloudLinkService(
                 cloudLinkRepository, keycloakUrl, clientId, redirectUri, encryptionKey,
-                cloudApiUrl, ceVersion, objectMapper);
+                cloudApiUrl, ceVersion, objectMapper, webUrl, parsePendingAuthTtl(pendingAuthTtl));
+    }
+
+    /** Null (the service's 2h default) when blank or unparseable, so a typo never breaks boot. */
+    static java.time.Duration parsePendingAuthTtl(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return org.springframework.boot.convert.DurationStyle.detectAndParse(value.trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     @Bean

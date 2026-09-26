@@ -182,6 +182,62 @@ class AgentContextBuilderTest {
     }
 
     @Nested
+    @DisplayName("build - Orbi delivers a result the user can see")
+    class DeliverUsableResultWiring {
+
+        private static final String RULE = "# Deliver a result the user can see";
+
+        @Test
+        @DisplayName("the general chat (no agent) carries the rule")
+        void orbiGetsTheRule() {
+            ChatRequest request = createRequest("Build me a lead finder", "gpt-4", "openai");
+            when(historyConverter.convert(any(), eq("conv-1"), eq("user-1"))).thenReturn(List.of());
+            when(historyConverter.isNewConversation(any())).thenReturn(true);
+            when(workflowContextProvider.getConversationMeta("conv-1")).thenReturn(ConversationMeta.empty());
+            when(workflowContextProvider.getWorkflowContext(any(ConversationMeta.class), eq("user-1")))
+                    .thenReturn(new WorkflowContext(null, null, null, null, null, null, false));
+            when(workflowContextProvider.getActiveWorkflowBuilderSession("user-1", "conv-1"))
+                    .thenReturn(WorkflowBuilderSessionContext.empty());
+            when(coreToolsProvider.getCoreTools(anyBoolean())).thenReturn(List.of());
+
+            AgentLoopContext context = agentContextBuilder.build(request, "conv-1", null);
+
+            assertThat(context.systemPrompt()).contains(RULE);
+        }
+
+        @Test
+        @DisplayName("a scoped agent with every tool never carries it: building extra resources is Orbi's call only")
+        void scopedAgentDoesNotGetTheRule() {
+            ChatRequest request = createRequest("Hello", "gpt-4", "openai");
+            request.setAgentId("agent-1");
+            // Workflows, tables and interfaces all granted: every module the rule needs.
+            ToolsConfig tc = new ToolsConfig(
+                    "all", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null,
+                    null, null, null, null, null, null, null,
+                    "all", "all", "all", null, null, null);
+            AgentConfig agentConfig = new AgentConfig(
+                    "agent-1", "Agent", null, null, null,
+                    null, null, null, tc, null, null,
+                    null, null, null);
+            when(historyConverter.convert(any(), eq("conv-1"), eq("user-1"))).thenReturn(List.of());
+            when(historyConverter.isNewConversation(any())).thenReturn(true);
+            when(agentConfigProvider.getAgentConfig("agent-1", "user-1", null)).thenReturn(agentConfig);
+            when(workflowContextProvider.getConversationMeta("conv-1")).thenReturn(ConversationMeta.empty());
+            when(workflowContextProvider.getWorkflowContext(any(ConversationMeta.class), eq("user-1")))
+                    .thenReturn(new WorkflowContext(null, null, null, null, null, null, false));
+            when(workflowContextProvider.getActiveWorkflowBuilderSession("user-1", "conv-1"))
+                    .thenReturn(WorkflowBuilderSessionContext.empty());
+            when(coreToolsProvider.getCoreTools(anySet(), anyBoolean())).thenReturn(List.of());
+
+            String prompt = agentContextBuilder.build(request, "conv-1", null).systemPrompt();
+
+            // The tools the rule needs ARE there, so its absence is the scoping, not a missing module.
+            assertThat(prompt).contains("- workflow -").contains("- table -").contains("- interface -");
+            assertThat(prompt).doesNotContain(RULE);
+        }
+    }
+
+    @Nested
     @DisplayName("build - agent config override")
     class BuildAgentConfigOverride {
 
@@ -217,6 +273,34 @@ class AgentContextBuilderTest {
             assertThat(context.maxTokens()).isEqualTo(4000);
             assertThat(context.maxIterations()).isEqualTo(15);
             assertThat(context.systemPrompt()).contains("Custom prompt");
+        }
+
+        @Test
+        @DisplayName("regression V515: an agent whose stored model is DISABLED builds its turn on the replacement (a CLI turn never reaches agent-service's own swap)")
+        void disabledAgentModelRunsOnReplacement() {
+            ChatRequest request = createRequest("Hello", "gpt-4", "openai");
+            request.setAgentId("agent-1");
+            AgentConfig agentConfig = new AgentConfig(
+                    "agent-1", "My Agent", "Custom prompt", "claude-code", "claude-opus-4-8",
+                    0.5, 4000, 15, null, null, null,
+                    null, null, null);
+            when(historyConverter.convert(any(), eq("conv-1"), eq("user-1"))).thenReturn(List.of());
+            when(historyConverter.isNewConversation(any())).thenReturn(true);
+            when(agentConfigProvider.getAgentConfig("agent-1", "user-1", null)).thenReturn(agentConfig);
+            when(agentConfigProvider.resolveEffectiveModel("claude-code", "claude-opus-4-8"))
+                    .thenReturn(new AgentConfigProvider.EffectiveModel("claude-code", "claude-opus-4-9", true));
+            when(workflowContextProvider.getConversationMeta("conv-1")).thenReturn(ConversationMeta.empty());
+            when(workflowContextProvider.getWorkflowContext(any(ConversationMeta.class), eq("user-1")))
+                    .thenReturn(new WorkflowContext(null, null, null, null, null, null, false));
+            when(workflowContextProvider.getActiveWorkflowBuilderSession("user-1", "conv-1"))
+                    .thenReturn(WorkflowBuilderSessionContext.empty());
+            when(coreToolsProvider.getCoreTools(anySet(), eq(false))).thenReturn(List.of());
+
+            AgentLoopContext context = agentContextBuilder.build(request, "conv-1", null);
+
+            // Pre-fix the disabled pair went to the bridge verbatim and the turn failed.
+            assertThat(context.provider()).isEqualTo("claude-code");
+            assertThat(context.model()).isEqualTo("claude-opus-4-9");
         }
 
         @Test

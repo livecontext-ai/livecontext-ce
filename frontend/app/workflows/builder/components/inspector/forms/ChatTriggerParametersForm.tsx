@@ -1,8 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import * as ReactDOM from 'react-dom';
-import { Info, X, Copy, Check, AlertCircle, ExternalLink } from 'lucide-react';
+import { Copy, Check, AlertCircle, ExternalLink } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -10,8 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useTranslations } from 'next-intl';
 import type { BuilderNodeData } from '../../../types';
-import { FieldInfoTooltip } from './shared/FieldInfoTooltip';
-import { usePopoverPosition } from '../../../hooks/ui/usePopoverPosition';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { chatEndpointSettingsService } from '@/lib/api/orchestrator';
 import type { StandaloneChatEndpoint } from '@/lib/api/orchestrator';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
@@ -223,65 +221,25 @@ export function ChatTriggerParametersForm({
     } as BuilderNodeData);
   }, [data, chatTriggerData, isRunMode, onUpdate]);
 
-  const [isInfoOpen, setIsInfoOpen] = React.useState(false);
-  const { buttonRef: infoButtonRef, popoverStyle } = usePopoverPosition(isInfoOpen, 288);
 
   return (
     <div className="space-y-4 pt-2">
       <div className="flex items-center gap-1.5">
         <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('chat.configuration')}</span>
-        <div className="relative inline-flex">
-          <button
-            ref={infoButtonRef}
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsInfoOpen(!isInfoOpen);
-            }}
-            className="p-0.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-            title={t('chat.moreInfo')}
-          >
-            <Info className="h-3 w-3 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300" />
-          </button>
-          {isInfoOpen && typeof document !== 'undefined' && ReactDOM.createPortal(
-            <>
-              <div
-                className="fixed inset-0 z-[9998]"
-                onClick={() => setIsInfoOpen(false)}
-              />
-              <div
-                className="fixed z-[9999] p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 shadow-lg"
-                style={popoverStyle}
-              >
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <span className="font-medium text-sm text-slate-700 dark:text-slate-200">
-                    {t('chat.title')}
-                  </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsInfoOpen(false);
-                    }}
-                    className="p-0.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700"
-                  >
-                    <X className="h-3.5 w-3.5 text-slate-400" />
-                  </button>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mb-2">
-                  {t('chat.description')}
-                </p>
-                <div className="border-t border-slate-200 dark:border-slate-700 pt-2">
-                  <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{t('chat.availableOutputs')}</p>
-                  <ul className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5 font-mono">
-                    <li>• message.text</li>
-                    <li>• message.timestamp</li>
-                    <li>• message.args (for commands)</li>
-                  </ul>
-                </div>
-              </div>
-            </>,
-            document.body
-          )}
-        </div>
+        <InfoPopover label={t('chat.configuration')} size="sm" side="bottom" align="end" contentClassName="w-[288px] p-3">
+          <p className="mb-2 font-medium text-sm text-slate-700 dark:text-slate-200">{t('chat.title')}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mb-2">
+            {t('chat.description')}
+          </p>
+          <div className="border-t border-slate-200 dark:border-slate-700 pt-2">
+            <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{t('chat.availableOutputs')}</p>
+            <ul className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5 font-mono">
+              <li>• message.text</li>
+              <li>• message.timestamp</li>
+              <li>• message.args (for commands)</li>
+            </ul>
+          </div>
+        </InfoPopover>
       </div>
 
       {/* Loading state while creating or fetching endpoint */}
@@ -358,7 +316,7 @@ export function ChatTriggerParametersForm({
       <div className="space-y-2">
         <div className="flex items-center gap-1.5">
           <label className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('chat.matchType')}</label>
-          <FieldInfoTooltip description={MATCH_TYPES.find(m => m.value === chatTriggerData.matchType)?.description || ''} />
+          <InfoPopover label={t('chat.matchType')} size="sm" side="bottom" align="end">{MATCH_TYPES.find(m => m.value === chatTriggerData.matchType)?.description || ''}</InfoPopover>
         </div>
         <Select
           value={chatTriggerData.matchType}
@@ -386,8 +344,7 @@ export function ChatTriggerParametersForm({
               <label className="text-sm font-semibold text-slate-500 dark:text-slate-400">
                 {isRegexType ? t('chat.patternRegex') : t('chat.text')}
               </label>
-              <FieldInfoTooltip
-                description={
+              <InfoPopover label={isRegexType ? t('chat.patternRegex') : t('chat.text')} size="sm" side="bottom" align="end">{
                   isRegexType
                     ? 'Regular expression to match messages'
                     : chatTriggerData.matchType === 'startsWith'
@@ -397,8 +354,7 @@ export function ChatTriggerParametersForm({
                         : chatTriggerData.matchType === 'equals'
                           ? 'Text that the message must exactly match'
                           : 'Text that must be present in the message'
-                }
-              />
+                }</InfoPopover>
             </div>
             {!isRegexType && (
               <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
@@ -447,7 +403,7 @@ export function ChatTriggerParametersForm({
         <div className="space-y-2">
           <div className="flex items-center gap-1.5">
             <label className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('chat.commandName')}</label>
-            <FieldInfoTooltip description="The command name after the slash (e.g., /help, /start)" />
+            <InfoPopover label={t('chat.commandName')} size="sm" side="bottom" align="end">The command name after the slash (e.g., /help, /start)</InfoPopover>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-slate-500 dark:text-slate-400 font-mono">/</span>

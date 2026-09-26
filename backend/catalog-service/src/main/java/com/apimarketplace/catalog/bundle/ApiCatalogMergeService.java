@@ -66,9 +66,13 @@ public class ApiCatalogMergeService {
 
     /**
      * Apply the parsed payload maps. Caller MUST have verified the bundle
-     * signature and gunzipped the payload first.
+     * signature first.
+     *
+     * <p>{@code apiMaps} is iterated ONCE, in order, and no API map is kept after its
+     * transaction (only its id, for the orphan sweep): the applier streams it from the
+     * payload one API at a time, because the whole catalog does not fit the CE heap.
      */
-    public MergeResult merge(List<Map<String, Object>> apiMaps,
+    public MergeResult merge(Iterable<Map<String, Object>> apiMaps,
                              List<Map<String, Object>> templateMaps) {
         int upsertedApis = 0;
         int upsertedTools = 0;
@@ -76,7 +80,7 @@ public class ApiCatalogMergeService {
         int failedApis = 0;
         int deprecatedTools = 0;
         List<String> errors = new ArrayList<>();
-        List<UUID> bundleApiIds = new ArrayList<>(apiMaps.size());
+        List<UUID> bundleApiIds = new ArrayList<>();
 
         for (Map<String, Object> apiMap : apiMaps) {
             UUID apiId;

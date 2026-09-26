@@ -1,8 +1,8 @@
 'use client';
 
 import * as React from 'react';
-import * as ReactDOM from 'react-dom';
-import { Plus, Trash2, Info, X, GripVertical, ChevronDown, ChevronUp, Copy, Check, AlertCircle, ExternalLink } from 'lucide-react';
+import { Plus, Trash2, GripVertical, ChevronDown, ChevronUp, Copy, Check, AlertCircle, ExternalLink } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
 import type { Node } from 'reactflow';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
@@ -10,7 +10,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import type { BuilderNodeData } from '../../../types';
-import { usePopoverPosition } from '../../../hooks/ui/usePopoverPosition';
 import { useTranslations } from 'next-intl';
 import { normalizeLabel } from '../../../utils/labelNormalizer';
 import { formEndpointSettingsService } from '@/lib/api/orchestrator';
@@ -471,8 +470,6 @@ export function FormTriggerParametersForm({
     return { ...existing, fields };
   }, [(data as any).formTriggerData]);
 
-  const [isInfoOpen, setIsInfoOpen] = React.useState(false);
-  const { buttonRef: infoButtonRef, popoverStyle } = usePopoverPosition(isInfoOpen, 320);
 
   // Update handler for form trigger data
   const handleUpdate = React.useCallback((updates: Partial<FormTriggerData>) => {
@@ -567,58 +564,20 @@ export function FormTriggerParametersForm({
       {/* Header with info tooltip */}
       <div className="flex items-center gap-1.5">
         <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('title')}</span>
-        <div className="relative inline-flex">
-          <button
-            ref={infoButtonRef}
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsInfoOpen(!isInfoOpen);
-            }}
-            className="p-0.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-            title={t('moreInfo')}
-          >
-            <Info className="h-3 w-3 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300" />
-          </button>
-          {isInfoOpen && typeof document !== 'undefined' && ReactDOM.createPortal(
-            <>
-              <div
-                className="fixed inset-0 z-[9998]"
-                onClick={() => setIsInfoOpen(false)}
-              />
-              <div
-                className="fixed z-[9999] p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 shadow-lg"
-                style={popoverStyle}
-              >
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <span className="font-medium text-sm text-slate-700 dark:text-slate-200">
-                    {t('infoTitle')}
-                  </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsInfoOpen(false);
-                    }}
-                    className="p-0.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700"
-                  >
-                    <X className="h-3.5 w-3.5 text-slate-400" />
-                  </button>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mb-2">
-                  {t('infoDescription')}
-                </p>
-                <div className="border-t border-slate-200 dark:border-slate-700 pt-2">
-                  <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{t('availableOutputs')}</p>
-                  <ul className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5 font-mono max-h-32 overflow-y-auto">
-                    {availableOutputs.map(output => (
-                      <li key={output}>• {output}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </>,
-            document.body
-          )}
-        </div>
+        <InfoPopover label={t('title')} size="sm" side="bottom" align="end" contentClassName="w-[320px] p-3">
+          <p className="mb-2 font-medium text-sm text-slate-700 dark:text-slate-200">{t('infoTitle')}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mb-2">
+            {t('infoDescription')}
+          </p>
+          <div className="border-t border-slate-200 dark:border-slate-700 pt-2">
+            <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{t('availableOutputs')}</p>
+            <ul className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5 font-mono max-h-32 overflow-y-auto">
+              {availableOutputs.map(output => (
+                <li key={output}>• {output}</li>
+              ))}
+            </ul>
+          </div>
+        </InfoPopover>
       </div>
 
       {/* Loading state while creating or fetching endpoint */}

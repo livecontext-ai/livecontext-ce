@@ -108,7 +108,21 @@ public final class BadgeCatalog {
             def("popularity_10",    BadgeFamily.POPULARITY, BadgeTier.SILVER,   BadgeMetric.PUBLICATION_USES, 10),
             def("popularity_500",   BadgeFamily.POPULARITY, BadgeTier.GOLD,     BadgeMetric.PUBLICATION_USES, 500),
             def("popularity_5000",  BadgeFamily.POPULARITY, BadgeTier.PLATINUM, BadgeMetric.PUBLICATION_USES, 5_000),
-            def("popularity_50000", BadgeFamily.POPULARITY, BadgeTier.DIAMOND,  BadgeMetric.PUBLICATION_USES, 50_000)
+            def("popularity_50000", BadgeFamily.POPULARITY, BadgeTier.DIAMOND,  BadgeMetric.PUBLICATION_USES, 50_000),
+
+            // --- Reachable outside the app: destinations that really received a message
+            def("reachable_1", BadgeFamily.REACHABLE, BadgeTier.BRONZE, BadgeMetric.CHANNELS_CONNECTED, 1),
+            def("reachable_5", BadgeFamily.REACHABLE, BadgeTier.SILVER, BadgeMetric.CHANNELS_CONNECTED, 5),
+
+            // --- Several chat services
+            def("multichannel_2", BadgeFamily.MULTICHANNEL, BadgeTier.SILVER, BadgeMetric.CHANNEL_SERVICES, 2),
+            def("multichannel_4", BadgeFamily.MULTICHANNEL, BadgeTier.GOLD,   BadgeMetric.CHANNEL_SERVICES, 4),
+
+            // --- Decisions made from a chat
+            def("remote_1",    BadgeFamily.REMOTE_CONTROL, BadgeTier.BRONZE,   BadgeMetric.REMOTE_DECISIONS, 1),
+            def("remote_25",   BadgeFamily.REMOTE_CONTROL, BadgeTier.SILVER,   BadgeMetric.REMOTE_DECISIONS, 25),
+            def("remote_250",  BadgeFamily.REMOTE_CONTROL, BadgeTier.GOLD,     BadgeMetric.REMOTE_DECISIONS, 250),
+            def("remote_2500", BadgeFamily.REMOTE_CONTROL, BadgeTier.PLATINUM, BadgeMetric.REMOTE_DECISIONS, 2_500)
     );
 
     private static final Map<String, BadgeDefinition> BY_CODE = indexByCode();

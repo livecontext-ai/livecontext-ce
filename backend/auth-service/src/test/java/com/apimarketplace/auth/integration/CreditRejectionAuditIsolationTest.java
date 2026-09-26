@@ -30,8 +30,9 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 /**
  * A refused turn, retried, on a real database.
  *
- * <p>This is the only shape that witnesses the defect. The rejected-consumption audit row reuses
- * the {@code source_id} of the turn it refuses, and {@code idx_cl_source_id_unique} is unique on
+ * <p>This is the only shape that witnesses the defect. The rejected-consumption audit row is keyed
+ * on the turn it refuses (the {@code source_id} itself until 2026-09-25, a deterministic
+ * {@code <source_id>:rejected} since), and {@code idx_cl_source_id_unique} is unique on
  * that column across the whole ledger, so the second refusal of the same turn writes a key that
  * already exists. Written inside the consume transaction, as it was, that violation aborted the
  * transaction and flagged it rollback-only; the catch beside the save returned
@@ -47,7 +48,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  */
 @SpringBootTest
 @DisplayName("A retried refusal does not become a server error (real Postgres)")
-class CreditRejectionAuditIsolationTest extends AuthPostgresIntegrationTest {
+class CreditRejectionAuditIsolationTest extends AuthScratchPostgresSpringTest {
 
     @Autowired private CreditService creditService;
     @Autowired private CreditLedgerRepository ledgerRepository;
@@ -133,7 +134,9 @@ class CreditRejectionAuditIsolationTest extends AuthPostgresIntegrationTest {
                 .filter(e -> "AGENT_EXECUTION_REJECTED".equals(e.getSourceType()))
                 .toList();
         assertThat(rejected).hasSize(1);
-        assertThat(rejected.get(0).getSourceId()).isEqualTo(sourceId);
+        // Under its own key: the bare one is reserved for the charge a replay writes after a
+        // top-up (see RejectedConsumptionReplayTest).
+        assertThat(rejected.get(0).getSourceId()).isEqualTo(sourceId + ":rejected");
         assertThat(rejected.get(0).getAmount()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 

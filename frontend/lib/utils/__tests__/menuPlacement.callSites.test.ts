@@ -30,7 +30,6 @@ const CALL_SITES: Record<string, 'clampMenuLeft' | 'clampMenuCenter'> = {
   'components/app/AppSidebar.tsx': 'clampMenuLeft',
   'components/ui/expression-editor.tsx': 'clampMenuLeft',
   'components/webhook/CurlExamplePopover.tsx': 'clampMenuLeft',
-  'app/workflows/builder/hooks/ui/usePopoverPosition.ts': 'clampMenuLeft',
   'app/workflows/builder/components/CanvasContextMenu.tsx': 'clampMenuLeft',
   // Centred on its trigger (translateX(-50%)), so the midpoint is what moves.
   'app/workflows/builder/hooks/usePortalMenu.ts': 'clampMenuCenter',

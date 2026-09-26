@@ -8,9 +8,13 @@ import type { Agent } from '@/lib/api/orchestrator/types';
 import { orchestratorApi } from '@/lib/api';
 import { getActivePublicPreview } from '@/contexts/PublicationSnapshotContext';
 import { WorkflowPlanImporter } from '../services/workflowPlanImporter/WorkflowPlanImporter';
-import { applyDagreLayout, layoutConfigForDirection } from '../services/LayoutService';
 import { dispatchLayoutApplied } from '@/lib/workflow/layoutAppliedEvent';
+import { planSyncLayoutOptions } from '../utils/planLayoutDirection';
 import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { isRunCameraFollowEnabled } from '../services/runCameraFollowStore';
+import { findAddedNodeIds } from '../services/buildFollow';
+import { WORKFLOW_FOLLOW_NODES_EVENT } from '../services/runFollowEvent';
+import { isEventForWorkflow } from '@/lib/workflow/workflowEventScope';
 
 interface UseWorkflowEventListenersOptions {
   workflowId?: string;
@@ -62,7 +66,7 @@ export function useWorkflowEventListeners({
   runContext,
 }: UseWorkflowEventListenersOptions): UseWorkflowEventListenersReturn {
   // An agent-pushed plan must land in the direction the canvas is wired for.
-  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const { direction: layoutDirection, setWorkflowDirection } = useWorkflowLayoutDirectionSafe();
   // Read through a ref, NOT a dependency: this value must be the direction at the
   // moment the plan is imported, but adding it to the effect deps below would
   // re-register the listener (and, in the loader, re-fetch the workflow) every time
@@ -73,6 +77,8 @@ export function useWorkflowEventListeners({
   // every handle rendered vertically.
   const layoutDirectionRef = React.useRef(layoutDirection);
   layoutDirectionRef.current = layoutDirection;
+  const setWorkflowDirectionRef = React.useRef(setWorkflowDirection);
+  setWorkflowDirectionRef.current = setWorkflowDirection;
 
   const queryClient = useQueryClient();
 
@@ -118,6 +124,32 @@ export function useWorkflowEventListeners({
     };
   }, []);
 
+  // Whether the agent chat of THIS workflow is streaming. Following the build frames
+  // only the newest nodes, and the canvas renders only what is on screen, so once the
+  // agent is done the finished graph is framed whole: the user sees what was built,
+  // not its last node.
+  // 'unknown' until this workflow's chat reports a stream (an agent driving the plan
+  // from elsewhere never does): the build is followed then too, just never re-framed
+  // whole at the end.
+  const agentStreamRef = React.useRef<'unknown' | 'streaming' | 'ended'>('unknown');
+  const followedDuringStreamRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!workflowId) return;
+    const handleStreamingChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ isStreaming?: boolean; workflowId?: string }>).detail;
+      if (!isEventForWorkflow(detail, workflowId)) return;
+      const streaming = !!detail?.isStreaming;
+      const ended = agentStreamRef.current === 'streaming' && !streaming;
+      if (streaming) agentStreamRef.current = 'streaming';
+      else if (agentStreamRef.current === 'streaming') agentStreamRef.current = 'ended';
+      if (!ended || !followedDuringStreamRef.current) return;
+      followedDuringStreamRef.current = false;
+      window.dispatchEvent(new CustomEvent('workflowViewFitView', { detail: { animated: true } }));
+    };
+    window.addEventListener('workflowStreamingStateChange', handleStreamingChange);
+    return () => window.removeEventListener('workflowStreamingStateChange', handleStreamingChange);
+  }, [workflowId]);
+
   // Listen for workflow plan modifications from LLM (via StreamingContext)
   React.useEffect(() => {
     if (!workflowId) return;
@@ -161,18 +193,14 @@ export function useWorkflowEventListeners({
             try {
               const planJson = JSON.stringify(plan);
               const importResult = await WorkflowPlanImporter.importPlan(
-                planJson, [], layoutDirectionRef.current, { queryClient, isRunMode },
+                planJson, [], planSyncLayoutOptions(layoutDirectionRef.current), { queryClient, isRunMode },
               );
 
               if (importResult.success) {
-                // Always apply Dagre layout after sync (same algo as the toolbox auto-layout button)
-                // The importer may use applyMixedLayout (simple heuristic) when only some nodes
-                // lack positions, which produces poor results. Dagre gives consistent, clean layouts.
-                let layoutedNodes = applyDagreLayout(
-                  importResult.nodes,
-                  importResult.edges,
-                  layoutConfigForDirection(layoutDirectionRef.current),
-                );
+                // The importer keeps every stored position and only places the nodes the
+                // agent just added. A forced Dagre pass here re-laid the whole graph after
+                // every agent action and threw away the layout the user had saved.
+                let layoutedNodes = importResult.nodes;
 
                 // Resolve agent avatars for nodes with agentConfigId but no agentAvatarUrl
                 const agentNodesNeedingAvatar = layoutedNodes.filter(
@@ -197,25 +225,51 @@ export function useWorkflowEventListeners({
                   }
                 }
 
+                // Read BEFORE nodesRef is overwritten: it is the canvas the agent built on.
+                const addedNodeIds = findAddedNodeIds(nodesRef.current, layoutedNodes);
+
+                // The direction the importer placed the nodes in: the canvas's own, unless
+                // the agent stated another one in its plan. Beside setNodes so both land
+                // in one render.
+                setWorkflowDirectionRef.current(importResult.layoutDirection);
                 setNodes(layoutedNodes);
                 setEdges(importResult.edges);
                 nodesRef.current = layoutedNodes;
                 edgesRef.current = importResult.edges;
-                console.log('[WorkflowEventListeners] ✅ Plan refreshed with Dagre layout');
+                console.log('[WorkflowEventListeners] ✅ Plan refreshed');
 
-                // This handler just re-laid the whole graph from label ESTIMATES (nothing
-                // is measured at import time), and those estimates decide both where a
-                // node is centred and how much room the next rank gets. Say so, and let
-                // MeasuredLayoutSync replay the layout on the real sizes once the browser
-                // has painted them. This is the ONLY announcement in the app: a load is
-                // laid out from estimates too, but a correction there necessarily lands
-                // after the dirty and undo baselines have settled and would mark a
-                // workflow the user merely opened as edited
+                // When the plan had no position at all, the importer just laid the whole
+                // graph out from label ESTIMATES (nothing is measured at import time), and
+                // those estimates decide both where a node is centred and how much room the
+                // next rank gets. Say so, and let MeasuredLayoutSync replay the layout on
+                // the real sizes once the browser has painted them. Only then: that replay
+                // recomputes EVERY node, so announcing a plan whose positions were kept
+                // would move the nodes the user placed. This is the ONLY announcement in
+                // the app: a load is laid out from estimates too, but a correction there
+                // necessarily lands after the dirty and undo baselines have settled and
+                // would mark a workflow the user merely opened as edited
                 // (postLoadPositionWriteArmsBaselines.test.tsx is that fact, executable).
-                dispatchLayoutApplied(workflowId);
+                if (importResult.laidOutFromScratch) {
+                  dispatchLayoutApplied(workflowId);
+                }
 
-                // Trigger fit view after a short delay to let React render the new nodes
+                // After a short delay to let React render the new nodes. Unless the
+                // agent's stream is known to have ENDED, with camera follow on (the
+                // default), frame
+                // what it just ADDED, through the same event a run uses, so the user
+                // watches the build node by node; an edit that adds nothing leaves the
+                // camera where it is. Otherwise (follow off, or a sync that lands after
+                // the stream ended) the whole graph is framed as before. Both are read
+                // at fire time so a toggle flipped in between is honoured.
                 setTimeout(() => {
+                  if (isRunCameraFollowEnabled() && agentStreamRef.current !== 'ended') {
+                    if (addedNodeIds.length === 0) return;
+                    followedDuringStreamRef.current = true;
+                    window.dispatchEvent(new CustomEvent(WORKFLOW_FOLLOW_NODES_EVENT, {
+                      detail: { workflowId, nodeIds: addedNodeIds },
+                    }));
+                    return;
+                  }
                   window.dispatchEvent(new CustomEvent('workflowViewFitView', {
                     detail: { animated: true }
                   }));

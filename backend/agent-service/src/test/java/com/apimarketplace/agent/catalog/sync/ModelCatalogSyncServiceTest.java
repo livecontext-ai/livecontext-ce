@@ -133,6 +133,31 @@ class ModelCatalogSyncServiceTest {
     // ────────────────────────────────────────────────────────────────────────
 
     @Test
+    @DisplayName("V533: a retired row the feed still carries is neither added, updated, unchanged nor price-flagged")
+    void retiredRowIsLeftOutOfThePreview() {
+        // The merge leaves a retired row untouched, so the preview must not promise an update
+        // (or, if the row were dropped from the baseline, an insert) that will never happen.
+        ModelConfigOverrideEntity retired = entity("openai", "gpt-4o",
+                new BigDecimal("2.500000"), new BigDecimal("10.000000"));
+        retired.setRetiredAt(java.time.Instant.now());
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(retired));
+        when(liteLlmParser.parse(any(), any(), any())).thenReturn(
+                LiteLlmFeedParser.ParseResult.success(List.of(
+                        // A price move far past the sanity guard: it would be flagged on a live row.
+                        feedRow("openai", "gpt-4o", "25.000000", "100.000000")
+                ), Set.of(), 0, 0, 0, 0, 0));
+        when(openRouterParser.parse(any(), any(), any())).thenReturn(
+                OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+
+        var result = syncService.sync(ModelCatalogSyncService.SyncRequest.dryRun("tester"));
+
+        assertThat(result.plan().added()).isEmpty();
+        assertThat(result.plan().updated()).isEmpty();
+        assertThat(result.plan().unchanged()).isZero();
+        assertThat(result.plan().flagged()).isEmpty();
+    }
+
+    @Test
     @DisplayName("Dry-run OK: parses both feeds, classifies diff, writes log, does NOT call mergeService")
     void dryRunClassifiesAndLogsWithoutApplying() {
         // One existing row, one new incoming row → added=1, unchanged=1.

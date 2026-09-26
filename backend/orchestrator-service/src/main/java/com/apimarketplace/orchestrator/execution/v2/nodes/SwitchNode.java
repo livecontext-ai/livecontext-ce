@@ -66,14 +66,19 @@ public class SwitchNode extends BaseNode {
         Map<String, Object> evalContext = EvalContextBuilder.buildStandardEvalContext(context);
 
         // Evaluate switch expression to get the value
-        Object switchValue = evaluateSwitchExpression(evalContext);
+        Object switchValue = evaluateSwitchExpression(evalContext, context);
+
+        // Each case value, resolved in the SAME context as the subject. A case written
+        // `{{$vars.gold_tier}}` used to be compared as that literal text, so it never matched
+        // while the same reference resolved in the subject a few lines above.
+        List<Object> caseValues = resolveCaseValues(evalContext, context);
 
         // Match against cases
         // Computed ONCE: it runs a protected-region scan, a regex sweep and a probe over
         // the subject expression, and both the case rows and the parameters panel need
         // the same answer.
         String subjectDisplay = subjectForDisplay(evalContext, switchValue);
-        SwitchEvaluation evaluation = evaluateCases(switchValue, subjectDisplay);
+        SwitchEvaluation evaluation = evaluateCases(switchValue, subjectDisplay, caseValues);
 
 
         // Build resolved_params snapshot for inspector visibility (resolved values)
@@ -96,7 +101,7 @@ public class SwitchNode extends BaseNode {
             String key = caseItem.label() != null && !caseItem.label().isBlank()
                 ? caseItem.label()
                 : ("default".equals(caseItem.type()) ? "default" : "case_" + i);
-            resolvedParams.put(key, "default".equals(caseItem.type()) ? "(default)" : caseItem.value());
+            resolvedParams.put(key, "default".equals(caseItem.type()) ? "(default)" : reportedCaseValue(i, caseValues));
         }
 
         // Build output with evaluation details
@@ -117,6 +122,8 @@ public class SwitchNode extends BaseNode {
 
         // Add matched case info with label
         if (evaluation.selectedCase != null) {
+            // The CONFIGURED case value, as before: this is an output field downstream nodes read,
+            // and a resolved `{{$vars.x}}` would publish a workspace variable into the run's data.
             output.put("matched_value", evaluation.selectedCase.value());
             output.put("match_result", true);
             String label = evaluation.selectedCase.label();
@@ -179,7 +186,7 @@ public class SwitchNode extends BaseNode {
     /**
      * Evaluates the switch expression to get the value to match.
      */
-    private Object evaluateSwitchExpression(Map<String, Object> evalContext) {
+    private Object evaluateSwitchExpression(Map<String, Object> evalContext, ExecutionContext context) {
         if (switchExpression == null || switchExpression.isBlank()) {
             logger.warn("Switch '{}' has no expression, using null", nodeId);
             return null;
@@ -194,9 +201,9 @@ public class SwitchNode extends BaseNode {
 
             if (templateAdapter != null) {
                 // Fallback to template adapter
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(
-                    Map.of("__expr__", switchExpression), null);
-                return resolved.get("__expr__");
+                // The run's own context: a null one made every resolution throw, so this path
+                // always fell to the catch below and matched the default.
+                return resolveTemplateValue(switchExpression, context);
             }
 
             // No template engine, return expression as-is
@@ -209,9 +216,90 @@ public class SwitchNode extends BaseNode {
     }
 
     /**
+     * The value each case is compared on, by index. A literal case value is returned as it is;
+     * one containing {@code {{...}}} is resolved against {@code evalContext}, the map the subject
+     * itself was resolved against, so both sides of a comparison read the same run. A default
+     * case keeps its (null) value.
+     */
+    private List<Object> resolveCaseValues(Map<String, Object> evalContext, ExecutionContext context) {
+        List<Object> values = new ArrayList<>(cases.size());
+        for (SwitchCase caseItem : cases) {
+            Object value = caseItem.value();
+            if (isTemplatedCase(caseItem)) {
+                String text = (String) value;
+                value = templateEngine != null
+                    ? templateEngine.resolveWithMap(text, evalContext)
+                    : resolveTemplateValue(text, context);
+                // A reference to nothing reads as "" through resolveWithMap and as null through
+                // the adapter. Either way it is not a value to compare on: against an empty
+                // subject it would MATCH and take the branch from `default`.
+                if (value == null || (value instanceof String r && r.isEmpty())
+                        || anyReferenceResolvesToNothing(text, evalContext, context)) {
+                    value = UNRESOLVED_CASE;
+                }
+            }
+            values.add(value);
+        }
+        return values;
+    }
+
+    private static final java.util.regex.Pattern CASE_REFERENCE = java.util.regex.Pattern.compile("\\{\\{.*?}}");
+
+    /**
+     * Whether ANY reference inside a case with text around it resolved to nothing. The whole
+     * case then reads as its literal part alone ({@code gold_{{x}}} becomes {@code gold_}), a
+     * value the author never wrote, which could match a subject equal to it.
+     */
+    private boolean anyReferenceResolvesToNothing(String caseText, Map<String, Object> evalContext,
+                                                  ExecutionContext context) {
+        java.util.regex.Matcher m = CASE_REFERENCE.matcher(caseText);
+        int references = 0;
+        while (m.find()) {
+            references++;
+            if (references == 1 && m.start() == 0 && m.end() == caseText.length()) {
+                return false; // one whole reference: already judged by its own value
+            }
+            Object one = templateEngine != null
+                ? templateEngine.resolveWithMap(m.group(), evalContext)
+                : resolveTemplateValue(m.group(), context);
+            if (one == null || (one instanceof String r && r.isEmpty())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Marks a templated case whose reference resolved to nothing: it never matches. */
+    private static final Object UNRESOLVED_CASE = new Object() {
+        @Override
+        public String toString() {
+            return "(resolved to nothing)";
+        }
+    };
+
+    private static boolean isTemplatedCase(SwitchCase caseItem) {
+        return !caseItem.isDefault() && caseItem.value() instanceof String text && text.contains("{{");
+    }
+
+    /**
+     * What the panel shows for case {@code i}: a literal as written, a resolved template through
+     * the workspace-variable rule (a case written {@code {{$vars.x}}} must not print the variable).
+     */
+    private Object reportedCaseValue(int i, List<Object> caseValues) {
+        Object value = caseValues.get(i);
+        if (value == UNRESOLVED_CASE) {
+            return UNRESOLVED_CASE.toString();
+        }
+        SwitchCase caseItem = cases.get(i);
+        return isTemplatedCase(caseItem)
+            ? ReportedParams.valueFrom((String) caseItem.value(), value)
+            : value;
+    }
+
+    /**
      * Evaluate all cases and find the matching one.
      */
-    private SwitchEvaluation evaluateCases(Object switchValue, String subject) {
+    private SwitchEvaluation evaluateCases(Object switchValue, String subject, List<Object> caseValues) {
         // Pass 1: only a NON-default case can win on value, and the first one does.
         boolean[] matches = new boolean[cases.size()];
         int selectedIndex = -1;
@@ -221,7 +309,7 @@ public class SwitchNode extends BaseNode {
             if (caseItem.isDefault()) {
                 continue;
             }
-            matches[i] = valuesMatch(switchValue, caseItem.value());
+            matches[i] = caseValues.get(i) != UNRESOLVED_CASE && valuesMatch(switchValue, caseValues.get(i));
             if (matches[i] && selectedIndex < 0) {
                 selectedIndex = i;
             }
@@ -251,14 +339,15 @@ public class SwitchNode extends BaseNode {
             String caseLabel = caseItem.label() != null ? caseItem.label() : caseType;
             boolean selected = i == selectedIndex;
 
-            logger.debug("Case[{}] '{}': value='{}' vs switch='{}' -> matched={} selected={}",
-                i, caseType, caseItem.value(), switchValue, matches[i], selected);
+            Object shownCase = caseItem.isDefault() ? null : reportedCaseValue(i, caseValues);
+            logger.debug("Case[{}] '{}': value='{}' -> matched={} selected={}",
+                i, caseType, shownCase, matches[i], selected);
 
             Map<String, Object> entry = caseItem.isDefault()
                 ? BranchEvaluationReport.fallback(i, caseType, selected)
                 : BranchEvaluationReport.matched(
                     i, caseType,
-                    caseItem.value() == null ? null : String.valueOf(caseItem.value()),
+                    shownCase == null ? null : String.valueOf(shownCase),
                     subject, matches[i], selected);
             // The author named this case; the port (case_0) cannot say "Gold tier".
             entry.put("case_label", caseLabel);

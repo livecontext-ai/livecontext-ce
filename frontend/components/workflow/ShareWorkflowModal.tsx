@@ -29,7 +29,7 @@ import { track } from '@/lib/analytics/analytics';
 import type { WorkflowPlanVersion, WorkflowVersionsResponse } from '@/lib/api/orchestrator/types';
 import { useInterfaceRender } from '@/app/workflows/builder/hooks/useInterfaces';
 import { ShowcasePreview } from '@/components/marketplace/ShowcasePreview';
-import { FieldInfoTooltip } from '@/app/workflows/builder/components/inspector/forms/shared/FieldInfoTooltip';
+import { InfoPopover } from '@/components/ui/info-popover';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { isCeMode } from '@/lib/format-cost';
 import { CategoryPicker } from '@/components/marketplace/CategoryPicker';
@@ -1218,7 +1218,7 @@ export function PublishWorkflowModal({
               <label className="text-sm font-medium text-theme-primary">
                 {t('includedResourcesLabel')}
               </label>
-              <FieldInfoTooltip description={t('includedResourcesHint')} />
+              <InfoPopover label={t('includedResourcesLabel')} size="sm" side="bottom" align="end">{t('includedResourcesHint')}</InfoPopover>
             </div>
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center gap-2">
@@ -1270,7 +1270,7 @@ export function PublishWorkflowModal({
               <label className="block text-sm font-medium text-theme-primary">
                 {t('studioLabel')}
               </label>
-              <FieldInfoTooltip description={t('studioHint')} />
+              <InfoPopover label={t('studioLabel')} size="sm" side="bottom" align="end">{t('studioHint')}</InfoPopover>
             </div>
             <button
               type="button"

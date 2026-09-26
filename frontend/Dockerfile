@@ -106,7 +106,16 @@ RUN NODE_OPTIONS="--max-old-space-size=6144" npm run build
 FROM ${NODE_IMAGE}
 WORKDIR /app
 
-COPY --from=build /app/.next/standalone ./
+# The standalone tree is owned by the runtime user (1001, podSecurityContext in the
+# helm chart), not root: Next writes revalidated ISR pages back into
+# .next/server/app/*.html|.rsc|.meta at runtime. Copied as root, every revalidation
+# re-rendered, logged "Failed to update prerender cache ... EACCES" and persisted
+# nothing, on every pod. --chown on the COPY rather than a later `chown -R`, which
+# would duplicate the whole server tree in a second layer. Trade-off, accepted: the
+# runtime user can now write its own server code too (the shape of Next's reference
+# Dockerfile). Rejected alternative: copy the tree as root, then re-COPY only
+# .next with --chown; narrower, but it ships the .next tree twice in two layers.
+COPY --chown=1001:1001 --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 COPY --from=build /app/messages ./messages

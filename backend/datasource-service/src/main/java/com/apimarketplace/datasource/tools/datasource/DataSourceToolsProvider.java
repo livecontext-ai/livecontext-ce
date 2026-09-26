@@ -42,6 +42,7 @@ public class DataSourceToolsProvider implements ToolsProvider {
 
     private static final List<String> VALID_ACTIONS = List.of(
         "create", "get", "list", "update", "delete",
+        "present",
         "query_rows", "insert_rows", "update_rows", "delete_rows",
         "add_columns",
         // Marketplace publication lifecycle
@@ -119,6 +120,7 @@ public class DataSourceToolsProvider implements ToolsProvider {
                 .type("string")
                 .description("Action to perform. "
                     + "Table CRUD: create (data and/or columns), list, get, update (name/description), delete. "
+                    + "present: open the table in the user's side panel (table_id). "
                     + "Rows: query_rows (where and/or similarity, limit), insert_rows (rows), update_rows (where + set), "
                     + "delete_rows (where REQUIRED - there is no truncate action: to delete ALL rows use "
                     + "where={column:'id', operator:'IS NOT NULL'}). "
@@ -196,7 +198,7 @@ public class DataSourceToolsProvider implements ToolsProvider {
             stringParam("query", "Filter tables by name or description (for: list). Case-insensitive substring match, applied before pagination. This filters the TABLE list, not row contents - use where/similarity for row queries.", false),
 
             // ==================== Marketplace publication (publish, unpublish) ====================
-            stringParam("title", "Marketplace listing title - REQUIRED for publish", false),
+            stringParam("title", "Marketplace listing title - REQUIRED for publish. For present: optional panel title (default: the resource name).", false),
             stringParam("interface_id", "Landing interface UUID - REQUIRED for publish (the public-facing page presented to acquirers before they install the table).", false),
             enumParam("visibility", "Marketplace visibility: 'PRIVATE' (default), 'PUBLIC', 'UNLISTED' (for: publish)", false,
                 List.of("PRIVATE", "PUBLIC", "UNLISTED")),

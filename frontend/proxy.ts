@@ -247,6 +247,10 @@ function routeRequest(request: NextRequest) {
     const targetUrl = new URL(`/api/${proxiedPath}`, GATEWAY_URL);
     targetUrl.search = request.nextUrl.search;
 
+    // Every incoming header is forwarded, and two of them are load-bearing: Cloudflare fronts
+    // livecontext.ai and sets `CF-IPCountry` / `CF-Connecting-IP`, which auth-service reads
+    // (signup country for the lifecycle e-mails, abuse-only signup IP). Never rebuild this
+    // from an allow-list without keeping those two; pinned by proxy.cloudflareHeaders.test.ts.
     const headers = new Headers(request.headers);
     const authHeader = headers.get('authorization');
     // Only promote a `token` query param to a bearer when it is a JWT access token
@@ -451,6 +455,16 @@ function routeRequest(request: NextRequest) {
     const newPath = locale ? `/${locale}/app/chat` : '/app/chat';
     const newUrl = new URL(newPath, request.url);
     newUrl.search = request.nextUrl.search;
+    return NextResponse.redirect(newUrl);
+  }
+
+  // Settings > Agents & Chat rendered a second copy of the agent & Orbi defaults editor,
+  // which now lives only on the Agents page "Settings" tab. Old links and bookmarks land
+  // there, in their own locale (a page-level redirect() would lose it to the /en fallback).
+  if (pathnameWithoutLocale === '/app/settings/agents') {
+    const newPath = locale ? `/${locale}/app/agent` : '/app/agent';
+    const newUrl = new URL(newPath, request.url);
+    newUrl.search = '?view=settings';
     return NextResponse.redirect(newUrl);
   }
 

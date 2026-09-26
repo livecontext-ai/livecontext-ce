@@ -114,6 +114,28 @@ public final class DefaultSystemPrompts {
         Read help → plan → build.
         """;
 
+    /**
+     * Orbi only (the general chat, see {@link #build(Set, boolean, boolean)}), and only when
+     * workflow + table + interface are all available: the user asked for a result, not for a
+     * graph of nodes. Without this the chat delivered a bare workflow whose output lived in run
+     * logs the user never opens. Never for scoped agents or sub-agents: "build more than asked,
+     * without asking" is a chat stance, not something a delegated worker may decide.
+     */
+    private static final String DELIVER_USABLE_RESULT = """
+
+        # Deliver a result the user can see
+
+        When you build a workflow that collects or produces data, deliver it ready to use, without asking:
+        - a table that stores what it collects (a table node writes each result);
+        - an interface in the workflow that displays those results;
+        - then run it once and, when the run has produced the data, workflow(action='present', view='application', run_id=...) so the user sees it.
+        Skip the table or the interface only when the user says so, or when there is nothing to look at (e.g. the workflow only sends a message).
+
+        You choose what the user sees: action='present' opens a resource in their side panel, on the tool that owns it (workflow for an application, a run or a workflow; table, interface, agent, files for theirs). Show the result they asked for, not the machinery: the application first, else the table, else the file produced, else the run. Present once per new result, never on every step.
+        """;
+
+    private static final Set<String> DELIVER_USABLE_RESULT_MODULES = Set.of("workflow", "table", "interface");
+
     // ═══════════════════════════════════════════════════════════════════════════════
     // RESOURCE MODULES - each is independent and self-contained
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -229,8 +251,14 @@ public final class DefaultSystemPrompts {
 
     public static final PromptModule ASK_USER = new PromptModule(
         "ask_user",
-        "\n        - ask_user - Put a multiple-choice question to the person you are talking to and wait for their pick: ask_user(action='ask', questions=[{header, question, options:[{label, description}], multiSelect}]). Use it when a choice changes what you do next and guessing would waste work; never for something you can infer. The person can always type their own answer, so do not add an 'Other' option. If the result says pending_user, tell them in one sentence that you are waiting, then stop: their answer arrives as their next message. In an unattended run it answers unavailable: decide with what you have and state your assumption.\n",
+        "\n        - ask_user - Put a multiple-choice question to the person you are talking to and wait for their pick: ask_user(action='ask', questions=[{header, question, options:[{label, description}], multiSelect}]). Use it when a choice changes what you do next and guessing would waste work; never for something you can infer. The person can always type their own answer, so do not add an 'Other' option. If the result says pending_user, tell them in one sentence that you are waiting, then stop: their answer arrives as their next message. In a run nobody is watching the question goes to the workspace's connected chat instead, and the result says where (via, destination); with no connected chat it answers unavailable, so decide with what you have and state your assumption.\n",
         Set.of("ask_user")
+    );
+
+    public static final PromptModule CHANNEL = new PromptModule(
+        "channel",
+        "\n        - channel - Connect this workspace to a chat the user actually reads (Telegram today), so approvals and permission requests can reach them when they are not looking at the app: channel(action='discover') lists the chats their bot has heard from, channel(action='connect', chat_id=…, chat_title=…) attaches one and proves it by delivering a test message (read `delivered`: false means the destination is saved but nothing arrived). Run discover BEFORE connect - once connected, the chat service stops replaying recent messages. channel(action='list'/'set_default'/'disconnect') manage them, channel(action='help') for the rest.\n",
+        Set.of("channel")
     );
 
     /**
@@ -252,7 +280,7 @@ public final class DefaultSystemPrompts {
      */
     public static final List<PromptModule> ALL_RESOURCE_MODULES = List.of(
         CATALOG, TABLE, INTERFACE, AGENT, SKILL, MEMORY, WORKFLOW, APPLICATION, WEB_SEARCH,
-        GENERATION, FILES, MAILBOX, WAIT, ASK_USER
+        GENERATION, FILES, MAILBOX, WAIT, ASK_USER, CHANNEL
     );
 
 
@@ -344,6 +372,15 @@ public final class DefaultSystemPrompts {
      * @return assembled system prompt + set of core tool names
      */
     public static ModularPromptResult build(Set<String> enabledModuleKeys, boolean conversationMode) {
+        return build(enabledModuleKeys, conversationMode, false);
+    }
+
+    /**
+     * @param deliverUsableResult true for the general chat (Orbi) only: adds the rule to build a
+     *                            table + an interface with a workflow and to present the result.
+     */
+    public static ModularPromptResult build(Set<String> enabledModuleKeys, boolean conversationMode,
+                                            boolean deliverUsableResult) {
         StringBuilder sb = new StringBuilder();
         Set<String> toolNames = new LinkedHashSet<>();
 
@@ -362,6 +399,10 @@ public final class DefaultSystemPrompts {
             for (PromptModule module : activeModules) {
                 sb.append(module.promptSection());
                 toolNames.addAll(module.toolNames());
+            }
+            if (deliverUsableResult
+                    && activeModules.stream().map(PromptModule::key).toList().containsAll(DELIVER_USABLE_RESULT_MODULES)) {
+                sb.append(DELIVER_USABLE_RESULT);
             }
         }
 
@@ -417,6 +458,7 @@ public final class DefaultSystemPrompts {
         - Add step: workflow(action='add_node', type='<tool-uuid>', label='...', params={...}, connect_after='...')
         - Save: workflow(action='save')
         - View node: workflow(action='describe', node='Node Label')
+        - Show the user a result once it exists: workflow(action='present', view='application', run_id='...'); other views: run, table, file, interface, agent, workflow
         - Get help: workflow(action='help', topics=['<node_type>'])
         """;
 

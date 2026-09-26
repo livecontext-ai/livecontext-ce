@@ -597,4 +597,49 @@ class DownloadFileNodeTest {
         assertFalse(params.containsKey("filename_expression"));
         assertFalse(params.containsKey("mime_type_expression"));
     }
+
+    @Test
+    @DisplayName("a storage failure AFTER filename/mimeType resolved reports the RESOLVED values; it used to report the {{...}} expressions")
+    @SuppressWarnings("unchecked")
+    void storageFailureReportsResolvedFilenameAndMimeType() throws Exception {
+        DownloadFileNode node = new DownloadFileNode("mcp:download", "http://93.184.216.34/doc.pdf",
+            "{{core:meta.output.name}}", "{{core:meta.output.type}}");
+        node.setFileStorageService(mockFileStorageService);
+        node.setFileDownloader(mockFileDownloader);
+        node.setMimeTypeRegistry(mockMimeTypeRegistry);
+        node.setTemplateAdapter(mockTemplateAdapter);
+        Map<String, Object> values = new java.util.HashMap<>();
+        values.put("{{core:meta.output.name}}", "report.pdf");
+        values.put("{{core:meta.output.type}}", "application/pdf");
+        when(mockTemplateAdapter.resolveTemplates(any(), any()))
+            .thenAnswer(TemplateResolutionStubs.resolving(values));
+        when(mockFileDownloader.download("http://93.184.216.34/doc.pdf")).thenReturn("pdf".getBytes());
+        when(mockFileStorageService.upload(any(), any(), any(), any(), any(), any(), any(byte[].class),
+                anyInt(), anyInt(), nullable(Integer.class), any()))
+            .thenThrow(new IllegalStateException("storage quota exceeded"));
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertFalse(result.isSuccess());
+        Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+        assertEquals("report.pdf", params.get("filename"));
+        assertEquals("application/pdf", params.get("mimeType"));
+    }
+
+    @Test
+    @DisplayName("Regression 2026-09-25: an unexpected failure worded around a presigned url withholds its signature")
+    void unexpectedFailureWithholdsSignature() throws Exception {
+        String url = "http://93.184.216.34/doc.pdf?X-Amz-Signature=deadbeefFAKEsig0123456789";
+        DownloadFileNode node = new DownloadFileNode("mcp:download", url, "doc.pdf", "application/pdf");
+        node.setFileStorageService(mockFileStorageService);
+        node.setFileDownloader(mockFileDownloader);
+        node.setMimeTypeRegistry(mockMimeTypeRegistry);
+        when(mockFileDownloader.download(url)).thenThrow(new IllegalStateException("client blew up on GET " + url));
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertFalse(result.isSuccess());
+        assertFalse(String.valueOf(result.errorMessage()).contains("deadbeefFAKEsig"), "error: " + result.errorMessage());
+        assertTrue(String.valueOf(result.errorMessage()).contains("client blew up"), "keeps the reason: " + result.errorMessage());
+    }
 }

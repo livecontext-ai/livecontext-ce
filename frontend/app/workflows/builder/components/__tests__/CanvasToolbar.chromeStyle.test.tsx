@@ -54,7 +54,7 @@ import {
 } from '@/components/ui/canvas-chrome';
 import { CanvasToolbar } from '../CanvasToolbar';
 import { FileStripExpansionProvider } from '@/contexts/FileStripExpansionContext';
-import { __resetRunCameraFollowForTests } from '../../services/runCameraFollowStore';
+import { __resetRunCameraFollowForTests, setRunCameraFollowEnabled } from '../../services/runCameraFollowStore';
 
 const baseProps = () => ({
   isRunMode: false,
@@ -100,6 +100,9 @@ beforeEach(() => {
   // clearing localStorage alone would not put it back to its default here.
   __resetRunCameraFollowForTests();
   window.localStorage.clear();
+  // Following is ON by default, which paints its toggle active. Switched off here so
+  // every control can be held to the same INACTIVE shared class below.
+  setRunCameraFollowEnabled(false);
 });
 
 describe('CanvasToolbar - canvas chrome style', () => {
@@ -174,8 +177,8 @@ describe('CanvasToolbar - canvas chrome style', () => {
   it('keeps the run-follow toggle on the toolbar in BOTH modes, beside Focus', () => {
     // A run-only feature whose only control disappears during a run is unusable, and
     // counting buttons cannot see it: wrapping the View-controls group in a run-mode
-    // condition leaves every count unchanged. The toggle removes ITSELF in edit mode
-    // (it reads the mode directly), which is why the toolbar must not decide for it.
+    // condition leaves every count unchanged. It follows the run in run mode and the
+    // agent's build in edit mode, so the toolbar must not decide for it.
     for (const isRunMode of [false, true]) {
       const { container, unmount } = render(<CanvasToolbar {...baseProps()} isRunMode={isRunMode} />);
       const toggle = container.querySelector('[data-testid="canvas-toggle-run-follow"]');

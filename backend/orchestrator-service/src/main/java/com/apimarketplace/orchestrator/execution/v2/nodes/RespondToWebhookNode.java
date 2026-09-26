@@ -51,7 +51,7 @@ public class RespondToWebhookNode extends BaseNode {
     public NodeExecutionResult execute(ExecutionContext context) {
         int statusCode = respondToWebhookConfig != null ? respondToWebhookConfig.statusCode() : 200;
         String contentType = respondToWebhookConfig != null ? respondToWebhookConfig.contentType() : "application/json";
-        Map<String, String> headers = respondToWebhookConfig != null ? respondToWebhookConfig.headers() : Map.of();
+        Map<String, String> configuredHeaders = respondToWebhookConfig != null ? respondToWebhookConfig.headers() : Map.of();
 
         logger.info("RespondToWebhook node executing: nodeId={}, statusCode={}, contentType={}, itemId={}",
             nodeId, statusCode, contentType, context.itemId());
@@ -59,8 +59,25 @@ public class RespondToWebhookNode extends BaseNode {
         // Captured outside the try so failure paths still surface the resolved inputs
         // to the inspector "Resolved parameters" panel.
         String resolvedBody = null;
+        // The configured headers until they are resolved, so a failure before that still reports them.
+        Map<String, String> headers = configuredHeaders;
+        // A statusCode written as {{...}}: the template until it resolves, then its value.
+        String statusTemplate = deferredScalar("respondToWebhook", "statusCode");
+        Object reportedStatus = statusTemplate != null ? statusTemplate : statusCode;
 
         try {
+            Core.RespondToWebhookConfig cfg = withDeferredScalars(
+                "respondToWebhook", respondToWebhookConfig, Core.RespondToWebhookConfig.class, context);
+            if (cfg != null) {
+                statusCode = cfg.statusCode();
+            }
+            reportedStatus = statusTemplate != null ? ReportedParams.valueFrom(statusTemplate, statusCode) : statusCode;
+
+            // Header VALUES accept references (the builder offers free-text inputs for them); the
+            // names are literal. They used to be sent exactly as typed, so a
+            // {{core:x.output.token}} reached the caller as that text while the body beside it resolved.
+            headers = resolveHeaderValues(configuredHeaders, context);
+
             // Resolve body expression using SpEL template adapter
             String bodyExpression = respondToWebhookConfig != null ? respondToWebhookConfig.body() : null;
             resolvedBody = resolveExpression(bodyExpression, context);
@@ -102,7 +119,7 @@ public class RespondToWebhookNode extends BaseNode {
             result.put("item_index", context.itemIndex());
             result.put("itemIndex", context.itemIndex());
             result.put("item_id", context.itemId());
-            result.put("resolved_params", buildInputDataMap(statusCode, contentType, resolvedBody, headers));
+            result.put("resolved_params", buildInputDataMap(reportedStatus, contentType, resolvedBody, headers));
 
             return NodeExecutionResult.success(nodeId, result);
 
@@ -113,7 +130,7 @@ public class RespondToWebhookNode extends BaseNode {
             failOutput.put("item_index", context.itemIndex());
             failOutput.put("itemIndex", context.itemIndex());
             failOutput.put("item_id", context.itemId());
-            failOutput.put("resolved_params", buildInputDataMap(statusCode, contentType, resolvedBody, headers));
+            failOutput.put("resolved_params", buildInputDataMap(reportedStatus, contentType, resolvedBody, headers));
             failOutput.put("error", e.getMessage());
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failOutput, 0L);
         }
@@ -126,23 +143,24 @@ public class RespondToWebhookNode extends BaseNode {
         if (expression == null || expression.isBlank()) {
             return null;
         }
-
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object result = resolved.get("__expr__");
-                return result != null ? String.valueOf(result) : expression;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve body expression '{}': {}", expression, e.getMessage());
-                return expression;
-            }
-        }
-
-        return expression;
+        // One resolver for every field of every node: typed, JSON for a structure, never the
+        // configured template in place of a value (BaseNode#resolveTemplateValue).
+        return resolveTemplateString(expression, context);
     }
 
-    private Map<String, Object> buildInputDataMap(int statusCode, String contentType, String bodyExpression,
+    private Map<String, String> resolveHeaderValues(Map<String, String> configured, ExecutionContext context) {
+        if (configured == null || configured.isEmpty()) {
+            return configured;
+        }
+        Map<String, String> resolved = new LinkedHashMap<>();
+        configured.forEach((name, value) -> {
+            String resolvedValue = value == null || value.isBlank() ? value : resolveTemplateString(value, context);
+            resolved.put(name, resolvedValue != null ? resolvedValue : "");
+        });
+        return resolved;
+    }
+
+    private Map<String, Object> buildInputDataMap(Object statusCode, String contentType, String bodyExpression,
                                                   Map<String, String> headers) {
         Map<String, Object> inputData = new LinkedHashMap<>();
         inputData.put("statusCode", statusCode);
@@ -158,7 +176,16 @@ public class RespondToWebhookNode extends BaseNode {
             // Through the gate: an `Authorization` or a `Set-Cookie` an author configured
             // here is a credential under a name the word rules read, and this map is
             // persisted and published as `{{core:x.input.headers}}`.
-            inputData.put("headers", ReportedParams.reportValue(headers));
+            // A value pulled from a workspace variable is withheld: its header NAME says nothing
+            // ("X-Tier"), so the word rules cannot see it.
+            Map<String, String> configured = respondToWebhookConfig != null
+                ? respondToWebhookConfig.headers() : Map.of();
+            Map<String, Object> reported = new java.util.LinkedHashMap<>();
+            headers.forEach((name, value) -> reported.put(name,
+                ReportedParams.referencesAnyWorkspaceVariable(configured != null ? configured.get(name) : null)
+                    ? ReportedParams.valueFrom(configured.get(name), value)
+                    : value));
+            inputData.put("headers", ReportedParams.reportValue(reported));
         }
         return inputData;
     }

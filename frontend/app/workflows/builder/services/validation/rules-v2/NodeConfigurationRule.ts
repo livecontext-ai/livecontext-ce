@@ -48,6 +48,35 @@ import {
   MEDIA_WIDTH_PERCENT_MIN,
 } from '../../../utils/mediaParams';
 
+/**
+ * The config a typed guardrail rule needs, mirroring the backend GuardrailRuleEvaluator (and the
+ * builder tool's validation): the message when it is missing, or null when the rule is complete.
+ */
+export function guardrailMissingConfig(
+  type: string | undefined,
+  config: Record<string, unknown>,
+  blank: (value: unknown) => boolean,
+): string | null {
+  switch (type) {
+    case 'keyword_filter':
+      return blank(config.keywordsExpression) ? 'keywords are required' : null;
+    case 'regex_pattern':
+      return blank(config.pattern) ? 'a regex pattern is required' : null;
+    case 'length_check':
+      return blank(config.minLength) && blank(config.maxLength) ? 'a minimum or maximum length is required' : null;
+    case 'custom':
+      return blank(config.expression) ? 'a validation expression is required' : null;
+    case 'topic_restriction':
+      return blank(config.topicsExpression) ? 'the blocked topics are required' : null;
+    case 'competitor_mention':
+      return blank(config.topicsExpression) ? 'the competitor names are required' : null;
+    case 'pii_detection':
+      return Array.isArray(config.piiTypes) && config.piiTypes.length === 0 ? 'select at least one PII type' : null;
+    default:
+      return null;
+  }
+}
+
 export class NodeConfigurationRule extends BaseValidationRule {
   readonly ruleName = 'NodeConfiguration' as const;
   readonly isCritical = true;
@@ -331,6 +360,22 @@ export class NodeConfigurationRule extends BaseValidationRule {
         issues.push(this.createError(elementKey, 'agent',
           'Guardrail must have at least one rule',
           { rule: 'guardrail_missing_rules', nodeId: node.id }));
+      } else {
+        // Keyword, regex, length, custom, competitor and topic rules are checked with their
+        // config: an empty one fails the node at run time with the rule named, so flag it here.
+        // A rule imported from a {ruleId: description} plan carries only a description and is
+        // judged by the model: it needs nothing more.
+        rules.forEach((rule: any, index: number) => {
+          const config = rule?.config ?? {};
+          const blank = (value: unknown) => value === undefined || value === null || String(value).trim() === '';
+          if (!blank(config.description) && Object.keys(config).every((key) => key === 'description')) return;
+          const missing = guardrailMissingConfig(rule?.type, config, blank);
+          if (missing) {
+            issues.push(this.createError(elementKey, 'agent',
+              `Guardrail rule ${index + 1}: ${missing}`,
+              { rule: 'guardrail_rule_missing_config', nodeId: node.id }));
+          }
+        });
       }
     }
     // Classify: prompt and at least two categories required
@@ -756,10 +801,14 @@ export class NodeConfigurationRule extends BaseValidationRule {
 
   /**
    * External-channel delegation checks (all WARNING, never blocking). Only fire
-   * when the section is actually enabled (a channel is selected): a delegation
-   * without a chat id cannot deliver the approval message, and the channel counts
-   * as a single approver decision so requiredApprovals > 1 can never be satisfied
-   * by the external channel alone.
+   * when the section is actually enabled (a channel is selected). The channel
+   * counts as a single approver decision, so requiredApprovals > 1 can never be
+   * satisfied by the external channel alone; and a Teams press is a link that does
+   * not say who opened it, so an allow-list there would refuse every press.
+   *
+   * NOTE: a missing chatId is VALID on every channel (mirrors the backend
+   * CoreValidator): the approval then goes to the destination the workspace
+   * connected on that service.
    *
    * NOTE: a missing credentialId is a VALID configuration (no warning): the backend
    * falls back to the user's own Telegram credential (catalog implicit resolution,
@@ -777,14 +826,28 @@ export class NodeConfigurationRule extends BaseValidationRule {
       return; // delegation disabled - nothing to check
     }
 
-    const chatId = delegation.chatId;
-    if (!chatId || (typeof chatId === 'string' && chatId.trim() === '')) {
+    // Mirrors the backend APPROVAL_DELEGATION_CHAT_NAME: a press comes back with the channel ID,
+    // so a Slack destination named "#ops" or "@alice" would never match it.
+    const namedChat = typeof delegation.chatId === 'string' ? delegation.chatId.trim() : '';
+    if (channel === 'slack' && (namedChat.startsWith('#') || namedChat.startsWith('@'))) {
       issues.push(
         this.createWarning(
           elementKey,
           'core',
-          'Delegation is enabled but the chat ID is empty',
-          { rule: 'approval_delegation_missing_chat_id', nodeId: node.id }
+          'Give the Slack channel ID (it starts with C, G or D), not its name, or leave the destination empty to use the connected one',
+          { rule: 'approval_delegation_chat_name', nodeId: node.id }
+        )
+      );
+    }
+
+    const allowed = delegation.allowedUserIds;
+    if (channel === 'teams' && Array.isArray(allowed) && allowed.length > 0) {
+      issues.push(
+        this.createWarning(
+          elementKey,
+          'core',
+          'Teams approvals are decided from a link that does not say who opened it, so allowed user IDs would refuse every press',
+          { rule: 'approval_delegation_allowlist_unenforceable', nodeId: node.id }
         )
       );
     }

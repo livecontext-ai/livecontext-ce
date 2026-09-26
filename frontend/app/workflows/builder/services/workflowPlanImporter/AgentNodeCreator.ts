@@ -38,23 +38,31 @@ const GUARDRAIL_TYPE_MAP: Record<string, GuardrailType> = {
 
 /**
  * Returns the default config fields for a guardrail rule type.
- * The description from the plan is preserved alongside the type-specific fields
- * so the frontend form doesn't show "required" errors on empty config fields.
+ *
+ * A rule imported from the builder's {ruleId: description} form carries only a description, and
+ * the backend judges such a rule with the model from that description. Its description used to be
+ * copied into keywordsExpression / topicsExpression, which turned "Block spam messages" into a
+ * literal keyword list once the backend started checking keyword rules exactly. A description-only
+ * rule therefore keeps its description and gets no type-specific field.
  */
 function defaultConfigForType(type: GuardrailType, existing?: Record<string, any>): Record<string, any> {
-  const desc = existing?.description;
+  const descriptionOnly = existing?.description !== undefined
+    && Object.keys(existing).every((key) => key === 'description');
+  if (descriptionOnly) {
+    return { ...existing };
+  }
   switch (type) {
     case 'pii_detection':
       return { ...existing, piiTypes: existing?.piiTypes ?? ['email', 'phone', 'credit_card'] };
     case 'keyword_filter':
-      return { ...existing, keywordsExpression: existing?.keywordsExpression ?? desc ?? '', mode: existing?.mode ?? 'block' };
+      return { ...existing, keywordsExpression: existing?.keywordsExpression ?? '', mode: existing?.mode ?? 'block' };
     case 'regex_pattern':
-      return { ...existing, pattern: existing?.pattern ?? '' };
+      return { ...existing, pattern: existing?.pattern ?? '', mode: existing?.mode ?? 'require' };
     case 'length_check':
       return { ...existing, minLength: existing?.minLength ?? 1, maxLength: existing?.maxLength ?? 10000 };
     case 'topic_restriction':
     case 'competitor_mention':
-      return { ...existing, topicsExpression: existing?.topicsExpression ?? desc ?? '' };
+      return { ...existing, topicsExpression: existing?.topicsExpression ?? '' };
     case 'custom':
       return { ...existing, expression: existing?.expression ?? '' };
     default:

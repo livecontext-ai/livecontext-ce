@@ -167,6 +167,43 @@ class RedisStreamStateServiceTest {
                     .expectError(RuntimeException.class)
                     .verify();
         }
+
+        @Test
+        @DisplayName("a failed create ATTEMPT logs WARN, never ERROR (the caller retries and owns the final ERROR)")
+        void failedAttemptLogsWarnNotError() {
+            when(hashOps.putAll(anyString(), anyMap()))
+                    .thenReturn(Mono.error(new RuntimeException("Redis command timed out")));
+            lenient().when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+            lenient().when(valueOps.set(anyString(), anyString())).thenReturn(Mono.just(true));
+            lenient().when(setOps.add(anyString(), any(String[].class))).thenReturn(Mono.just(1L));
+
+            var appender = captureLogs(() -> StepVerifier.create(
+                            service.createStream("user-1", "conv-1", "gpt-4", "openai"))
+                    .expectError(RuntimeException.class)
+                    .verify());
+
+            assertThat(appender.list).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+            assertThat(appender.list)
+                    .filteredOn(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+                    .singleElement()
+                    .satisfies(e -> assertThat(e.getFormattedMessage()).contains("conv-1"));
+        }
+    }
+
+    private ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> captureLogs(
+            Runnable action) {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(RedisStreamStateService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            action.run();
+        } finally {
+            logger.detachAppender(appender);
+        }
+        return appender;
     }
 
     // ==================== getMetadata ====================
@@ -515,6 +552,19 @@ class RedisStreamStateServiceTest {
                     .verifyComplete();
 
             verify(hashOps).put("stream:stream-1", "errorMessage", "Unknown error");
+        }
+
+        @Test
+        @DisplayName("marking a stream ERROR logs no ERROR line (the caller logs the cause once)")
+        void markingErrorDoesNotLogAtError() {
+            when(hashOps.put(eq("stream:stream-1"), anyString(), anyString())).thenReturn(Mono.just(true));
+            when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+
+            var appender = captureLogs(() -> StepVerifier.create(service.error("stream-1", "LLM provider timeout"))
+                    .expectNext(true)
+                    .verifyComplete());
+
+            assertThat(appender.list).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
         }
     }
 

@@ -53,6 +53,7 @@ public class CreditController {
         // (the provider bills them the tokens), whatever kind of turn it was. The route was
         // decided once per execution by agent-service and rides on the request.
         boolean ownKey = CreditService.KEY_ROUTE_OWN_KEY.equals(request.keyRoute());
+        String sourceId = CreditService.idempotencyKeyOrNull(request.sourceId());
         CreditService.CreditConsumeResult result = switch (request.sourceType()) {
             case "AGENT_EXECUTION", "CLASSIFY_EXECUTION", "GUARDRAIL_EXECUTION",
                  "COMPACTION_SUMMARY", "BROWSER_AGENT_EXECUTION",
@@ -62,10 +63,10 @@ public class CreditController {
                  // every CLI/bridge observability write would 500 → rejection + dead-letter spam.
                  "CLI_SESSION" -> ownKey
                     ? creditService.consumeForOwnKeyTurn(
-                            userId, request.sourceId(), request.provider(), request.model(),
+                            userId, sourceId, request.provider(), request.model(),
                             request.toTokenBreakdown(), request.sourceType())
                     : creditService.consumeForAgent(
-                            userId, request.sourceId(), request.provider(), request.model(),
+                            userId, sourceId, request.provider(), request.model(),
                             request.toTokenBreakdown(),
                             request.sourceType());
             // CE_LLM_RELAY uses an idempotent post-flight path (keyed on (sourceId,
@@ -74,25 +75,25 @@ public class CreditController {
             // legacy per-call relay (unique "ce-llm-"+UUID sourceIds) is unaffected - the
             // idempotency guard never matches a fresh id.
             case "CE_LLM_RELAY" -> creditService.consumeForCeRelay(
-                    userId, request.sourceId(), request.provider(), request.model(),
+                    userId, sourceId, request.provider(), request.model(),
                     request.toTokenBreakdown());
-            case "WORKFLOW_NODE" -> creditService.consumeForWorkflowNode(userId, request.sourceId());
+            case "WORKFLOW_NODE" -> creditService.consumeForWorkflowNode(userId, sourceId);
             case "CHAT_CONVERSATION" -> ownKey
                     ? creditService.consumeForOwnKeyTurn(
-                            userId, request.sourceId(), request.provider(), request.model(),
+                            userId, sourceId, request.provider(), request.model(),
                             request.toTokenBreakdown(), request.sourceType())
                     : creditService.consumeForChat(
-                            userId, request.sourceId(), request.provider(), request.model(),
+                            userId, sourceId, request.provider(), request.model(),
                             request.toTokenBreakdown());
             case "MARKETPLACE_PURCHASE" -> creditService.consumeForMarketplacePurchase(
-                    userId, request.sourceId(), request.cost() != null ? request.cost() : 0);
-            case "WEB_SEARCH" -> creditService.consumeForWebSearch(userId, request.sourceId());
-            case "WEB_FETCH" -> creditService.consumeForWebFetch(userId, request.sourceId());
+                    userId, sourceId, request.cost() != null ? request.cost() : 0);
+            case "WEB_SEARCH" -> creditService.consumeForWebSearch(userId, sourceId);
+            case "WEB_FETCH" -> creditService.consumeForWebFetch(userId, sourceId);
             // Still live: publication screening bills its replacement image here.
             // IMAGE_GENERATION_BYOK is gone with the legacy tool's billing strategy - it
             // stays readable on historical ledger rows, but nothing writes it any more.
             case "IMAGE_GENERATION" -> creditService.consumeForImageGeneration(
-                    userId, request.sourceId(), request.provider(), request.model(),
+                    userId, sourceId, request.provider(), request.model(),
                     // imageCount = actualImageCount returned by the provider; defaults
                     // to 1 for backward-compat with old client builds that don't set it.
                     request.imageCount() != null ? request.imageCount() : 1);
@@ -114,11 +115,11 @@ public class CreditController {
     @GetMapping("/balance")
     public ResponseEntity<Map<String, Object>> getBalance(
             @RequestHeader("X-User-ID") Long userId,
-            // V494: optional, and only read by the LLM budget guards. With them the
-            // response states whether the AI allowance is spendable ON THIS MODEL, which
-            // the caller cannot work out for itself - the free-tier flag lives in the
-            // billing mirror. Without them the field is simply absent and the caller
-            // falls back to the wallet, which is the pre-V494 answer.
+            // Optional, and only read by the LLM budget guards. With them the response
+            // states what a turn ON THIS MODEL can spend (V512: on the Free plan the monthly
+            // credits count only on a free-tier model), which the caller cannot work out for
+            // itself - the free-tier flag lives in the billing mirror. Without them the
+            // field is simply absent and the caller falls back to the wallet.
             @RequestParam(value = "provider", required = false) String provider,
             @RequestParam(value = "model", required = false) String model) {
         CreditService.BalanceBreakdown breakdown = creditService.getBalanceBreakdown(userId);
@@ -126,9 +127,10 @@ public class CreditController {
                 "balance", breakdown.balance(),
                 "subBalance", breakdown.subBalance(),
                 "paygBalance", breakdown.paygBalance(),
-                // V494: the monthly AI allowance, kept OUT of `balance` because it
-                // only funds agent/chat turns on free-tier models. A wallet surface
-                // shows it as its own line, never added to the headline figure.
+                // V494: a plan's separate AI allowance, kept OUT of `balance` because
+                // it only funds agent/chat turns on free-tier models. 0 for every plan
+                // since V512 merged the Free plan's pot into its monthly credits; kept
+                // on the wire for older clients.
                 "aiBalance", breakdown.aiBalance(),
                 "delinquent", breakdown.delinquent(),
                 // Whether the monthly bucket is workflow-scoped on this plan, so
@@ -137,13 +139,12 @@ public class CreditController {
                 // for the ordinary paid account.
                 "monthlyCreditsAreWorkflowOnly", breakdown.monthlyCreditsAreWorkflowOnly()));
         if (provider != null && !provider.isBlank() && model != null && !model.isBlank()) {
-            // The allowance counts toward an LLM budget only on a model an admin opened;
-            // on any other model it is money no debit for this turn can draw, and a guard
-            // that budgeted against it would let a loop run on credits it cannot spend.
-            boolean allowanceApplies = creditService.isAiAllowanceSpendableOn(provider, model);
-            body.put("llmSpendableBalance", allowanceApplies
-                    ? breakdown.balance().add(breakdown.aiBalance())
-                    : breakdown.balance());
+            // What this model's turns can actually draw, from the same routing the
+            // debit uses. On the Free plan the monthly pool counts only on a model an
+            // admin opened to the free tier; on any other model it is money no debit
+            // for this turn can draw, and a guard that budgeted against it would let a
+            // loop run on credits it cannot spend.
+            body.put("llmSpendableBalance", creditService.getLlmSpendableBalance(userId, provider, model));
         }
         return ResponseEntity.ok(body);
     }
@@ -152,8 +153,8 @@ public class CreditController {
      * Generic "has at least 1 credit?" gate. {@code sourceType} is optional:
      * when present (e.g. {@code CHAT_CONVERSATION} from the internal/scheduled
      * chat gate) the check applies the FREE-plan bucket scoping - a Free user
-     * holding monthly workflow-only credits but no PAYG top-up is refused a
-     * chat/agent spend up-front instead of overshooting the PAYG bucket
+     * holding monthly credits but no PAYG top-up is refused a chat/agent spend
+     * on a non-free-tier model up-front instead of overshooting the PAYG bucket
      * negative post-flight. Absent (workflow launch gates), the legacy
      * total-balance semantics are preserved: the Free monthly bucket IS
      * eligible to fund workflow runs.
@@ -194,7 +195,8 @@ public class CreditController {
     /**
      * Cost-aware pre-flight check for a chat turn.
      *
-     * <p>The generic {@link #checkCredits} endpoint only answers "balance >= 1 credit?",
+     * <p>The generic {@link #checkCredits} endpoint only answers "balance >=
+     * {@link CreditService#MIN_USABLE_BALANCE}?" (1 credit),
      * which leaves a gap: a user with 1.5 credits can pass the gate, the LLM runs, and
      * the post-flight {@code consumeForChat} then fails with 402 because the real cost
      * is higher than the balance. The user got a free answer and the ledger stays clean.
@@ -419,7 +421,8 @@ public class CreditController {
             @RequestHeader("X-User-ID") Long userId,
             @RequestBody MarkupConsumeRequest request) {
         CreditService.CreditConsumeResult result = creditService.consumePlatformMarkup(
-                userId, request.sourceId(), request.apiToolName(), request.amount(), request.runId());
+                userId, CreditService.idempotencyKeyOrNull(request.sourceId()), request.apiToolName(),
+                request.amount(), request.runId());
         if (!result.success()) {
             return ResponseEntity.status(402).body(result);
         }

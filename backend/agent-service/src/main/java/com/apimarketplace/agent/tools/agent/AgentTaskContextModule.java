@@ -12,6 +12,7 @@ import com.apimarketplace.agent.repository.AgentExecutionRepository;
 import com.apimarketplace.agent.repository.AgentExecutionToolCallRepository;
 import com.apimarketplace.agent.repository.AgentTaskEventRepository;
 import com.apimarketplace.agent.service.AgentService;
+import com.apimarketplace.agent.service.TraceContentLoader;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.agent.tools.agent.permission.TaskVisibilityResolver;
@@ -21,6 +22,7 @@ import com.apimarketplace.agent.tools.common.ToolModule;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.web.TenantResolver;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -86,6 +88,47 @@ public class AgentTaskContextModule implements ToolModule {
     private final AgentTaskEventRepository taskEventRepository;
     private final TaskVisibilityResolver visibilityResolver;
     private final ToolCallRedactor redactor;
+
+    /**
+     * The longest stored content read back into this tool's response, per row. A long row
+     * was persisted as a 500-character excerpt with the full text in storage, and this tool
+     * returned the excerpt; up to this size it now returns the text (a 12 KB email a classify
+     * judged, a long prompt). Past it the excerpt stays and {@code content_length} gives the
+     * real size.
+     */
+    static final int MAX_STORED_CONTENT_CHARS = 32 * 1024;
+
+    /**
+     * The most stored text read back into ONE response, across messages and tool calls. A
+     * response holds up to 100 messages plus up to 100 tool calls, and the reading agent's
+     * context is the budget: past this, the remaining long rows keep their excerpt.
+     */
+    static final long MAX_RESPONSE_READ_BACK_CHARS = 256L * 1024;
+
+    private TraceContentLoader traceContentLoader;
+
+    /** Optional so the unit tests that build this module by hand keep compiling. */
+    @Autowired(required = false)
+    void setTraceContentLoader(TraceContentLoader traceContentLoader) {
+        this.traceContentLoader = traceContentLoader;
+    }
+
+    /** The row's full text when it fits both the per-row limit and what is left of {@code budget}. */
+    private String fullContent(String inline, UUID storageId, String tenantId, Integer contentLength, long[] budget) {
+        if (traceContentLoader == null || storageId == null) {
+            return inline;
+        }
+        // An unknown length counts as the per-row limit, so the response budget stays strict.
+        int length = contentLength != null ? contentLength : MAX_STORED_CONTENT_CHARS;
+        if (length > budget[0]) {
+            return inline;
+        }
+        String full = traceContentLoader.fullContent(inline, storageId, tenantId, contentLength, MAX_STORED_CONTENT_CHARS);
+        if (full != null && !full.equals(inline)) {
+            budget[0] -= full.length();
+        }
+        return full;
+    }
 
     public AgentTaskContextModule(AgentService agentService,
                                    AgentExecutionRepository executionRepository,
@@ -366,9 +409,11 @@ public class AgentTaskContextModule implements ToolModule {
         execBlock.put("model", exec.getModel());
         result.put("execution", execBlock);
 
-        result.put("messages", buildMessagesBlock(page, totalMessages, from, to));
+        // One read-back budget for the whole response, shared by messages and tool calls.
+        long[] readBackBudget = {MAX_RESPONSE_READ_BACK_CHARS};
+        result.put("messages", buildMessagesBlock(page, totalMessages, from, to, readBackBudget));
         if (includeToolCalls) {
-            result.put("tool_calls", buildToolCallsBlock(toolCalls, toolCallsPage.getTotalElements(), toolCallsTruncated));
+            result.put("tool_calls", buildToolCallsBlock(toolCalls, toolCallsPage.getTotalElements(), toolCallsTruncated, readBackBudget));
         }
         result.put("hint", to < totalMessages
                 ? "More messages available. Call again with offset=" + to + "."
@@ -377,7 +422,7 @@ public class AgentTaskContextModule implements ToolModule {
     }
 
     private Map<String, Object> buildMessagesBlock(List<AgentExecutionMessageEntity> page,
-                                                    int total, int from, int to) {
+                                                    int total, int from, int to, long[] readBackBudget) {
         List<Map<String, Object>> items = new ArrayList<>(page.size());
         for (AgentExecutionMessageEntity m : page) {
             Map<String, Object> i = new LinkedHashMap<>();
@@ -388,7 +433,8 @@ public class AgentTaskContextModule implements ToolModule {
             i.put("tool_call_id", m.getToolCallId());
             // Content may carry tool args/results - redact secrets before surfacing.
             // The redactor handles JSON and falls back to raw scrub for plain text.
-            String redactedContent = redactor.redactJsonString(m.getContent(), m.getToolName());
+            String redactedContent = redactor.redactJsonString(fullContent(m.getContent(),
+                m.getContentStorageId(), m.getTenantId(), m.getContentLength(), readBackBudget), m.getToolName());
             i.put("content", redactedContent);
             i.put("content_length", m.getContentLength());
             items.add(i);
@@ -409,7 +455,7 @@ public class AgentTaskContextModule implements ToolModule {
      * request/response payload).
      */
     private Map<String, Object> buildToolCallsBlock(List<AgentExecutionToolCallEntity> calls,
-                                                     long total, boolean truncated) {
+                                                     long total, boolean truncated, long[] readBackBudget) {
         List<Map<String, Object>> items = new ArrayList<>(calls.size());
         for (AgentExecutionToolCallEntity tc : calls) {
             Map<String, Object> c = new LinkedHashMap<>();
@@ -421,7 +467,9 @@ public class AgentTaskContextModule implements ToolModule {
             c.put("success", tc.isSuccess());
             // Redact arguments AND content (results) - both can carry credentials.
             c.put("arguments", redactor.redactMap(tc.getArguments(), tc.getToolName()));
-            c.put("content", redactor.redactJsonString(tc.getContent(), tc.getToolName()));
+            c.put("content", redactor.redactJsonString(fullContent(tc.getContent(),
+                tc.getContentStorageId(), tc.getTenantId(), tc.getContentLength(), readBackBudget), tc.getToolName()));
+            c.put("content_length", tc.getContentLength());
             items.add(c);
         }
         Map<String, Object> block = new LinkedHashMap<>();

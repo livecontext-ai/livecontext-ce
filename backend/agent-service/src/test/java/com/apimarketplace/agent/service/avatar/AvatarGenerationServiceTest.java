@@ -65,6 +65,23 @@ class AvatarGenerationServiceTest {
     }
 
     @Test
+    @DisplayName("regression V515: a DISABLED requested model is generated on its replacement")
+    void disabledModelRunsOnReplacement() {
+        com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+            org.mockito.Mockito.mock(com.apimarketplace.agent.service.ModelReplacementResolver.class);
+        when(resolver.substituteIfDisabled("anthropic", "claude-sonnet")).thenReturn(java.util.Optional.of(
+            new com.apimarketplace.agent.service.ModelReplacementResolver.Substitution(
+                "deepseek", "deepseek-chat", "anthropic", "claude-sonnet", false)));
+        ReflectionTestUtils.setField(service, "modelReplacementResolver", resolver);
+        when(jsonInvoker.invoke(eq("deepseek"), eq("deepseek-chat"), anyString(), anyString(), eq("t")))
+                .thenReturn(VALID_SVG);
+
+        service.generate("a fox", "anthropic", "claude-sonnet", "t");
+
+        verify(jsonInvoker, never()).invoke(eq("anthropic"), eq("claude-sonnet"), anyString(), anyString(), anyString());
+    }
+
+    @Test
     @DisplayName("explicit provider/model bypass default resolution")
     void honorsExplicitPair() {
         when(jsonInvoker.invoke(eq("anthropic"), eq("claude-sonnet"), anyString(), anyString(), eq("t")))
@@ -73,6 +90,30 @@ class AvatarGenerationServiceTest {
         service.generate("x", "anthropic", "claude-sonnet", "t");
 
         verify(providerFactory, never()).getDefaultProviderName();
+    }
+
+    @Test
+    @DisplayName("V515: a DISABLED utility model is swapped too when the requested pair routes to a bridge")
+    void disabledUtilityFallbackIsSwapped() {
+        var linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        ReflectionTestUtils.setField(service, "executionLinkService", linkService);
+        com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+            org.mockito.Mockito.mock(com.apimarketplace.agent.service.ModelReplacementResolver.class);
+        ReflectionTestUtils.setField(service, "modelReplacementResolver", resolver);
+        when(resolver.substituteIfDisabled("anthropic", "claude-opus-4-6")).thenReturn(java.util.Optional.empty());
+        when(resolver.substituteIfDisabled("anthropic", "claude-haiku-4-5")).thenReturn(java.util.Optional.of(
+            new com.apimarketplace.agent.service.ModelReplacementResolver.Substitution(
+                "deepseek", "deepseek-chat", "anthropic", "claude-haiku-4-5", false)));
+        when(linkService.resolveSingleCompletionTarget("anthropic", "claude-opus-4-6"))
+                .thenThrow(new IllegalArgumentException("BRIDGE_EXECUTION_NOT_RELAYABLE"));
+        when(linkService.resolveSingleCompletionTarget("deepseek", "deepseek-chat"))
+                .thenReturn(new ModelExecutionLinkService.SingleCompletionTarget("deepseek", "deepseek-chat"));
+        when(jsonInvoker.invoke(eq("deepseek"), eq("deepseek-chat"), anyString(), anyString(), eq("t")))
+                .thenReturn(VALID_SVG);
+
+        service.generate("a fox", "anthropic", "claude-opus-4-6", "t");
+
+        verify(linkService, never()).resolveSingleCompletionTarget("anthropic", "claude-haiku-4-5");
     }
 
     @Test

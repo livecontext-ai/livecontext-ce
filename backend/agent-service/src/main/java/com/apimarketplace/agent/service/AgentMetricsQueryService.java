@@ -212,6 +212,115 @@ public class AgentMetricsQueryService {
     }
 
     /**
+     * Cross-tenant tool health, for platform administrators.
+     *
+     * <p>Every other method here is tenant-scoped, which is right for a customer
+     * looking at their own agents and wrong for the question this one answers:
+     * <b>is a tool broken for everyone, or did one customer paste a bad key?</b>
+     * A tenant-scoped view cannot tell those apart, and they need opposite fixes:
+     * a catalog correction plus a re-import, or a message to one user.
+     *
+     * <p>The discriminator is the SPREAD. {@code tenantsAffected} over
+     * {@code tenantsCalling} is what separates the two: a tool failing for every
+     * tenant that calls it is a catalog defect; one failing for a single tenant out
+     * of twelve is a credential. {@code sampleError} carries the provider's own
+     * words so the reader does not have to open an execution to guess.
+     *
+     * <p>{@code minCalls} exists because a 100% failure rate over two calls is
+     * noise, and ranking on rate alone would put it above a tool failing 4,000
+     * times out of 10,000. Rows are ordered by absolute failures, which is the
+     * shape of the actual damage.
+     *
+     * @param minCalls  ignore tools called fewer times than this across the platform
+     * @param sinceDays only count calls from the last N days (0 = all history)
+     * @param limit     cap the result set
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getGlobalToolHealth(int minCalls, int sinceDays, int limit) {
+        // tool_name alone is too coarse to act on. Verified in production: the 48
+        // distinct values are the MCP meta-tools (catalog, workflow, table, ...) and
+        // the CLI bridge's own tools, never a catalog endpoint. A broken Gmail
+        // endpoint therefore shows up as "catalog failed", pooled with everything
+        // else the agent did. The endpoint identity lives in the call arguments, so
+        // it is surfaced as a second grouping key: production then names the actual
+        // offenders (gmail list_messages, 92 failures out of 120, all 3 tenants).
+        //
+        // The ref is returned RAW rather than joined to catalog.api_tools: this
+        // service may only query its own schema, and resolving a tool id belongs to
+        // catalog-service.
+        StringBuilder sql = new StringBuilder(
+            "SELECT tc.tool_name, " +
+            "COALESCE(tc.arguments->>'api', tc.arguments->>'api_id', tc.arguments->>'tool_id') AS tool_ref, " +
+            "COUNT(*) AS total_calls, " +
+            "COUNT(*) FILTER (WHERE NOT tc.success) AS failure_count, " +
+            "CASE WHEN COUNT(*) > 0 THEN ROUND(COUNT(*) FILTER (WHERE NOT tc.success) * 100.0 / COUNT(*), 2) ELSE 0 END AS failure_rate_pct, " +
+            "COUNT(DISTINCT tc.tenant_id) AS tenants_calling, " +
+            "COUNT(DISTINCT tc.tenant_id) FILTER (WHERE NOT tc.success) AS tenants_affected, " +
+            "MAX(tc.created_at) AS last_used_at, " +
+            "(ARRAY_AGG(tc.error_message ORDER BY tc.created_at DESC) " +
+            "   FILTER (WHERE NOT tc.success AND tc.error_message IS NOT NULL))[1] AS sample_error " +
+            "FROM agent_execution_tool_calls tc ");
+        if (sinceDays > 0) {
+            sql.append("WHERE tc.created_at >= NOW() - CAST(:sinceDays || ' days' AS INTERVAL) ");
+        }
+        sql.append("GROUP BY tc.tool_name, COALESCE(tc.arguments->>'api', tc.arguments->>'api_id', tc.arguments->>'tool_id') ")
+           .append("HAVING COUNT(*) >= :minCalls AND COUNT(*) FILTER (WHERE NOT tc.success) > 0 ")
+           .append("ORDER BY COUNT(*) FILTER (WHERE NOT tc.success) DESC");
+
+        Query query = entityManager.createNativeQuery(sql.toString());
+        if (sinceDays > 0) {
+            query.setParameter("sinceDays", String.valueOf(sinceDays));
+        }
+        query.setParameter("minCalls", (long) Math.max(minCalls, 1));
+        query.setMaxResults(Math.max(limit, 1));
+
+        List<Object[]> results = query.getResultList();
+        List<Map<String, Object>> stats = new ArrayList<>();
+        for (Object[] row : results) {
+            // Column order follows the SELECT: tool_name, tool_ref, then the counts.
+            long total = toLong(row[2]);
+            long failures = toLong(row[3]);
+            long tenantsCalling = toLong(row[5]);
+            long tenantsAffected = toLong(row[6]);
+            Map<String, Object> stat = new LinkedHashMap<>();
+            stat.put("toolName", row[0]);
+            stat.put("toolRef", row[1]);
+            stat.put("totalCalls", total);
+            stat.put("failureCount", failures);
+            stat.put("failureRatePct", row[4] instanceof BigDecimal bd ? bd.doubleValue() : 0.0);
+            stat.put("tenantsCalling", tenantsCalling);
+            stat.put("tenantsAffected", tenantsAffected);
+            stat.put("lastUsedAt", row[7] != null ? row[7].toString() : null);
+            stat.put("sampleError", row[8] != null ? truncate(row[8].toString(), 400) : null);
+            stat.put("verdict", verdictFor(tenantsCalling, tenantsAffected));
+            stats.add(stat);
+        }
+        return stats;
+    }
+
+    /**
+     * Turns the spread into the word a reader acts on. Kept next to the query so
+     * the thresholds are visible with the data that feeds them rather than buried
+     * in a component.
+     */
+    static String verdictFor(long tenantsCalling, long tenantsAffected) {
+        if (tenantsCalling <= 1) {
+            return "SINGLE_TENANT";
+        }
+        if (tenantsAffected == tenantsCalling) {
+            return "ALL_TENANTS";
+        }
+        if (tenantsAffected * 2 >= tenantsCalling) {
+            return "WIDESPREAD";
+        }
+        return "ISOLATED";
+    }
+
+    private static String truncate(String s, int max) {
+        return s.length() <= max ? s : s.substring(0, max) + "...";
+    }
+
+    /**
      * Per-tool aggregate stats for a single agent - scope-aware version of
      * {@link #getToolStatsByAgent(String, UUID)}.
      */

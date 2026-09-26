@@ -134,7 +134,7 @@ class CreditServiceConsumePlatformMarkupTest {
             assertThat(result.success()).isTrue();
             assertThat(result.creditsUsed()).isEqualByComparingTo(BigDecimal.ZERO);
             verify(ledgerRepository, never()).save(any(CreditLedgerEntry.class));
-            verify(ledgerRepository, never()).existsBySourceId(any());
+            verify(ledgerRepository, never()).existsNonRejectionBySourceId(any());
             verify(subscriptionRepository, never()).save(any(Subscription.class));
         }
 
@@ -155,7 +155,7 @@ class CreditServiceConsumePlatformMarkupTest {
             verify(ledgerRepository, never()).save(any(CreditLedgerEntry.class));
             // Shadow mode must not even touch the idempotency index - we are not
             // writing, so duplicate detection is moot.
-            verify(ledgerRepository, never()).existsBySourceId(any());
+            verify(ledgerRepository, never()).existsNonRejectionBySourceId(any());
             verify(subscriptionRepository, never()).save(any(Subscription.class));
         }
 
@@ -163,7 +163,7 @@ class CreditServiceConsumePlatformMarkupTest {
         @DisplayName("is idempotent when the sourceId already exists in the ledger")
         void idempotentOnDuplicateSourceId() {
             // Arrange
-            when(ledgerRepository.existsBySourceId("dup")).thenReturn(true);
+            when(ledgerRepository.existsNonRejectionBySourceId("dup")).thenReturn(true);
             lenientBalanceRead(INITIAL_BALANCE);
 
             // Act
@@ -181,7 +181,7 @@ class CreditServiceConsumePlatformMarkupTest {
         @DisplayName("debits the amount and writes a ledger row tagged sourceType=PLATFORM_MARKUP")
         void debitsAndWritesLedgerRow() {
             // Arrange
-            when(ledgerRepository.existsBySourceId("src-ok")).thenReturn(false);
+            when(ledgerRepository.existsNonRejectionBySourceId("src-ok")).thenReturn(false);
             mockActiveSubscription(INITIAL_BALANCE);
 
             // Act

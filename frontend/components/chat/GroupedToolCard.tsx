@@ -6,7 +6,7 @@ import { createPortal } from 'react-dom';
 import { clampMenuLeft } from '@/lib/utils/menuPlacement';
 import { useTranslations } from 'next-intl';
 import Image from 'next/image';
-import { ChevronDown, ChevronRight, Table, Monitor, Workflow, Bot, Loader2, Search, Globe, HelpCircle, KeyRound, ListChecks, Eye, Code, Plug, Play, Pencil, FolderOpen, Terminal, FileText, ExternalLink, Trash2, MoreVertical, ArrowUpRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, KeyRound, ExternalLink, Trash2, MoreVertical, ArrowUpRight } from 'lucide-react';
 import { WorkflowActionIcon, getWorkflowActionIcon } from '@/app/workflows/builder/components/nodes/shared';
 import { resolveNodeIcon } from '@/app/workflows/builder/data/nodeVisuals';
 import { TasksPreviewBlock } from './TasksPreviewBlock';
@@ -28,28 +28,8 @@ import { normalizeIconSlug } from '@/lib/credentials/iconSlug';
 import type { GroupedToolActivity } from '@/lib/utils/activityGrouping';
 import { getToolDescription, getToolIconType, getToolIconSlug } from '@/lib/utils/activityGrouping';
 import { isOpenableVisualization, toAutoOpenDetail } from '@/lib/chat/messageActivity';
-
-// Tool icon mapping
-const toolIcons: Record<string, React.ReactNode> = {
-  table: <Table className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  interface: <Monitor className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  workflow: <Workflow className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  agent: <Bot className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  search: <Search className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  globe: <Globe className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  help: <HelpCircle className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  key: <KeyRound className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  tasks: <ListChecks className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  eye: <Eye className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  code: <Code className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  files: <FolderOpen className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  api: <Plug className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  play: <Play className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  pencil: <Pencil className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  // Native Claude Code tools (full agent toolset over the bridge).
-  terminal: <Terminal className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-  file: <FileText className="w-3.5 h-3.5 text-theme-muted shrink-0" />,
-};
+import { toolIcons } from './toolIcons';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 /** Resolve icon for a node label using the centralized NODE_ICON_REGISTRY. */
 function NodeLabelIcon({ label }: { label: string }): React.ReactElement {
@@ -183,7 +163,7 @@ function ServiceApprovalPreview({ serviceApproval }: ServiceApprovalPreviewProps
             {/* Service icon */}
             <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600">
               {service.iconSlug && !imageErrors[service.serviceType] ? (
-                <Image
+                <ServiceLogo as={Image}
                   src={`/icons/services/${normalizeIconSlug(service.iconSlug)}.svg`}
                   alt={service.serviceName}
                   width={18}
@@ -593,7 +573,7 @@ function CallTimelineItem({ call, index, isStreaming = false }: CallTimelineItem
         )}
         {/* API icon from iconSlug (if available) or extracted from arguments */}
         {(call.iconSlug || getToolIconSlug(call.toolName, call.arguments)) ? (
-          <Image
+          <ServiceLogo as={Image}
             src={`/icons/services/${normalizeIconSlug(call.iconSlug || getToolIconSlug(call.toolName, call.arguments))}.svg`}
             alt=""
             width={14}

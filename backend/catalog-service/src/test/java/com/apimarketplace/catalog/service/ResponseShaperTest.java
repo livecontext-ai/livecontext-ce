@@ -453,6 +453,89 @@ class ResponseShaperTest {
         }
 
         @Test
+        @DisplayName("regression: STEP_OUTPUT keeps a text leaf over 4 KB WHOLE; it reached every downstream {{...}} as 200 chars")
+        void stepOutputKeepsLongTextWhole() {
+            String body = "Dear team, ".repeat(1000); // ~11 KB of plain text, an email body
+            Map<String, Object> input = Map.of("items", List.of(Map.of("body", body)));
+
+            ShapingResult result = shaper.shape(input, null, null, Mode.STEP_OUTPUT);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = (Map<String, Object>) result.data();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> item = ((List<Map<String, Object>>) root.get("items")).get(0);
+            assertEquals(body, item.get("body"));
+            assertTrue(result.truncatedPatterns().isEmpty());
+        }
+
+        @Test
+        @DisplayName("plain WORKFLOW mode (an agent inside a run, an internal call) still clips text at 4 KB")
+        void workflowModeStillClipsTextAt4Kb() {
+            // Billing scope RUN is sent by an agent running inside a workflow too; lifting the cap on
+            // scope alone would have put 1 MB leaves into that agent's context.
+            String body = "Dear team, ".repeat(1000);
+            ShapingResult result = shaper.shape(Map.of("body", body), null, null, Mode.WORKFLOW);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = (Map<String, Object>) result.data();
+            assertTrue(String.valueOf(root.get("body")).contains("[TRUNCATED:"));
+        }
+
+        @Test
+        @DisplayName("the same text leaf is still clipped in AGENT mode")
+        void agentModeStillClipsLongText() {
+            String body = "Dear team, ".repeat(1000);
+            ShapingResult result = shaper.shape(Map.of("body", body), null, null, Mode.AGENT);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = (Map<String, Object>) result.data();
+            assertTrue(String.valueOf(root.get("body")).contains("[TRUNCATED:"));
+        }
+
+        @Test
+        @DisplayName("STEP_OUTPUT still replaces inline base64 above 4 KB, and keeps it at exactly 4 KB")
+        void stepOutputBase64Boundary() {
+            String atCap = "QUJD".repeat(1024);       // 4096 bytes
+            String overCap = atCap + "QUJD";          // 4100 bytes
+            ShapingResult result = shaper.shape(
+                Map.of("a", atCap, "b", overCap), null, null, Mode.STEP_OUTPUT);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = (Map<String, Object>) result.data();
+            assertEquals(atCap, root.get("a"));
+            assertTrue(String.valueOf(root.get("b")).startsWith("[BASE64_CONTENT:"));
+        }
+
+        @Test
+        @DisplayName("STEP_OUTPUT clips text only ABOVE 1 MB: exactly 1 MB is kept, one byte more is clipped")
+        void stepOutputTextBoundary() {
+            String exact = "a b ".repeat(ResponseShaper.MAX_STRING_SIZE_STEP_OUTPUT / 4);
+            String over = exact + "c";
+            ShapingResult result = shaper.shape(
+                Map.of("exact", exact, "over", over), null, null, Mode.STEP_OUTPUT);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = (Map<String, Object>) result.data();
+            assertEquals(exact, root.get("exact"));
+            assertTrue(String.valueOf(root.get("over")).contains("[TRUNCATED:"));
+            assertEquals("over", result.truncatedPatterns().get(0).path());
+        }
+
+        @Test
+        @DisplayName("an expand path still keeps base64 above 4 KB whole in STEP_OUTPUT mode")
+        void stepOutputExpandPathKeepsBase64() {
+            String b64 = "QUJD".repeat(2000);
+            ShapingResult result = shaper.shape(
+                Map.of("data", List.of(Map.of("b64_json", b64))), List.of("data[].b64_json"), null, Mode.STEP_OUTPUT);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = (Map<String, Object>) result.data();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> first = ((List<Map<String, Object>>) root.get("data")).get(0);
+            assertEquals(b64, first.get("b64_json"));
+        }
+
+        @Test
         @DisplayName("workflowModeStillEmitsPatternedTruncatedFields - pattern shape used in both modes")
         void workflowModeStillEmitsPatternedTruncatedFields() {
             List<Map<String, Object>> items = new ArrayList<>();

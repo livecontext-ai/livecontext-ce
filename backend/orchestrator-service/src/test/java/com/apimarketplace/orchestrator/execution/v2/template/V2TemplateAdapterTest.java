@@ -552,4 +552,90 @@ class V2TemplateAdapterTest {
                 spelEvaluator);
         }
     }
+
+    @Nested
+    @DisplayName("trigger payload scoping")
+    class TriggerPayloadScoping {
+
+        private WorkflowExecutionContext convertedFor(String contextTriggerId) {
+            when(mockPlan.getTriggers()).thenReturn(List.of(
+                new com.apimarketplace.orchestrator.domain.workflow.Trigger("t1", "Hook A", "single", "webhook"),
+                new com.apimarketplace.orchestrator.domain.workflow.Trigger("t2", "Hook B", "single", "webhook")));
+            org.mockito.Mockito.lenient().when(mockPlan.getId()).thenReturn("plan-1");
+            ExecutionContext ctx = new ExecutionContext("run-1", "wr-1", "tenant-1", "item-0", 0,
+                contextTriggerId, 0, 0, new java.util.HashMap<>(Map.of("x", 1, "hook_b", "payload-field")),
+                new java.util.HashMap<>(), ExecutionState.create(), mockPlan);
+            org.mockito.ArgumentCaptor<WorkflowExecutionContext> v1 =
+                org.mockito.ArgumentCaptor.forClass(WorkflowExecutionContext.class);
+            when(mockTemplateEngine.evaluateTemplate(anyString(), v1.capture())).thenReturn(null);
+
+            adapter.resolveTemplates(Map.of("v", "{{trigger:hook_b.output.x}}"), ctx);
+            return v1.getValue();
+        }
+
+        @Test
+        @DisplayName("regression: another trigger's label does not answer with THIS trigger's payload")
+        void otherTriggerLabelIsNotGivenTheCurrentPayload() {
+            WorkflowExecutionContext v1 = convertedFor("trigger:hook_a");
+
+            assertNotNull(v1.getStepOutput("trigger:hook_a"), "the owning trigger still reads its payload");
+            assertNull(v1.getStepOutput("trigger:hook_b"),
+                "hook_b fired in another epoch, if at all: it must resolve to nothing, not to hook_a's x");
+            assertNull(v1.getDataItem("trigger:hook_b"),
+                "a payload FIELD named like another trigger must not answer for it either");
+        }
+
+        @Test
+        @DisplayName("another trigger's REAL output, when present, still resolves: only the fabricated copy is skipped")
+        void otherTriggersRealOutputStillResolves() {
+            when(mockPlan.getTriggers()).thenReturn(List.of(
+                new com.apimarketplace.orchestrator.domain.workflow.Trigger("t1", "Hook A", "single", "webhook"),
+                new com.apimarketplace.orchestrator.domain.workflow.Trigger("t2", "Hook B", "single", "webhook")));
+            org.mockito.Mockito.lenient().when(mockPlan.getId()).thenReturn("plan-1");
+            Map<String, Object> hookBOutput = Map.of("output", Map.of("x", 42));
+            ExecutionContext ctx = new ExecutionContext("run-1", "wr-1", "tenant-1", "item-0", 0,
+                "trigger:hook_a", 0, 0, new java.util.HashMap<>(Map.of("x", 1)),
+                new java.util.HashMap<>(Map.of("trigger:hook_b", hookBOutput)), ExecutionState.create(), mockPlan);
+            org.mockito.ArgumentCaptor<WorkflowExecutionContext> v1 =
+                org.mockito.ArgumentCaptor.forClass(WorkflowExecutionContext.class);
+            when(mockTemplateEngine.evaluateTemplate(anyString(), v1.capture())).thenReturn(null);
+
+            adapter.resolveTemplates(Map.of("v", "{{trigger:hook_b.output.x}}"), ctx);
+
+            assertEquals(hookBOutput, v1.getValue().getDataItem("trigger:hook_b"));
+        }
+
+        @Test
+        @DisplayName("a context that names no plan trigger keeps offering the payload under every label")
+        void unknownOwnerKeepsLegacyBehaviour() {
+            WorkflowExecutionContext v1 = convertedFor("trigger:default");
+
+            assertNotNull(v1.getStepOutput("trigger:hook_a"));
+            assertNotNull(v1.getStepOutput("trigger:hook_b"));
+        }
+    }
+
+    @Nested
+    @DisplayName("item identity and current_item")
+    class ItemIdentityTests {
+
+        @Test
+        @DisplayName("regression: the V1 context carries the node's own item index and item id for {{item_index}} / {{item_id}}")
+        void itemIndexAndIdComeFromTheContext() {
+            when(mockPlan.getTriggers()).thenReturn(List.of());
+            org.mockito.Mockito.lenient().when(mockPlan.getId()).thenReturn("plan-1");
+            ExecutionContext ctx = new ExecutionContext("run-1", "wr-1", "tenant-1", "item-7", 7,
+                null, 0, 0, new HashMap<>(Map.of("user_id", 1)), new HashMap<>(), ExecutionState.create(), mockPlan);
+            ArgumentCaptor<WorkflowExecutionContext> v1 = ArgumentCaptor.forClass(WorkflowExecutionContext.class);
+            when(mockTemplateEngine.evaluateTemplate(anyString(), v1.capture())).thenReturn(null);
+
+            adapter.resolveTemplates(Map.of("v", "{{item_id}}"), ctx);
+
+            assertEquals(7, v1.getValue().getCurrentItemIndex());
+            assertEquals("item-7", v1.getValue().getGlobalVariables().get("item_id"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> currentItem = (Map<String, Object>) v1.getValue().getDataItem("current_item");
+            assertEquals(1, currentItem.get("user_id"), "legacy current_item still built from the payload");
+        }
+    }
 }

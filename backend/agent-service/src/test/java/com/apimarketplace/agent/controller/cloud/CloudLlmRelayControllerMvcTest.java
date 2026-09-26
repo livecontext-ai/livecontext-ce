@@ -13,6 +13,7 @@ import com.apimarketplace.agent.service.cloud.CeRelayAccrualStore;
 import com.apimarketplace.agent.service.cloud.CeRelaySettlementService;
 import com.apimarketplace.agent.streaming.StreamingCallback;
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -92,7 +93,7 @@ class CloudLlmRelayControllerMvcTest {
     @Test
     @DisplayName("POST /complete routes, binds X-User-ID + install headers, deserializes the body, and serializes the JSON response")
     void completeOverMvcBindsHeadersDeserializesBodyAndSerializesJson() throws Exception {
-        when(authClient.userOwnsActiveCeLink(CLOUD_USER_ID, INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess(CLOUD_USER_ID, INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(response("done", 11, 7));
@@ -115,7 +116,7 @@ class CloudLlmRelayControllerMvcTest {
                 .andExpect(jsonPath("$.usage.promptTokens").value(11));
 
         // X-User-ID bound String to Long and was stringified for the link check (header extraction).
-        verify(authClient).userOwnsActiveCeLink(CLOUD_USER_ID, INSTALL_ID);
+        verify(authClient).ceLinkAccess(CLOUD_USER_ID, INSTALL_ID);
         // The nested CompletionRequest deserialized from the body and the tenant was rewritten to the
         // cloud user before dispatch, proving @RequestBody binding reached the controller intact.
         ArgumentCaptor<CompletionRequest> dispatched = ArgumentCaptor.forClass(CompletionRequest.class);
@@ -127,7 +128,7 @@ class CloudLlmRelayControllerMvcTest {
     @Test
     @DisplayName("POST /stream negotiates application/x-ndjson and writes newline-delimited stream events")
     void streamOverMvcNegotiatesNdjsonAndWritesEvents() throws Exception {
-        when(authClient.userOwnsActiveCeLink(CLOUD_USER_ID, INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess(CLOUD_USER_ID, INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(creditClient.checkChatBudget(eq(CLOUD_USER_ID), eq(PROVIDER), eq(MODEL), anyInt(), anyInt(), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))

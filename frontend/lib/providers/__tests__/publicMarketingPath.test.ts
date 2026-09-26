@@ -17,6 +17,35 @@ describe('isPublicMarketingPath', () => {
     }
     expect(isPublicMarketingPath('/foreign/creator')).toBe(false);
   });
+  it('treats every clean path on the docs subdomain as public (hydration #418 regression)', () => {
+    // On docs.livecontext.ai the browser reports clean paths (`/glossary`), not the
+    // `/docs/glossary` route the server rendered. Without the host these read as
+    // protected and the client swapped the page for the auth spinner.
+    for (const p of ['/glossary', '/agents', '/public-access', '/mcp-server', '/getting-started']) {
+      expect(isPublicMarketingPath(p)).toBe(false); // the path alone does not say it
+      expect(isPublicMarketingPath(p, 'docs.livecontext.ai')).toBe(true);
+      expect(isPublicMarketingPath(p, 'docs.localhost:3000')).toBe(true);
+    }
+    // Any other host keeps the path rule exactly as before.
+    expect(isPublicMarketingPath('/glossary', 'livecontext.ai')).toBe(false);
+    expect(isPublicMarketingPath('/app/chat', 'livecontext.ai')).toBe(false);
+    expect(isPublicMarketingPath('/docs/glossary', 'livecontext.ai')).toBe(true);
+    expect(isPublicMarketingPath('/app/chat', null)).toBe(false);
+    expect(isPublicMarketingPath('/app/chat', undefined)).toBe(false);
+  });
+
+  it('keeps the auth gate on app routes even on the docs host, like the server render does', () => {
+    for (const p of ['/app', '/app/chat', '/en/app/u/j.doe', '/fr/app']) {
+      expect(isPublicMarketingPath(p, 'docs.livecontext.ai')).toBe(false);
+    }
+  });
+
+  it('matches only a real docs host, and covers locale-prefixed clean paths there', () => {
+    expect(isPublicMarketingPath('/fr/glossary', 'docs.livecontext.ai')).toBe(true);
+    expect(isPublicMarketingPath('/glossary', 'mydocs.livecontext.ai')).toBe(false);
+    expect(isPublicMarketingPath('/glossary', 'livecontext.ai.docs.evil.example')).toBe(false);
+  });
+
   it('covers the landing page, bare and under every locale prefix', () => {
     expect(isPublicMarketingPath('/')).toBe(true);
     for (const locale of ['en', 'fr', 'es', 'de', 'pt', 'zh']) {

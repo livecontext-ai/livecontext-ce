@@ -1,9 +1,12 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
+
 import com.apimarketplace.orchestrator.domain.file.FileRef;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
 import com.apimarketplace.orchestrator.services.file.PublicLinkService;
+import com.apimarketplace.orchestrator.services.template.ResolvedValuePreview;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -80,6 +83,11 @@ public class PublicLinkNode extends BaseNode {
             // {_type:'file', path, name, mimeType, size}) - stringifying it would lose the key.
             Object resolved = resolveRaw(fileExpression, context);
             Map<String, Object> fileRef = asFileRefMap(resolved);
+            // `file` stays the expression the author wrote; what it resolved to sits beside it
+            // (the split list / listResolved pair), so a reference that worked no longer reads as
+            // an unresolved {{...}} in the Params column. A description, never the file itself.
+            resolvedParams.put("fileResolved",
+                ReportedParams.valueFrom(fileExpression, describeResolvedFile(resolved, fileRef)));
             if (fileRef == null) {
                 return failure(context, resolvedParams, startTime,
                     "file did not resolve to a file reference (map the WHOLE FileRef output, e.g. {{core:download.output.file}})");
@@ -145,16 +153,20 @@ public class PublicLinkNode extends BaseNode {
 
     /** Resolve a template expression keeping the RAW object type (not stringified). */
     private Object resolveRaw(String expression, ExecutionContext context) {
-        if (templateAdapter == null) {
-            return expression;
+        return resolveTemplateValue(expression, context);
+    }
+
+    private static String describeResolvedFile(Object resolved, Map<String, Object> fileRef) {
+        if (resolved == null) {
+            return "(resolved to nothing)";
         }
-        try {
-            Map<String, Object> resolved = templateAdapter.resolveTemplates(Map.of("__expr__", expression), context);
-            return resolved.get("__expr__");
-        } catch (Exception e) {
-            logger.warn("Failed to resolve file expression: {} - {}", expression, e.getMessage());
-            return null;
+        if (fileRef != null) {
+            Object name = fileRef.get("name");
+            Object path = fileRef.get("path");
+            String label = name != null ? String.valueOf(name) : "file";
+            return ResolvedValuePreview.shorten(path != null ? label + " (" + path + ")" : label);
         }
+        return ResolvedValuePreview.describe(resolved);
     }
 
     /**

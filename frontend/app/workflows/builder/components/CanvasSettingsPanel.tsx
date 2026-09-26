@@ -51,7 +51,7 @@ export function CanvasSettingsPanel({
 }: CanvasSettingsPanelProps) {
   const t = useTranslations('workflowBuilder.canvas');
   const { isPreviewOnly } = useWorkflowMode();
-  const { direction, setDirection } = useWorkflowLayoutDirectionSafe();
+  const { direction, setWorkflowDirection } = useWorkflowLayoutDirectionSafe();
   // Reachable from the workflow, not only from account settings - and LINKED to it:
   // there is a single stored preference, so moving the inspector here moves it in
   // Settings too, and everywhere else. Unlike the layout direction below, it is not
@@ -69,49 +69,25 @@ export function CanvasSettingsPanel({
   // inspector a node click opens here changes it in Settings and in every other workflow.
   const { openMode: inspectorOpenMode, setOpenMode: setInspectorOpenMode } = useInspectorOpenModeSafe();
 
-  // The in-canvas toggle writes BOTH layers, and that is the fix: it used to call
-  // setWorkflowDirection alone, which is memory-only, so changing the reading direction
-  // from the workflow you are looking at left the account default untouched. Every other
-  // workflow, and every new one, still opened the other way round - the control looked
-  // global and was not, which is the same complaint the inspector dock was linked to
-  // Settings for.
+  // The in-canvas toggle sets the direction of THIS workflow, never the account default
+  // (that is Settings > Preferences). A workflow's direction is part of the workflow: it is
+  // saved into its plan and every viewer, the marketplace included, reads it back from
+  // there. A toggle that also rewrote the default re-oriented every other canvas that falls
+  // back on it, and, when the provider was shared, the workflow open behind the side panel.
   //
-  // setDirection persists the account default AND updates the active direction, so it
-  // subsumes setWorkflowDirection here; that setter stays for its two remaining callers,
-  // both in the loader (the initial seed from a plan's stored direction, and a version
-  // restore), neither of which may move the user's default.
-  //
-  // The workflow keeps its own direction too: it is saved into the plan on save and
-  // re-seeded on load, so re-opening an old canvas still reads the way its node positions
-  // were authored. The preference decides where a workflow with nothing stored starts.
-  //
-  // It also re-flows the graph here: this is the ONE place a direction change should move
-  // nodes (the user asked for it). The loader's seed on load must NOT re-flow (it would
-  // trash saved positions), which is why the auto-layout lives here and not in the shared
-  // handle-sync effect. Handle re-measure is handled by DirectionHandleSync for both paths.
-  //
-  // KNOWN LIMIT, and deliberately not worked around here. What this select shows is the
-  // ACTIVE direction, which the loader may have seeded from the open workflow's own plan,
-  // so it can already read "vertical" while the account default is horizontal - and there
-  // is then no way to adopt vertical as the default FROM THIS CONTROL. Splitting the guard
-  // to persist on every pick does not fix it: this is a controlled Radix Select, which
-  // fires `onValueChange` only when the value actually changes, so re-picking the option
-  // already shown never reaches this function at all. (A native `<select>`, which is what
-  // a test double usually is, DOES fire on re-pick - so that workaround tests green and
-  // ships dead.) Settings > Preferences is where a default is set without touching the
-  // canvas in front of you - and it reads `defaultDirection`, not the active value, so it
-  // keeps working after a plan-stamped workflow has been opened in the same session.
-  // Flipping away and back is not an alternative: each flip re-runs the auto-layout and
-  // rewrites hand-placed node positions.
+  // It re-lays the graph out in the same event: positions only mean something in the
+  // direction they were computed in. Both land in one render, so they make one undo step
+  // (useHistory records the direction with the positions) and arm Save together; the
+  // direction reaches the database with that Save (generateWorkflowPlan stamps it).
   const changeDirection = React.useCallback(
     (next: WorkflowLayoutDirection) => {
       if (next === direction) return;
-      setDirection(next);
+      setWorkflowDirection(next);
       if (onForceNodesUpdate && nodes.length > 0) {
         onForceNodesUpdate(applyDagreLayout(nodes, edges, layoutConfigForDirection(next)));
       }
     },
-    [direction, setDirection, onForceNodesUpdate, nodes, edges],
+    [direction, setWorkflowDirection, onForceNodesUpdate, nodes, edges],
   );
 
   if (!isOpen) return null;
@@ -149,11 +125,11 @@ export function CanvasSettingsPanel({
             )}
           </div>
 
-          {/* Layout direction - reachable from the canvas, not only account settings.
-              Writes the same per-workspace preference; changing it re-measures the
-              handles and re-flows the graph (BuilderCanvas' direction effect). Same
-              Select control as Connection Style above. Hidden in the read-only preview
-              (its layout is frozen). */}
+          {/* Layout direction of THIS workflow (saved into its plan; the account default
+              lives in Settings). Changing it re-lays the graph out (changeDirection) and
+              re-measures the handles (DirectionHandleSync). Same Select control as
+              Connection Style above. Hidden in the read-only preview (its layout is
+              frozen). */}
           {!isPreviewOnly && (
             <div className="space-y-3">
               <span className="text-sm font-medium text-[var(--text-secondary)] mb-1 block">

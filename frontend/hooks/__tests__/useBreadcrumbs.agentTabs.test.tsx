@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 /**
- * The Agents-page tab crumbs and the Settings > Agents & Chat crumb.
+ * The Agents-page tab crumbs.
  *
- * Both are trailing crumbs that carry the ONLY visible name of the screen the user is on:
+ * They are trailing crumbs that carry the ONLY visible name of the screen the user is on:
  * the Agents page renders no title of its own, and Fleet even hides the tab bar, so the
  * crumb is the only exit. Every tab in AgentPageTabBar must therefore have an entry in
  * AGENT_TAB_CRUMBS - the Memory tab shipped without one and fell through to the bare
@@ -114,15 +114,5 @@ describe('useBreadcrumbs - Agents page tabs', () => {
     agentsCrumb?.onClick?.();
     expect(pushState).toHaveBeenCalledWith(null, '', '/en/app/agent');
     expect(navigate).not.toHaveBeenCalled();
-  });
-});
-
-describe('useBreadcrumbs - Settings > Agents & Chat', () => {
-  // Without a SETTINGS_LABELS entry the crumb falls back to the raw URL segment and reads
-  // "agents" (lowercase), a different name from the nav item the user just clicked.
-  it('names the settings page with its nav label, not the raw path segment', () => {
-    mockPathname = '/en/app/settings/agents';
-    mockView = 'settings';
-    expect(labels()).toEqual(['', 'Settings', 'Agents & Chat']);
   });
 });

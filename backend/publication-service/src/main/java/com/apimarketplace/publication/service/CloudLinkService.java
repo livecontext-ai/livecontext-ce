@@ -35,7 +35,18 @@ public class CloudLinkService {
     private static final Logger logger = LoggerFactory.getLogger(CloudLinkService.class);
     private static final int GCM_IV_LENGTH = 12;
     private static final int GCM_TAG_LENGTH = 128;
-    private static final Duration PENDING_AUTH_FLOW_TTL = Duration.ofMinutes(30);
+    /**
+     * Default lifetime of a pending OAuth flow (state + PKCE verifier). Two hours, not minutes: a new
+     * cloud account goes through the cloud onboarding (email verification, steps) and then a paid
+     * checkout before Keycloak redirects back here, so a short TTL expired the flow under a user who
+     * was simply signing up. Overridable with {@code cloud-link.pending-auth-ttl}.
+     */
+    static final Duration DEFAULT_PENDING_AUTH_FLOW_TTL = Duration.ofHours(2);
+    /**
+     * Error code the cloud answers (HTTP 403) on every CE-link-gated endpoint when the bound cloud
+     * account is not on a paid plan. The link is SUSPENDED, never revoked: paying again restores it.
+     */
+    public static final String PLAN_REQUIRED_ERROR = "CLOUD_LINK_PLAN_REQUIRED";
     private static final String DEFAULT_FRONTEND_CALLBACK_PATH = "/app/settings/cloud-account";
     /**
      * Source type the cloud relay stamps on every CE-originated LLM call (mirror of
@@ -60,6 +71,8 @@ public class CloudLinkService {
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final String webUrl;
+    private final Duration pendingAuthFlowTtl;
 
     // In-memory PKCE verifier storage (short-lived, keyed by state)
     private final Map<String, PendingAuthFlow> pendingAuthFlows = new LinkedHashMap<>() {
@@ -79,8 +92,8 @@ public class CloudLinkService {
             return new PendingAuthFlow(codeVerifier, tenantId, authCode, createdAt, frontendReturnPath);
         }
 
-        boolean isExpired(Instant now) {
-            return !createdAt.plus(PENDING_AUTH_FLOW_TTL).isAfter(now);
+        boolean isExpired(Instant now, Duration ttl) {
+            return !createdAt.plus(ttl).isAfter(now);
         }
     }
 
@@ -93,7 +106,27 @@ public class CloudLinkService {
                             String ceVersion,
                             ObjectMapper objectMapper) {
         this(cloudLinkRepository, keycloakUrl, clientId, redirectUri, encryptionKey,
-                cloudApiUrl, ceVersion, objectMapper, new RestTemplate(), Clock.systemUTC());
+                cloudApiUrl, ceVersion, objectMapper, (String) null, (Duration) null);
+    }
+
+    /**
+     * Production constructor. {@code webUrl} is the cloud web app base the onboarding start URL is
+     * built on (blank = derived from {@code cloudApiUrl}); {@code pendingAuthFlowTtl} null or not
+     * positive = {@link #DEFAULT_PENDING_AUTH_FLOW_TTL}.
+     */
+    public CloudLinkService(CeCloudLinkRepository cloudLinkRepository,
+                            String keycloakUrl,
+                            String clientId,
+                            String redirectUri,
+                            String encryptionKey,
+                            String cloudApiUrl,
+                            String ceVersion,
+                            ObjectMapper objectMapper,
+                            String webUrl,
+                            Duration pendingAuthFlowTtl) {
+        this(cloudLinkRepository, keycloakUrl, clientId, redirectUri, encryptionKey,
+                cloudApiUrl, ceVersion, objectMapper, new RestTemplate(), Clock.systemUTC(),
+                webUrl, pendingAuthFlowTtl);
     }
 
     /** Test-friendly constructor - allows injecting a mocked RestTemplate. */
@@ -121,6 +154,23 @@ public class CloudLinkService {
                      ObjectMapper objectMapper,
                      RestTemplate restTemplate,
                      Clock clock) {
+        this(cloudLinkRepository, keycloakUrl, clientId, redirectUri, encryptionKey,
+                cloudApiUrl, ceVersion, objectMapper, restTemplate, clock, null, null);
+    }
+
+    /** Test-friendly constructor - every collaborator and setting injectable. */
+    CloudLinkService(CeCloudLinkRepository cloudLinkRepository,
+                     String keycloakUrl,
+                     String clientId,
+                     String redirectUri,
+                     String encryptionKey,
+                     String cloudApiUrl,
+                     String ceVersion,
+                     ObjectMapper objectMapper,
+                     RestTemplate restTemplate,
+                     Clock clock,
+                     String webUrl,
+                     Duration pendingAuthFlowTtl) {
         this.cloudLinkRepository = cloudLinkRepository;
         this.keycloakUrl = keycloakUrl;
         this.clientId = clientId;
@@ -131,6 +181,42 @@ public class CloudLinkService {
         this.restTemplate = restTemplate;
         this.objectMapper = objectMapper;
         this.clock = clock;
+        this.webUrl = (webUrl == null || webUrl.isBlank())
+                ? deriveWebUrl(cloudApiUrl)
+                : stripTrailingSlashes(webUrl.trim());
+        this.pendingAuthFlowTtl = (pendingAuthFlowTtl == null
+                || pendingAuthFlowTtl.isZero() || pendingAuthFlowTtl.isNegative())
+                ? DEFAULT_PENDING_AUTH_FLOW_TTL
+                : pendingAuthFlowTtl;
+    }
+
+    /**
+     * Cloud web app base derived from the cloud API base: {@code https://livecontext.ai/api} becomes
+     * {@code https://livecontext.ai}. Used when {@code cloud-link.web-url} is not set, which is the
+     * normal case: an install that points its API at another cloud also means that cloud's web app.
+     */
+    static String deriveWebUrl(String cloudApiUrl) {
+        if (cloudApiUrl == null || cloudApiUrl.isBlank()) {
+            return "https://livecontext.ai";
+        }
+        String base = stripTrailingSlashes(cloudApiUrl.trim());
+        if (base.endsWith("/api")) {
+            base = base.substring(0, base.length() - "/api".length());
+        }
+        return base;
+    }
+
+    private static String stripTrailingSlashes(String value) {
+        String v = value;
+        while (v.endsWith("/")) {
+            v = v.substring(0, v.length() - 1);
+        }
+        return v;
+    }
+
+    /** Effective pending-flow lifetime (visible for tests). */
+    Duration pendingAuthFlowTtl() {
+        return pendingAuthFlowTtl;
     }
 
     /**
@@ -166,7 +252,19 @@ public class CloudLinkService {
                 + "&code_challenge_method=S256"
                 + "&state=" + state;
 
-        return Map.of("authUrl", authUrl, "state", state);
+        // Entry point through the CLOUD onboarding: a new account first verifies its email and
+        // completes the onboarding steps, then (linking needs a paid plan) goes through pricing, and
+        // only then does the cloud web app send the browser to Keycloak with these same PKCE values.
+        // The cloud rebuilds the authorize URL from its own Keycloak config, so only the OAuth
+        // parameters travel here, each URL-encoded.
+        String startUrl = webUrl + "/onboarding?ce_link=1"
+                + "&client_id=" + urlEncode(clientId)
+                + "&redirect_uri=" + urlEncode(redirectUri)
+                + "&state=" + urlEncode(state)
+                + "&code_challenge=" + urlEncode(codeChallenge)
+                + "&code_challenge_method=S256";
+
+        return Map.of("authUrl", authUrl, "state", state, "startUrl", startUrl);
     }
 
     /**
@@ -181,10 +279,30 @@ public class CloudLinkService {
         synchronized (pendingAuthFlows) {
             PendingAuthFlow pending = requirePendingAuthFlow(state);
             if (pending.authCode() != null && !pending.authCode().isBlank()) {
-                throw new IllegalArgumentException("Authorization callback already completed");
+                throw new CallbackStateException("Authorization callback already completed",
+                        pending.frontendReturnPath());
             }
             pendingAuthFlows.put(state, pending.withAuthCode(authCode));
             return pending.frontendReturnPath();
+        }
+    }
+
+    /**
+     * The callback's {@code state} is unknown, expired or already used. Carries the flow's sanitized
+     * frontend return path when it is still known (a replay), null otherwise, so the controller can
+     * send the browser back to the right CE page with {@code cloud_link_error=expired}.
+     */
+    public static class CallbackStateException extends IllegalArgumentException {
+        private final String frontendReturnPath;
+
+        public CallbackStateException(String message, String frontendReturnPath) {
+            super(message);
+            this.frontendReturnPath = frontendReturnPath;
+        }
+
+        /** Allowlisted return path of the flow, or null when the state is unknown or expired. */
+        public String getFrontendReturnPath() {
+            return frontendReturnPath;
         }
     }
 
@@ -272,15 +390,15 @@ public class CloudLinkService {
         Instant now = Instant.now(clock);
         pruneExpiredPendingAuthFlows(now);
         PendingAuthFlow pending = pendingAuthFlows.get(state);
-        if (pending == null || pending.isExpired(now)) {
+        if (pending == null || pending.isExpired(now, pendingAuthFlowTtl)) {
             pendingAuthFlows.remove(state);
-            throw new IllegalArgumentException("Invalid or expired state parameter");
+            throw new CallbackStateException("Invalid or expired state parameter", null);
         }
         return pending;
     }
 
     private void pruneExpiredPendingAuthFlows(Instant now) {
-        pendingAuthFlows.entrySet().removeIf(entry -> entry.getValue().isExpired(now));
+        pendingAuthFlows.entrySet().removeIf(entry -> entry.getValue().isExpired(now, pendingAuthFlowTtl));
     }
 
     private String sanitizeFrontendReturnPath(String returnPath) {
@@ -313,13 +431,31 @@ public class CloudLinkService {
         throw new IllegalArgumentException("Unsupported cloud-link return path");
     }
 
+    /** Result of one register POST, observable by callers that must tell the cases apart. */
+    public enum RegisterOutcome {
+        /** 2xx: registered (and any plan-required suspension cleared). */
+        REGISTERED,
+        /** 409 ALREADY_BOUND: the install is already in the cloud registry, marked registered. */
+        ALREADY_BOUND,
+        /**
+         * 403 CLOUD_LINK_PLAN_REQUIRED: the bound cloud account is not on a paid plan. NOT registered,
+         * and deliberately not treated like 409: the row is only marked suspended. The next attempt is
+         * the heartbeat tick (or a user action), never an immediate retry.
+         */
+        PLAN_REQUIRED,
+        /** Any other non-2xx answer that did not throw: nothing stamped. */
+        NOT_REGISTERED
+    }
+
     /**
      * POSTs the freshly-linked install to the cloud's {@code /api/ce-link/register}
      * endpoint. Stamps {@code registeredAt = now()} on the local row on 2xx so the
      * heartbeat scheduler picks it up. On 409 ALREADY_BOUND the row is also marked
      * registered (the install_id is already in the cloud registry - no further work).
+     * On 403 CLOUD_LINK_PLAN_REQUIRED the row is marked plan-required (see
+     * {@link #markPlanRequired}) and stays unregistered. Any other failure still throws.
      */
-    public void registerWithCloud(CeCloudLinkEntity link) {
+    public RegisterOutcome registerWithCloud(CeCloudLinkEntity link) {
         String accessToken = getCloudAccessToken(link.getTenantId());
         String url = cloudApiUrl + "/ce-link/register";
         Map<String, Object> body = new LinkedHashMap<>();
@@ -338,12 +474,14 @@ public class CloudLinkService {
                 // Defensive: don't stamp registeredAt unless the cloud explicitly succeeded.
                 logger.warn("CE cloud link register POST non-2xx for tenant={} installId={}: {}",
                         link.getTenantId(), link.getInstallId(), response.getStatusCode().value());
-                return;
+                return RegisterOutcome.NOT_REGISTERED;
             }
             link.setRegisteredAt(clock.instant());
+            clearPlanRequired(link);
             cloudLinkRepository.save(link);
             logger.info("CE cloud link registered (tenant={} installId={}): cloud responded {}",
                     link.getTenantId(), link.getInstallId(), response.getStatusCode().value());
+            return RegisterOutcome.REGISTERED;
         } catch (org.springframework.web.client.HttpClientErrorException.Conflict alreadyBound) {
             // 409 ALREADY_BOUND - the install_id is already in the cloud registry.
             // Mark local registered so we stop re-POSTing on every scheduler tick.
@@ -351,7 +489,65 @@ public class CloudLinkService {
             cloudLinkRepository.save(link);
             logger.info("CE cloud link 409 ALREADY_BOUND (tenant={} installId={}) - marked locally registered",
                     link.getTenantId(), link.getInstallId());
+            return RegisterOutcome.ALREADY_BOUND;
+        } catch (org.springframework.web.client.HttpClientErrorException.Forbidden forbidden) {
+            Optional<String> planCode = planRequiredPlanCode(forbidden);
+            if (planCode.isEmpty()) {
+                throw forbidden;
+            }
+            markPlanRequired(link, planCode.get());
+            logger.warn("CE cloud link register refused: the cloud account needs a paid plan "
+                            + "(tenant={} installId={} planCode={}). Link kept, retried on the heartbeat tick.",
+                    link.getTenantId(), link.getInstallId(), planCode.get());
+            return RegisterOutcome.PLAN_REQUIRED;
         }
+    }
+
+    /**
+     * When a 403 carries {@value #PLAN_REQUIRED_ERROR}, returns the plan code the cloud reported
+     * (empty string when it sent none); empty Optional for any other 403. Reads the JSON
+     * {@code error} field, and falls back to a plain token match so a non-JSON body still counts.
+     */
+    Optional<String> planRequiredPlanCode(org.springframework.web.client.HttpStatusCodeException e) {
+        String raw;
+        try {
+            raw = e.getResponseBodyAsString(StandardCharsets.UTF_8);
+        } catch (RuntimeException ignored) {
+            return Optional.empty();
+        }
+        if (raw == null || !raw.contains(PLAN_REQUIRED_ERROR)) {
+            return Optional.empty();
+        }
+        try {
+            JsonNode body = objectMapper.readTree(raw);
+            JsonNode planCode = body == null ? null : body.get("planCode");
+            return Optional.of(planCode != null && !planCode.isNull() ? planCode.asText() : "");
+        } catch (Exception notJson) {
+            return Optional.of("");
+        }
+    }
+
+    /**
+     * Marks the link SUSPENDED because the bound cloud account is not on a paid plan. Touches ONLY
+     * the two plan-required columns: the tokens, registeredAt and the llm/catalog sources are kept,
+     * so the next 2xx from the cloud (after the owner pays) restores the link as it was, with no
+     * re-link. Reloads the row first so a token refresh persisted by {@link #getCloudAccessToken}
+     * during the same call is not overwritten by a stale instance, and mirrors onto the caller's.
+     */
+    private void markPlanRequired(CeCloudLinkEntity link, String planCode) {
+        String code = planCode == null || planCode.isBlank() ? null : planCode;
+        CeCloudLinkEntity fresh = cloudLinkRepository.findByTenantId(link.getTenantId()).orElse(link);
+        Instant since = fresh.getPlanRequiredAt() != null ? fresh.getPlanRequiredAt() : clock.instant();
+        fresh.setPlanRequiredAt(since);
+        fresh.setPlanRequiredPlanCode(code);
+        cloudLinkRepository.save(fresh);
+        link.setPlanRequiredAt(since);
+        link.setPlanRequiredPlanCode(code);
+    }
+
+    private static void clearPlanRequired(CeCloudLinkEntity link) {
+        link.setPlanRequiredAt(null);
+        link.setPlanRequiredPlanCode(null);
     }
 
     /**
@@ -702,7 +898,9 @@ public class CloudLinkService {
         if (link.getRegisteredAt() == null) {
             // Not yet registered - try register first; heartbeat will catch up next tick.
             try {
-                registerWithCloud(link);
+                if (registerWithCloud(link) == RegisterOutcome.PLAN_REQUIRED) {
+                    return HeartbeatOutcome.PLAN_REQUIRED;
+                }
                 return promoteCloudSourceWhenRegistered(link.getTenantId())
                         ? HeartbeatOutcome.REGISTERED
                         : HeartbeatOutcome.PENDING_REGISTER;
@@ -732,7 +930,11 @@ public class CloudLinkService {
             // token-refresh state that getCloudAccessToken may have just persisted.
             CeCloudLinkEntity fresh = cloudLinkRepository.findByTenantId(link.getTenantId()).orElse(link);
             fresh.setLastUsedAt(clock.instant());
+            // A 2xx means the cloud serves this link again (the owner is on a paid plan): lift the
+            // suspension. Nothing else to restore, since suspension never touched the link itself.
+            clearPlanRequired(fresh);
             cloudLinkRepository.save(fresh);
+            clearPlanRequired(incomingLink);
             return HeartbeatOutcome.OK;
         } catch (org.springframework.web.client.HttpClientErrorException.Gone revoked) {
             // 410 GONE - cloud revoked the link. Clear local registered + cached token
@@ -768,6 +970,21 @@ public class CloudLinkService {
             logger.warn("CE cloud link 404 for tenant {} installId={} - cleared registered marker",
                     link.getTenantId(), link.getInstallId());
             return HeartbeatOutcome.NOT_FOUND;
+        } catch (org.springframework.web.client.HttpClientErrorException.Forbidden forbidden) {
+            Optional<String> planCode = planRequiredPlanCode(forbidden);
+            if (planCode.isEmpty()) {
+                // Any other 403: unchanged behaviour, treated as transient (next tick retries).
+                logger.warn("Heartbeat 403 for tenant {} installId={}: {}",
+                        link.getTenantId(), link.getInstallId(), forbidden.getMessage());
+                return HeartbeatOutcome.TRANSIENT_FAILURE;
+            }
+            // 403 CLOUD_LINK_PLAN_REQUIRED - the cloud account fell back to a non-paid plan. The link
+            // is SUSPENDED, not revoked: registration, tokens and sources are kept so paying again
+            // restores it on the next tick with no re-link.
+            markPlanRequired(incomingLink, planCode.get());
+            logger.warn("CE cloud link suspended for tenant {} installId={}: cloud account needs a paid plan (planCode={})",
+                    link.getTenantId(), link.getInstallId(), planCode.get());
+            return HeartbeatOutcome.PLAN_REQUIRED;
         } catch (RuntimeException transientFailure) {
             // Network blip (HttpServerErrorException, ResourceAccessException, …) -
             // next tick retries. No local mutation.
@@ -779,7 +996,9 @@ public class CloudLinkService {
 
     /** Result of one heartbeat call, observable by tests + scheduler. */
     public enum HeartbeatOutcome {
-        OK, REGISTERED, PENDING_REGISTER, TOKEN_UNAVAILABLE, REVOKED, NOT_FOUND, TRANSIENT_FAILURE
+        OK, REGISTERED, PENDING_REGISTER, TOKEN_UNAVAILABLE, REVOKED, NOT_FOUND, TRANSIENT_FAILURE,
+        /** 403 CLOUD_LINK_PLAN_REQUIRED: link kept but suspended until the cloud account pays. */
+        PLAN_REQUIRED
     }
 
     /**
@@ -843,6 +1062,10 @@ public class CloudLinkService {
             if (entity.getInstallId() != null) {
                 status.put("installId", entity.getInstallId().toString());
             }
+            // Suspended because the cloud account is not on a paid plan (403 CLOUD_LINK_PLAN_REQUIRED
+            // on register or heartbeat). Cleared by the next 2xx, so paying again restores the link.
+            status.put("planRequired", entity.getPlanRequiredAt() != null);
+            status.put("planRequiredPlanCode", entity.getPlanRequiredPlanCode());
             governingCloudEntitlementForLink(entity).ifPresent(e -> {
                 status.put("cloudPlanCode", e.planCode());
                 status.put("cloudCreditTierIndex", e.creditTierIndex());
@@ -853,6 +1076,8 @@ public class CloudLinkService {
         } else {
             status.put("linked", false);
             status.put("registered", false);
+            status.put("planRequired", false);
+            status.put("planRequiredPlanCode", null);
         }
 
         // Install-global activation: drives VISIBILITY (marketplace, highlights, plan badge). One
@@ -896,7 +1121,10 @@ public class CloudLinkService {
         }
         CeCloudLinkEntity link = existing.get();
         if (normalized == CloudLlmSource.CLOUD && link.getRegisteredAt() == null) {
-            registerWithCloud(link);
+            RegisterOutcome registered = registerWithCloud(link);
+            if (registered == RegisterOutcome.PLAN_REQUIRED) {
+                throw new CloudLinkPlanRequiredException(link.getPlanRequiredPlanCode());
+            }
             link = cloudLinkRepository.findByTenantId(tenantId)
                     .orElseThrow(() -> new CloudAccountNotLinkedException("No cloud account linked"));
             if (link.getRegisteredAt() == null) {
@@ -919,7 +1147,10 @@ public class CloudLinkService {
         }
         CeCloudLinkEntity link = existing.get();
         if (normalized == CloudLlmSource.CLOUD && link.getRegisteredAt() == null) {
-            registerWithCloud(link);
+            RegisterOutcome registered = registerWithCloud(link);
+            if (registered == RegisterOutcome.PLAN_REQUIRED) {
+                throw new CloudLinkPlanRequiredException(link.getPlanRequiredPlanCode());
+            }
             link = cloudLinkRepository.findByTenantId(tenantId)
                     .orElseThrow(() -> new CloudAccountNotLinkedException("No cloud account linked"));
             if (link.getRegisteredAt() == null) {
@@ -970,6 +1201,12 @@ public class CloudLinkService {
      */
     private CloudRuntimeStatus resolveCloudSelectedRuntime(Long tenantId, CeCloudLinkEntity link) {
         if (link.getRegisteredAt() == null) {
+            if (link.getPlanRequiredAt() != null) {
+                // Suspended on a plan-required refusal: do NOT re-POST register on every runtime
+                // resolution (that would be a hot retry per LLM/catalog call). The heartbeat tick
+                // retries it and lifts the suspension once the cloud account pays.
+                return CloudRuntimeStatus.notReady(CloudLlmSource.CLOUD);
+            }
             registerWithCloud(link);
         }
         CeCloudLinkEntity fresh = cloudLinkRepository.findByTenantId(tenantId)
@@ -1261,6 +1498,25 @@ public class CloudLinkService {
     public static class CloudAccountNotLinkedException extends RuntimeException {
         public CloudAccountNotLinkedException(String message) {
             super(message);
+        }
+    }
+
+    /**
+     * The cloud refused to register this install with 403 {@value #PLAN_REQUIRED_ERROR}. Extends
+     * {@link IllegalStateException} so a caller that only knew "not registered" keeps working; the
+     * message starts with the code so any layer that forwards it keeps the token the UI matches on.
+     */
+    public static class CloudLinkPlanRequiredException extends IllegalStateException {
+        private final String planCode;
+
+        public CloudLinkPlanRequiredException(String planCode) {
+            super(PLAN_REQUIRED_ERROR + ": linking a self-hosted install to LiveContext Cloud requires a paid plan");
+            this.planCode = planCode;
+        }
+
+        /** Plan code the cloud reported (e.g. FREE), or null when it sent none. */
+        public String getPlanCode() {
+            return planCode;
         }
     }
 }

@@ -24,6 +24,12 @@ const CAPABILITIES: ReadonlyArray<{ key: string; labelKey: string; descriptionKe
     labelKey: 'vectorSearch.label',
     descriptionKey: 'vectorSearch.description',
   },
+  {
+    // NotificationEmailEntitlement.FEATURE_KEY in orchestrator-service is the backend spelling.
+    key: 'feature:notification_email',
+    labelKey: 'notificationEmail.label',
+    descriptionKey: 'notificationEmail.description',
+  },
 ];
 
 interface CapabilityPlanListProps {

@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { getClientLocale } from '@/lib/utils/locale';
-import { OwnKeyRowNote } from './OwnKeyRowNote';
 import { Coins, Bot, MessageSquare, Workflow, RefreshCw, Filter, ChevronLeft, ChevronRight, User, ArrowDownCircle } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
@@ -10,22 +9,26 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { quotaApi, CreditSummary, CreditHistoryPage } from '@/lib/api';
 import { useAuth } from '@/lib/providers/smart-providers';
 import UsageAnalyticsPanel from './components/UsageAnalyticsPanel';
-import { ProviderModelCell, useModelNameIndex } from './components/modelLabels';
+import { useModelNameIndex } from './components/modelLabels';
+import { UsageHistoryPanel } from './components/UsageHistoryPanel';
 import { isCeMode, creditsToUsd } from '@/lib/format-cost';
-import { formatUtcDateTime } from '@/lib/utils/dateFormatters';
 import { BalanceBreakdownCard, TopUpModal } from '@/components/billing';
 import { usePaygTiers } from '@/lib/hooks/smart-hooks-complete';
-import { useFreeAiCredits } from '@/lib/hooks/useFreeAiCredits';
 import { useCreditWallet } from '@/lib/hooks/useCreditWallet';
 import { useScheduledPlanChange } from '@/lib/hooks/useScheduledPlanChange';
 import { useCurrentOrgStore } from '@/lib/stores/current-org-store';
 import { cloudLinkService } from '@/lib/api/cloud-link.service';
 import { WorkspaceScopeSelect, ALL_WORKSPACES_SCOPE } from '@/components/settings/WorkspaceScopeSelect';
+import { useQuery } from '@tanstack/react-query';
+import { organizationApi } from '@/lib/api/organization-api';
 import {
   CREDIT_SOURCE_FILTERS,
   CREDIT_SOURCE_FILTERS_LOCAL_LEDGER,
   CREDIT_SOURCE_LABEL_KEYS,
 } from '@/lib/billing/creditSourceTypes';
+
+/** Rows per usage-history page; the table pads a short last page to it. */
+const HISTORY_PAGE_SIZE = 15;
 
 /**
  * Quota & Usage page.
@@ -72,7 +75,7 @@ function CeQuotaPage() {
       const effectiveOrgId = allWorkspaces ? null : scopeOrgId;
       const [summaryData, historyData, status] = await Promise.all([
         quotaApi.getSummary(effectiveOrgId, allWorkspaces).catch(() => null),
-        quotaApi.getHistory(currentPage, 15, filterType || undefined, effectiveOrgId, allWorkspaces).catch(() => null),
+        quotaApi.getHistory(currentPage, HISTORY_PAGE_SIZE, filterType || undefined, effectiveOrgId, allWorkspaces).catch(() => null),
         cloudLinkService.getStatus().catch(() => null),
       ]);
       if (summaryData) setSummary(summaryData);
@@ -83,7 +86,7 @@ function CeQuotaPage() {
         // enforced server-side - so no client source-type filter is sent here.
         const [cloud, cloudHistory] = await Promise.all([
           cloudLinkService.getCloudUsageSummary().catch(() => null),
-          cloudLinkService.getCloudUsageHistory(currentPage, 15).catch(() => null),
+          cloudLinkService.getCloudUsageHistory(currentPage, HISTORY_PAGE_SIZE).catch(() => null),
         ]);
         setCloudSummary(cloud);
         setUsingCloud(!!cloud);
@@ -138,23 +141,6 @@ function CeQuotaPage() {
     const formatted = abs.toLocaleString(getClientLocale(), { minimumFractionDigits: 2, maximumFractionDigits: fractionDigits });
     return `${dollars < 0 ? '-' : ''}$${formatted}`;
   };
-
-  const formatDate = (dateStr: string) => {
-    try {
-      return formatUtcDateTime(dateStr);
-    } catch { return dateStr; }
-  };
-
-  const formatTokens = (count: number | null) => {
-    if (count === null || count === undefined) return '-';
-    return count.toLocaleString(getClientLocale());
-  };
-
-  // IMAGE_GENERATION rows reuse promptTokens to store actualImageCount and leave
-  // completionTokens null - rendering "1 / -" in a column labeled "Tokens" is
-  // misleading. Image-gen has no token concept; render "-".
-  const isImageGenSourceType = (sourceType: string) =>
-    sourceType === 'IMAGE_GENERATION' || sourceType === 'IMAGE_GENERATION_BYOK';
 
   if (authLoading || loading) {
     return (
@@ -214,17 +200,16 @@ function CeQuotaPage() {
       />
 
       {/* Usage History */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-theme-secondary rounded-xl flex items-center justify-center">
-              <Coins className="w-5 h-5 text-theme-primary" />
-            </div>
-            <h2 className="text-lg font-semibold text-theme-primary">{t('history.title')}</h2>
-          </div>
-          {/* The cloud-mirrored view is a single source type (CE_LLM_RELAY), so the
-              per-type filter only makes sense against the local BYOK ledger. */}
-          {!usingCloud && (
+      <UsageHistoryPanel
+        history={history}
+        pageSize={HISTORY_PAGE_SIZE}
+        amountHeader={t('history.cost')}
+        formatAmount={formatCredits}
+        modelNames={modelNames}
+        toolbar={
+          // The cloud-mirrored view is a single source type (CE_LLM_RELAY), so the
+          // per-type filter only makes sense against the local BYOK ledger.
+          !usingCloud && (
             <Select value={filterType || 'ALL'} onValueChange={handleFilterChange}>
               <SelectTrigger
                 data-testid="usage-history-filter"
@@ -242,73 +227,24 @@ function CeQuotaPage() {
                 ))}
               </SelectContent>
             </Select>
-          )}
-        </div>
-
-        {/* History Table */}
-        <div className="overflow-x-auto rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700/50">
-          <table className="min-w-full" style={{ borderSpacing: '0' }}>
-            <thead className="bg-theme-secondary border-b border-slate-200 dark:border-slate-700/50">
-              <tr>
-                <th className="px-4 py-2.5 font-medium text-left text-theme-secondary text-sm">{t('history.date')}</th>
-                <th className="px-4 py-2.5 font-medium text-left text-theme-secondary text-sm">{t('history.type')}</th>
-                <th className="px-4 py-2.5 font-medium text-left text-theme-secondary text-sm">{t('history.providerModel')}</th>
-                <th className="px-4 py-2.5 font-medium text-left text-theme-secondary text-sm">{t('history.tokens')}</th>
-                <th className="px-4 py-2.5 font-medium text-right text-theme-secondary text-sm">{t('history.cost')}</th>
-                <th className="px-4 py-2.5 font-medium text-left text-theme-secondary text-sm">{t('history.description')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history?.content?.length > 0 ? (
-                history.content.map((entry) => (
-                  <tr key={entry.id} className="border-b border-slate-200 dark:border-slate-700/50 last:border-b-0 hover:bg-theme-secondary/50 transition-colors duration-150">
-                    <td className="px-4 py-2 text-sm text-theme-primary whitespace-nowrap">{formatDate(entry.createdAt)}</td>
-                    <td className="px-4 py-2 text-sm text-theme-primary">
-                      {CREDIT_SOURCE_LABEL_KEYS[entry.sourceType] ? t(CREDIT_SOURCE_LABEL_KEYS[entry.sourceType]) : entry.sourceType}
-                    </td>
-                    <td className="px-4 py-2 text-sm text-theme-primary">
-                      <ProviderModelCell provider={entry.provider} model={entry.model} index={modelNames} />
-                    </td>
-                    <td className="px-4 py-2 text-sm text-theme-primary whitespace-nowrap">
-                      {isImageGenSourceType(entry.sourceType) ? (
-                        '-'
-                      ) : entry.promptTokens !== null || entry.completionTokens !== null ? (
-                        <>{formatTokens(entry.promptTokens)}<span className="text-theme-tertiary mx-1">/</span>{formatTokens(entry.completionTokens)}{entry.cachedTokens ? <span className="text-theme-tertiary block">({t('history.cachedTokens', { count: formatTokens(entry.cachedTokens) })})</span> : null}</>
-                      ) : '-'}
-                    </td>
-                    <td className={`px-4 py-2 text-sm text-right font-medium whitespace-nowrap ${entry.amount > 0 ? 'text-emerald-500 dark:text-emerald-400' : 'text-theme-primary'}`}>
-                      {entry.amount < 0 ? '' : '+'}{formatCredits(entry.amount)}
-                      <OwnKeyRowNote entry={entry} />
-                    </td>
-                    <td className="px-4 py-2 text-sm text-theme-primary max-w-[200px] truncate" title={entry.description ?? undefined}>
-                      {entry.description || '-'}
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-sm text-theme-secondary">{t('history.noHistory')}</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination */}
-        {history && history.totalPages > 1 && (
-          <div className="flex items-center justify-between mt-3">
-            <p className="text-sm text-theme-secondary">{t('history.page', { current: history.number + 1, total: history.totalPages })}</p>
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setCurrentPage((p) => Math.max(0, p - 1))} disabled={history.number === 0}>
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setCurrentPage((p) => p + 1)} disabled={history.number >= history.totalPages - 1}>
-                <ChevronRight className="h-4 w-4" />
-              </Button>
+          )
+        }
+        footer={
+          history && history.totalPages > 1 && (
+            <div className="flex items-center justify-between mt-3">
+              <p className="text-sm text-theme-secondary">{t('history.page', { current: history.number + 1, total: history.totalPages })}</p>
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setCurrentPage((p) => Math.max(0, p - 1))} disabled={history.number === 0} aria-label={t('history.previousPage')}>
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setCurrentPage((p) => p + 1)} disabled={history.number >= history.totalPages - 1} aria-label={t('history.nextPage')}>
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )
+        }
+      />
     </div>
   );
 }
@@ -330,6 +266,13 @@ function QuotaPageInner() {
   const [currentPage, setCurrentPage] = useState(0);
   const [filterType, setFilterType] = useState<string>('');
   const [refreshing, setRefreshing] = useState(false);
+  // A page or filter change refetches while the current rows stay on screen (dimmed). Only the
+  // FIRST load and a workspace re-scope show the skeleton: swapping the whole page for it on
+  // every click threw the reader back to the top, away from the table they were paging.
+  const [historyLoading, setHistoryLoading] = useState(false);
+  // Bumped by every pager click. The pager asks for the page NEXT TO THE ONE SHOWN, which after a
+  // failed request can equal the page already requested; the bump makes that retry refetch.
+  const [historyReloadKey, setHistoryReloadKey] = useState(0);
   const [topUpOpen, setTopUpOpen] = useState(false);
   const requestSeqRef = useRef(0);
 
@@ -343,14 +286,11 @@ function QuotaPageInner() {
     balance: walletTotal,
     subBalance: walletSub,
     paygBalance: walletPayg,
-    aiBalance: walletAi,
-    hasAiAllowance,
     allowance,
     renewsAt,
     periodEndsAt,
   } = useCreditWallet();
   const { configured: paygConfigured } = usePaygTiers();
-  const freeAiCredits = useFreeAiCredits();
   // The wallet card promises the CURRENT tier's grant, so it must stand down when a different
   // tier is already scheduled to take effect. Same hook, same query key and same fail-open
   // posture as the Billing page, which suppresses its own rows under this condition.
@@ -361,10 +301,27 @@ function QuotaPageInner() {
   const monthlyPlan =
     allowance !== null ? { allowance, renewsAt, periodEndsAt, hasScheduledChange } : undefined;
 
+  // Same membership query (and cache key) as the workspace selector above.
+  const { data: workspaces } = useQuery({
+    queryKey: ['organizations', 'memberships'],
+    queryFn: () => organizationApi.getOrganizations(),
+    enabled: isAuthenticated,
+    staleTime: 5 * 60 * 1000,
+  });
+  // "How long the balance lasts" divides the ACCOUNT's balance by the spend the panel shows, so
+  // it is only honest when that spend is the whole account's: every workspace is the viewer's own
+  // (a guest's pace is not what drains the owner's wallet) and the view covers all of them. A
+  // single workspace's pace against the shared balance would promise days that are not there.
+  const enterableWorkspaces = (workspaces ?? []).filter((w) => !w.paused && !w.pendingDeletion);
+  const viewCoversAccount =
+    enterableWorkspaces.length > 0 &&
+    enterableWorkspaces.every((w) => w.currentUserRole === 'OWNER') &&
+    (scopeOrgId === ALL_WORKSPACES_SCOPE || enterableWorkspaces.length === 1);
+
   const fetchData = useCallback(async () => {
     const requestSeq = ++requestSeqRef.current;
     try {
-      setLoading(true);
+      setHistoryLoading(true);
       setError(null);
       // V366: "All workspaces" aggregates across every workspace; a real id slices
       // to that workspace. Routing/balance are unaffected (single owner-pays wallet).
@@ -372,7 +329,7 @@ function QuotaPageInner() {
       const effectiveOrgId = allWorkspaces ? null : scopeOrgId;
       const [summaryData, historyData] = await Promise.all([
         quotaApi.getSummary(effectiveOrgId, allWorkspaces),
-        quotaApi.getHistory(currentPage, 15, filterType || undefined, effectiveOrgId, allWorkspaces),
+        quotaApi.getHistory(currentPage, HISTORY_PAGE_SIZE, filterType || undefined, effectiveOrgId, allWorkspaces),
       ]);
       if (requestSeq !== requestSeqRef.current) return;
       setSummary(summaryData);
@@ -384,6 +341,7 @@ function QuotaPageInner() {
     } finally {
       if (requestSeq === requestSeqRef.current) {
         setLoading(false);
+        setHistoryLoading(false);
         setRefreshing(false);
       }
     }
@@ -410,11 +368,16 @@ function QuotaPageInner() {
     } else {
       setLoading(false);
     }
-  }, [authLoading, isAuthenticated, fetchData]);
+  }, [authLoading, isAuthenticated, fetchData, historyReloadKey]);
 
   const handleRefresh = () => {
     setRefreshing(true);
     fetchData();
+  };
+
+  const goToPage = (page: number) => {
+    setCurrentPage(page);
+    setHistoryReloadKey((k) => k + 1);
   };
 
   const handleFilterChange = (value: string) => {
@@ -430,25 +393,6 @@ function QuotaPageInner() {
     const sign = value < 0 ? '-' : '';
     return isCeMode ? `${sign}$${formatted}` : `${sign}${formatted}`;
   };
-
-  const formatDate = (dateStr: string) => {
-    try {
-      return formatUtcDateTime(dateStr);
-    } catch {
-      return dateStr;
-    }
-  };
-
-  const formatTokens = (count: number | null) => {
-    if (count === null || count === undefined) return '-';
-    return count.toLocaleString(getClientLocale());
-  };
-
-  // IMAGE_GENERATION rows reuse promptTokens to store actualImageCount and leave
-  // completionTokens null - rendering "1 / -" in a column labeled "Tokens" is
-  // misleading. Image-gen has no token concept; render "-".
-  const isImageGenSourceType = (sourceType: string) =>
-    sourceType === 'IMAGE_GENERATION' || sourceType === 'IMAGE_GENERATION_BYOK';
 
   // The four kinds of spend that get a summary card. A deliberate SUBSET - four cards is the
   // layout - but each is named from the shared map rather than restated here, so the card, the
@@ -468,8 +412,8 @@ function QuotaPageInner() {
           <div className="h-6 bg-theme-tertiary rounded w-1/3 mb-4" />
           <div className="h-3 bg-theme-tertiary rounded-full" />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {[1, 2, 3].map((i) => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map((i) => (
             <div key={i} className="bg-theme-secondary rounded-xl p-4 animate-pulse">
               <div className="h-5 bg-theme-tertiary rounded w-1/2 mb-2" />
               <div className="h-4 bg-theme-tertiary rounded w-1/3" />
@@ -517,11 +461,6 @@ function QuotaPageInner() {
         balance={walletTotal ?? summary?.balance ?? null}
         subBalance={walletSub}
         paygBalance={walletPayg}
-        aiBalance={walletAi}
-        // Both halves: the account is the shape that gets a pot AND the plan still
-        // configures one. An admin who sets included_ai_credits to 0 closes the free
-        // tier, and the card must then stop drawing a row for a pot nobody has.
-        hasAiAllowance={hasAiAllowance && freeAiCredits > 0}
         onTopUp={() => setTopUpOpen(true)}
         topUpEnabled={paygConfigured}
         monthlyPlan={monthlyPlan}
@@ -529,8 +468,9 @@ function QuotaPageInner() {
 
       <TopUpModal isOpen={topUpOpen} onClose={() => setTopUpOpen(false)} />
 
-      {/* Error state */}
-      {error && (
+      {/* Error state. Once the history table is on screen the error is shown beside it
+          instead: the reader is paging down there and would never see a banner up here. */}
+      {error && !history && (
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
           <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
         </div>
@@ -573,26 +513,28 @@ function QuotaPageInner() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* The four kinds of spend sit on one row from `lg` (the settings column is ~750px
+            there, ~175px a card), two by two from `sm`, stacked on a phone. The label shares
+            the icon's line so the amount gets the full card width: it is never truncated, a
+            clipped number reads as a wrong one. */}
+        <div data-testid="usage-breakdown-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {breakdownCards.map((card) => {
             const Icon = card.icon;
             const data = summary?.breakdownByType?.[card.key];
             return (
-              <div key={card.key} className="bg-theme-secondary rounded-xl p-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-theme-tertiary rounded-xl flex items-center justify-center">
-                    <Icon className="w-5 h-5 text-theme-primary" />
+              <div key={card.key} className="bg-theme-secondary rounded-xl p-4 min-w-0">
+                <div className="flex items-center gap-2 min-w-0 mb-2">
+                  <div className="w-8 h-8 bg-theme-tertiary rounded-lg flex items-center justify-center shrink-0">
+                    <Icon className="w-4 h-4 text-theme-primary" />
                   </div>
-                  <div>
-                    <p className="text-xl font-semibold text-theme-primary">
-                      {data ? formatCredits(data.credits) : '0'}
-                    </p>
-                    <p className="text-sm text-theme-secondary">{t(card.labelKey)}</p>
-                    <p className="text-xs text-theme-tertiary">
-                      {t('breakdown.executions', { count: data?.count ?? 0 })}
-                    </p>
-                  </div>
+                  <p className="text-sm text-theme-secondary truncate" title={t(card.labelKey)}>{t(card.labelKey)}</p>
                 </div>
+                <p className="text-xl font-semibold text-theme-primary tabular-nums break-words">
+                  {data ? formatCredits(data.credits) : '0'}
+                </p>
+                <p className="text-xs text-theme-tertiary">
+                  {t('breakdown.executions', { count: data?.count ?? 0 })}
+                </p>
               </div>
             );
           })}
@@ -600,16 +542,17 @@ function QuotaPageInner() {
       </div>
 
       {/* Usage History */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-theme-secondary rounded-xl flex items-center justify-center">
-              <Coins className="w-5 h-5 text-theme-primary" />
-            </div>
-            <h2 className="text-lg font-semibold text-theme-primary">{t('history.title')}</h2>
-          </div>
-
-          <Select value={filterType || 'ALL'} onValueChange={handleFilterChange}>
+      <UsageHistoryPanel
+        history={history}
+        busy={historyLoading}
+        pageSize={HISTORY_PAGE_SIZE}
+        amountHeader={isCeMode ? t('history.cost') : t('history.credits')}
+        formatAmount={formatCredits}
+        modelNames={modelNames}
+        toolbar={
+          // Locked while a page is in flight, like the pager: a filter picked then would
+          // label rows that belong to the previous one if its request failed.
+          <Select value={filterType || 'ALL'} onValueChange={handleFilterChange} disabled={historyLoading}>
             <SelectTrigger
               data-testid="usage-history-filter"
               className="w-full sm:w-[180px] h-9 min-h-0 py-0 text-sm"
@@ -625,106 +568,54 @@ function QuotaPageInner() {
               ))}
             </SelectContent>
           </Select>
-        </div>
+        }
+        footer={
+          <>
+            {error && history && (
+              <p className="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">{error}</p>
+            )}
 
-        {/* History Table - markdown-style */}
-        <div className="overflow-x-auto rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700/50">
-          <table className="min-w-full" style={{ borderSpacing: '0' }}>
-            <thead className="bg-theme-secondary border-b border-slate-200 dark:border-slate-700/50">
-              <tr>
-                <th className="px-4 py-2.5 font-medium text-left text-theme-secondary text-sm">{t('history.date')}</th>
-                <th className="px-4 py-2.5 font-medium text-left text-theme-secondary text-sm">{t('history.type')}</th>
-                <th className="px-4 py-2.5 font-medium text-left text-theme-secondary text-sm">{t('history.providerModel')}</th>
-                <th className="px-4 py-2.5 font-medium text-left text-theme-secondary text-sm">{t('history.tokens')}</th>
-                <th className="px-4 py-2.5 font-medium text-right text-theme-secondary text-sm">{isCeMode ? t('history.cost') : t('history.credits')}</th>
-                <th className="px-4 py-2.5 font-medium text-left text-theme-secondary text-sm">{t('history.description')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history?.content?.length > 0 ? (
-                history.content.map((entry) => (
-                  <tr key={entry.id} className="border-b border-slate-200 dark:border-slate-700/50 last:border-b-0 hover:bg-theme-secondary/50 transition-colors duration-150">
-                    <td className="px-4 py-2 text-sm text-theme-primary whitespace-nowrap">
-                      {formatDate(entry.createdAt)}
-                    </td>
-                    <td className="px-4 py-2 text-sm text-theme-primary">
-                      {CREDIT_SOURCE_LABEL_KEYS[entry.sourceType] ? t(CREDIT_SOURCE_LABEL_KEYS[entry.sourceType]) : entry.sourceType}
-                    </td>
-                    <td className="px-4 py-2 text-sm text-theme-primary">
-                      <ProviderModelCell provider={entry.provider} model={entry.model} index={modelNames} />
-                    </td>
-                    <td className="px-4 py-2 text-sm text-theme-primary whitespace-nowrap">
-                      {isImageGenSourceType(entry.sourceType) ? (
-                        '-'
-                      ) : entry.promptTokens !== null || entry.completionTokens !== null ? (
-                        <>
-                          {formatTokens(entry.promptTokens)}
-                          <span className="text-theme-tertiary mx-1">/</span>
-                          {formatTokens(entry.completionTokens)}
-                          {entry.cachedTokens ? (
-                            <span className="text-theme-tertiary block">
-                              ({t('history.cachedTokens', { count: formatTokens(entry.cachedTokens) })})
-                            </span>
-                          ) : null}
-                        </>
-                      ) : (
-                        '-'
-                      )}
-                    </td>
-                    <td className={`px-4 py-2 text-sm text-right font-medium whitespace-nowrap ${entry.amount > 0 ? 'text-emerald-500 dark:text-emerald-400' : 'text-theme-primary'}`}>
-                      {entry.amount < 0 ? '' : '+'}{formatCredits(entry.amount)}
-                      <OwnKeyRowNote entry={entry} />
-                    </td>
-                    <td className="px-4 py-2 text-sm text-theme-primary max-w-[200px] truncate" title={entry.description ?? undefined}>
-                      {entry.description || '-'}
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-sm text-theme-secondary">
-                    {t('history.noHistory')}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination */}
-        {history && history.totalPages > 1 && (
-          <div className="flex items-center justify-between mt-3">
-            <p className="text-sm text-theme-secondary">
-              {t('history.page', { current: history.number + 1, total: history.totalPages })}
-            </p>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 p-0"
-                onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
-                disabled={history.number === 0}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 p-0"
-                onClick={() => setCurrentPage((p) => p + 1)}
-                disabled={history.number >= history.totalPages - 1}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
+            {/* Pagination - relative to the page SHOWN, never to the one requested, so a failed
+                request cannot leave the pager a page ahead of its rows; and both buttons wait for
+                the page in flight, so a double click cannot skip a page or run past the end. */}
+            {history && history.totalPages > 1 && (
+              <div className="flex items-center justify-between mt-3">
+                <p className="text-sm text-theme-secondary">
+                  {t('history.page', { current: history.number + 1, total: history.totalPages })}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0"
+                    onClick={() => goToPage(Math.max(0, history.number - 1))}
+                    disabled={historyLoading || history.number === 0}
+                    aria-label={t('history.previousPage')}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0"
+                    onClick={() => goToPage(history.number + 1)}
+                    disabled={historyLoading || history.number >= history.totalPages - 1}
+                    aria-label={t('history.nextPage')}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
+        }
+      />
 
       {/* Usage Analytics */}
       <UsageAnalyticsPanel
         orgId={scopeOrgId === ALL_WORKSPACES_SCOPE ? null : scopeOrgId}
         allWorkspaces={scopeOrgId === ALL_WORKSPACES_SCOPE}
+        balance={viewCoversAccount ? walletTotal ?? summary?.balance ?? null : null}
       />
     </div>
   );

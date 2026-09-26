@@ -280,6 +280,7 @@
     "description": "发现并使用强大的MCP（模型上下文协议）工具，用于您的开发和自动化项目。"
   },
   "common": {
+    "infoAbout": "关于{label}的说明",
     "addToFavorites": "添加到收藏",
     "removeFromFavorites": "从收藏中移除",
     "favoriteErrorTitle": "无法更新收藏",
@@ -463,7 +464,16 @@
     "sso": {
       "redirecting": "正在重定向到您的 SSO 提供商...",
       "invalid": "此 SSO 链接无效。",
-      "failed": "无法启动 SSO 登录。"
+      "failed": "无法启动 SSO 登录。",
+      "title": "使用 SSO 登录",
+      "subtitle": "输入您的工作邮箱，我们会将您转到公司的登录页面。",
+      "emailLabel": "工作邮箱",
+      "emailPlaceholder": "you@company.com",
+      "continue": "继续",
+      "looking": "正在查找您的公司...",
+      "notFound": "此邮箱域名未配置 SSO。请使用其他方式登录，或联系您的工作区管理员。",
+      "lookupFailed": "暂时无法检查 SSO，请稍后重试。",
+      "ceUnavailable": "SSO 登录仅在 LiveContext Cloud 上可用。"
     },
     "login": {
       "createAccount": "创建一个",
@@ -847,11 +857,15 @@
           "WEBHOOK_TRIGGER_DISABLED": "{count, plural, one {# 个已禁用触发器} other {# 个已禁用触发器}}",
           "CRED_EXPIRED": "{count, plural, one {# 个已过期凭证} other {# 个已过期凭证}}",
           "AGENT_TASK_ASSIGNED": "{count, plural, one {# 项任务已分配} other {# 项任务已分配}}",
+          "AGENT_AUTHORIZATION_UNREACHABLE": "{count, plural, one {# 个智能体无人可询问} other {# 个智能体无人可询问}}",
           "AGENT_TASK_AWAITING_REVIEW": "{count, plural, one {# 项任务待你审核} other {# 项任务待你审核}}",
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# 个低额度桥接} other {# 个低额度桥接}}",
           "ORG_INVITATION_PENDING": "{count, plural, one {# 个组织邀请} other {# 个组织邀请}}",
           "BADGE_UNLOCKED": "{count, plural, other {# 项新成就}}",
-          "BUDGET_REACHED": "{count, plural, other {# 个工作流因支出上限而停止}}"
+          "BUDGET_REACHED": "{count, plural, other {# 个工作流因支出上限而停止}}",
+          "CREDIT_LOW": "{count, plural, one {点数即将用完} other {点数即将用完 (#)}}",
+          "CREDIT_EXHAUSTED": "{count, plural, one {点数已用完} other {点数已用完 (#)}}",
+          "AGENT_TASK_MENTION": "{count, plural, one {# 条任务提及} other {# 条任务提及}}"
         },
         "approvalOpen": "打开",
         "approvalReview": "审核",
@@ -906,13 +920,15 @@
         "weeklyReport": "生成每周 KPI 报告",
         "weeklyReportPrompt": "每周五下午 5 点，从我们的数据库中提取 MRR、注册数、流失率和活跃用户，构建一份包含周环比变化的每周 KPI 报告，并以 PDF 形式通过电子邮件发送给领导团队。"
       },
-      "title1": "我能帮您什么？",
-      "title2": "今天我们要自动化什么？",
-      "title3": "有想法吗？让我们构建它。",
-      "title4": "需要一个真正可用的工作流吗？",
-      "title5": "什么在消耗您的时间？让我们来解决它。"
+      "title1": "你好，我是 Orbi。我能帮您什么？",
+      "title2": "今天想让 Orbi 帮您自动化什么？",
+      "title3": "有想法吗？Orbi 和您一起把它做出来。",
+      "title4": "需要一个真正可用的工作流吗？问问 Orbi。",
+      "title5": "什么在消耗您的时间？交给 Orbi 吧。"
     },
     "placeholder": "输入消息...",
+    "placeholderOrbi": "给 Orbi 发消息...",
+    "orbiPoke": "戳一下 Orbi",
     "send": "发送",
     "stop": "停止",
     "stopGenerating": "停止生成",
@@ -960,7 +976,7 @@
       "close": "Close"
     },
     "toolSelector": {
-      "title": "选择 MCP 工具",
+      "title": "选择集成工具",
       "smartModeHint": "智能模式：将根据您的请求自动选择工具",
       "manualModeHint": "手动模式：选择您要使用的工具",
       "display": "Display:",
@@ -1140,8 +1156,6 @@
       "passageNumber": "第 {number} 次执行",
       "inputData": "输入数据",
       "outputData": "输出数据",
-      "readOnly": "只读",
-      "loadedPassages": "已加载 {loaded} / {total} 次执行",
       "loadMore": "加载更多执行记录",
       "loading": "正在加载日志…",
       "emptyEpoch": "本轮次尚未执行任何节点。",
@@ -2215,7 +2229,7 @@
     "insufficientCredits": {
       "title": "您的积分已用完",
       "description": "您的积分余额不足以执行此操作。请升级您的计划以继续。",
-      "freeScopeNote": "在免费方案中，每月额度用于运行工作流。对话与智能体则从独立的每月 AI 额度中扣除，仅限向免费方案开放的模型；额度用完后需要充值或升级到付费方案。",
+      "freeScopeNote": "在免费方案中，每月积分可用于运行工作流，以及在标记为“免费”的模型上进行对话和智能体轮次。其他模型、联网搜索和图像生成需要充值或升级到付费方案。",
       "recommended": "推荐",
       "currentPlan": "当前计划",
       "upgrade": "升级",
@@ -2229,7 +2243,6 @@
       },
       "features": {
         "freeCredits": "每月 1,000 积分",
-        "freeAiCredits": "每月 {credits} 个 AI 积分",
         "freeConcurrent": "1 个并发执行",
         "freeStorage": "100 MB 存储空间",
         "creditsPerMonth": "积分/月",
@@ -2259,7 +2272,6 @@
       "features": {
         "freeStorage": "100 MB 存储空间",
         "freeCredits": "每月 1,000 积分",
-        "freeAiCredits": "每月 {credits} 个 AI 积分",
         "starterStorage": "1 GB 存储空间",
         "starterCredits": "每月 5,000 积分",
         "proStorage": "10 GB 存储空间",
@@ -2531,7 +2543,7 @@
       "resetCredits": "重置信用额度",
       "resetCreditsConfirm": "确定要重置此代理的已消耗信用额度吗？",
       "systemPromptInfo": "定义代理行为、个性和能力的指令。",
-      "toolsLabel": "可用工具",
+      "toolsLabel": "可用的集成工具",
       "selectAll": "全选",
       "deselectAll": "取消全选",
       "grant_none": "无",
@@ -2544,8 +2556,8 @@
       "noToolsAvailable": "暂无可用工具",
       "searchApis": "搜索 API...",
       "noSearchResults": "未找到结果",
-      "allTools": "所有工具",
-      "noTools": "无工具",
+      "allTools": "所有集成工具",
+      "noTools": "无集成工具",
       "offTools": "完全无工具",
       "customToolsOption": "自定义选择（最多 {max} 个）",
       "customTools": "自定义（{count}/{max}）",
@@ -2663,9 +2675,19 @@
       "noResourcesAvailable": "暂无可用资源",
       "resourcesSelected": "{count} / {total} 个资源",
       "advancedModeLabel": "高级模式",
-      "sensitiveActionsLabel": "敏感操作",
-      "sensitiveActionsAlwaysOn": "始终允许",
-      "sensitiveActionsLockedInfo": "智能体执行敏感操作（安装、执行、子智能体、目录调用）时无需请求授权。对智能体而言此项始终开启，且无法关闭。",
+      "sensitiveActionsAskHint": "安装、执行、子智能体和目录调用：请求会发送到此目标。没有回复时，该操作不会执行。",
+      "sensitiveActionsSaveFailed": "智能体已保存，但其敏感操作设置未能保存。",
+      "channelCardTitle": "在应用外联系我",
+      "channelCardDescription": "它在你不在时运行，其授权请求和问题会通过聊天发送给你",
+      "channelCardUnavailable": "请先连接一个渠道（Telegram、Slack、WhatsApp、Discord 或 Teams）",
+      "channelCardConnect": "连接渠道",
+      "channelCardLoading": "正在加载你的渠道...",
+      "channelCardError": "无法加载你的渠道，请稍后重试。",
+      "armedWithoutChannel": "此智能体会在敏感操作前征求许可，但没有可用于询问的渠道：这些操作不会执行。",
+      "armedWithoutChannelDisarm": "不再询问",
+      "sensitiveActionsAskLabel": "执行敏感操作前征求我的许可",
+      "channelDestinationLabel": "目标",
+      "channelDestinationHint": "当它在你不在时运行（按计划或通过 webhook），它的请求和问题会发送到这里。",
       "reasoningEffortInherit": "继承（模型默认）",
       "reasoningEffortLabel": "推理强度",
       "scheduleCreateFailed": "保存计划失败",
@@ -3032,13 +3054,10 @@
       "title": "欢迎礼物",
       "subtitle": "您正在使用 Free 方案。以下是它每月为您提供的额度。",
       "features": {
-        "freeCredits": "工作流积分",
-        "freeCreditsDetail": "用于运行您的工作流。",
-        "freeAiCredits": "AI 积分",
-        "freeAiCreditsDetail": "用于支付聊天和智能体的对话，适用于向免费方案开放的模型。"
+        "freeCredits": "每月积分",
+        "freeCreditsDetail": "可用于运行工作流，以及在标记为“免费”的模型上进行对话和智能体轮次。"
       },
-      "renewal": "两者都会在每月初自动补满，无需绑定银行卡。",
-      "renewalSingle": "它们会在每月初自动补满，无需绑定银行卡。",
+      "renewal": "它们会在每月初自动补满，无需绑定银行卡。",
       "cta": "开始探索"
     },
     "suggestedApps": {
@@ -3117,6 +3136,10 @@
       "vectorSearch": {
         "label": "向量列与相似度搜索",
         "description": "嵌入列、相似度查询（RAG），以及安装使用它们的市场应用。嵌入共享托管数据库，因此门槛是付费套餐而非完全开放。"
+      },
+      "notificationEmail": {
+        "label": "邮件提醒",
+        "description": "通过邮件接收工作流失败、账户问题和任务提醒。点数提醒在所有套餐中都会通过邮件发送，因为点数用完的免费账户必须知道。频道提醒和应用内铃铛从不受限。"
       }
     }
   },
@@ -3389,7 +3412,8 @@
       "hideKey": "隐藏密钥",
       "useMyKey": "使用我的密钥",
       "noProviders": "目前该工作区没有可使用您自己密钥的提供商。",
-      "requiresPlan": "自有密钥从 {plan} 套餐开始提供。",
+      "requiresPlan": "自有密钥从 {plan} 套餐开始",
+      "requiresPlanDescription": "在此之前，已保存的密钥为只读，您的智能体继续使用 LiveContext 密钥运行。升级到 {plan} 即可改用您自己的密钥。",
       "upgrade": "升级到 {plan}",
       "fees": {
         "open": "查看每回合价格",
@@ -3515,7 +3539,10 @@
       "bundleShipOff": "CE：停用",
       "bundleShipTooltip": "CE 捆绑包为此模型分发的状态，独立于启用开关：自动跟随开关，启用即使此处停用也向自托管安装分发启用状态，停用则分发停用状态。",
       "freeTierChip": "免费",
-      "freeTierTooltip": "免费方案的账户能否将其每月 AI 额度用于此模型。该额度是独立的一份，与用于工作流的每月额度分开。默认关闭：此时免费账户需要充值才能使用该模型。",
+      "freeTierTooltip": "免费方案账户是否可以用每月积分支付此模型上的对话和智能体轮次。默认关闭：此时免费账户需要充值才能使用此模型。",
+      "replacedBy": "替换为",
+      "replacementDefault": "平台默认模型",
+      "replacementTooltip": "此模型被停用期间，仍在使用它的智能体、工作流节点和对话将改用此模型运行（并按此模型计费）。平台默认 = 未选择模型时平台使用的模型。",
       "notConfigured": "未配置",
       "notConfiguredTooltip": "已列出以便排序和定价，但尚不可用：此提供商没有 API 密钥（或云中继无法运行它）。添加密钥后即可使用。",
       "custom": "自定义",
@@ -3555,12 +3582,45 @@
       "filterByProvider": "按提供商筛选",
       "selectAll": "选择所有显示的模型",
       "selectRow": "选择",
+      "rankEdit": "修改排名",
       "bulkSelected": "已选 {count} 个",
       "bulkEnable": "启用",
       "bulkDisable": "关闭",
       "bulkTier": "设置档位",
       "bulkClear": "清除选择",
       "bulkPartial": "{action}：{total} 个中有 {failed} 个失败。{reason}",
+      "releasedOn": "发布于 {date}",
+      "releaseUnknown": "发布日期未知",
+      "sort": {
+        "label": "排序方式",
+        "rank": "按排名",
+        "oldest": "最早发布优先",
+        "newest": "最新发布优先"
+      },
+      "retire": {
+        "action": "归档",
+        "bulk": "归档所选 ({count})",
+        "confirmOne": "归档“{name}”？它将从所有模型列表和选择器中移除，不再发送给自托管实例，任何目录刷新都无法让它恢复。之后可以在“已归档模型”中恢复。",
+        "confirmMany": "归档 {count} 个模型？它们将从所有模型列表和选择器中移除，不再发送给自托管实例，任何目录刷新都无法让它们恢复。之后可以在“已归档模型”中恢复。",
+        "doneTitle": "已归档模型：{count}",
+        "doneMessage": "它们已从所有模型列表中移除。如需再次使用，可在“已归档模型”中恢复。",
+        "error": "无法归档这些模型"
+      },
+      "retired": {
+        "title": "已归档模型",
+        "titleWithCount": "已归档模型 ({count})",
+        "hint": "已归档的模型在所有地方都会隐藏，目录刷新也不会让它们恢复。恢复后的模型默认处于禁用状态。",
+        "empty": "没有已归档的模型。",
+        "loadError": "无法加载已归档的模型。",
+        "restore": "恢复",
+        "restoreSelected": "恢复所选 ({count})",
+        "selectAll": "选择所有已归档模型",
+        "selectRow": "选择",
+        "retiredOn": "归档于 {date}",
+        "restoredTitle": "已恢复模型：{count}",
+        "restoredMessage": "恢复后的模型处于禁用状态。请在模型列表中启用它，之后才能使用。",
+        "restoreError": "无法恢复这些模型"
+      },
       "searchPlaceholder": "搜索模型",
       "filterByTier": "档位",
       "allTiers": "所有档位",
@@ -3581,7 +3641,7 @@
         "tpmGlobal": "TPM 全局",
         "tpmTenant": "每租户 TPM"
       },
-      "freeTierNoneOpen": "此标签页下没有向免费方案开放任何模型，因此定价页所宣传的每月 AI 额度无法支付此类运行：免费账户会被拒绝。请用上方的“免费”标记至少开放一个模型。"
+      "freeTierNoneOpen": "此标签页下没有向免费方案开放任何模型，因此定价页为对话和智能体宣传的每月积分无法支付此类运行：免费账户会被拒绝。请用上方的“免费”标记至少开放一个模型。"
     },
     "adminOnlyBadge": "仅限管理员",
     "modelBundle": {
@@ -3716,7 +3776,7 @@
       "sameAsBilled": "与计费模型相同",
       "appliesTo": "适用于",
       "scopeAll": "所有场景",
-      "scopeChat": "通用聊天",
+      "scopeChat": "Orbi",
       "scopeWorkflow": "工作流节点",
       "scopeWebhook": "Webhook",
       "scopeWidget": "小组件",
@@ -4053,7 +4113,8 @@
         "customFieldRequired": "{field} 为必填项",
         "saveFailed": "保存凭据失败",
         "oauthConfigFailed": "保存 OAuth 配置失败",
-        "oauthUrlsRequired": "授权 URL 和 Token URL 为必填项"
+        "oauthUrlsRequired": "授权 URL 和 Token URL 为必填项",
+        "byokScopesRequired": "请至少勾选一个权限范围。"
       },
       "oauthConfig": {
         "authUrl": "授权 URL",
@@ -4067,7 +4128,9 @@
         "scopes": "Scopes",
         "scopesPlaceholder": "例如 read write（以空格分隔）",
         "tokenUrl": "Token URL",
-        "tokenUrlPlaceholder": "https://provider.com/oauth/token"
+        "tokenUrlPlaceholder": "https://provider.com/oauth/token",
+        "scopePickerTitle": "要请求的权限范围",
+        "scopePickerHint": "取消勾选您的 OAuth 应用未获得的权限范围。只要应用缺少其中任何一个权限范围，TikTok、Figma 和 LinkedIn 就会拒绝整个连接。需要未勾选权限范围的工具会指出缺少哪一个：在此处勾选它，保存，然后重新连接。"
       },
       "platformKey": {
         "title": "您不必添加密钥",
@@ -5134,11 +5197,8 @@
         "processing": "处理中…"
       },
       "features": {
-        "creditsFree": "每月 1,000 工作流积分",
-        "creditsFreeTooltip": "这些积分只用于运行你的工作流：一次运行每执行一个节点消耗 **{nodeCredits} 积分**。对话与智能体从不动用它们，它们取自下面那一行的独立月度 AI 额度；联网搜索、图像生成这类附加能力则需要单独充值。",
-        "aiCreditsFree": "每月 {credits} 个 AI 额度",
-        "aiCreditsFreeUnknown": "每月 AI 额度",
-        "aiCreditsFreeTooltip": "在面向免费方案开放的模型上，对话与智能体轮次另有一份独立的月度额度：与已配置的智能体进行一次简短交流（含其全部上下文），在 {basisModel} 这类轻量模型上约需 **{exchangeCredits} 积分**。这是基于真实用量的估算，不是上限。它每月自动补满，且从不动用你的工作流积分。",
+        "creditsFree": "每月 1,000 积分",
+        "creditsFreeTooltip": "工作流和智能体共用同一份月度积分：一次运行每执行一个节点消耗 **{nodeCredits} 积分**，与已配置的智能体在 {basisModel} 这类轻量模型上进行一次简短交流约需 **{exchangeCredits} 积分**（基于真实用量的估算，不是上限）。标记为“免费”的模型上的对话与智能体由这份积分承担；其他模型以及联网搜索、图像生成这类附加能力充值后仍可使用。每月重置。",
         "creditsPerMonth": "每月 {credits} 积分",
         "creditsCustom": "定制积分",
         "users1": "1 个用户",
@@ -5173,6 +5233,8 @@
         "cePlatformCredsTooltip": "与云关联的自托管实例可使用 LiveContext 平台凭据运行第三方集成，无需自备 API 密钥。每次调用收取少量积分加价。",
         "vectorSearch": "云端向量搜索与 RAG",
         "vectorSearchTooltip": "在您的表格上使用嵌入列与相似度搜索，用于检索增强生成。嵌入共享托管数据库，因此在云端从 Pro 套餐起提供。自托管安装在所有套餐中均可使用，因为它拥有自己的数据库。",
+        "emailAlerts": "邮件提醒",
+        "emailAlertsTooltip": "失败的工作流、账户问题和分配给你的任务会发送到你的邮箱，且不会刷屏：工作流出错时发一封邮件，每天最多提醒一次，恢复时再发一封。所有套餐都能在应用内和已连接的聊天频道中收到这些提醒，并通过邮件接收点数提醒。",
         "browserAgent": "浏览器智能体节点",
         "browserAgentTooltip": "由大模型驱动真实浏览器：浏览网页、填写表单、从没有 API 的站点提取结构化数据。它在整个任务期间占用一个浏览器会话，这在共享基础设施上是稀缺资源，因此从 Pro 套餐起提供。",
         "priorityExecution": "优先执行",
@@ -5223,8 +5285,6 @@
       },
       "dimensions": {
         "credits": "每月积分",
-        "aiCredits": "AI 额度",
-        "aiCreditsTooltip": "在面向免费方案开放的模型上，对话与智能体轮次另有一份独立的月度额度：与已配置的智能体进行一次简短交流（含其全部上下文），在 {basisModel} 这类轻量模型上约需 **{exchangeCredits} 积分**。这是基于真实用量的估算，不是上限。付费方案不需要这份额度：它们的积分本就可用于智能体，而免费方案的积分只能运行工作流。",
         "nodes": "节点与集成",
         "nodesTooltip": "受限的只有发布：向 YouTube、Instagram、TikTok、X、LinkedIn 及另外 13 个平台发布内容需要付费套餐。从这些平台读取内容，以及其他所有节点，在每个套餐中都可用。",
         "concurrent": "并发执行",
@@ -5238,9 +5298,7 @@
         "creditsTooltip": "与已配置的智能体进行一次简短交流（含其全部上下文），在 {basisModel} 这类轻量模型上约需 **{exchangeCredits} 积分**。这是基于真实用量的估算，不是上限；顶级模型的花费更高。"
       },
       "values": {
-        "creditsFree": "1,000 / 月（工作流）",
-        "aiCreditsFree": "{credits} / 月",
-        "aiCreditsIncluded": "已包含在额度内",
+        "creditsFree": "1,000 / 月",
         "creditsDynamic": "{credits} 起 / 月",
         "creditsCustom": "定制",
         "nodesCore": "除发布外全部",
@@ -5479,7 +5537,9 @@
       "title": "存储使用量",
       "usedOf": "已使用 {used} / {total}",
       "thisWorkspace": "此工作区已使用 {used}",
-      "accountPool": "账户：{total} 中已使用 {used}，由所有工作区共享"
+      "accountPool": "账户：{total} 中已使用 {used}，由所有工作区共享",
+      "available": "可用 {free}",
+      "softLimitMarker": "达到 80% 时提醒"
     },
     "breakdown": {
       "title": "存储明细",
@@ -5487,7 +5547,8 @@
       "workflows": "工作流",
       "tables": "数据表",
       "files": "文件",
-      "noData": "暂无明细数据。点击重新计算以生成。"
+      "noData": "暂无明细数据。点击重新计算以生成。",
+      "itemsAvg": "{count} 项，平均 {avg}"
     },
     "trends": {
       "title": "使用趋势",
@@ -5496,7 +5557,16 @@
       "period30d": "30天",
       "period90d": "90天",
       "noHistory": "趋势数据将在首次每日快照后显示。",
-      "totalItems": "{count} 项"
+      "totalItems": "{count} 项",
+      "growth": "本周期变化",
+      "growthRange": "从 {from} 到 {to}",
+      "perDay": "日均",
+      "fullIn": "预计占满",
+      "days": "约 {count} 天",
+      "overYear": "超过一年",
+      "notFilling": "未在增长",
+      "alreadyFull": "已占满",
+      "atThisPace": "按本周期的速度"
     },
     "categories": {
       "STEP_OUTPUTS": "步骤输出",
@@ -5530,6 +5600,12 @@
       "title": "需要更多存储？",
       "description": "升级套餐以获取更多存储空间。",
       "button": "升级套餐"
+    },
+    "largest": {
+      "title": "最大的项目",
+      "subtitle": "此工作区中占用空间最多的内容",
+      "openFiles": "打开文件",
+      "unnamed": "未命名"
     }
   },
   "runMode": {
@@ -5731,8 +5807,12 @@
       "noHistory": "暂无使用历史",
       "filterAll": "所有类型",
       "page": "第 {current} 页，共 {total} 页",
+      "previousPage": "上一页",
+      "nextPage": "下一页",
       "cost": "成本（$）",
-      "ownKeyBadge": "您的密钥"
+      "ownKeyBadge": "您的密钥",
+      "fullscreen": "全屏",
+      "exitFullscreen": "退出全屏"
     },
     "error": {
       "loadFailed": "加载配额数据失败"
@@ -5759,7 +5839,26 @@
       "mostActive": "最活跃",
       "noData": "此周期暂无使用数据",
       "credits": "积分",
-      "totalCost": "总成本"
+      "totalCost": "总成本",
+      "chartMetric": "图表指标",
+      "metricCredits": "积分",
+      "metricCost": "费用",
+      "metricCalls": "调用",
+      "metricTokens": "令牌",
+      "calls": "调用次数",
+      "tokens": "令牌数",
+      "avgPerCall": "每次调用平均",
+      "vsPrevious": "较上一周期",
+      "peakOn": "{date} 峰值 {amount}",
+      "runway": "余额可用",
+      "runwayDays": "约 {count} 天",
+      "runwayOverYear": "超过一年",
+      "runwayHint": "按本周期的日均消耗计算",
+      "byType": "按类型",
+      "byModel": "按模型",
+      "filterOn": "按此行筛选图表",
+      "noModel": "无模型（API 调用和工具）",
+      "otherModels": "其他 {count} 个模型"
     },
     "upgrade": {
       "title": "使用分析",
@@ -5787,7 +5886,41 @@
     "capExceededTokens": "Member quota exceeded: {consumed} of {cap} LLM tokens used this cycle. Ask your organization admin to raise this cap.",
     "capExceededGeneric": "Member quota exceeded ({dimension}): {consumed} of {cap}. Ask your organization admin to raise this cap."
   },
+  "twoFactorNudge": {
+    "title": "用双重身份验证保护你的团队",
+    "body": "你是这个团队工作区的所有者，掌管它的已连接应用、凭据和账单。开启双重身份验证，这样仅凭被盗的密码也无法登录。",
+    "cta": "开启双重身份验证",
+    "dismiss": "关闭"
+  },
   "settings": {
+    "twoFactor": {
+      "title": "双重身份验证",
+      "description": "每次登录时，除密码或 Google、GitHub 登录外，还需输入身份验证器应用中的验证码。",
+      "stateOn": "已开启",
+      "stateOff": "未开启",
+      "loading": "正在加载双重身份验证状态...",
+      "error": "无法加载你的双重身份验证状态，请重试。",
+      "requiredForAdmins": "管理员账号必须启用双重身份验证，因此无法移除你最后一个身份验证器应用。",
+      "requiredForAdminsPending": "管理员账号必须启用双重身份验证。请现在开启，否则下次登录时会要求你设置。",
+      "unnamedDevice": "身份验证器应用",
+      "addedOn": "添加于 {date}",
+      "remove": "移除",
+      "turnOn": "开启",
+      "unavailable": "此账号无法使用双重身份验证。",
+      "recoveryTitle": "恢复码",
+      "recoveryNone": "尚未生成。如果手机丢失，你将无法登录。",
+      "recoveryLeft": "剩余 {remaining}/{total} 个。手机丢失时每个恢复码可使用一次。",
+      "recoveryLow": "仅剩 {remaining} 个。请在用完之前生成新的一组。",
+      "recoverySet": "已设置。手机丢失时每个恢复码可使用一次。",
+      "recoveryCreate": "生成恢复码",
+      "recoveryRegenerate": "重新生成恢复码"
+    },
+    "emailUpdates": {
+      "title": "邮件通知",
+      "description": "不定期发送 LiveContext 的最新动态和优惠信息。与您账户相关的邮件（例如入门指引或额度用尽提醒）无论如何都会发送。",
+      "label": "通过电子邮件向我发送 LiveContext 的最新动态和优惠信息。一键即可退订。",
+      "error": "无法加载或保存您的邮件偏好，请重试。"
+    },
     "nav": {
       "scrollLeft": "向左滚动",
       "scrollRight": "向右滚动"
@@ -5796,8 +5929,8 @@
     "mustBeLoggedIn": "您必须登录才能访问设置。",
     "signIn": "登录",
     "agentDefaults": {
-      "title": "智能体与聊天默认设置",
-      "subtitle": "应用于此工作区中每个智能体对话和每个新建通用聊天的默认选项。"
+      "title": "智能体与 Orbi 默认设置",
+      "subtitle": "应用于此工作区中每个智能体对话和每个新建 Orbi 对话的默认选项。"
     },
     "bundles": {
       "title": "目录包",
@@ -5805,7 +5938,7 @@
       "adminOnly": "只有平台管理员可以管理目录包。",
       "adminOnlyBadge": "仅限管理员",
       "tabModels": "模型目录",
-      "tabApis": "MCP 目录",
+      "tabApis": "集成目录",
       "tabSkills": "技能",
       "skills": {
         "loading": "正在加载技能包...",
@@ -5990,6 +6123,7 @@
       "email": "邮箱",
       "accountType": "账户类型",
       "localAccount": "邮箱/密码",
+      "ssoAccount": "单点登录 (SAML)",
       "plan": "计划",
       "editBio": "编辑简介",
       "editBioDesc": "告诉我们关于您的信息",
@@ -6058,7 +6192,7 @@
       "chatDefaultsLink": "打开智能体与聊天设置",
       "savePreferences": "保存偏好设置",
       "workflowLayoutDirection": "工作流布局",
-      "workflowLayoutDirectionDescription": "工作流编辑器的阅读方向：从左到右，或从上到下。决定节点连接和按钮的位置，以及自动布局排列图形的方式。",
+      "workflowLayoutDirectionDescription": "新工作流的起始方向：从左到右，或从上到下。已保存的工作流保留自己的方向，可在其画布设置中更改；市场会按作者的排列方式展示每个工作流。",
       "workflowLayoutDirectionHorizontal": "从左到右",
       "workflowLayoutDirectionVertical": "从上到下",
       "inspectorDock": "节点检查器",
@@ -6071,15 +6205,60 @@
       "inspectorOpenModeAdvanced": "设置、输入与输出"
     },
     "notifications": {
-      "title": "通知偏好设置",
-      "description": "管理我们如何联系您",
-      "email": "邮件通知",
-      "emailDescription": "通过邮件接收重要通知",
-      "comingSoon": "即将推出",
-      "push": "推送通知",
-      "pushDescription": "在浏览器中接收推送通知",
-      "marketing": "营销邮件",
-      "marketingDescription": "接收关于新工具和功能的信息"
+      "title": "通知",
+      "description": "选择在此工作区中每类提醒通过哪里送达你。应用内的铃铛始终会收到全部内容。",
+      "antiSpamInfo": "提醒如何受限",
+      "antiSpamTitle": "不会消息轰炸",
+      "antiSpamBreaks": "工作流出错时发送一条消息。",
+      "antiSpamReminder": "持续出错期间每天最多提醒一次。",
+      "antiSpamRecovered": "恢复正常时发送一条消息。",
+      "antiSpamDigest": "账户和任务动态合并在每日摘要中发送。",
+      "antiSpamCap": "一个收件箱每天最多收到 10 条提醒。",
+      "loading": "正在加载你的通知设置...",
+      "loadFailed": "无法加载你的通知设置。",
+      "retry": "重试",
+      "saveFailed": "该更改未保存，请重试。",
+      "channelTitle": "渠道提醒的发送位置",
+      "channelIntro": "渠道提醒会发送到此工作区的默认聊天。",
+      "channelPrivacy": "此聊天中的所有成员都能看到这些提醒。",
+      "channelLoading": "正在加载已连接的聊天...",
+      "channelLoadFailed": "无法加载已连接的聊天。",
+      "noDefault": "此工作区已连接聊天，但没有设置默认聊天，因此不会发送渠道提醒。",
+      "defaultOff": "此工作区的默认聊天已停用，因此不会发送渠道提醒。",
+      "changeLabel": "将提醒发送到其他聊天",
+      "changeHint": "您选择的聊天将成为此工作区的默认聊天：跟随默认设置的审批和智能体提问也会发送到那里。",
+      "changeFailed": "默认聊天未更改，请重试。",
+      "changeReadOnly": "您在此工作区的角色为只读：只有可以编辑它的成员才能选择其他聊天。",
+      "manageChannels": "管理渠道",
+      "noChannel": "此工作区尚未连接聊天频道，因此频道选项暂不可用。",
+      "connectChannel": "连接频道",
+      "emailNeedsPlan": "{plan} 套餐起包含邮件提醒。",
+      "personScoped": "适用于你的所有工作区。频道提醒会发送到你个人工作区的频道。",
+      "deliversNothing": "此选项下不会向应用外发送任何内容，铃铛中仍会显示。",
+      "topics": {
+        "failures": {
+          "title": "工作流失败",
+          "description": "你拥有的某个生产工作流失败，或因达到支出上限而停止。"
+        },
+        "credits": {
+          "title": "点数",
+          "description": "你的点数即将用完或已用完。"
+        },
+        "account": {
+          "title": "账户问题",
+          "description": "某个凭据已过期或某个触发器被关闭。通过每日摘要发送。"
+        },
+        "tasks": {
+          "title": "任务",
+          "description": "有任务分配给你、提到你或等待你审核。通过每日摘要发送。"
+        }
+      },
+      "delivery": {
+        "both": "邮件和频道",
+        "email": "邮件",
+        "channel": "频道",
+        "off": "仅铃铛"
+      }
     },
     "advanced": {
       "deleteTitle": "删除账户",
@@ -6225,7 +6404,28 @@
           "ERROR": "Error",
           "DISABLED": "Disabled"
         },
-        "loading": "正在加载"
+        "loading": "正在加载",
+        "domains": {
+          "title": "已验证的邮箱域名",
+          "description": "只有此工作区已证明拥有的域名下的邮箱地址才能使用 SSO 登录。\"使用 SSO 登录\"会将这些地址转到您的身份提供商。",
+          "noneVerified": "尚无已验证的域名：在验证域名之前，任何人都无法通过 SSO 登录。",
+          "verified": "已验证",
+          "pending": "待验证",
+          "verify": "立即检查",
+          "remove": "移除 {domain}",
+          "verifiedAt": "验证于 {date}",
+          "instructions": "请在您的 DNS 服务商处添加此 TXT 记录，然后点击立即检查。DNS 变更可能需要几分钟才能生效。",
+          "recordName": "名称",
+          "recordValue": "值",
+          "copy": "复制",
+          "copied": "已复制",
+          "lastChecked": "上次检查于 {date}",
+          "placeholder": "company.com",
+          "add": "添加域名",
+          "verifiedNotice": "{domain} 已验证。",
+          "notFoundYet": "尚未找到 {domain} 的 TXT 记录。请检查记录，几分钟后再试。",
+          "error": "出错了，请重试。"
+        }
       },
       "cancel": "取消",
       "save": "保存",
@@ -6682,7 +6882,6 @@
       "loopOutput": "循环输出",
       "previousIterationExplanation": "This output comes from the previous loop iteration. You can use it to build logic that accumulates or depends on results from earlier iterations.",
       "loopOutputExplanation": "This output comes from this node in the loop. After the loop completes, it contains the result from the last iteration.",
-      "clickForInfo": "点击查看更多信息",
       "goToNode": "转到 {label}",
       "downloadFile": "下载文件",
       "clickToExpand": "点击展开",
@@ -6738,7 +6937,7 @@
         "signalBrowserTakeover": "浏览器接管",
         "signalExpiresAt": "{date} 过期",
         "noResolvedParams": "没有已解析的参数",
-        "configuredParamsTitle": "启动参数"
+        "configuredParamsTitle": "配置的值（未解析）"
       },
       "moreActions": "更多操作",
       "nodeOutputs": "节点输出",
@@ -7391,6 +7590,7 @@
       "scopeLatestEpoch": "该步骤的最新一轮"
     },
     "canvas": {
+      "validationSummary": "{errors} 个错误，{warnings} 个警告",
       "portSingleTargetHint": "此输出已连接。一个端口只能连到一个节点--添加 Fork 节点即可并行运行多个节点。",
       "loadErrorTitle": "无法加载此工作流",
       "loadErrorMessage": "工作流加载失败。请检查网络连接后重试。",
@@ -7425,9 +7625,12 @@
       "mockRun": "模拟运行",
       "followRunningNode": "跟随正在运行的步骤",
       "stopFollowingRunningNode": "停止跟随正在运行的步骤",
+      "followAgentBuild": "跟随智能体添加的节点",
+      "stopFollowingAgentBuild": "停止跟随智能体添加的节点",
       "runsHistory": "运行历史",
       "backToHome": "返回首页",
       "searchPlaceholder": "搜索 {context}...",
+      "searchIntegrations": "搜索集成...",
       "frequentlyUsed": "常用",
       "coreTriggers": "核心触发器",
       "appTriggerShortcuts": "应用触发器",
@@ -7444,7 +7647,7 @@
       "paletteCategories": "分类",
       "paletteNodes": "节点",
       "paletteIntegrations": "集成",
-      "mcp": "MCP",
+      "mcp": "集成",
       "noApiFound": "未找到 API",
       "noToolFound": "未找到工具",
       "createTable": "创建表",
@@ -8006,7 +8209,6 @@
       },
       "manual": {
         "configuration": "手动配置",
-        "moreInfo": "点击查看更多信息",
         "title": "手动触发器",
         "description": "点击播放按钮手动触发工作流。",
         "availableOutputs": "可用输出：",
@@ -8015,7 +8217,6 @@
       },
       "workflowTrigger": {
         "configuration": "工作流配置",
-        "moreInfo": "点击查看更多信息",
         "title": "工作流触发器",
         "description": "当另一个工作流完成并调用它时，触发此工作流。",
         "availableOutputs": "可用输出：",
@@ -8025,7 +8226,6 @@
       },
       "chat": {
         "configuration": "聊天配置",
-        "moreInfo": "点击查看更多信息",
         "title": "聊天触发器",
         "description": "通过聊天面板中的对话输入触发工作流。",
         "availableOutputs": "可用输出：",
@@ -8082,7 +8282,7 @@
         "promptPlaceholder": "您希望该智能体做什么？",
         "tools": "Tools",
         "allTools": "所有工具",
-        "connectToolsHint": "连接 MCP 工具以限制智能体可使用的工具",
+        "connectToolsHint": "连接集成工具以限制智能体可以使用的工具",
         "systemPrompt": "系统提示词",
         "systemPromptPlaceholder": "你是一个乐于助人的助手...",
         "systemPromptInfo": "定义智能体行为和个性的指令。",
@@ -8097,9 +8297,32 @@
         "addRule": "Add rule",
         "inputToValidate": "要验证的输入",
         "validationRules": "验证规则",
-        "rulesDescription": "为护栏定义验证规则。",
+        "rulesDescription": "关键词、正则、长度、个人信息（地址除外）、竞争对手和自定义规则会被精确检查，无需调用 AI。其他规则由 AI 模型判断。",
         "temperatureDescription": "控制验证的随机性。值越低，验证越严格。",
-        "maxTokensDescription": "AI 验证响应的最大 Token 数。"
+        "maxTokensDescription": "AI 验证响应的最大 Token 数。",
+        "mode": "模式",
+        "keywordModeBlock": "拦截这些关键词",
+        "keywordModeAllow": "仅当出现其中一个关键词时才允许",
+        "regexModeRequire": "内容必须匹配",
+        "regexModeBlock": "内容不得包含任何匹配",
+        "engineDeterministic": "精确检查，无需调用 AI",
+        "engineModel": "由 AI 模型判断",
+        "typeDescriptions": {
+          "pii_detection": "精确检测邮箱、电话号码、社会安全号和银行卡号；地址由 AI 判断",
+          "toxic_language": "由 AI 判断：冒犯性或有害内容",
+          "prompt_injection": "由 AI 判断：试图绕过指令的行为",
+          "keyword_filter": "拦截或要求完整单词形式的关键词",
+          "regex_pattern": "内容必须匹配某个正则，或不得包含匹配",
+          "length_check": "以字符计的最小和最大长度",
+          "topic_restriction": "由 AI 判断：内容不得涉及的话题",
+          "competitor_mention": "拦截列出的名称（完整单词）",
+          "custom": "布尔表达式：#input 表示内容，true 表示有效"
+        },
+        "actionDescriptions": {
+          "block": "检查失败，并转到 Fail 输出",
+          "sanitize": "检查失败，并在清理后的输出中将匹配文本替换为 [REDACTED]",
+          "flag": "检查失败，并列出违规项，不做遮盖"
+        }
       },
       "addField": "添加字段",
       "browserAgent": {
@@ -8149,7 +8372,6 @@
         "bootstrapTitle": "需要引导",
         "configuration": "错误触发器配置",
         "description": "当被监视的工作流运行以 FAILED 或 PARTIAL_SUCCESS 结束时触发。这涵盖任何类型的故障：未处理的节点异常（HTTP 错误、代码崩溃、工具抛出）、stop_on_error 节点、超时，或当某些分支失败但其他分支成功时的部分成功。用它来提醒运维、记录故障、重试或回退。防循环：如果此处理程序本身失败，则不会触发进一步的错误处理程序。",
-        "moreInfo": "点击了解更多信息",
         "title": "错误触发器",
         "watchedWorkflow": "被监视的工作流",
         "watchedWorkflowHint": "每当上面的工作流失败时，此处理程序就会触发 - 任何节点异常、stop_on_error、超时或部分成功都会以 FAILED/PARTIAL_SUCCESS 结束并在此处调度。"
@@ -8177,24 +8399,31 @@
         "delegation": {
           "title": "通过外部渠道委派",
           "infoTitle": "外部渠道委派",
-          "infoBody": "将待处理的审批以带有批准和拒绝按钮的消息形式发送到 Telegram 聊天。点按按钮即可完成审批，与应用内决定并行有效。",
+          "infoBody": "将待处理的审批以带有批准和拒绝按钮的消息发送到 Telegram、Slack、Discord、WhatsApp 或 Microsoft Teams。按下按钮即可完成审批，应用内的决定同样有效。",
           "infoOptional": "可选。审批同时仍可在应用内处理。",
           "enableAria": "启用外部渠道委派",
           "channelLabel": "渠道",
-          "credentialHint": "可选。留空则使用您的默认 Telegram 凭据发送，或选择一个以使用特定机器人。",
-          "chatIdLabel": "聊天 ID",
-          "chatIdHint": "目标聊天或群组的 ID。支持 '{{...}}' 表达式。",
+          "credentialHint": "可选。留空则使用在“设置 > 渠道”中连接的 {channel} 账号，或选择一个指定账号。",
+          "chatIdLabel": "目标",
+          "chatIdHint": "可选。留空则发送到在“设置 > 渠道”中连接的 {channel} 目标。支持表达式。",
           "messageLabel": "消息模板",
           "messagePlaceholder": "默认为审批上下文",
           "imageLabel": "图片",
           "imageHint": "可选。另一个节点的文件输出（例如界面截图）或图片 URL。设置后，消息将作为照片发送，文本作为图片说明。支持 '{{...}}' 表达式。",
           "allowedUserIdsLabel": "允许的用户 ID",
-          "allowedUserIdsHint": "以逗号分隔的 Telegram 用户 ID。留空则聊天中的任何人都可以决定。",
+          "allowedUserIdsHint": "以逗号分隔的 {channel} 用户 ID。留空则聊天中的任何人都可以决定。",
           "approveLabelLabel": "批准按钮",
           "approveLabelPlaceholder": "✅ 批准",
           "rejectLabelLabel": "拒绝按钮",
           "rejectLabelPlaceholder": "❌ 拒绝",
-          "buttonLabelsHint": "可选。批准和拒绝按钮的自定义文字。留空则保留默认值。仅按钮文字改变。支持 '{{...}}' 表达式。"
+          "buttonLabelsHint": "可选。批准和拒绝按钮的自定义文字。留空则保留默认值。仅按钮文字改变。支持 '{{...}}' 表达式。",
+          "channelHint": "只需连接一次服务，审批即可送达，无需其他设置。",
+          "manageChannels": "管理渠道",
+          "destinationLabel": "目标",
+          "destinationHint": "像选择凭据一样选择：工作区默认、已连接的目标，或手动指定的其他聊天。",
+          "customDestination": "其他聊天（高级）",
+          "credentialDescription": "用于发送审批消息的 {channel} 账号",
+          "anonymousPressNote": "在 {channel} 上，按钮是指向确认页面的链接，该页面无法识别是谁打开的，因此聊天中的任何人都可以决定。"
         }
       }
     },
@@ -8422,7 +8651,6 @@
     },
     "availableOutputs": "可用输出：",
     "manageInSettings": "在设置中管理",
-    "moreInfo": "更多信息",
     "loadingEndpoint": "正在加载端点...",
     "formUrl": "表单 URL",
     "copyUrl": "复制 URL",
@@ -8553,18 +8781,19 @@
       "description": "创建您的第一个数据表开始使用，或查看下方的引导教程"
     },
     "mcp": {
-      "title": "MCP",
-      "searchPlaceholder": "按名称、描述搜索MCP...",
-      "addButton": "添加MCP",
-      "noMCPsFound": "未找到MCP",
-      "addFirstMCP": "从市场添加您的第一个MCP",
-      "noMatchingMCPs": "没有MCP匹配您的搜索条件",
+      "title": "集成",
+      "count": "{count} 个集成",
+      "searchPlaceholder": "按名称、描述搜索集成...",
+      "addButton": "添加集成",
+      "noMCPsFound": "未找到集成",
+      "addFirstMCP": "从市场添加您的第一个集成",
+      "noMatchingMCPs": "没有符合搜索条件的集成",
       "deleteCount": "删除 ({count})",
-      "deleteTitle": "删除MCP",
-      "deleteConfirmation": "您确定要删除 {count} 个MCP吗？此操作无法撤销。",
+      "deleteTitle": "删除集成",
+      "deleteConfirmation": "确定要删除 {count} 个集成吗？此操作无法撤销。",
       "tools": "工具",
       "added": "已添加",
-      "deleteFailed": "无法删除所选的 MCP。"
+      "deleteFailed": "无法删除所选集成。"
     }
   },
   "fleetInspector": {
@@ -8747,9 +8976,9 @@
     "error": "错误",
     "repeat": "重复",
     "overview": "概览",
-    "overviewDesc": "所有代理和普通聊天的综合指标",
-    "generalChat": "普通聊天",
-    "generalChatDesc": "未选择代理的对话指标",
+    "overviewDesc": "所有代理和 Orbi 的综合指标",
+    "generalChat": "Orbi",
+    "generalChatDesc": "与 Orbi 的对话（未选择代理）",
     "classify": "Classify",
     "guardrail": "Guardrail",
     "agentPerformanceDesc": "每个代理的执行统计",
@@ -8818,6 +9047,7 @@
     "deniedMessage": "连接请求已取消"
   },
   "onboarding": {
+    "marketingConsent": "通过电子邮件向我发送 LiveContext 的最新动态和优惠信息。一键即可退订。",
     "emailVerification": {
       "title": "验证您的邮箱",
       "description": "我们已向 {email} 发送了一个 6 位数验证码",
@@ -8830,7 +9060,8 @@
       "tooManyAttempts": "尝试次数过多，请申请新的验证码",
       "rateLimited": "请求过于频繁，请稍候",
       "codeSent": "验证码已发送！",
-      "verified": "邮箱已验证！"
+      "verified": "邮箱已验证！",
+      "wrongEmail": "不是您的邮箱？退出登录"
     },
     "step": "步骤",
     "of": "/",
@@ -8846,7 +9077,7 @@
     "displayNameHint": "仅限字母、数字、空格和连字符。对其他用户可见。",
     "displayNameRequired": "显示名称是必需的",
     "displayNameTaken": "此显示名称已被使用",
-    "displayNameCheckError": "无法验证显示名称可用性",
+    "displayNameCheckError": "无法验证显示名称可用性，您仍可以继续。",
     "role": "您的角色是什么？",
     "customRolePlaceholder": "输入您的角色...",
     "companySize": "公司规模",
@@ -8859,10 +9090,13 @@
     "step3Required": "请回答这两个问题以完成",
     "loginRequired": "需要登录",
     "loginRequiredDescription": "请登录以完成您的个人资料设置",
+    "ceLinkLoginRequiredDescription": "登录或创建 LiveContext Cloud 账户，以连接您的自托管实例。",
     "signIn": "登录",
     "errorTitle": "出了点问题",
     "errorDescription": "我们无法加载引导页面。请重试。",
     "retry": "重试",
+    "signOut": "退出登录",
+    "signOutFailed": "无法退出登录，请重试。",
     "step1": {
       "title": "让我们了解您",
       "description": "告诉我们一些关于您的信息以个性化您的体验"
@@ -9307,8 +9541,6 @@
       },
       "breakdown": {
         "payg": "PAYG 充值",
-        "ai": "AI 额度",
-        "aiHint": "用于智能体与对话，仅限向免费方案开放的模型。每月自动恢复。",
         "paygHintPersists": "在续订周期之间保留。",
         "sub": "订阅"
       },
@@ -9347,8 +9579,7 @@
     "freeTier": {
       "label": "免费",
       "srLabel": "已包含在您的套餐中",
-      "tooltip": "已包含在您的 Free 套餐中：每月的 AI 额度可支付使用此模型的聊天和智能体回合。",
-      "tooltipWithCredits": "已包含在您的 Free 套餐中：每月 {credits} 个 AI 积分，可支付使用此模型的聊天和智能体回合。"
+      "tooltip": "已包含在您的 Free 套餐中：每月积分可支付使用此模型的聊天和智能体回合。"
     },
     "upgradeRequired": {
       "label": "需要付费积分",
@@ -9357,6 +9588,7 @@
       "cta": "查看套餐或充值"
     },
     "planLocked": {
+      "infoLabel": "为什么此节点需要 {plan} 方案",
       "nodeNotice": "该节点从 {plan} 套餐起可用。在升级前，工作流运行到此节点会失败。"
     }
   },
@@ -10704,9 +10936,9 @@
     "dismiss": "知道了",
     "learnMore": "查看全部更新",
     "latest": {
-      "title": "类型安全的分类器，以及你自己的模型密钥",
-      "body": "Classify 节点现在可以跑在决策模型上：TypeSafe Jev 直接从你定义的类别里挑出一个，并给每个类别一个概率，而不是让对话模型写出类别的名字。类别不变，分支不变，只换一次提供方。同时，你自己的提供方密钥现在驱动一切，智能体、对话和节点都一样：每一次执行都绑定到它真正用过的那把密钥；提供方在运行途中拒绝你的密钥时，你读到的是它自己的原话，而不是我们的转述。",
-      "mediaAlt": "并排的两个图标：TypeSafe 标志，配文为 Classify 的类型化引擎；以及一把钥匙，配文为用于智能体、对话和节点的你自己的密钥"
+      "title": "智能体可以在你的聊天应用中联系你",
+      "body": "智能体、审批步骤和无人值守的运行不再停在一张没人看到的卡片上。在设置中的 Channels 页面连接 Telegram、Slack、Discord、WhatsApp 或 Microsoft Teams，问题或审批请求就会出现在你平时阅读的聊天中：你从那里作答，运行随即继续。通知也可以离开应用，通过渠道或电子邮件发送，并使用你的语言（在云端，电子邮件通知从 Starter 套餐开始提供）。渠道也可以手动连接，无需助手，也不消耗积分。",
+      "mediaAlt": "并排的两个图标：一个聊天气泡，说明为支持 Telegram、Slack、Discord、WhatsApp 和 Teams 的聊天渠道；一个铃铛，说明为通过电子邮件或渠道发送的通知"
     }
   },
   "optionalComponents": {
@@ -11444,7 +11676,10 @@
       "NIGHT_OWL": "夜班",
       "PUBLISHER": "发布",
       "SHARER": "分享",
-      "POPULARITY": "影响力"
+      "POPULARITY": "影响力",
+      "REACHABLE": "随时可达",
+      "MULTICHANNEL": "多渠道",
+      "REMOTE_CONTROL": "远程掌控"
     },
     "tier": {
       "BRONZE": "青铜",
@@ -11465,7 +11700,10 @@
       "PUBLICATIONS_PUBLISHED": "在市场中发布 {count} 个作品",
       "PUBLICATIONS_PUBLIC": "将 {count} 个作品设为公开",
       "PUBLICATION_USES": "您的作品被安装 {count} 次",
-      "DAYS_UNTIL_JOIN_CUTOFF": "早期加入 LiveContext"
+      "DAYS_UNTIL_JOIN_CUTOFF": "早期加入 LiveContext",
+      "CHANNELS_CONNECTED": "连接 {count} 个能收到你消息的聊天目标",
+      "CHANNEL_SERVICES": "在 {count} 个不同的聊天服务上可被联系",
+      "REMOTE_DECISIONS": "在聊天中而非应用中获得 {count} 次对你请求的回复"
     },
     "item": {
       "founder_2026": {
@@ -11615,6 +11853,30 @@
       },
       "popularity_50000": {
         "name": "家喻户晓"
+      },
+      "reachable_1": {
+        "name": "触手可及"
+      },
+      "reachable_5": {
+        "name": "无处不在"
+      },
+      "multichannel_2": {
+        "name": "双线畅通"
+      },
+      "multichannel_4": {
+        "name": "总机"
+      },
+      "remote_1": {
+        "name": "第一通电话"
+      },
+      "remote_25": {
+        "name": "口袋驾驶员"
+      },
+      "remote_250": {
+        "name": "控制室"
+      },
+      "remote_2500": {
+        "name": "指挥中心"
       }
     }
   },
@@ -11720,10 +11982,6 @@
       "clear": "清除"
     },
     "untitled": "未命名作品",
-    "look": {
-      "toDarkroom": "切换到暗房视图",
-      "toApp": "返回应用视图"
-    },
     "thread": {
       "loading": "正在加载该创作记录"
     },
@@ -12002,9 +12260,9 @@
       },
       "hero": {
         "eyebrow": "AI 自动化平台",
-        "titleLineOne": "一条消息<u>进</u>。",
-        "titleLineTwo": "一个能跑的自动化<u>出</u>。",
-        "lead": "{integrations} 个集成，支持所有主流大模型，云端或自托管。以可视化方式、在对话中或用代码构建、部署并运行你的智能体，并在任意环节加入人工确认。",
+        "titleLineOne": "只说<u>一次</u>。",
+        "titleLineTwo": "从此<u>不必</u>再做。",
+        "lead": "一条消息即可搭建你的自动化，一切尽在你的掌控：每一步都有记录、可审计，密钥加密存储，在任何环节加入人工确认。AI 只用在值得的地方，比让智能体一步步摸索更省钱。",
         "startFree": "免费开始"
       },
       "integrations": {
@@ -12049,8 +12307,8 @@
         "lead": "选一个方案，选你的额度档位，再给每个智能体设一个它不能超过的预算。你只为实际运行付费，没有隐藏费用，也不会突然超支。"
       },
       "finalCta": {
-        "titleLineOne": "别再在一堆工具之间来回切换。",
-        "titleLineTwo": "从一个开始。",
+        "titleLineOne": "Build prod.",
+        "titleLineTwo": "Not god.",
         "lead": "和它对话，用它搭建，用它交付，派它替你把活干完。"
       }
     },
@@ -15023,6 +15281,254 @@
       "running": "运行中",
       "waiting": "等待中",
       "completed": "已完成"
+    }
+  },
+  "channelsSettings": {
+    "title": "渠道",
+    "subtitle": "当你不在应用中时，你的审批和智能体的问题会通过这里送达。",
+    "loading": "加载中...",
+    "error": "出错了",
+    "connectedTitle": "已连接的目标",
+    "emptyTitle": "尚未连接任何渠道",
+    "emptyHint": "在下方选择一个服务，助手会引导你完成设置。",
+    "defaultBadge": "默认",
+    "statusWorking": "正常：已有消息送达此处。",
+    "statusNotDelivered": "尚未生效：还没有任何消息送达此处。",
+    "sentByBot": "由机器人 @{bot} 发送",
+    "restricted": "{count, plural, other {# 人可以决定}}",
+    "troubleshoot": "让助手修复",
+    "makeDefault": "设为默认",
+    "disconnect": "断开连接",
+    "disconnectTitle": "断开此目标？",
+    "disconnectMessage": "审批和问题将不再发送到 {chat}。如果它是默认目标，默认将转移到另一个可用的目标。",
+    "servicesTitle": "添加渠道",
+    "servicesHint": "每个服务都需要在其自己的控制台中完成几个步骤。助手会逐步带你完成，途中你可以随时向它提问。",
+    "setUpWithAssistant": "让助手帮我设置",
+    "setUpManually": "手动设置",
+    "readOnly": "你在此工作区的角色为只读：你可以查看它的联系方式，但不能修改。",
+    "manual": {
+      "title": "连接 {channel}",
+      "intro": "与助手相同的步骤，以表单形式完成。不消耗积分。",
+      "stepAccount": "您的 {channel} 账户",
+      "stepHello": "先给您的机器人打个招呼",
+      "stepDestination": "消息发往哪里",
+      "accountSetting": {
+        "publicKey": {
+          "label": "应用公钥",
+          "placeholder": "64 个十六进制字符",
+          "hint": "Developer Portal，你的应用，General Information，Public Key。"
+        },
+        "phoneNumberId": {
+          "label": "电话号码 ID",
+          "placeholder": "106540352242922",
+          "hint": "Meta 应用，WhatsApp，API Setup，Phone number ID（不是电话号码本身）。"
+        }
+      },
+      "findChats": "查找我的聊天",
+      "findChatsHint": {
+        "telegram": "列出最近给您的机器人发过消息的聊天。仅在机器人连接之前有效：连接后请在下方填写 ID。",
+        "slack": "列出邀请了该应用的频道以及您的私信。",
+        "discord": "列出您的机器人所在服务器的频道。",
+        "teams": "列出您的 Teams 聊天。"
+      },
+      "chatIdLabel": "聊天 ID",
+      "noChats": {
+        "telegram": "还没有聊天：给你的机器人发一条消息（或把它加入群组），然后再次查找。",
+        "slack": "没有找到频道：在频道中用 /invite 邀请该应用，然后再次查找。",
+        "discord": "没有找到频道：把机器人加入你的服务器，然后再次查找。",
+        "teams": "没有找到聊天：在 Teams 中开始一个聊天，然后再次查找。"
+      },
+      "phoneLabel": "电话号码",
+      "phoneHint": "使用国际格式。对方必须在过去 24 小时内给你的 WhatsApp 号码发过消息。",
+      "connect": "连接并发送测试消息",
+      "close": "关闭",
+      "delivered": "已连接：测试消息已送达。",
+      "notDelivered": "已保存，但测试消息未送达。",
+      "remaining": "服务中还有一步",
+      "typeChatLabel": "或输入聊天 ID",
+      "typeChatHint": {
+        "telegram": "发给群组：填写群组 ID，以 -100 开头。发给公开频道：@名称。切勿填写您自己机器人的 @名称。",
+        "slack": "用于列表中没有的频道：它的 ID（右键点击频道，查看频道详情，在最底部）。",
+        "discord": "用于列表中没有的频道：它的 ID（开启开发者模式，右键点击频道，复制频道 ID）。",
+        "teams": "用于列表中没有的聊天：它的会话 ID。"
+      },
+      "chatIdPlaceholder": {
+        "telegram": "123456789、-1001234567890 或 @mychannel",
+        "slack": "C0123456789",
+        "discord": "123456789012345678",
+        "whatsapp": "+8613812345678",
+        "teams": "19:abc123@thread.v2"
+      },
+      "accountSettingKept": "此账户已连接：留空即可保留已保存的值。",
+      "details": "详情：",
+      "copy": "复制",
+      "copied": "已复制",
+      "tryAgain": "重试",
+      "listUnavailable": {
+        "telegram": "Telegram 无法列出已连接机器人的聊天。请在下方直接填写目标：发给自己时，填写给 @userinfobot 发消息后它回复的数字。"
+      },
+      "botItself": "这是您的机器人（@{bot}）：机器人无法给自己发消息。请填写应接收消息的聊天，例如 @userinfobot 提供的您的数字 ID。",
+      "guide": {
+        "openBot": "在 Telegram 中打开 @{bot}",
+        "askAssistant": "让 Orbi 引导我",
+        "links": {
+          "botFather": "打开 @BotFather",
+          "userInfoBot": "获取我的 ID（@userinfobot）",
+          "discordPortal": "Discord 开发者门户",
+          "metaApps": "Meta 开发者平台"
+        },
+        "telegram": {
+          "1": "在 Telegram 中打开 @BotFather，发送 /newbot，并复制它给您的令牌。",
+          "2": "然后在下方连接该令牌。",
+          "3": "打开您的机器人并点击“开始”（群组：将机器人加入群组并在群里发一条消息）。机器人无法给从未给它发过消息的人发消息。",
+          "4": "填写要发送的聊天：发给自己时，填写您的数字 ID，给 @userinfobot 发消息后它会发给您。"
+        },
+        "slack": {
+          "1": "在下方连接 Slack，并在您的工作区中批准该应用。",
+          "2": "对于频道，在频道中输入 /invite 加应用名称。私信无需任何操作。",
+          "3": "通过“查找我的聊天”选择频道或会话。"
+        },
+        "discord": {
+          "1": "在 Discord 开发者门户中创建应用，打开 Bot 并复制其令牌。",
+          "2": "在 OAuth2 的 URL Generator 中勾选 bot 和 Send Messages，打开链接并将机器人添加到您的服务器。",
+          "3": "在下方粘贴令牌，并在其下的字段中填写 Public Key（General Information 页面）。",
+          "4": "选择频道，然后将连接后显示的 Interactions Endpoint URL 粘贴到 General Information 页面。"
+        },
+        "whatsapp": {
+          "1": "在您启用了 WhatsApp 的 Meta 应用中，打开 API Setup：记下 Phone number ID，并创建永久的 System User 令牌。",
+          "2": "在下方粘贴令牌，并在其下的字段中填写 Phone number ID。",
+          "3": "用将要回复的手机给您的企业号码发一条消息（WhatsApp 只允许在 24 小时内回复）。",
+          "4": "填写该手机号码，然后配置连接后显示的回调 URL 和验证令牌。"
+        },
+        "teams": {
+          "1": "在下方使用 Microsoft 登录。",
+          "2": "通过“查找我的聊天”选择聊天。",
+          "3": "消息以您的身份发布，Teams 不会就您自己的消息通知您：请选择其他人会阅读的聊天，或选择其他服务以便自己收到通知。"
+        }
+      }
+    },
+    "assistantUnavailable": "此处无法打开助手。请打开聊天并让它设置该渠道。",
+    "setupPrompt": "我希望我的审批和智能体的问题通过 {channel} 送达我。请一步一步引导我完成设置（渠道：{id}），并在每一步之后与我确认。",
+    "troubleshootPrompt": "我的 {channel} 渠道“{chat}”无法使用。最近的错误：{error}。请帮我找出原因并修复。",
+    "services": {
+      "telegram": {
+        "needs": "你自己的机器人，用 BotFather 两分钟即可创建。",
+        "time": "约 3 分钟"
+      },
+      "slack": {
+        "needs": "无需创建任何东西：在你的工作区中授权该应用并选择一个频道。",
+        "time": "约 1 分钟"
+      },
+      "discord": {
+        "needs": "你自己的 Discord 应用和机器人，以及一个需要粘贴到其门户中的 URL。",
+        "time": "约 5 分钟"
+      },
+      "whatsapp": {
+        "needs": "一个启用了 WhatsApp 的 Meta 企业应用、其电话号码 ID 和访问令牌。",
+        "time": "约 10 分钟"
+      },
+      "teams": {
+        "needs": "无需创建任何东西：使用 Microsoft 登录并选择一个聊天。消息以你的名义发送，因此会通知聊天中的其他人，而不是你。",
+        "time": "约 1 分钟"
+      }
+    }
+  },
+  "channelPicker": {
+    "loading": "正在加载目标...",
+    "error": "无法加载目标。",
+    "empty": "尚未连接任何渠道。",
+    "connect": "连接渠道",
+    "defaultOf": "工作区默认（{destination}）",
+    "defaultNone": "工作区默认（暂无）",
+    "defaultNoneHint": "此工作区还没有默认目标：在连接之前不会发送任何内容。",
+    "notWorking": "{destination}（尚未收到消息）",
+    "gone": "已断开的目标",
+    "goneHint": "此处选择的目标已不再连接：在选择其他目标之前不会发送任何内容。",
+    "manage": "管理渠道"
+  },
+  "setupChecklist": {
+    "pill": "{done}/{total}",
+    "pillAria": "{done}/{total} 个设置步骤已完成",
+    "title": "快速上手",
+    "subtitle": "已完成 {done}/{total}。每一步完成后会自动勾选。",
+    "statusDone": "已完成",
+    "statusTodo": "待完成",
+    "tasks": {
+      "integration": {
+        "title": "连接一个应用",
+        "why": "你的智能体就能在其中读取和操作（Gmail、Notion、Slack……）。"
+      },
+      "chat": {
+        "title": "和 Orbi 对话",
+        "why": "想要什么尽管问：它会为你创建智能体、工作流和应用。"
+      },
+      "build": {
+        "title": "创建一个智能体或工作流",
+        "why": "即使你不在，也能替你工作。"
+      },
+      "channel": {
+        "title": "在应用之外也能收到消息",
+        "why": "审批和问题会发送到 Telegram、Slack、WhatsApp、Discord 或 Teams。"
+      }
+    }
+  },
+  "toolHealth": {
+    "title": "工具健康状况",
+    "subtitle": "在整个平台上失败的工具。按租户的分布可以区分目录条目损坏与单个客户的凭证问题。",
+    "loading": "加载中...",
+    "window": "时间范围",
+    "windowAll": "全部历史",
+    "windowDays": "最近 {days} 天",
+    "minCalls": "最少调用次数",
+    "refresh": "刷新",
+    "summary": "{tools} 个工具存在失败，疑似目录缺陷 {suspects} 个",
+    "errorTitle": "无法加载工具健康状况",
+    "empty": "在此时间范围内没有工具失败次数达到阈值。",
+    "tenantsOf": "{calling} 个中的 {affected} 个",
+    "scopeNote": "统计仅涵盖由智能体发起的工具调用。工作流节点发起的调用不按工具记录，不会显示在此处。",
+    "col": {
+      "tool": "工具",
+      "failures": "失败次数",
+      "rate": "失败率",
+      "tenants": "受影响租户",
+      "lastUsed": "最近调用",
+      "error": "最近错误"
+    },
+    "verdict": {
+      "ALL_TENANTS": "全部租户",
+      "WIDESPREAD": "大范围",
+      "ISOLATED": "个别",
+      "SINGLE_TENANT": "单一租户"
+    },
+    "verdictHint": {
+      "ALL_TENANTS": "对所有调用它的租户都失败，请先检查目录条目",
+      "WIDESPREAD": "至少一半调用它的租户都失败",
+      "ISOLATED": "少数租户，很可能是其凭证问题",
+      "SINGLE_TENANT": "只有一个租户调用，无法据此判断目录"
+    }
+  },
+  "ceCloudLink": {
+    "expired": "连接已过期，请重新点击连接。",
+    "planRequired": {
+      "title": "您的 LiveContext Cloud 关联需要付费套餐",
+      "body": "将自托管实例关联到 LiveContext Cloud 需要云端账户拥有付费套餐。选择套餐后，此实例会自动重新连接，无需重新关联。",
+      "cta": "查看云端套餐",
+      "sidebarBadge": "需要付费套餐"
+    },
+    "planRequiredModal": {
+      "title": "需要付费套餐",
+      "description": "此实例关联的 LiveContext Cloud 账户没有付费套餐，因此云端拒绝了该请求。在 LiveContext Cloud 上选择套餐后，此实例会自动重新连接。",
+      "cta": "查看云端套餐",
+      "close": "关闭"
+    },
+    "cloud": {
+      "returning": "正在返回您的自托管实例。",
+      "pricingBannerTitle": "关联您的自托管实例需要付费套餐",
+      "pricingBannerBody": "请在下方选择套餐。订阅生效后，您将返回自己的实例以完成连接。",
+      "pricingBannerContinue": "我已有付费套餐，继续",
+      "pricingBannerStillRequired": "您当前的套餐还不是付费套餐。请选择套餐以继续。",
+      "pricingBannerNoPending": "此连接请求已失效。请在您的自托管实例上重新点击连接。",
+      "pricingBannerError": "无法核实您的套餐，请重试。"
     }
   }
 }

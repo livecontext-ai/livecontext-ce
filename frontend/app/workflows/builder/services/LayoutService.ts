@@ -678,6 +678,96 @@ export function needsLayout(nodes: Node<BuilderNodeData>[]): boolean {
   return false;
 }
 
+export function hasValidPosition(node: Node<BuilderNodeData>): boolean {
+  return !!node.position && isFinite(node.position.x) && isFinite(node.position.y);
+}
+
+/**
+ * Gives a position to every node that has none, and moves no node that has one.
+ *
+ * A plan where only SOME nodes carry a position is a workflow the user laid out plus
+ * nodes an agent added after (agent-created nodes are saved without a position). The
+ * previous answer was a Dagre pass over the whole graph, which threw away the layout
+ * the user had saved every time the agent added a node or the workflow was reopened.
+ *
+ * Here a new node keeps the offset Dagre gives it from an already-placed neighbour,
+ * anchored where the user put that neighbour; a chain of new nodes is placed outward
+ * from the placed part of the graph one hop at a time. New nodes with no placed node
+ * anywhere in their reach are placed, as a group, below the user's nodes. A plan with
+ * no position at all (an agent build) is laid out entirely, and `laidOutFromScratch`
+ * says so. Nothing checks for overlap between a placed new node and the user's nodes.
+ */
+export function placeUnpositionedNodes(
+  nodes: Node<BuilderNodeData>[],
+  edges: Edge[],
+  options?: Partial<typeof LAYOUT_CONFIG>,
+): { nodes: Node<BuilderNodeData>[]; laidOutFromScratch: boolean } {
+  const unpositioned = nodes.filter((n) => !hasValidPosition(n));
+  if (unpositioned.length === 0) return { nodes, laidOutFromScratch: false };
+  const laid = applyDagreLayout(nodes, edges, options);
+  if (unpositioned.length === nodes.length) return { nodes: laid, laidOutFromScratch: true };
+
+  const dagrePosition = new Map(laid.map((n) => [n.id, { ...n.position }]));
+  const placed = new Map(
+    nodes.filter(hasValidPosition).map((n) => [n.id, { x: n.position.x, y: n.position.y }]),
+  );
+  const neighbours = new Map<string, string[]>();
+  for (const e of edges) {
+    neighbours.set(e.source, [...(neighbours.get(e.source) ?? []), e.target]);
+    neighbours.set(e.target, [...(neighbours.get(e.target) ?? []), e.source]);
+  }
+
+  let progress = true;
+  while (progress) {
+    progress = false;
+    for (const node of unpositioned) {
+      if (placed.has(node.id)) continue;
+      const anchorId = (neighbours.get(node.id) ?? []).find((id) => placed.has(id));
+      if (!anchorId) continue;
+      const anchor = placed.get(anchorId)!;
+      const anchorDagre = dagrePosition.get(anchorId)!;
+      const ownDagre = dagrePosition.get(node.id)!;
+      placed.set(node.id, {
+        x: Math.round(anchor.x + ownDagre.x - anchorDagre.x),
+        y: Math.round(anchor.y + ownDagre.y - anchorDagre.y),
+      });
+      progress = true;
+    }
+  }
+
+  // New nodes out of reach of every placed node (a note, a separate chain): Dagre's own
+  // coordinates bear no relation to where the user put things and could land on top of
+  // them, so the whole group is moved, keeping its internal layout, below the placed nodes.
+  const unreachable = unpositioned.filter((n) => !placed.has(n.id));
+  if (unreachable.length > 0) {
+    const direction = directionOf(options?.rankdir ?? LAYOUT_CONFIG.rankdir);
+    let placedMinX = Infinity;
+    let placedMaxY = -Infinity;
+    for (const node of nodes) {
+      if (!hasValidPosition(node)) continue;
+      placedMinX = Math.min(placedMinX, node.position.x);
+      placedMaxY = Math.max(placedMaxY, node.position.y + getNodeDimensions(node, true, direction).height);
+    }
+    const groupMinX = Math.min(...unreachable.map((n) => dagrePosition.get(n.id)!.x));
+    const groupMinY = Math.min(...unreachable.map((n) => dagrePosition.get(n.id)!.y));
+    const gap = options?.ranksep ?? LAYOUT_CONFIG.ranksep;
+    for (const node of unreachable) {
+      const own = dagrePosition.get(node.id)!;
+      placed.set(node.id, {
+        x: Math.round(placedMinX + own.x - groupMinX),
+        y: Math.round(placedMaxY + gap + own.y - groupMinY),
+      });
+    }
+  }
+
+  const result = nodes.map((node) => {
+    if (hasValidPosition(node)) return node;
+    const position = placed.get(node.id)!;
+    return { ...node, position, positionAbsolute: position };
+  });
+  return { nodes: result, laidOutFromScratch: false };
+}
+
 /**
  * Calculate local position for a new node based on its neighbors
  * Used when adding a single node to an existing workflow with positions

@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Sparkles, Workflow, Bot, Database, Store, BookOpen } from 'lucide-react';
+import { Sparkles, Workflow, Bot, Database, Users, Store, CreditCard, BookOpen } from 'lucide-react';
 
 // Single source of truth for the docs information architecture.
 // Consumed by: the sidebar (`DocsNav`), the mobile drawer, the in-page prev/next
@@ -19,6 +19,8 @@ export interface DocsNavItem {
   href?: string;
   /** Short label shown muted next to a not-yet-written page. */
   badge?: string;
+  /** Extra search terms for the sidebar filter (topics the page covers that are not in its title). */
+  keywords?: string[];
 }
 
 export interface DocsNavSection {
@@ -32,61 +34,105 @@ export const DOCS_NAV: DocsNavSection[] = [
     title: 'Get started',
     icon: Sparkles,
     items: [
-      { title: 'Overview', href: '/' },
-      { title: 'Getting started', href: '/getting-started' },
-      { title: 'Core concepts', href: '/concepts' },
+      { title: 'Overview', href: '/', keywords: ['introduction', 'what is', 'cloud', 'community edition'] },
+      { title: 'Getting started', href: '/getting-started', keywords: ['quickstart', 'first workflow', 'sign up', 'onboarding', 'tutorial'] },
+      { title: 'Core concepts', href: '/concepts', keywords: ['mental model', 'run', 'node', 'credit', 'epoch'] },
+      { title: 'Tour of the workspace', href: '/workspace', keywords: ['navigation', 'sidebar', 'projects', 'folders', 'favorites', 'messages', 'mobile'] },
+      { title: 'Glossary', href: '/glossary', keywords: ['definitions', 'terms', 'vocabulary'] },
     ],
   },
   {
     title: 'Build',
     icon: Workflow,
     items: [
-      { title: 'Chat', href: '/chat' },
-      { title: 'Workflows', href: '/workflows' },
-      { title: 'Node reference', href: '/nodes' },
-      { title: 'Triggers', href: '/triggers' },
-      { title: 'Interfaces & apps', href: '/interfaces' },
-      { title: 'Runs & execution', href: '/runs' },
+      { title: 'Chat', href: '/chat', keywords: ['assistant', 'conversation', 'attachments', 'composer', 'ask user'] },
+      { title: 'Workflows', href: '/workflows', keywords: ['canvas', 'builder', 'fork', 'merge', 'loop', 'versions', 'pin'] },
+      { title: 'Node reference', href: '/nodes', keywords: ['decision', 'switch', 'split', 'code', 'http request', 'sub-workflow', 'media', 'email', 'ssh', 'database'] },
+      { title: 'Triggers', href: '/triggers', keywords: ['webhook', 'schedule', 'cron', 'form', 'manual', 'error trigger'] },
+      { title: 'Interfaces & apps', href: '/interfaces', keywords: ['html', 'page', 'iframe', 'application', 'js_template'] },
+      { title: 'Runs & execution', href: '/runs', keywords: ['history', 'epoch', 'step by step', 'approval', 'cancel', 're-run', 'debug'] },
     ],
   },
   {
     title: 'AI',
     icon: Bot,
     items: [
-      { title: 'Agents', href: '/agents' },
-      { title: 'Models & providers', href: '/models' },
-      { title: 'Browser Agent', href: '/browser-agent' },
-      { title: 'Skills', href: '/skills' },
+      { title: 'Agents', href: '/agents', keywords: ['tools', 'budget', 'memory', 'delegation', 'stop reason', 'claude code', 'codex'] },
+      { title: 'Models & providers', href: '/models', keywords: ['llm', 'openai', 'anthropic', 'api key', 'own key', 'byok', 'reasoning'] },
+      { title: 'Studio', href: '/studio', keywords: ['image', 'video', 'audio', 'music', 'voice', 'generate', 'media'] },
+      { title: 'Browser Agent', href: '/browser-agent', keywords: ['web', 'scraping', 'navigation', 'computer use'] },
+      { title: 'Skills', href: '/skills', keywords: ['instructions', 'playbook', 'reusable'] },
     ],
   },
   {
     title: 'Data',
     icon: Database,
     items: [
-      { title: 'Tables & data', href: '/tables' },
-      { title: 'Integrations', href: '/integrations' },
-      { title: 'Files & storage', href: '/files' },
+      { title: 'Tables & data', href: '/tables', keywords: ['spreadsheet', 'rows', 'crud', 'vector', 'semantic search', 'import', 'csv'] },
+      { title: 'Integrations', href: '/integrations', keywords: ['api', 'oauth', 'credentials', 'connect', 'custom api', 'mcp'] },
+      { title: 'Files & storage', href: '/files', keywords: ['upload', 'download', 'fileref', 'quota', 's3'] },
+    ],
+  },
+  {
+    title: 'Work & collaborate',
+    icon: Users,
+    items: [
+      { title: 'Tasks & board', href: '/board', keywords: ['kanban', 'todo', 'assign'] },
+      { title: 'Agenda', href: '/agenda', keywords: ['calendar', 'schedule', 'planning'] },
+      { title: 'Notifications', href: '/notifications', keywords: ['bell', 'inbox', 'alerts', 'activity'] },
+      { title: 'Chat channels', href: '/channels', keywords: ['telegram', 'slack', 'discord', 'whatsapp', 'teams'] },
     ],
   },
   {
     title: 'Share & host',
     icon: Store,
     items: [
-      { title: 'Marketplace', href: '/marketplace' },
-      { title: 'Self-hosting', href: '/self-host' },
-      { title: 'Organizations & roles', href: '/organizations' },
-      { title: 'Plans & billing', href: '/billing' },
+      { title: 'Marketplace', href: '/marketplace', keywords: ['publish', 'fork', 'template', 'acquire'] },
+      { title: 'Public access & sharing', href: '/public-access', keywords: ['share link', 'public url', 'endpoint', 'token', 'embed'] },
+      { title: 'Organizations & roles', href: '/organizations', keywords: ['team', 'members', 'invite', 'rbac', 'sso', 'saml'] },
+      { title: 'Self-hosting', href: '/self-host', keywords: ['community edition', 'ce', 'docker', 'install', 'cloud link', 'update'] },
+      { title: 'Administration', href: '/admin', keywords: ['admin', 'instance', 'platform credentials', 'version'] },
+    ],
+  },
+  {
+    title: 'Account & billing',
+    icon: CreditCard,
+    items: [
+      { title: 'Account & settings', href: '/account', keywords: ['profile', 'preferences', 'language', 'delete account', 'settings'] },
+      { title: 'Plans & billing', href: '/billing', keywords: ['pricing', 'credits', 'subscription', 'free plan', 'top-up', 'invoice'] },
     ],
   },
   {
     title: 'Reference',
     icon: BookOpen,
     items: [
-      { title: 'Expressions & variables', href: '/expressions' },
-      { title: 'REST API & webhooks', href: '/rest-api' },
+      { title: 'Expressions & variables', href: '/expressions', keywords: ['template', 'spel', 'functions', 'variables', 'secrets'] },
+      { title: 'REST API & webhooks', href: '/rest-api', keywords: ['http', 'api key', 'endpoint', 'webhook signature'] },
+      { title: 'MCP server', href: '/mcp-server', keywords: ['model context protocol', 'claude desktop', 'cursor', 'external client', 'lc_live'] },
     ],
   },
 ];
+
+/**
+ * Sidebar filter: keep the items whose title, section title, or keywords contain
+ * the query (case-insensitive). An empty query returns the full IA. Pure helper,
+ * unit-tested and used by `DocsNav`.
+ */
+export function filterDocsNav(query: string, nav: DocsNavSection[] = DOCS_NAV): DocsNavSection[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return nav;
+  return nav
+    .map((section) => ({
+      ...section,
+      items: section.items.filter(
+        (item) =>
+          item.title.toLowerCase().includes(q) ||
+          section.title.toLowerCase().includes(q) ||
+          (item.keywords ?? []).some((k) => k.toLowerCase().includes(q)),
+      ),
+    }))
+    .filter((section) => section.items.length > 0);
+}
 
 /** A page with a real route, plus the section it belongs to. */
 export interface DocsPage {

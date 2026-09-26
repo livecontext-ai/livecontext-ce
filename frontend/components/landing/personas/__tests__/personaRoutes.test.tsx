@@ -64,6 +64,13 @@ describe('persona public routes', () => {
     expect(metadata.robots).toEqual({ index: true, follow: true });
   });
 
+  it('shares the card of its own language, not the site-wide English one', async () => {
+    const metadata = await generateMetadata({ params: Promise.resolve({ locale: 'fr', persona: 'creator' }) });
+    const og = metadata.openGraph as { images: Array<{ url: string }> };
+    expect(og.images[0].url).toBe('/landing/og/home-fr.jpg');
+    expect(metadata.twitter?.images).toEqual(['/landing/og/home-fr.jpg']);
+  });
+
   /** The graph, looked up by type rather than by position, which is what a reader of it does. */
   const graphOf = async (locale: string, persona: string) => {
     const page = await PersonaPage({ params: Promise.resolve({ locale, persona }) });

@@ -1,5 +1,8 @@
 package com.apimarketplace.auth.dto;
 
+import com.apimarketplace.common.plan.CeLinkRefusal;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 /**
  * Response for {@code POST /api/ce-link/register}.
  * <ul>
@@ -10,6 +13,11 @@ package com.apimarketplace.auth.dto;
  *       otherwise null (no info leak).</li>
  *   <li>401 {@code error="INSTALL_ID_REQUIRED"} when header missing; or
  *       {@code error="LINK_REVOKED"} when the existing row is REVOKED.</li>
+ *   <li>403 {@code error="CLOUD_LINK_PLAN_REQUIRED"} when the caller's governing plan is not
+ *       paid ({@link #planRequired}). The controller does NOT serialize this record for that
+ *       branch: it sends the shared {@link CeLinkRefusal#planRequiredBody} so register answers
+ *       exactly like every other link-gated endpoint. {@code planCode} is carried for it and
+ *       never serialized.</li>
  * </ul>
  * Constant-time 400ms enforcement (PR3d filter) covers all branches.
  */
@@ -17,13 +25,23 @@ public record CeLinkRegisterResponse(
         boolean registered,
         String error,
         String boundToEmail,
-        String scopes
+        String scopes,
+        @JsonIgnore String planCode
 ) {
     public static CeLinkRegisterResponse ok(String scopes) {
-        return new CeLinkRegisterResponse(true, null, null, scopes);
+        return new CeLinkRegisterResponse(true, null, null, scopes, null);
     }
 
     public static CeLinkRegisterResponse alreadyBound(String boundToEmailMasked) {
-        return new CeLinkRegisterResponse(false, "ALREADY_BOUND", boundToEmailMasked, null);
+        return new CeLinkRegisterResponse(false, "ALREADY_BOUND", boundToEmailMasked, null, null);
+    }
+
+    public static CeLinkRegisterResponse planRequired(String planCode) {
+        return new CeLinkRegisterResponse(false, CeLinkRefusal.PLAN_REQUIRED_ERROR, null, null, planCode);
+    }
+
+    @JsonIgnore
+    public boolean isPlanRequired() {
+        return CeLinkRefusal.PLAN_REQUIRED_ERROR.equals(error);
     }
 }

@@ -830,6 +830,36 @@ public class CredentialClient {
     }
 
     /**
+     * Offer the catalog's starting price of every generation model, so auth-service
+     * publishes the ones a platform credential has NEVER priced and leaves every
+     * other row alone. Idempotent: re-offering the same list publishes nothing.
+     *
+     * @return the per-call summary, or empty when auth-service could not be reached
+     */
+    public Optional<Map<String, Object>> addNeverPricedGenerationPrices(
+            List<BundleGenerationPriceDto> prices, String origin) {
+        if (prices == null || prices.isEmpty()) return Optional.empty();
+        String url = baseUrl + "/api/internal/credentials/pricing-versions/add-never-priced";
+        HttpHeaders headers = buildHeaders("SYSTEM");
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("prices", prices);
+        if (origin != null && !origin.isBlank()) {
+            body.put("origin", origin);
+        }
+        try {
+            ResponseEntity<Map> resp = restTemplate.exchange(
+                    url, HttpMethod.POST, new HttpEntity<>(body, headers), Map.class);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> rb = resp.getBody();
+            return Optional.ofNullable(rb);
+        } catch (Exception e) {
+            log.warn("addNeverPricedGenerationPrices failed ({} price(s)): {}", prices.size(), e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
      * V148+ helper: resolve a platform credential id (and provider_kind) by
      * its catalog-side integration name (e.g. {@code "llm_openai"}). Catalog
      * stores credentials by name; the markup subsystem keys on numeric id.

@@ -167,7 +167,7 @@ class AgentAsyncCompletionServiceDrainGuardTest {
         // removed - otherwise two near-simultaneous last siblings each see the other and both defer,
         // leaving the epoch permanently un-closed. Clear(self) must therefore precede the sibling scan.
         InOrder inOrder = inOrder(inFlightStore);
-        inOrder.verify(inFlightStore).clear("corr-last");
+        inOrder.verify(inFlightStore).deleteStagedEntry("corr-last");
         inOrder.verify(inFlightStore).hasOtherInFlightForEpoch("run-1", "trigger:ask", 1, "corr-last");
     }
 

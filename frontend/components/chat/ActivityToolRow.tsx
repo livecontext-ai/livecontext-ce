@@ -8,6 +8,7 @@ import { getToolIconType, getToolDescription } from '@/lib/utils/activityGroupin
 import { toolIcons, formatToolName } from '@/components/chat/ActivityFeed';
 import { isOpenableVisualization, toAutoOpenDetail } from '@/lib/chat/messageActivity';
 import { normalizeIconSlug } from '@/lib/credentials/iconSlug';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 function formatDurationMs(ms: number): string {
   if (ms < 1000) return '< 1s';
@@ -98,7 +99,7 @@ export function ActivityToolRow({ activity }: ActivityToolRowProps) {
   const inner = (
     <>
       {hasApiIcon ? (
-        <Image
+        <ServiceLogo as={Image}
           src={`/icons/services/${normalizeIconSlug(activity.iconSlug)}.svg`}
           alt=""
           width={14}

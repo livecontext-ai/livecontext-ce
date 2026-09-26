@@ -1561,4 +1561,90 @@ class WorkflowPlanParserTest {
             assertEquals("My Form", plan.getInterfaces().get(0).label());
         }
     }
+
+    @Nested
+    @DisplayName("parse() - cryptoJwt payload")
+    class CryptoJwtPayloadParsingTests {
+
+        @Test
+        @DisplayName("a payload saved as TEXT by the builder form keeps the whole cryptoJwt config")
+        void textPayloadDoesNotDropTheConfig() {
+            Map<String, Object> core = new HashMap<>();
+            core.put("id", "core-1");
+            core.put("type", "crypto_jwt");
+            core.put("label", "Sign");
+            core.put("cryptoJwt", Map.of(
+                "operation", "jwtCreate",
+                "algorithm", "HS256",
+                "secret", "s3cret",
+                "payload", "{\"sub\": \"{{trigger:in.output.user_id}}\"}"));
+            Map<String, Object> planData = new HashMap<>();
+            planData.put("cores", List.of(core));
+
+            WorkflowPlan plan = WorkflowPlanParser.parse(planData, "tenant-1");
+
+            Core.CryptoJwtConfig config = plan.getCores().get(0).cryptoJwtConfig();
+            assertNotNull(config, "a Map-typed payload made Jackson reject the whole block");
+            assertEquals("jwtCreate", config.operation());
+            assertEquals("{\"sub\": \"{{trigger:in.output.user_id}}\"}", config.payload());
+        }
+
+        @Test
+        @DisplayName("regression: a {{...}} limit.count no longer drops the whole config; it is set aside for run time")
+        void templatedNumberIsDeferredNotDroppingTheConfig() {
+            Map<String, Object> core = new HashMap<>();
+            core.put("id", "core-1");
+            core.put("type", "limit");
+            core.put("label", "Top");
+            core.put("limit", Map.of("count", "{{trigger:in.output.n}}", "offset", 3, "from", "last"));
+            Map<String, Object> planData = new HashMap<>();
+            planData.put("cores", List.of(core));
+
+            WorkflowPlan plan = WorkflowPlanParser.parse(planData, "tenant-1");
+
+            Core parsed = plan.getCores().get(0);
+            Core.LimitConfig config = parsed.limitConfig();
+            assertNotNull(config, "Jackson cannot put a template in an int and used to reject the whole block");
+            assertEquals(3, config.offset(), "the other fields parse as written");
+            assertEquals("last", config.from());
+            assertEquals(Map.of("count", "{{trigger:in.output.n}}"), parsed.deferredScalars().get("limit"));
+        }
+
+        @Test
+        @DisplayName("regression: a guardrail's node-level action reaches its params (it was never read)")
+        void guardrailNodeActionIsCarried() {
+            Map<String, Object> planData = new HashMap<>();
+            planData.put("agents", List.of(Map.of("label", "Guard", "type", "guardrail", "action", "flag")));
+
+            WorkflowPlan plan = WorkflowPlanParser.parse(planData, "tenant-1");
+
+            assertEquals("flag", plan.getAgents().get(0).params().get("action"));
+        }
+
+        @Test
+        @DisplayName("an explicit params.action wins over the node-level one")
+        void explicitParamsActionWins() {
+            Map<String, Object> planData = new HashMap<>();
+            planData.put("agents", List.of(Map.of("label", "Guard", "type", "guardrail", "action", "flag",
+                "params", Map.of("action", "block"))));
+
+            WorkflowPlan plan = WorkflowPlanParser.parse(planData, "tenant-1");
+
+            assertEquals("block", plan.getAgents().get(0).params().get("action"));
+        }
+
+        @Test
+        @DisplayName("regression: templated agent numbers are kept for run time instead of becoming the defaults")
+        void templatedAgentNumbersAreDeferred() {
+            Map<String, Object> planData = new HashMap<>();
+            planData.put("agents", List.of(Map.of("label", "Writer", "type", "agent",
+                "maxTokens", "{{core:cfg.output.tok}}", "temperature", 0.3)));
+
+            WorkflowPlan plan = WorkflowPlanParser.parse(planData, "tenant-1");
+
+            Agent agent = plan.getAgents().get(0);
+            assertEquals(Map.of("maxTokens", "{{core:cfg.output.tok}}"), agent.deferredScalars());
+            assertEquals(0.3, agent.temperature());
+        }
+    }
 }

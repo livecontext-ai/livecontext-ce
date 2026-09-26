@@ -264,9 +264,11 @@ describe('CredentialWizard - byok.surface gates the toggle', () => {
     await screen.findByText('Configure scopes', undefined, { timeout: 3000 });
     // The single catalog scope from buildTemplate (gmail.readonly) must appear
     // as a chip under the "Configure scopes" step.
+    // The same scope also labels a box of the V513 scope picker, so look for the chip itself.
     expect(
-      screen.queryByText('https://www.googleapis.com/auth/gmail.readonly'),
-    ).not.toBeNull();
+      screen.getAllByText('https://www.googleapis.com/auth/gmail.readonly')
+        .some((el) => el.tagName === 'CODE'),
+    ).toBe(true);
     // Non-scope steps must NOT spawn chips - only the title-matched step.
     // Sanity: the "Open the developer portal" body shouldn't render any chip.
     expect(screen.queryByText('Sign in.')).not.toBeNull();

@@ -1,5 +1,10 @@
 package com.apimarketplace.catalog.bundle;
 
+import com.fasterxml.jackson.core.StreamReadConstraints;
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
@@ -11,6 +16,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
+
+import java.io.IOException;
 
 /**
  * CE-side HTTP client that fetches the currently active API-catalog bundle
@@ -34,6 +41,33 @@ import org.springframework.web.client.RestTemplate;
 @Slf4j
 @Component
 public class ApiCatalogBundleFetcher {
+
+    /**
+     * Longest {@code payloadBase64} this install accepts, in characters.
+     *
+     * <p>The body is read as bytes and parsed here, NOT through the RestTemplate's Jackson
+     * converter: that converter keeps Jackson's default 20,000,000-character cap on a single
+     * string, and the whole catalog travels as ONE string. The bundle activated on 2026-09-03
+     * (931 APIs, 243 MB raw, 32.4 MB on the wire) crossed it, so from then on every CE install
+     * failed every poll with a {@code StreamConstraintsException}, re-downloaded the full body
+     * every 15 minutes, and never received another catalog update. 256 Mi characters is about
+     * 190 MB of gzip, some six times today's bundle: a ceiling against a runaway body, not a
+     * size the catalog is expected to approach.
+     */
+    static final int MAX_PAYLOAD_CHARS = 256 * 1024 * 1024;
+
+    /**
+     * Unknown properties are ignored, as the Spring-configured converter did before: the cloud
+     * adding a field to the envelope must never break an install that predates it.
+     */
+    private static final ObjectMapper BUNDLE_READER = JsonMapper.builder(
+                    JsonFactory.builder()
+                            .streamReadConstraints(StreamReadConstraints.builder()
+                                    .maxStringLength(MAX_PAYLOAD_CHARS)
+                                    .build())
+                            .build())
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .build();
 
     private final RestTemplate restTemplate;
     private final String cloudUrl;
@@ -73,12 +107,24 @@ public class ApiCatalogBundleFetcher {
             if (knownChecksum != null && !knownChecksum.isBlank()) {
                 headers.setIfNoneMatch("\"" + knownChecksum + "\"");
             }
-            ResponseEntity<ApiCatalogSignedBundle> resp = restTemplate.exchange(
-                    url, HttpMethod.GET, new HttpEntity<>(headers), ApiCatalogSignedBundle.class);
+            ResponseEntity<byte[]> resp = restTemplate.exchange(
+                    url, HttpMethod.GET, new HttpEntity<>(headers), byte[].class);
             if (resp.getStatusCode() == HttpStatus.NOT_MODIFIED) {
                 return FetchResult.notModified();
             }
-            ApiCatalogSignedBundle body = resp.getBody();
+            byte[] raw = resp.getBody();
+            if (raw == null || raw.length == 0) {
+                return FetchResult.httpError("cloud returned 200 with empty body");
+            }
+            ApiCatalogSignedBundle body;
+            try {
+                body = BUNDLE_READER.readValue(raw, ApiCatalogSignedBundle.class);
+            } catch (IOException e) {
+                // The transfer succeeded and the body is what the cloud sent: this is not a
+                // network problem, and reporting it as one is what hid the size cap above.
+                return FetchResult.httpError("unreadable bundle body (" + raw.length + " bytes): "
+                        + e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
             if (body == null) {
                 return FetchResult.httpError("cloud returned 200 with empty body");
             }

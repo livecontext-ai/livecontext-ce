@@ -277,6 +277,9 @@ describe('workflow logs run child view', () => {
     await waitFor(() => expect(getRun).toHaveBeenCalledWith('run-1'));
     expect(screen.getByTestId('logs-content')).toHaveTextContent('mcp:fetch');
 
+    // The button returns to the Run tab, so it is labelled like that tab, not "Logs".
+    expect(screen.getByRole('button', { name: 'workflow.logs.backToRun' })).toHaveTextContent('sidePanel.runTab');
+    expect(screen.getByRole('button', { name: 'workflow.logs.backToRun' })).not.toHaveTextContent('actions.logs');
     fireEvent.click(screen.getByRole('button', { name: 'workflow.logs.backToRun' }));
     expect(onBack).toHaveBeenCalledTimes(1);
   });

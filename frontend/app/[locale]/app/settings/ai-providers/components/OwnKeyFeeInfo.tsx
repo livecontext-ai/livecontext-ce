@@ -1,14 +1,13 @@
 "use client";
 
 import React from "react";
-import { Info } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { InfoPopover } from "@/components/ui/info-popover";
+import { cn } from "@/lib/utils";
 import { TierBadge } from "@/components/ai/ModelInfo";
 import { useModelCostBasis } from "@/lib/hooks/useModelCostBasis";
 import { formatCreditAmount } from "@/lib/billing/model-cost-estimate";
 import { getClientLocale } from "@/lib/utils/locale";
-import { cn } from "@/lib/utils";
 
 /**
  * The four price bands, in the order a reader climbs them. {@code unknown} is deliberately
@@ -50,51 +49,40 @@ export default function OwnKeyFeeInfo({ className }: { className?: string }) {
   if (rows.length === 0) return null;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label={t("yourKeys.fees.open")}
-          title={t("yourKeys.fees.open")}
-          className={cn(
-            "inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-lg text-theme-secondary transition-colors hover:bg-theme-tertiary hover:text-theme-primary",
-            className,
-          )}
-        >
-          <Info className="h-3.5 w-3.5" />
-        </button>
-      </PopoverTrigger>
-      {/* Width-capped and never wider than the viewport: this opens inside a settings column
-          that is a third of the screen on desktop and the whole of it on a phone. */}
-      <PopoverContent
-        align="start"
-        className="w-72 max-w-[calc(100vw-2rem)] border-theme bg-theme-primary p-4 text-sm"
-      >
-        <p className="mb-1 font-medium text-theme-primary">{t("yourKeys.fees.title")}</p>
-        <p className="mb-3 text-xs leading-relaxed text-theme-secondary">{t("yourKeys.fees.intro")}</p>
-        {/* The unit belongs to the COLUMN, not to each row. Repeating it per line gave "1
-            credits" on the budget band, and the obvious repair - a plural rule - cannot apply to
-            a value that is already a formatted string ("1,000", "<0.1"). Said once above the
-            numbers, the grammar problem disappears and the list reads as the price table it is. */}
-        <div className="mb-1 border-b border-theme pb-1 text-right text-[11px] uppercase tracking-wide text-theme-secondary">
-          {t("yourKeys.fees.unit")}
-        </div>
-        <dl className="space-y-1.5">
-          {rows.map(({ tier, credits }) => (
-            <div key={tier} className="flex items-center justify-between gap-3">
-              {/* The SAME badge the model pickers draw, so a band named here is recognisable
-                  on the row where it is chosen - one colour and one word per tier, app-wide. */}
-              <dt className="min-w-0">
-                <TierBadge tier={tier} />
-              </dt>
-              <dd className="whitespace-nowrap text-sm font-medium tabular-nums text-theme-primary" data-testid="own-key-fee-row">
-                {/* Rounded and grouped exactly like every other credit figure in the app. */}
-                {formatCreditAmount(credits, getClientLocale())}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </PopoverContent>
-    </Popover>
+    <InfoPopover
+      label={t("yourKeys.fees.open")}
+      accessibleName={t("yourKeys.fees.open")}
+      open={open}
+      onOpenChange={setOpen}
+      align="start"
+      // The 20px hit area the old button had; the shared trigger is only padded.
+      triggerClassName={cn("h-5 w-5 rounded-lg", className)}
+      contentClassName="p-4"
+    >
+      <p className="mb-1 font-medium text-theme-primary">{t("yourKeys.fees.title")}</p>
+      <p className="mb-3 text-xs leading-relaxed text-theme-secondary">{t("yourKeys.fees.intro")}</p>
+      {/* The unit belongs to the COLUMN, not to each row. Repeating it per line gave "1
+          credits" on the budget band, and the obvious repair - a plural rule - cannot apply to
+          a value that is already a formatted string ("1,000", "<0.1"). Said once above the
+          numbers, the grammar problem disappears and the list reads as the price table it is. */}
+      <div className="mb-1 border-b border-theme pb-1 text-right text-[11px] uppercase tracking-wide text-theme-secondary">
+        {t("yourKeys.fees.unit")}
+      </div>
+      <dl className="space-y-1.5">
+        {rows.map(({ tier, credits }) => (
+          <div key={tier} className="flex items-center justify-between gap-3">
+            {/* The SAME badge the model pickers draw, so a band named here is recognisable
+                on the row where it is chosen - one colour and one word per tier, app-wide. */}
+            <dt className="min-w-0">
+              <TierBadge tier={tier} />
+            </dt>
+            <dd className="whitespace-nowrap text-sm font-medium tabular-nums text-theme-primary" data-testid="own-key-fee-row">
+              {/* Rounded and grouped exactly like every other credit figure in the app. */}
+              {formatCreditAmount(credits, getClientLocale())}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </InfoPopover>
   );
 }

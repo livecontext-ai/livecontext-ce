@@ -4,6 +4,7 @@ import com.apimarketplace.agent.tools.ask.UserQuestionAnswer;
 import com.apimarketplace.agent.tools.ask.UserQuestionAnswerEnvelope;
 
 import com.apimarketplace.agent.service.execution.ApprovalCardExtractor;
+import com.apimarketplace.agent.service.execution.ChannelAuthorizationClient;
 import com.apimarketplace.agent.service.execution.ApprovalCardPublisher;
 import com.apimarketplace.agent.service.execution.ToolApprovalGate;
 import com.apimarketplace.agent.tools.ToolErrorCode;
@@ -104,6 +105,45 @@ class AskUserToolsProviderTest {
         Map<String, Object> help = data(result);
         assertThat(help).containsKeys("actions", "question_shape", "when_to_use", "constraints", "examples");
         assertThat(help.toString()).contains("answered", "pending_user", "dismissed", "unavailable");
+        // Every reason the tool can return is explained, with what to do: the help must not tell a
+        // sub-agent to decide alone while the answer tells it to hand the question back.
+        assertThat(help.toString()).contains("'asked_by_caller'", "that agent will ask them",
+                "'workflow_step'", "User Approval step", "'no_live_chat'");
+        assertThat(help.toString()).doesNotContain("a workflow node, a sub-agent");
+    }
+
+    @Test
+    @DisplayName("A depth that is not a number counts as no depth: the run is judged like any other")
+    void unreadableDepthIsNoDepth() {
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__agent_depth__", "not-a-number");
+        creds.put("__workflowRunId__", "run-1");
+
+        var result = provider.execute("ask_user", askParams(), context(creds));
+
+        assertThat(data(result)).containsEntry("reason", "workflow_step");
+    }
+
+    @Test
+    @DisplayName("The plain workflowRunId key marks a workflow step too")
+    void plainWorkflowRunIdIsAWorkflowStep() {
+        Map<String, Object> creds = chatCredentials();
+        creds.put("workflowRunId", "run-1");
+
+        var result = provider.execute("ask_user", askParams(), context(creds));
+
+        assertThat(data(result)).containsEntry("reason", "workflow_step");
+    }
+
+    @Test
+    @DisplayName("A run with no caller agent, no workflow and no conversation keeps 'no_live_chat'")
+    void otherwiseStillNoLiveChat() {
+        Map<String, Object> creds = new HashMap<>();
+        creds.put(AskUserToolsProvider.KEY_TOOL_CALL_ID, "call-7");
+
+        var result = provider.execute("ask_user", askParams(), context(creds));
+
+        assertThat(data(result)).containsEntry("status", "unavailable").containsEntry("reason", "no_live_chat");
     }
 
     @Test
@@ -121,7 +161,7 @@ class AskUserToolsProviderTest {
     }
 
     @Test
-    @DisplayName("Outside an interactive chat the answer is 'unavailable' and no card is raised")
+    @DisplayName("In a workflow step the answer is 'unavailable', points at a User Approval step, and no card is raised")
     void unavailableOffChat() {
         Map<String, Object> creds = chatCredentials();
         creds.put("__workflowRunId__", "run-1");
@@ -129,10 +169,178 @@ class AskUserToolsProviderTest {
         var result = provider.execute("ask_user", askParams(), context(creds));
 
         assertThat(result.success()).isTrue();
-        assertThat(data(result)).containsEntry("status", "unavailable").containsEntry("reason", "no_live_chat");
+        assertThat(data(result)).containsEntry("status", "unavailable").containsEntry("reason", "workflow_step");
+        // The one thing left to do: a step that asks and waits. Said, so the agent can pass it on.
+        assertThat(String.valueOf(data(result).get("message"))).contains("User Approval step");
         assertThat(result.metadata()).isNullOrEmpty();
         verify(gate, never()).beginPark(any());
         verify(publisher, never()).publishUserQuestion(anyString(), anyString(), any(), anyBoolean(), anyString());
+    }
+
+    /**
+     * Prod 2026-09-24: an agent started another with agent(execute), the sub-agent's question was
+     * answered 'nobody is watching', and the parent reported the refusal: the question never reached
+     * the person. The sub-agent is now told its reply goes back to an agent that can ask.
+     */
+    @Test
+    @DisplayName("A sub-agent is told its question travels back in its reply, for the agent that started it to ask")
+    void subAgentHandsTheQuestionToItsCaller() {
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__agent_depth__", 1);
+
+        var result = provider.execute("ask_user", askParams(), context(creds));
+
+        assertThat(result.success()).isTrue();
+        assertThat(data(result)).containsEntry("status", "unavailable").containsEntry("reason", "asked_by_caller");
+        assertThat(String.valueOf(data(result).get("message")))
+                .contains("End your reply with the question").contains("the agent that started you will put it to them");
+        verify(gate, never()).beginPark(any());
+    }
+
+    @Test
+    @DisplayName("A sub-agent inside a workflow is still a sub-agent: its caller is the one that can ask")
+    void subAgentInAWorkflowStillHandsItToItsCaller() {
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__agent_depth__", "2");
+        creds.put("__workflowRunId__", "run-1");
+
+        var result = provider.execute("ask_user", askParams(), context(creds));
+
+        assertThat(data(result)).containsEntry("reason", "asked_by_caller");
+    }
+
+    @Test
+    @DisplayName("A run the producer marked unattended is 'unavailable', even though it looks interactive")
+    void unavailableOnAMarkedUnattendedRun() {
+        Map<String, Object> creds = chatCredentials();
+        // Exactly the shape a schedule or a webhook produces: a conversation AND a stream,
+        // because the sync path mints a stream id unconditionally, and no workflow run and no
+        // task id. It is indistinguishable from somebody typing, which is why the producer
+        // says so instead of leaving it to be derived (AgentContextBuilder, isExternalSource).
+        creds.put("__unattendedRun__", true);
+
+        var result = provider.execute("ask_user", askParams(), context(creds));
+
+        // Before this was read, such a run painted a card into a stream nobody reads, parked
+        // for the gate's full 240 s, and then told the agent "the card is on screen". Four
+        // minutes of a scheduled run spent on a sentence that was false.
+        assertThat(data(result)).containsEntry("status", "unavailable").containsEntry("reason", "no_live_chat");
+        verify(gate, never()).beginPark(any());
+        verify(publisher, never()).publishUserQuestion(anyString(), anyString(), any(), anyBoolean(), anyString());
+    }
+
+    @Test
+    @DisplayName("An unattended run with a connected chat asks there, and says where")
+    void asksOnTheChannelWhenNobodyIsWatching() {
+        ChannelAuthorizationClient channelClient = mock(ChannelAuthorizationClient.class);
+        provider.configureChannelClientForTest(channelClient);
+        when(channelClient.askQuestions(any(), any(), anyString(), anyString(), anyString(), any(), any()))
+                .thenReturn(new ChannelAuthorizationClient.Delivery(
+                        ChannelAuthorizationClient.Delivery.Status.SENT, "telegram", "Ops room", null));
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__unattendedRun__", true);
+
+        var result = provider.execute("ask_user", askParams(), context(creds));
+
+        // Both halves of WHERE: the app to go and look in, and which room there. A workspace
+        // whose bot sits in three rooms has three of those, and "I asked on telegram" leaves
+        // the person guessing which.
+        assertThat(data(result)).containsEntry("status", "pending_user")
+                .containsEntry("via", "telegram").containsEntry("destination", "Ops room");
+        assertThat(String.valueOf(data(result).get("message"))).contains("Ops room");
+        // No card and no park: a card needs a stream nobody is reading, and an answer from a
+        // phone arrives hours later as the person's next message, far past any gate budget.
+        verify(gate, never()).beginPark(any());
+        verify(publisher, never()).publishUserQuestion(anyString(), anyString(), any(), anyBoolean(), anyString());
+    }
+
+    @Test
+    @DisplayName("The same question already waiting there is not sent twice")
+    void doesNotRepeatAQuestionAlreadyWaiting() {
+        ChannelAuthorizationClient channelClient = mock(ChannelAuthorizationClient.class);
+        provider.configureChannelClientForTest(channelClient);
+        when(channelClient.askQuestions(any(), any(), anyString(), anyString(), anyString(), any(), any()))
+                .thenReturn(new ChannelAuthorizationClient.Delivery(
+                        ChannelAuthorizationClient.Delivery.Status.ALREADY_PENDING, "telegram", "Ops room",
+                        "2026-09-22T08:00:00Z"));
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__unattendedRun__", true);
+
+        var result = provider.execute("ask_user", askParams(), context(creds));
+
+        // A nightly agent must read, in its own conversation, that it already asked. Otherwise
+        // it is surprised by its own duplicate refusal on the next run instead of remembering.
+        assertThat(data(result)).containsEntry("status", "pending_user")
+                .containsEntry("reason", "already_asked");
+        assertThat(String.valueOf(data(result).get("message"))).contains("ALREADY asked");
+    }
+
+    @Test
+    @DisplayName("An unattended run with no connected chat says so, and says what would fix it")
+    void unavailableWithNoChannel() {
+        ChannelAuthorizationClient channelClient = mock(ChannelAuthorizationClient.class);
+        provider.configureChannelClientForTest(channelClient);
+        when(channelClient.askQuestions(any(), any(), anyString(), anyString(), anyString(), any(), any()))
+                .thenReturn(ChannelAuthorizationClient.Delivery.none());
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__unattendedRun__", true);
+
+        var result = provider.execute("ask_user", askParams(), context(creds));
+
+        // Distinct from no_live_chat on purpose: that one means this run could never ask
+        // anybody, this one means it could have and the workspace is not set up for it. The
+        // agent is told the difference because only one of them is worth mentioning in a
+        // summary somebody will read.
+        assertThat(data(result)).containsEntry("status", "unavailable")
+                .containsEntry("reason", "no_channel");
+    }
+
+    @Test
+    @DisplayName("A chat that refused the message is not reported as asked")
+    void unavailableWhenTheChannelFails() {
+        ChannelAuthorizationClient channelClient = mock(ChannelAuthorizationClient.class);
+        provider.configureChannelClientForTest(channelClient);
+        when(channelClient.askQuestions(any(), any(), anyString(), anyString(), anyString(), any(), any()))
+                .thenReturn(new ChannelAuthorizationClient.Delivery(
+                        ChannelAuthorizationClient.Delivery.Status.FAILED, "telegram", null, null));
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__unattendedRun__", true);
+
+        var result = provider.execute("ask_user", askParams(), context(creds));
+
+        assertThat(data(result)).containsEntry("status", "unavailable")
+                .containsEntry("reason", "channel_failed");
+    }
+
+    @Test
+    @DisplayName("With no channel wired at all it behaves exactly as before the feature")
+    void degradesWithoutTheChannelClient() {
+        provider.configureChannelClientForTest(null);
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__unattendedRun__", true);
+
+        var result = provider.execute("ask_user", askParams(), context(creds));
+
+        assertThat(data(result)).containsEntry("status", "unavailable")
+                .containsEntry("reason", "no_live_chat");
+        verify(gate, never()).beginPark(any());
+    }
+
+    @Test
+    @DisplayName("A workflow node never reaches the channel, because a reply has nowhere to land")
+    void aWorkflowNodeNeverAsksTheChannel() {
+        ChannelAuthorizationClient channelClient = mock(ChannelAuthorizationClient.class);
+        provider.configureChannelClientForTest(channelClient);
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__workflowRunId__", "run-1");
+
+        var result = provider.execute("ask_user", askParams(), context(creds));
+
+        // Asking would take a real answer from a real person and drop it: by the time they
+        // reply the node has completed and its conversation cannot be re-entered.
+        assertThat(data(result)).containsEntry("status", "unavailable")
+                .containsEntry("reason", "workflow_step");
+        verify(channelClient, never()).askQuestions(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test

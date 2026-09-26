@@ -16,9 +16,10 @@ import { ModelSelectorDropdown, PROVIDER_ICON_MAP } from '@/components/chat/Mode
 import { modelFilterLabelsFrom } from '@/components/chat/modelFilterLabels';
 import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { UpgradeRequiredNotice } from '@/components/billing/UpgradeRequiredBadge';
-import { ComposerFreeTierBadge } from '@/components/billing/FreeTierBadge';
+import { FreeTierBadge } from '@/components/billing/FreeTierBadge';
 import { useMonthlyCreditsCannotPay } from '@/lib/hooks/useMonthlyCreditsCannotPay';
-import { resolveFreeTierPreferredModel } from '@/lib/hooks/usePreferFreeTierModel';
+import { resolveFreeTierPreferredModel } from '@/lib/models/freeTierModel';
+import { usePreferFreeTierModel } from '@/lib/hooks/usePreferFreeTierModel';
 import { useStreaming } from '@/contexts/StreamingContext';
 import { useVisibleModels, AIModel, SelectedModel, EMPTY_SELECTED_MODEL, modelMatches, selectedModelFromAIModel, selectedModelEquals, getEffectiveDefaultSelectedModel } from '@/hooks/useModels';
 import { useUnifiedAppSafe } from '@/contexts/UnifiedAppContext';
@@ -29,6 +30,8 @@ import { useTranslations } from 'next-intl';
 import { usePathname } from 'next/navigation';
 import type { AttachmentRef } from '@/lib/api/attachmentApi';
 import { subscribeAiChatMessages } from '@/lib/sidePanelChat';
+import { isOrbiChat } from '@/components/chat/orbi/isOrbiChat';
+import type { Conversation } from '@/lib/api/conversationApi';
 
 // Storage key prefix - suffixed with page context for per-page conversations
 const SIDE_PANEL_CONVERSATION_PREFIX = 'livecontext_side_panel_conversation_id';
@@ -72,9 +75,9 @@ export function ChatPanelContent() {
   const setSelectedModel = appContext?.setSelectedModel ?? ((_: SelectedModel) => {});
   const appSelectedModel: SelectedModel = appContext?.state.selectedModel ?? EMPTY_SELECTED_MODEL;
 
-  // V494: a free-tier account opens on a model its allowance covers, when one
+  // A Free account opens on a model its monthly credits cover, when one
   // exists. Without this the composer opens on the admin's global #1 and the very
-  // first turn of a fresh signup can be refused - the moment the allowance is for.
+  // first turn of a fresh signup can be refused.
   const defaultAIModel: AIModel | undefined = useMemo(
     () => resolveFreeTierPreferredModel(
       models,
@@ -102,6 +105,10 @@ export function ChatPanelContent() {
       setSelectedModel(effectiveDefault);
     }
   }, [isValidModel, effectiveDefault, appSelectedModel, setSelectedModel, appContext, verdictReady]);
+
+  // A Free account opens on the free tier's best-ranked model even when the browser
+  // restored another one (the stored selection is not scoped to the account).
+  usePreferFreeTierModel(models);
 
   const [showModelSelector, setShowModelSelector] = useState(false);
 
@@ -138,11 +145,14 @@ export function ChatPanelContent() {
       freeTierForModel={freeTierForModel}
       prefersFreeTierModels={prefersFreeTierModels}
       upgradeNotice={<UpgradeRequiredNotice blocked={creditsCannotPay} />}
-      freeTierBadge={<ComposerFreeTierBadge />}
+      freeTierBadge={<FreeTierBadge covered />}
     />
   );
 
   const [conversationId, setConversationId] = useState<string | null>(null);
+  // What the panel knows about its conversation, for the Orbi gate: a stored id can point at a
+  // conversation this panel did not create, so it is read, never assumed.
+  const [conversationMeta, setConversationMeta] = useState<Pick<Conversation, 'id' | 'kind' | 'agentId'> | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const conversationIdRef = useRef<string | null>(null);
@@ -160,6 +170,7 @@ export function ChatPanelContent() {
 
     // Reset state for new page context
     setConversationId(null);
+    setConversationMeta(null);
     conversationIdRef.current = null;
     setMessages([]);
 
@@ -176,6 +187,7 @@ export function ChatPanelContent() {
             const conv = await conversationApi.getConversation(storedId) as any;
             if (conv?.id) {
               setConversationId(conv.id);
+              setConversationMeta({ id: conv.id, kind: conv.kind, agentId: conv.agentId });
               conversationIdRef.current = conv.id;
               const msgs = await conversationApi.getRecentMessagesAsc(conv.id);
               if (Array.isArray(msgs)) setMessages(msgs);
@@ -232,6 +244,7 @@ export function ChatPanelContent() {
         if (newConv?.id) {
           cid = newConv.id;
           setConversationId(cid);
+          setConversationMeta({ id: newConv.id, kind: newConv.kind, agentId: newConv.agentId });
           conversationIdRef.current = cid;
           if (typeof window !== 'undefined') {
             sessionStorage.setItem(storageKey, cid);
@@ -380,6 +393,7 @@ export function ChatPanelContent() {
         leadingControl={leadingControl}
         welcomeLayout
         welcomeTitle={<WelcomeTitle>{t('sidePanel.welcomeTitle')}</WelcomeTitle>}
+        showOrbi={isOrbiChat({ conversationId, conversation: conversationMeta, agentId: null }) ? 'compact' : false}
       />
 
       {/* Mounted only while open: the dialog asks the catalogue for its models, and a panel that

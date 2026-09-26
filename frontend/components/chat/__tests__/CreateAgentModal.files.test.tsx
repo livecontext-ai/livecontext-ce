@@ -11,6 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // reaches the server - it would FAIL on the pre-change `{ size: 100, filesOnly: true }`.
 const { getExplorerEntries } = vi.hoisted(() => ({ getExplorerEntries: vi.fn() }));
 
+// The destination picker reads the workspace's destinations; that is covered in its own test.
+vi.mock('@/components/app/ChannelDestinationPicker', () => ({
+  ChannelDestinationPicker: () => null,
+  isWorking: () => true,
+  useChatDestinations: () => ({ destinations: [], workspaceDefault: null, isLoading: false, isError: false }),
+}));
 vi.mock('next-intl', () => ({
   useTranslations: (ns?: string) => (key: string) => `${ns}.${key}`,
 }));

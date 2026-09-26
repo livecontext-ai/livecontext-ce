@@ -1,0 +1,9 @@
+<svg fill="#ffffff" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="01.AI">
+  <rect width="512" height="512" rx="96" fill="#f1f1f1"/>
+  <text x="256" y="284" text-anchor="middle"
+        fill="#ffffff"
+        font-family="Inter, Arial, Helvetica, sans-serif"
+        font-size="112"
+        font-weight="700"
+        letter-spacing="2">01.AI</text>
+</svg>

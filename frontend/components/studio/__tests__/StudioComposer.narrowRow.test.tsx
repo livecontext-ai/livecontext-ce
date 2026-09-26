@@ -99,10 +99,6 @@ function renderComposer(width: number) {
       onSelectModel={vi.fn()}
       onSubmit={vi.fn(async () => true)}
       modeSwitch={<button type="button">mode-switch</button>}
-      // Rendered by every studio layout and never folded, so it is part of the row's budget at
-      // every width this suite measures. Left out, these tests would keep passing while the
-      // control they were written to protect was pushed off the end of a phone.
-      lookSwitch={<button type="button">look-switch</button>}
     />,
   );
 }
@@ -129,9 +125,6 @@ describe('StudioComposer - the button row on a narrow composer', () => {
 
     expect(screen.getByText('mode-switch')).toBeInTheDocument();
     expect(screen.getByTitle('composer.send')).toBeInTheDocument();
-    // The look switch joined the row later and never folds either, so it is held to the same
-    // promise: a control added to a row already over budget is how the next one gets clipped.
-    expect(screen.getByText('look-switch')).toBeInTheDocument();
   });
 
   it('moves the parameters behind ONE trigger instead of squeezing them', () => {
@@ -169,5 +162,20 @@ describe('StudioComposer - the button row on a narrow composer', () => {
 
     expect(screen.getByText('Seedance 2.5')).toBeInTheDocument();
     expect(screen.queryByTitle('composer.parameters')).not.toBeInTheDocument();
+  });
+  it('no longer accepts a look switch: the studio ground is fixed, not a choice', () => {
+    const selected = model();
+    render(
+      <StudioComposer
+        models={[selected]}
+        selectedModel={selected}
+        onSelectModel={vi.fn()}
+        onSubmit={vi.fn(async () => true)}
+        // @ts-expect-error The darkroom switch was removed; this prop must not type-check again.
+        lookSwitch={<button type="button">look-switch</button>}
+      />,
+    );
+    // And if someone re-adds the prop, the composer must not render it silently either.
+    expect(screen.queryByText('look-switch')).not.toBeInTheDocument();
   });
 });

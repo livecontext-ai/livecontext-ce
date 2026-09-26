@@ -35,10 +35,19 @@ import type { QueryClient } from '@tanstack/react-query';
  * this helper applies the same refresh to the direct-save (API key / basic /
  * bearer / custom) path so both flows behave identically.
  */
-export function invalidateCredentialCaches(queryClient: QueryClient): Promise<void> {
-  return queryClient.refetchQueries({
-    predicate: (q) =>
-      q.queryKey.some((k) => typeof k === 'string' && k.startsWith('user-credentials')),
-    type: 'all',
-  });
+export async function invalidateCredentialCaches(queryClient: QueryClient): Promise<void> {
+  await Promise.all([
+    queryClient.refetchQueries({
+      predicate: (q) =>
+        q.queryKey.some((k) => typeof k === 'string' && k.startsWith('user-credentials')),
+      type: 'all',
+    }),
+    // The setup checklist's evidence too: saving a credential is how "connect an app" gets done.
+    // ACTIVE only: a cached checklist of another workspace would otherwise be re-read under the
+    // current workspace's header and store this workspace's answer under that one's key.
+    queryClient.refetchQueries({
+      predicate: (q) => q.queryKey.includes('setup-checklist'),
+      type: 'active',
+    }),
+  ]);
 }

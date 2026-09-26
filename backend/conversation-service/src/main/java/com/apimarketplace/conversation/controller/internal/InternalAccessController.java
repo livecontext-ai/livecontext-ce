@@ -132,9 +132,15 @@ public class InternalAccessController {
                     log.warn("Failed to mark DB row completed for stream {}: {}", streamId, e.getMessage());
                 }
             } else if ("ERROR".equals(state)) {
-                streamStateService.error(streamId, "Agent execution error").block();
+                String reason = producerErrorMessage(body);
+                // Logged ONCE, at WARN: the producer already logged the real failure at
+                // ERROR in its own service. This line records the stream's terminal state
+                // and the reason it was handed, never a second incident.
+                log.warn("Stream {} finalized as ERROR by its producer: {}", streamId,
+                        bounded(reason, MAX_LOGGED_STREAM_ERROR_LENGTH));
+                streamStateService.error(streamId, reason).block();
                 try {
-                    streamService.markStreamAsError(streamId, "Agent execution error");
+                    streamService.markStreamAsError(streamId, reason);
                 } catch (Exception e) {
                     log.warn("Failed to mark DB row errored for stream {}: {}", streamId, e.getMessage());
                 }
@@ -149,6 +155,38 @@ public class InternalAccessController {
             log.warn("Failed to finalize stream {}: {}", streamId, e.getMessage());
             return ResponseEntity.ok().build(); // Best-effort
         }
+    }
+
+    /** Placeholder recorded when the producer sent no reason (a producer older than the field). */
+    public static final String DEFAULT_STREAM_ERROR = "Agent execution error";
+
+    /** Bound on the stored reason: it is a diagnostic, not a transcript. */
+    public static final int MAX_STREAM_ERROR_LENGTH = 2000;
+
+    /** Bound on the reason as it appears in a log line. */
+    static final int MAX_LOGGED_STREAM_ERROR_LENGTH = 500;
+
+    /**
+     * The reason the producer gave for an ERROR finalize, or the placeholder when it gave
+     * none. The field is optional so a producer that predates it keeps working unchanged.
+     *
+     * <p>The ONE reader of that field: the CE monolith's stub of this endpoint calls it too,
+     * so the two editions cannot disagree about the key. {@code error} is accepted as a
+     * legacy spelling because the CE stub used to read that key (which no producer sent).
+     */
+    public static String producerErrorMessage(Map<String, String> body) {
+        String reason = body == null ? null : body.get("errorMessage");
+        if ((reason == null || reason.isBlank()) && body != null) {
+            reason = body.get("error");
+        }
+        if (reason == null || reason.isBlank()) {
+            return DEFAULT_STREAM_ERROR;
+        }
+        return bounded(reason.strip(), MAX_STREAM_ERROR_LENGTH);
+    }
+
+    private static String bounded(String text, int max) {
+        return text.length() > max ? text.substring(0, max) + "..." : text;
     }
 
     // ==================== Snapshot Helpers ====================

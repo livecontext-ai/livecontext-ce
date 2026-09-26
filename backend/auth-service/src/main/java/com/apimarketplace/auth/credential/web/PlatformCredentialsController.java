@@ -5,7 +5,7 @@ import com.apimarketplace.auth.credential.domain.PlatformCredentialPricingVersio
 import com.apimarketplace.auth.credential.domain.PriceSpec;
 import com.apimarketplace.auth.credential.domain.PriceUnit;
 import com.apimarketplace.auth.credential.domain.PricingVersionEntry;
-import com.apimarketplace.auth.credential.service.CredentialService;
+import com.apimarketplace.auth.credential.service.ByokDeleteService;
 import com.apimarketplace.auth.credential.service.PlatformCredentialPricingService;
 import com.apimarketplace.auth.credential.service.PlatformCredentialService;
 import com.apimarketplace.auth.credential.service.TooManyByokAppsException;
@@ -16,7 +16,6 @@ import com.apimarketplace.common.web.TenantResolver;
 import com.fasterxml.jackson.databind.node.NullNode;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.transaction.annotation.Transactional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -43,7 +42,7 @@ public class PlatformCredentialsController {
 
     private final PlatformCredentialService service;
     private final PlatformCredentialPricingService pricingService;
-    private final CredentialService credentialService;
+    private final ByokDeleteService byokDeleteService;
     private final TenantResolver tenantResolver;
     // Optional CE-only bridge to the cloud's platform-credential public info (bean
     // absent on the cloud deployment - see CloudPlatformCredentialInfoAccess).
@@ -51,12 +50,12 @@ public class PlatformCredentialsController {
 
     public PlatformCredentialsController(PlatformCredentialService service,
                                           PlatformCredentialPricingService pricingService,
-                                          CredentialService credentialService,
+                                          ByokDeleteService byokDeleteService,
                                           TenantResolver tenantResolver,
                                           ObjectProvider<CloudPlatformCredentialInfoAccess> cloudPlatformInfoAccess) {
         this.service = service;
         this.pricingService = pricingService;
-        this.credentialService = credentialService;
+        this.byokDeleteService = byokDeleteService;
         this.tenantResolver = tenantResolver;
         this.cloudPlatformInfoAccess = cloudPlatformInfoAccess;
     }
@@ -389,6 +388,7 @@ public class PlatformCredentialsController {
      */
     @GetMapping("/my/{integrationName}/delete-impact")
     public ResponseEntity<?> deleteImpact(
+            HttpServletRequest httpRequest,
             @RequestHeader(value = "X-Authenticated", required = false) String authenticated,
             @RequestHeader("X-User-ID") String tenantId,
             @PathVariable String integrationName
@@ -399,7 +399,7 @@ public class PlatformCredentialsController {
         if (tenantId == null || tenantId.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "X-User-ID header is required"));
         }
-        int affected = credentialService.countDependentForByokDelete(tenantId, integrationName);
+        int affected = byokDeleteService.impact(integrationName, tenantId, tenantResolver.resolveOrgId(httpRequest));
         int displayed = Math.min(affected, 999);
         boolean truncated = affected > 999;
         return ResponseEntity.ok(Map.of(
@@ -420,10 +420,10 @@ public class PlatformCredentialsController {
      * the BYOK row intact so the user can retry, never an orphan with revoked
      * dependents and a still-live BYOK row.
      *
-     * <p>Wrapped in {@code @Transactional} so DB rollback covers both the dependent
-     * UPDATEs and the BYOK DELETE. Redis side-effects (refresh-disabled / refresh-cooldown
-     * sentinel deletes) ARE issued from inside the transaction by
-     * {@link CredentialService#revokeForByokDelete}, but they are NOT rolled back on
+     * <p>{@code ByokDeleteService.deleteWithCascade} runs in one transaction, so DB rollback covers
+     * both the dependent UPDATEs and the BYOK DELETE. Redis side-effects (refresh-disabled /
+     * refresh-cooldown sentinel deletes) ARE issued from inside the transaction by
+     * {@code CredentialService.revokeForByokDelete}, but they are NOT rolled back on
      * abort - Redis has no transactional boundary in this codebase. The asymmetry
      * is intentional and benign: on rollback the DB row reverts to {@code active},
      * and the worst-case Redis state (empty sentinel) makes the fast-path gate fall
@@ -432,7 +432,6 @@ public class PlatformCredentialsController {
      * benign. The DB status flip is always the source of truth.
      */
     @DeleteMapping("/my/{integrationName}")
-    @Transactional
     public ResponseEntity<?> deleteMy(
             HttpServletRequest httpRequest,
             @RequestHeader(value = "X-Authenticated", required = false) String authenticated,
@@ -450,16 +449,13 @@ public class PlatformCredentialsController {
         log.info("Deleting tenant platform credential '{}' for tenant {} (org {})",
                 integrationName, tenantId, organizationId);
 
-        // The dependent-token revoke cascade stays tenant-keyed for now (it
-        // operates on auth.credentials and is recoverable via re-auth); the BYOK
-        // row removal itself is workspace-scoped.
-        int revokedCredentialCount = credentialService.revokeForByokDelete(tenantId, integrationName);
-        boolean deleted = service.deleteCredential(integrationName, tenantId, organizationId);
+        // Only what THIS row's client issued is revoked, see ByokDeleteService.
+        ByokDeleteService.Result result = byokDeleteService.deleteWithCascade(integrationName, tenantId, organizationId);
 
         return ResponseEntity.ok(Map.of(
-                "deleted", deleted,
+                "deleted", result.deleted(),
                 "integrationName", integrationName,
-                "revokedCredentialCount", revokedCredentialCount
+                "revokedCredentialCount", result.revokedCredentialCount()
         ));
     }
 

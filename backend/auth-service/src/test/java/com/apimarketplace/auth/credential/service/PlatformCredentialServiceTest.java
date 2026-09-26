@@ -586,6 +586,122 @@ class PlatformCredentialServiceTest {
     // ========== updateCredential ==========
 
     @Nested
+    @DisplayName("saveCredential - own-client scope selection (V513)")
+    class ScopeSelectionTests {
+
+        private PlatformCredential tenantRow(String selectedScopes) {
+            return new PlatformCredential(
+                    21L, "tiktok", "TikTok", AuthType.OAUTH2,
+                    "t-cid", "t-csec", null, null, null,
+                    null, null, null, "tiktok", null, null, true, true,
+                    Map.of(), java.math.BigDecimal.ZERO, 0,
+                    Instant.now(), Instant.now(), null, "tenant-123", "primary", null, selectedScopes);
+        }
+
+        private CreatePlatformCredentialRequest requestWith(List<String> selectedScopes) {
+            return new CreatePlatformCredentialRequest(
+                    "tiktok", "TikTok", "oauth2",
+                    "new-cid", null, null, null, null,
+                    null, null, null, "tiktok", null, null, null, null, null,
+                    null, null, selectedScopes);
+        }
+
+        private PlatformCredential saveOver(PlatformCredential existing, List<String> selectedScopes) {
+            when(repository.findOwnedRow("tiktok", "tenant-123", null)).thenReturn(Optional.ofNullable(existing));
+            if (existing == null) {
+                when(repository.countByTenantIdAndOrganizationId("tenant-123", null)).thenReturn(0);
+            }
+            when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            lenient().when(repository.findEndpointsByCredentialId(any())).thenReturn(List.of());
+
+            service.saveCredential(requestWith(selectedScopes), "tenant-123");
+
+            ArgumentCaptor<PlatformCredential> captor = ArgumentCaptor.forClass(PlatformCredential.class);
+            verify(repository).save(captor.capture());
+            return captor.getValue();
+        }
+
+        @Test
+        @DisplayName("a create stores the chosen scopes space-separated, trimmed and de-duplicated")
+        void createStoresTheSelection() {
+            PlatformCredential saved = saveOver(null,
+                    List.of("user.info.basic", " video.upload ", "video.publish", "video.upload", ""));
+
+            assertThat(saved.selectedScopes()).isEqualTo("user.info.basic video.upload video.publish");
+        }
+
+        @Test
+        @DisplayName("an update with a new selection replaces the old one")
+        void updateReplacesTheSelection() {
+            PlatformCredential saved = saveOver(tenantRow("user.info.basic video.publish"),
+                    List.of("user.info.basic", "video.upload"));
+
+            assertThat(saved.selectedScopes()).isEqualTo("user.info.basic video.upload");
+        }
+
+        @Test
+        @DisplayName("an update that does not send a selection keeps the row's selection (a caller unaware of V513 must not wipe it)")
+        void updateWithoutSelectionKeepsTheStoredOne() {
+            PlatformCredential saved = saveOver(tenantRow("user.info.basic video.publish"), null);
+
+            assertThat(saved.selectedScopes()).isEqualTo("user.info.basic video.publish");
+        }
+
+        @Test
+        @DisplayName("an empty selection clears the row back to 'every catalog scope'")
+        void emptySelectionClearsIt() {
+            PlatformCredential saved = saveOver(tenantRow("user.info.basic"), List.of());
+
+            assertThat(saved.selectedScopes()).isNull();
+            assertThat(saved.selectedScopeList()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("updateCredential (the admin PUT, which knows nothing of V513) keeps the row's selection")
+        void updateCredentialKeepsTheSelection() {
+            when(repository.findByIntegrationName("tiktok", "tenant-123"))
+                    .thenReturn(Optional.of(tenantRow("user.info.basic video.publish")));
+            when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            lenient().when(repository.findById(any())).thenReturn(Optional.empty());
+            lenient().when(repository.findEndpointsByCredentialId(any())).thenReturn(List.of());
+
+            service.updateCredential("tiktok", new UpdatePlatformCredentialRequest(
+                    "TikTok renamed", null, null, null, null, null, null, null, null,
+                    null, null, null, null, null, null, null), "tenant-123");
+
+            ArgumentCaptor<PlatformCredential> captor = ArgumentCaptor.forClass(PlatformCredential.class);
+            verify(repository).save(captor.capture());
+            assertThat(captor.getValue().selectedScopes()).isEqualTo("user.info.basic video.publish");
+        }
+
+        @Test
+        @DisplayName("withTenantId / withOrganizationId / withId carry the selection (a copy that drops it would clear it on the next UPDATE)")
+        void copyMethodsKeepTheSelection() {
+            PlatformCredential row = tenantRow("video.upload");
+
+            assertThat(row.withTenantId("other").selectedScopes()).isEqualTo("video.upload");
+            assertThat(row.withOrganizationId("org-9").selectedScopes()).isEqualTo("video.upload");
+            assertThat(row.withId(99L).selectedScopes()).isEqualTo("video.upload");
+        }
+
+        @Test
+        @DisplayName("the POST /my JSON body binds selectedScopes, and a body without it binds null (keep the stored one)")
+        void requestJsonBindsTheSelection() throws Exception {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+            CreatePlatformCredentialRequest with = mapper.readValue(
+                    "{\"integrationName\":\"tiktok\",\"authType\":\"oauth2\",\"selectedScopes\":[\"video.upload\"]}",
+                    CreatePlatformCredentialRequest.class);
+            CreatePlatformCredentialRequest without = mapper.readValue(
+                    "{\"integrationName\":\"tiktok\",\"authType\":\"oauth2\"}",
+                    CreatePlatformCredentialRequest.class);
+
+            assertThat(with.selectedScopes()).containsExactly("video.upload");
+            assertThat(without.selectedScopes()).isNull();
+        }
+    }
+
+    @Nested
     @DisplayName("updateCredential")
     class UpdateCredentialTests {
 

@@ -31,6 +31,11 @@ public class StorageMappingResolverService implements MappingOperations {
 
     private static final Logger logger = LoggerFactory.getLogger(StorageMappingResolverService.class);
     private static final int PREVIEW_LIMIT = 200;
+    /**
+     * The exact error catalog-service's GET /api/tool-responses/mapping answers (200, success=false)
+     * when a tool has no mapping definition. Kept verbatim so only that answer is treated as normal.
+     */
+    static final String CATALOG_NO_MAPPING = "No mapping found for this tool";
 
     private final WebClient webClient;
     private final ObjectMapper objectMapper;
@@ -157,14 +162,20 @@ public class StorageMappingResolverService implements MappingOperations {
     }
 
     @SuppressWarnings("unchecked")
-    private MappingSpec parseMappingResponse(String responseJson, UUID toolId) throws Exception {
+    MappingSpec parseMappingResponse(String responseJson, UUID toolId) throws Exception {
         Map<String, Object> response = objectMapper.readValue(responseJson,
             objectMapper.getTypeFactory().constructMapType(Map.class, String.class, Object.class));
 
         boolean success = Boolean.TRUE.equals(response.get("success"));
         if (!success) {
             String error = (String) response.get("error");
-            logger.warn("Echec recuperation mapping spec pour toolId: {}, erreur: {}", toolId, error);
+            if (CATALOG_NO_MAPPING.equals(error)) {
+                // The tool simply has no response mapping: the normal state of most tools, not a failure.
+                logger.debug("No mapping spec for toolId: {}", toolId);
+            } else {
+                // Anything else is a catalog-side anomaly (e.g. a definition row with no version).
+                logger.warn("Echec recuperation mapping spec pour toolId: {}, erreur: {}", toolId, error);
+            }
             return null;
         }
 

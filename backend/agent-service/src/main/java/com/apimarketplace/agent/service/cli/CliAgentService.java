@@ -145,7 +145,11 @@ public class CliAgentService {
         credentials.put("conversationId", request != null && request.conversationId() != null
             ? request.conversationId() : sessionId);
         credentials.put("turnId", UUID.randomUUID().toString());
-        credentials.put("__agent_depth__", 0);
+        // A sub-agent on the bridge keeps its depth. Hard-coded to 0, its ask_user parked a card
+        // for a person nobody could see while the parent waited on it (prod 2026-09-23).
+        credentials.put("__agent_depth__",
+                request != null && request.agentDepth() != null && request.agentDepth() > 0
+                        ? request.agentDepth() : 0);
         // 2026-05-21 prod fix: stamp __orgId__ + __orgRole__ on session credentials
         // so every downstream RemoteToolExecutionService call forwards
         // X-Organization-ID + X-Organization-Role headers to the target tool service
@@ -208,6 +212,24 @@ public class CliAgentService {
         // the cap vanished exactly where it was needed) and present on the direct route when
         // an agent configures one (so the cap applied where it should not).
         credentials.put(ToolAuthorizationScope.KEY_CLI_BRIDGE_SESSION, true);
+
+        // The kind of run, as the dispatcher said it. The direct route reads these from the
+        // credentials it was handed; this route rebuilds its credentials here, so a marker not
+        // copied is gone, and every call then looked like a person watching the chat. Prod
+        // 2026-09-23: an unattended task's ask_user waited 150 s on a screen nobody had open and
+        // never reached the connected Telegram. Only written when set: absence is the default.
+        if (request != null && request.taskId() != null && !request.taskId().isBlank()) {
+            credentials.put(ToolAuthorizationScope.KEY_TASK_ID, request.taskId());
+        }
+        if (request != null && Boolean.TRUE.equals(request.unattendedRun())) {
+            credentials.put(ToolAuthorizationScope.KEY_UNATTENDED_RUN, true);
+        }
+        if (request != null && Boolean.TRUE.equals(request.requireToolAuthorization())) {
+            credentials.put(ToolAuthorizationScope.KEY_REQUIRE_AUTHORIZATION, true);
+        }
+        if (request != null && request.workflowRunId() != null && !request.workflowRunId().isBlank()) {
+            credentials.put(ToolAuthorizationScope.KEY_WORKFLOW_RUN_ID, request.workflowRunId());
+        }
 
         // The bridge's inactivity watchdog window for this run. Every tool call on this
         // session goes through RemoteToolExecutionService, and one that parks on an approval
@@ -286,7 +308,14 @@ public class CliAgentService {
             log.warn("CLI session agentId is not a UUID, leaving session unrestricted: {}", request.agentId());
             return;
         }
-        Map<String, Object> toolsConfig = agentService.getAgent(agentId, tenantId, organizationId, organizationRole)
+        java.util.Optional<AgentEntity> bound = agentService.getAgent(agentId, tenantId, organizationId, organizationRole);
+        // An armed agent asks permission wherever it runs. Read from the agent itself, not only from
+        // what the bridge forwarded: the session is where the gate reads it, so it must not depend on
+        // every dispatcher remembering to send it.
+        if (bound.map(AgentEntity::getRequireToolAuthorization).orElse(false)) {
+            credentials.put(ToolAuthorizationScope.KEY_REQUIRE_AUTHORIZATION, true);
+        }
+        Map<String, Object> toolsConfig = bound
             .map(AgentEntity::getToolsConfig)
             .orElse(null);
         if (toolsConfig != null) {
@@ -590,6 +619,15 @@ public class CliAgentService {
      *                   unclassifiable in the agent-health and product-analytics views.
      */
     private void recordObservability(CliSession session, long totalDuration, AgentStopReason stopReason) {
+        if (isRecordedByItsDispatcher(session)) {
+            // The run this session serves is recorded by whoever dispatched it (a chat, a task, a
+            // sub-agent), under this very id and with these same tool calls. A second row here was
+            // a phantom WORKFLOW run with provider "external", the CLI's own model name and no
+            // conversation, doubling every bridge turn in the run history (prod 2026-09-23).
+            log.debug("CLI session {} belongs to execution {}: its dispatcher records it",
+                    session.sessionId, session.credentials.get("__executionId__"));
+            return;
+        }
         try {
             AgentObservabilityRequest request = new AgentObservabilityRequest();
             request.setTenantId(session.tenantId);
@@ -671,6 +709,12 @@ public class CliAgentService {
     }
 
     // ==================== Session State ====================
+
+    /** True when the session serves a run a dispatcher already records (it passed the run's id). */
+    static boolean isRecordedByItsDispatcher(CliSession session) {
+        Object executionId = session.credentials != null ? session.credentials.get("__executionId__") : null;
+        return executionId != null && !String.valueOf(executionId).isBlank();
+    }
 
     static class CliSession {
         String sessionId;

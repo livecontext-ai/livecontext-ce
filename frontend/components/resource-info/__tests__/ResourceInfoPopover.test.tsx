@@ -65,6 +65,20 @@ describe('ResourceInfoPopover - the no-query-client contract', () => {
   });
 });
 
+describe('ResourceInfoPopover - the shared "i" layer', () => {
+  it('opens on the same layer as every other info panel, above any dialog it sits in', async () => {
+    // It used to keep the stock popover layer (z-[64]), under every dialog. It is the shared
+    // InfoPopover now, and the breadcrumb "i" can be opened with a modal on screen.
+    render(<ResourceInfoPopover ownerId="42" />);
+    open();
+
+    const panel = await screen.findByTestId('resource-info-popover');
+    const z = Number(/(?:^|\s)z-\[(\d+)\]/.exec(panel.className)?.[1] ?? 0);
+    expect(z).toBeGreaterThan(100000);
+    expect(panel.className).not.toMatch(/(?:^|\s)z-\[64\](?:\s|$)/);
+  });
+});
+
 describe('ResourceInfoPopover - the trigger actually toggles', () => {
   it('opens on click even though the trigger stops propagation for its host', async () => {
     // Regression: the trigger stops propagation so a click cannot reach the card or crumb

@@ -110,6 +110,25 @@ public class ModelExecutionLinkService {
     }
 
     /**
+     * True when the billed pair has an ENABLED link on at least one surface. Used by
+     * {@code ModelReplacementResolver} to accept a replacement that is only runnable through
+     * a link (its own provider carries no key, so the catalog does not list it).
+     */
+    public boolean isLinked(String billedProvider, String billedModel) {
+        if (billedProvider == null || billedProvider.isBlank()
+                || billedModel == null || billedModel.isBlank()) {
+            return false;
+        }
+        Map<String, ExecutionRoute> snap = snapshot();
+        for (ModelExecutionLinkScope scope : ModelExecutionLinkScope.values()) {
+            if (snap.containsKey(key(billedProvider, billedModel, scope))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * The effective execution pair for a SINGLE-COMPLETION caller. Unlike the full
      * agent path there is no billed-identity re-stamp to carry: single completions
      * are not billed per-model, so the caller just executes on this pair.

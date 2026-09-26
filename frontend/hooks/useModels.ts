@@ -60,8 +60,8 @@ export interface AIModel {
   rateLimitRpmPerTenant?: number | null;
   providerKind?: 'cloud' | 'byok' | 'bridge';
   /**
-   * V494 - a cloud admin opened this model to the free tier, so a Free account's
-   * monthly AI allowance can pay for a chat or agent turn on it. CE answers FALSE
+   * A cloud admin opened this model to the free tier, so a Free account's monthly
+   * credits can pay for a chat or agent turn on it. CE answers FALSE
    * rather than omitting it (it runs the same migration; only a cloud admin can set
    * it true), and an older catalogue payload omits it entirely. Both read as "not on
    * the free tier": the safe direction, since it only ever withholds a benefit rather

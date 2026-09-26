@@ -92,6 +92,9 @@ public class DownloadFileNode extends BaseNode {
         earlyInputData.put("filename", filenameExpression);
         earlyInputData.put("mimeType", mimeTypeExpression);
 
+        // The raw resolved url, for scrubbing failure text (earlyInputData holds the masked one).
+        String rawUrl = null;
+
         try {
             // Validate required services
             if (fileStorageService == null) {
@@ -128,16 +131,18 @@ public class DownloadFileNode extends BaseNode {
                 // nothing will be, however many times this runs, and the message is what
                 // has to say so: this is the busiest door onto that rule.
                 return NodeExecutionResult.failureWithOutput(nodeId,
-                    "Refused to download " + url + ": " + e.getMessage(),
+                    "Refused to download " + ReportedParams.maskUrlSecrets(url) + ": "
+                        + ReportedParams.scrubUrl(e.getMessage(), url),
                     buildFailureOutput(url, earlyInputData, context), System.currentTimeMillis() - startTime);
             }
 
-            logger.info("Downloading from URL: {}", url);
+            rawUrl = url;
+            logger.info("Downloading from URL: {}", ReportedParams.maskUrlSecrets(url));
 
             // Download file using injected downloader
             byte[] content = fileDownloader.download(url);
 
-            logger.debug("Downloaded {} bytes from {}", content.length, url);
+            logger.debug("Downloaded {} bytes from {}", content.length, ReportedParams.maskUrlSecrets(url));
 
             // Check file size
             if (content.length > FileConstants.MAX_FILE_SIZE_BYTES) {
@@ -151,6 +156,9 @@ public class DownloadFileNode extends BaseNode {
             if (filename == null || filename.isBlank()) {
                 filename = FileNameExtractor.fromUrl(url);
             }
+            // The failure paths below (upload refused, storage error) report earlyInputData: it
+            // must carry what the node resolved, not the configured {{...}} expression.
+            earlyInputData.put("filename", filename);
 
             // Resolve MIME type (or auto-detect)
             String mimeType = resolveExpression(mimeTypeExpression, context);
@@ -159,6 +167,7 @@ public class DownloadFileNode extends BaseNode {
                     ? mimeTypeRegistry.resolve(filename, content)
                     : FileConstants.DEFAULT_MIME_TYPE;
             }
+            earlyInputData.put("mimeType", mimeType);
 
             // Ensure filename has an extension (e.g., "600" from picsum.photos → "600.jpeg")
             if (filename != null && !filename.contains(".") && mimeType != null) {
@@ -213,9 +222,11 @@ public class DownloadFileNode extends BaseNode {
             return NodeExecutionResult.failureWithOutput(nodeId, "Download failed: " + e.getMessage(),
                 buildFailureOutput(resolvedUrl, earlyInputData, context), System.currentTimeMillis() - startTime);
         } catch (Exception e) {
-            logger.error("Download file failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
             String resolvedUrl = (String) earlyInputData.get("url");
-            return NodeExecutionResult.failureWithOutput(nodeId, "Download failed: " + e.getMessage(),
+            // Any client exception may word itself around the url; withhold its credentials.
+            String reason = ReportedParams.scrubUrl(e.getMessage(), rawUrl);
+            logger.error("Download file failed: nodeId={}, error={} ({})", nodeId, reason, e.getClass().getName());
+            return NodeExecutionResult.failureWithOutput(nodeId, "Download failed: " + reason,
                 buildFailureOutput(resolvedUrl, earlyInputData, context), System.currentTimeMillis() - startTime);
         }
     }
@@ -240,27 +251,9 @@ public class DownloadFileNode extends BaseNode {
         if (expression == null || expression.isBlank()) {
             return null;
         }
-
-        logger.info("📥 [DownloadFile] Resolving expression: {}", expression);
-        logger.info("📥 [DownloadFile] Context stepOutputs keys: {}",
-            context.stepOutputs() != null ? context.stepOutputs().keySet() : "NULL");
-
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object value = resolved.get("__expr__");
-                logger.info("📥 [DownloadFile] Resolved to: {}", value);
-                return value != null ? value.toString() : null;
-            } catch (Exception e) {
-                logger.warn("⚠️ Failed to resolve expression: {} - {}", expression, e.getMessage());
-                return expression; // Return as-is
-            }
-        } else {
-            logger.warn("📥 [DownloadFile] templateAdapter is NULL!");
-        }
-
-        return expression;
+        // One resolver for every field of every node: typed, JSON for a structure, never the
+        // configured template in place of a value (BaseNode#resolveTemplateValue).
+        return resolveTemplateString(expression, context);
     }
 
     private static String mimeTypeToExtension(String mimeType) {

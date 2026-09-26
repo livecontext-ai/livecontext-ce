@@ -30,6 +30,10 @@ public final class AuditEventTypes {
     public static final String PASSWORD_RESET_FAILED = "password.reset_failed";
     public static final String MFA_ENABLED = "mfa.enabled";
     public static final String MFA_DISABLED = "mfa.disabled";
+    /** A platform admin without a second factor was sent through TOTP enrollment at next login. */
+    public static final String MFA_SETUP_REQUIRED = "mfa.setup_required";
+    /** Recovery codes left behind by the removal of the last authenticator app were deleted. */
+    public static final String MFA_RECOVERY_CODES_RETIRED = "mfa.recovery_codes_retired";
 
     // ----- tokens -----
     public static final String TOKEN_REFRESHED = "token.refreshed";

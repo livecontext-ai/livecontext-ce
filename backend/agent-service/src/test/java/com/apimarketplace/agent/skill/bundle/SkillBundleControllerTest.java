@@ -4,6 +4,8 @@ import com.apimarketplace.agent.catalog.bundle.CatalogBundleSigner;
 import com.apimarketplace.agent.domain.SkillBundleEntity;
 import com.apimarketplace.agent.repository.SkillBundleSyncStatusRepository;
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
+import com.apimarketplace.common.plan.CeLinkRefusal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -93,16 +95,31 @@ class SkillBundleControllerTest {
     @Test
     @DisplayName("latest: a cloud user that does not own an active link -> 403")
     void latestNotLinked() {
-        when(authClient.userOwnsActiveCeLink("cloud-u", "install-1")).thenReturn(false);
+        when(authClient.ceLinkAccess("cloud-u", "install-1")).thenReturn(CeLinkAccessResult.notLinked());
         ResponseEntity<?> resp = controller.latestSignedBundle("cloud-u", "install-1");
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         verify(bundleService, never()).getActiveSignedBundle();
     }
 
     @Test
+    @DisplayName("latest and by-version: a linked account that is not on a paid plan -> 403 CLOUD_LINK_PLAN_REQUIRED")
+    void downloadsRefusedWhenPlanRequired() {
+        when(authClient.ceLinkAccess("cloud-u", "install-1")).thenReturn(CeLinkAccessResult.planRequired("FREE"));
+
+        ResponseEntity<?> latest = controller.latestSignedBundle("cloud-u", "install-1");
+        ResponseEntity<?> byVersion = controller.signedBundleByVersion("cloud-u", "install-1", 100L);
+
+        assertThat(latest.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(latest.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
+        assertThat(byVersion.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(byVersion.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
+        verify(bundleService, never()).getActiveSignedBundle();
+    }
+
+    @Test
     @DisplayName("latest: a linked install gets the active signed bundle (200)")
     void latestLinkedServesBundle() {
-        when(authClient.userOwnsActiveCeLink("cloud-u", "install-1")).thenReturn(true);
+        when(authClient.ceLinkAccess("cloud-u", "install-1")).thenReturn(CeLinkAccessResult.active("PRO"));
         when(bundleService.getActiveSignedBundle())
                 .thenReturn(Optional.of(new SignedSkillBundle(100, 1, "c", "s", "k", "i", 3, 50, "p")));
         ResponseEntity<?> resp = controller.latestSignedBundle("cloud-u", "install-1");
@@ -112,7 +129,7 @@ class SkillBundleControllerTest {
     @Test
     @DisplayName("latest: a linked install with no active bundle -> 404")
     void latestLinkedNoBundle() {
-        when(authClient.userOwnsActiveCeLink("cloud-u", "install-1")).thenReturn(true);
+        when(authClient.ceLinkAccess("cloud-u", "install-1")).thenReturn(CeLinkAccessResult.active("PRO"));
         when(bundleService.getActiveSignedBundle()).thenReturn(Optional.empty());
         ResponseEntity<?> resp = controller.latestSignedBundle("cloud-u", "install-1");
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);

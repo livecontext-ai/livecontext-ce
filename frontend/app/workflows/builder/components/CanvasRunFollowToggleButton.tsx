@@ -12,20 +12,20 @@ import {
 } from '@/app/workflows/builder/services/runCameraFollowStore';
 
 /**
- * Toolbar control for whether the camera keeps the running step in frame.
+ * Toolbar control for whether the camera follows the work in progress.
  *
  * It belongs in the View-controls group beside Focus, because it answers the same
  * question: where should the camera be. Focus frames the whole graph once; this keeps
- * framing whatever is running.
+ * framing what is happening. In RUN mode that is the step running (or, when nothing
+ * runs, the one waiting on the user); in EDIT mode it is the nodes an agent adds while
+ * it builds. So it shows in both modes, with a label naming what it follows in each.
  *
- * It renders NOTHING in edit mode, nor on a read-only preview canvas. No step can be
- * running in either, so the control would be permanently inert and would describe a
- * state you cannot reach. That is the same rule the file-strip toggle follows, and for
- * the same reason.
+ * It renders NOTHING on a read-only preview canvas, where nothing is ever built and
+ * whose camera the hook deliberately never moves.
  *
- * The state is a REMEMBERED preference: the moment you want to say "keep the running
- * node in front of me" is usually before the run starts, and once it is going you have
- * no hands free to arm it.
+ * The state is a REMEMBERED preference, ON by default: the moment you want to say
+ * "keep the work in front of me" is usually before the run or the build starts, and
+ * once it is going you have no hands free to arm it.
  *
  * Deliberately renders no wrapper of its own: it sits INSIDE the Focus group, so the
  * group's separator and spacing are already around it.
@@ -33,7 +33,8 @@ import {
 export function CanvasRunFollowToggleButton() {
   const t = useTranslations('workflowBuilder.canvas');
   const { isEditMode, isPreviewOnly } = useWorkflowMode();
-  const [enabled, setEnabled] = React.useState(false);
+  // Starts from the default (on), so the control does not flash unpressed on mount.
+  const [enabled, setEnabled] = React.useState(true);
 
   // Mount-time read, not render-time: the store reaches for localStorage, which does
   // not exist while server rendering.
@@ -42,9 +43,11 @@ export function CanvasRunFollowToggleButton() {
     return subscribeRunCameraFollow(setEnabled);
   }, []);
 
-  if (isEditMode || isPreviewOnly) return null;
+  if (isPreviewOnly) return null;
 
-  const label = enabled ? t('stopFollowingRunningNode') : t('followRunningNode');
+  const label = isEditMode
+    ? (enabled ? t('stopFollowingAgentBuild') : t('followAgentBuild'))
+    : (enabled ? t('stopFollowingRunningNode') : t('followRunningNode'));
 
   return (
     <button

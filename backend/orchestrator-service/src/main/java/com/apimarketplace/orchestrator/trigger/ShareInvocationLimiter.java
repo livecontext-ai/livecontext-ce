@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.trigger;
 
+import com.apimarketplace.common.web.LogSafePath;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -58,7 +59,7 @@ public class ShareInvocationLimiter {
             if (shareToken != null && !shareToken.isBlank()
                     && !incrementAndCheck("share:invoke:token:" + shareToken, perTokenDailyLimit)) {
                 logger.warn("Share invocation per-link daily cap ({}) reached for token {}",
-                        perTokenDailyLimit, shareToken);
+                        perTokenDailyLimit, LogSafePath.tokenPreview(shareToken));
                 return false;
             }
             if (ownerTenantId != null && !ownerTenantId.isBlank()

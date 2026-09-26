@@ -354,4 +354,89 @@ class SftpNodeTest {
                     .isEqualTo(java.util.Base64.getEncoder().encodeToString(data));
         }
     }
+
+    @Nested
+    @DisplayName("localContent that references a file")
+    class LocalContentFileReference {
+
+        private Map<String, Object> fileRef(String path) {
+            Map<String, Object> ref = new java.util.HashMap<>();
+            ref.put("_type", "file");
+            ref.put("path", path);
+            ref.put("name", "report.pdf");
+            return ref;
+        }
+
+        private SftpNode uploadNode(String host) {
+            Core.SftpConfig config = new Core.SftpConfig(
+                host, null, "user", "password", "pass123", null,
+                "upload", "/remote/report.pdf", "{{core:make.output.file}}", null, null, null
+            );
+            SftpNode node = new SftpNode("core:sftp", config);
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            Map<String, Object> values = new java.util.HashMap<>();
+            values.put("{{core:make.output.file}}", fileRef("tenant-1/files/report.pdf"));
+            when(adapter.resolveTemplates(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(values));
+            node.setTemplateAdapter(adapter);
+            return node;
+        }
+
+        @Test
+        @DisplayName("a file reference uploads the FILE's bytes; it used to upload the text \"{_type=file, path=...}\"")
+        @SuppressWarnings("unchecked")
+        void fileReferenceUploadsItsBytes() {
+            SftpNode node = uploadNode("   ");
+            com.apimarketplace.orchestrator.services.file.FileStorageService storage =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.file.FileStorageService.class);
+            when(storage.download("tenant-1/files/report.pdf")).thenReturn(java.util.Optional.of(new byte[1234]));
+            node.setFileStorageService(storage);
+
+            // The blank host stops the node before any connection; the content is resolved first.
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.isSuccess());
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(1234, params.get("localContentSize"));
+            org.mockito.Mockito.verify(storage).download("tenant-1/files/report.pdf");
+        }
+
+        @Test
+        @DisplayName("a file reference with no storage to read it from FAILS the node instead of uploading a description of the file")
+        void fileReferenceWithoutStorageFails() {
+            SftpNode node = uploadNode("sftp.example.com");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.isSuccess());
+            assertTrue(result.errorMessage().orElse("").contains("file storage is not available"),
+                "got: " + result.errorMessage().orElse(""));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("a {{...}} port and timeout are resolved and reported, not left on the typed defaults")
+    @SuppressWarnings("unchecked")
+    void templatedPortAndTimeoutAreResolved() {
+        Core.SftpConfig config = new Core.SftpConfig(null, null, "user", "password", "pass123", null, "list", "/remote/path", null, null, null, null);
+        SftpNode node = new SftpNode("core:sftp", config);
+        node.setDeferredScalars(java.util.Map.of("sftp", java.util.Map.of(
+            "port", "{{core:x.output.port}}", "timeout", "{{core:x.output.timeout}}")));
+        com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+            org.mockito.Mockito.mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+        org.mockito.Mockito.lenient().when(adapter.resolveTemplates(
+                org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.any()))
+            .thenAnswer(TemplateResolutionStubs.resolving(java.util.Map.of(
+                "{{core:x.output.port}}", "2222", "{{core:x.output.timeout}}", 45000)));
+        node.setTemplateAdapter(adapter);
+
+        // host is missing, so the node fails its validation right after building its params.
+        NodeExecutionResult result = node.execute(context);
+
+        assertFalse(result.isSuccess());
+        java.util.Map<String, Object> params = (java.util.Map<String, Object>) result.output().get("resolved_params");
+        assertEquals(2222, params.get("port"));
+        assertEquals(45000, params.get("timeout"));
+    }
 }

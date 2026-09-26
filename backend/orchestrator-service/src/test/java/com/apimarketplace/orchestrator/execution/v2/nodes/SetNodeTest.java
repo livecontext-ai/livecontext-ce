@@ -171,4 +171,49 @@ class SetNodeTest {
         assertEquals(1, output.get("id"));
         assertEquals("active", output.get("status"), "assignment should override input field");
     }
+
+    @Test
+    @DisplayName("a string-typed assignment whose reference resolves to an object is its JSON, not Java's {a=1} (which read as unresolved)")
+    void stringTypedObjectBecomesJson() {
+        Core.SetConfig config = new Core.SetConfig(List.of(
+            new Core.SetFieldAssignment("payload", "{{core:build.output.data}}", "string")
+        ), true, null);
+        SetNode node = new SetNode("core:set", config);
+        node.setTemplateAdapter(mockTemplateAdapter);
+        Map<String, Object> values = new HashMap<>();
+        values.put("{{core:build.output.data}}", new java.util.LinkedHashMap<>(Map.of("a", 1)));
+        when(mockTemplateAdapter.resolveTemplates(anyMap(), any()))
+            .thenAnswer(TemplateResolutionStubs.resolving(values));
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertTrue(result.isSuccess());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> output = (Map<String, Object>) result.output().get("output");
+        assertEquals("{\"a\":1}", output.get("payload"));
+    }
+
+    @Test
+    @DisplayName("a {{...}} keepOnlySet runs with the resolved boolean, not the typed default false")
+    void templatedKeepOnlySetIsResolved() {
+        Core.SetConfig config = new Core.SetConfig(List.of(
+            new Core.SetFieldAssignment("greeting", "hello", "string")
+        ), false, "{{core:src.output}}");
+        SetNode node = new SetNode("core:set", config);
+        node.setTemplateAdapter(mockTemplateAdapter);
+        node.setDeferredScalars(Map.of("set", Map.of("keepOnlySet", "{{core:x.output.n}}")));
+        Map<String, Object> values = new HashMap<>();
+        values.put("{{core:src.output}}", new java.util.LinkedHashMap<>(Map.of("upstream", 1)));
+        values.put("{{core:x.output.n}}", "true");
+        when(mockTemplateAdapter.resolveTemplates(anyMap(), any()))
+            .thenAnswer(TemplateResolutionStubs.resolving(values));
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> output = (Map<String, Object>) result.output().get("output");
+        assertFalse(output.containsKey("upstream"), "keepOnlySet resolved to true drops the input fields: " + output);
+        assertEquals("hello", output.get("greeting"));
+    }
 }

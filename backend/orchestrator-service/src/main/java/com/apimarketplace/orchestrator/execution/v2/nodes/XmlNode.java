@@ -55,9 +55,16 @@ public class XmlNode extends BaseNode {
         // passed to the report, so `value` means the same here as on ConvertToFileNode and
         // CompressionNode - the data, not a second resolution of the expression.
         Object[] resolvedValue = new Object[1];
+        // Same for the root element name: resolved once, used by the conversion, reported.
+        String[] resolvedRoot = new String[1];
+        // preserveAttributes as this execution reads it (a {{...}} one is resolved here).
+        Boolean[] resolvedPreserve = new Boolean[1];
 
         try {
             Map<String, Object> result = new HashMap<>();
+            Core.XmlConfig cfg = withDeferredScalars("xml", xmlConfig, Core.XmlConfig.class, context);
+            boolean preserveAttrs = cfg != null && cfg.preserveAttributes();
+            resolvedPreserve[0] = preserveAttrs;
 
             String value = xmlConfig != null ? xmlConfig.value() : null;
 
@@ -66,14 +73,16 @@ public class XmlNode extends BaseNode {
                 case "xmlToJson" -> {
                     String xml = resolveExpression(value, context);
                     resolvedValue[0] = xml;
-                    yield executeXmlToJson(xml);
+                    yield executeXmlToJson(xml, preserveAttrs);
                 }
                 // jsonToXml needs the RAW resolved value (Map/List/JSON-string), not the
                 // stringified form, so a configured value is honored instead of dumping context.
                 case "jsonToXml" -> {
                     Object raw = resolveExpressionRaw(value, context);
                     resolvedValue[0] = raw;
-                    yield executeJsonToXml(raw, context);
+                    String root = resolveExpression(xmlConfig != null ? xmlConfig.rootElement() : null, context);
+                    resolvedRoot[0] = root == null || root.isBlank() ? "root" : root;
+                    yield executeJsonToXml(raw, resolvedRoot[0], context);
                 }
                 default -> throw new IllegalArgumentException("Unknown XML operation: " + operation);
             };
@@ -87,7 +96,7 @@ public class XmlNode extends BaseNode {
             result.put("item_index", context.itemIndex());
             result.put("itemIndex", context.itemIndex());
             result.put("item_id", context.itemId());
-            result.put("resolved_params", buildInputDataMap(operation, resolvedValue[0]));
+            result.put("resolved_params", buildInputDataMap(operation, resolvedValue[0], resolvedRoot[0], resolvedPreserve[0]));
 
             logger.info("XML completed: nodeId={}, operation={}", nodeId, operation);
             return NodeExecutionResult.success(nodeId, result);
@@ -100,7 +109,7 @@ public class XmlNode extends BaseNode {
             failOutput.put("item_index", context.itemIndex());
             failOutput.put("itemIndex", context.itemIndex());
             failOutput.put("item_id", context.itemId());
-            failOutput.put("resolved_params", buildInputDataMap(operation, resolvedValue[0]));
+            failOutput.put("resolved_params", buildInputDataMap(operation, resolvedValue[0], resolvedRoot[0], resolvedPreserve[0]));
             failOutput.put("error", e.getMessage());
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failOutput, 0L);
         }
@@ -109,7 +118,7 @@ public class XmlNode extends BaseNode {
     /**
      * Parse XML string to a JSON-like Map structure.
      */
-    private Map<String, Object> executeXmlToJson(String xmlString) throws Exception {
+    private Map<String, Object> executeXmlToJson(String xmlString, boolean preserveAttrs) throws Exception {
         if (xmlString == null || xmlString.isBlank()) {
             throw new IllegalArgumentException("XML input value is required for xmlToJson operation");
         }
@@ -124,7 +133,7 @@ public class XmlNode extends BaseNode {
         Document document = builder.parse(new InputSource(new StringReader(xmlString)));
         document.getDocumentElement().normalize();
 
-        return elementToMap(document.getDocumentElement());
+        return elementToMap(document.getDocumentElement(), preserveAttrs);
     }
 
     /**
@@ -141,9 +150,7 @@ public class XmlNode extends BaseNode {
      * Previously the resolved value was stringified and only ever used as a step-output key,
      * so any real JSON value fell through to dumping the entire execution context.
      */
-    private String executeJsonToXml(Object resolvedValue, ExecutionContext context) throws Exception {
-        String rootElement = xmlConfig != null && xmlConfig.rootElement() != null
-            ? xmlConfig.rootElement() : "root";
+    private String executeJsonToXml(Object resolvedValue, String rootElement, ExecutionContext context) throws Exception {
 
         Map<String, Object> jsonData = coerceToJsonData(resolvedValue, context);
 
@@ -181,22 +188,12 @@ public class XmlNode extends BaseNode {
         if (expression == null || expression.isBlank()) {
             return null;
         }
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                return resolved.get("__expr__");
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression '{}': {}", expression, e.getMessage());
-                return expression;
-            }
-        }
-        return expression;
+        return resolveTemplateValue(expression, context);
     }
 
     /**
      * Coerce a resolved {@code value} into the JSON map serialized by jsonToXml. See
-     * {@link #executeJsonToXml(Object, ExecutionContext)} for the resolution order.
+     * {@link #executeJsonToXml(Object, String, ExecutionContext)} for the resolution order.
      */
     @SuppressWarnings("unchecked")
     private Map<String, Object> coerceToJsonData(Object value, ExecutionContext context) {
@@ -246,9 +243,8 @@ public class XmlNode extends BaseNode {
      * Handles attributes (if preserveAttributes is true), text content,
      * and child elements (including repeated elements as lists).
      */
-    private Map<String, Object> elementToMap(Element element) {
+    private Map<String, Object> elementToMap(Element element, boolean preserveAttrs) {
         Map<String, Object> map = new LinkedHashMap<>();
-        boolean preserveAttrs = xmlConfig != null && xmlConfig.preserveAttributes();
 
         // Handle attributes
         if (preserveAttrs && element.hasAttributes()) {
@@ -275,7 +271,7 @@ public class XmlNode extends BaseNode {
             if (child.getNodeType() == Node.ELEMENT_NODE) {
                 hasElementChildren = true;
                 String childName = child.getNodeName();
-                Map<String, Object> childValue = elementToMap((Element) child);
+                Map<String, Object> childValue = elementToMap((Element) child, preserveAttrs);
 
                 childMap.computeIfAbsent(childName, k -> new ArrayList<>()).add(childValue);
             } else if (child.getNodeType() == Node.TEXT_NODE
@@ -404,32 +400,23 @@ public class XmlNode extends BaseNode {
         if (expression == null || expression.isBlank()) {
             return null;
         }
-
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object result = resolved.get("__expr__");
-                return result != null ? String.valueOf(result) : expression;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression '{}': {}", expression, e.getMessage());
-                return expression;
-            }
-        }
-
-        return expression;
+        // One resolver for every field of every node: typed, JSON for a structure, never the
+        // configured template in place of a value (BaseNode#resolveTemplateValue).
+        return resolveTemplateString(expression, context);
     }
 
     /**
      * The node's configuration, as the node itself reads it.
      *
-     * <p>Both of these were re-resolved for display only. {@code rootElement} is used
-     * CONFIGURED by the conversion, so a resolved one named an element the document does
-     * not have; {@code value} is the whole document, and re-resolving it both ran the
+     * <p>Both of these used to be re-resolved for display only. {@code rootElement} is now
+     * resolved ONCE in {@link #execute}, and that value both names the document's root and is
+     * reported here (a {@code {{...}}} root used to name the element literally, and the XML
+     * parser rejected it). {@code value} is the whole document, and re-resolving it both ran the
      * expression a second time and coerced it to a String on the way onto the step row of
      * every item.
      */
-    private Map<String, Object> buildInputDataMap(String operation, Object resolvedValue) {
+    private Map<String, Object> buildInputDataMap(String operation, Object resolvedValue, String resolvedRoot,
+                                                  Boolean resolvedPreserve) {
         Map<String, Object> inputData = new LinkedHashMap<>();
         inputData.put("operation", operation);
         if (xmlConfig != null) {
@@ -437,8 +424,19 @@ public class XmlNode extends BaseNode {
             if (reportedValue != null) {
                 inputData.put("value", ReportedParams.valueFrom(xmlConfig.value(), reportedValue));
             }
-            if (xmlConfig.rootElement() != null) inputData.put("rootElement", xmlConfig.rootElement());
-            inputData.put("preserveAttributes", xmlConfig.preserveAttributes());
+            // Before the conversion resolved it (or on xmlToJson, which has no root), the
+            // configured text is all there is to report.
+            Object reportedRoot = resolvedRoot != null ? resolvedRoot : xmlConfig.rootElement();
+            if (reportedRoot != null) {
+                inputData.put("rootElement", ReportedParams.valueFrom(xmlConfig.rootElement(), reportedRoot));
+            }
+            String preserveTemplate = deferredScalar("xml", "preserveAttributes");
+            if (preserveTemplate == null) {
+                inputData.put("preserveAttributes", xmlConfig.preserveAttributes());
+            } else {
+                inputData.put("preserveAttributes", resolvedPreserve != null
+                    ? ReportedParams.valueFrom(preserveTemplate, resolvedPreserve) : preserveTemplate);
+            }
         }
         return ReportedParams.forReport(inputData);
     }

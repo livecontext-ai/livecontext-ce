@@ -180,6 +180,17 @@ public interface CreditLedgerRepository extends JpaRepository<CreditLedgerEntry,
 
     boolean existsBySourceId(String sourceId);
 
+    /**
+     * Whether {@code sourceId} carries a row that RECORDS something (a charge, a grant, a
+     * reservation), as opposed to a {@code *_REJECTED} audit of a refusal. The idempotency
+     * guards of the consume paths ask this: a refusal must never make a retry look already
+     * paid. Rejection rows are keyed apart since 2026-09-25, so only legacy rows can match the
+     * exclusion.
+     */
+    @Query("SELECT COUNT(e) > 0 FROM CreditLedgerEntry e " +
+           "WHERE e.sourceId = :sourceId AND e.sourceType NOT LIKE '%\\_REJECTED' ESCAPE '\\'")
+    boolean existsNonRejectionBySourceId(@Param("sourceId") String sourceId);
+
     @Query("SELECT CAST(e.createdAt AS date), e.sourceType, COUNT(e), SUM(ABS(e.amount)), " +
            "COALESCE(SUM(e.promptTokens),0) + COALESCE(SUM(e.completionTokens),0) " +
            "FROM CreditLedgerEntry e WHERE e.userId = :userId AND e.amount < 0 " +
@@ -206,6 +217,30 @@ public interface CreditLedgerRepository extends JpaRepository<CreditLedgerEntry,
                                           @Param("provider") String provider,
                                           @Param("model") String model,
                                           @Param("orgId") String orgId);
+
+    /**
+     * Spend per (provider, model, source type) over the window {@code [from, to)}, with the same
+     * optional filters as {@link #getDailyUsageFiltered}. The Usage page calls it twice: over the
+     * period it shows (the "by model" table) and over the period before it (the comparison).
+     * Rows: provider, model, sourceType, count, credits, tokens.
+     */
+    @Query("SELECT e.provider, e.model, e.sourceType, COUNT(e), SUM(ABS(e.amount)), " +
+           "COALESCE(SUM(e.promptTokens),0) + COALESCE(SUM(e.completionTokens),0) " +
+           "FROM CreditLedgerEntry e WHERE e.userId = :userId AND e.amount < 0 " +
+           "AND e.createdAt >= :from AND e.createdAt < :to " +
+           "AND e.sourceType <> 'PLATFORM_MARKUP_RESERVE' " +
+           "AND (:sourceType IS NULL OR e.sourceType = :sourceType) " +
+           "AND (:provider IS NULL OR e.provider = :provider) " +
+           "AND (:model IS NULL OR e.model = :model) " +
+           "AND (:orgId IS NULL OR e.organizationId = :orgId) " +
+           "GROUP BY e.provider, e.model, e.sourceType")
+    List<Object[]> getModelUsage(@Param("userId") Long userId,
+                                 @Param("from") LocalDateTime from,
+                                 @Param("to") LocalDateTime to,
+                                 @Param("sourceType") String sourceType,
+                                 @Param("provider") String provider,
+                                 @Param("model") String model,
+                                 @Param("orgId") String orgId);
 
     @Query("SELECT DISTINCT e.provider FROM CreditLedgerEntry e " +
            "WHERE e.userId = :userId AND e.provider IS NOT NULL AND e.amount < 0 AND e.createdAt >= :from " +
@@ -325,6 +360,27 @@ public interface CreditLedgerRepository extends JpaRepository<CreditLedgerEntry,
                                                             @Param("provider") String provider,
                                                             @Param("model") String model,
                                                             @Param("orgId") String orgId);
+
+    /** Member-view companion of {@link #getModelUsage}: payer + executor intersection. */
+    @Query("SELECT e.provider, e.model, e.sourceType, COUNT(e), SUM(ABS(e.amount)), " +
+           "COALESCE(SUM(e.promptTokens),0) + COALESCE(SUM(e.completionTokens),0) " +
+           "FROM CreditLedgerEntry e " +
+           "WHERE e.userId = :payerUserId AND e.executorUserId = :executorUserId " +
+           "AND e.amount < 0 AND e.createdAt >= :from AND e.createdAt < :to " +
+           "AND e.sourceType <> 'PLATFORM_MARKUP_RESERVE' " +
+           "AND (:sourceType IS NULL OR e.sourceType = :sourceType) " +
+           "AND (:provider IS NULL OR e.provider = :provider) " +
+           "AND (:model IS NULL OR e.model = :model) " +
+           "AND (:orgId IS NULL OR e.organizationId = :orgId) " +
+           "GROUP BY e.provider, e.model, e.sourceType")
+    List<Object[]> getModelUsageForPayerAndExecutor(@Param("payerUserId") Long payerUserId,
+                                                    @Param("executorUserId") Long executorUserId,
+                                                    @Param("from") LocalDateTime from,
+                                                    @Param("to") LocalDateTime to,
+                                                    @Param("sourceType") String sourceType,
+                                                    @Param("provider") String provider,
+                                                    @Param("model") String model,
+                                                    @Param("orgId") String orgId);
 
     @Query("SELECT DISTINCT e.provider FROM CreditLedgerEntry e " +
            "WHERE e.userId = :payerUserId AND e.executorUserId = :executorUserId " +

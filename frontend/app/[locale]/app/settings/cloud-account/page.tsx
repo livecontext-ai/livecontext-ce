@@ -54,6 +54,11 @@ import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { IS_CE } from '@/lib/edition/edition';
 import { cn } from '@/lib/utils';
 import BundlesSection from './components/BundlesSection';
+import { CloudLinkPlanRequiredBanner } from '@/components/cloud-link/CloudLinkPlanRequiredBanner';
+import {
+  CloudLinkExpiredNotice,
+  useCloudLinkExpired,
+} from '@/components/cloud-link/CloudLinkExpiredNotice';
 
 const CE_DOCS_URL = 'https://docs.livecontext.ai/community-edition';
 const STALE_AMBER_DAYS = 7;
@@ -84,6 +89,8 @@ function ThisInstallSection() {
   // OFF = credentials configured and used locally on this install.
   const [catalogSaving, setCatalogSaving] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  // ?cloud_link_error=expired: the backend no longer knew the OAuth state of the callback.
+  const cloudLinkExpired = useCloudLinkExpired();
 
   const loadStatus = useCallback(async () => {
     try {
@@ -146,8 +153,7 @@ function ThisInstallSection() {
 
   async function handleConnect() {
     try {
-      const { authUrl } = await cloudLinkService.getAuthUrl();
-      window.location.href = authUrl;
+      window.location.href = await cloudLinkService.getConnectUrl();
     } catch (err: any) {
       setError(err?.message || tErr('startConnect'));
       setState('error');
@@ -205,6 +211,8 @@ function ThisInstallSection() {
 
   return (
     <>
+      {cloudLinkExpired && !connected && <CloudLinkExpiredNotice />}
+      {connected && status?.planRequired && <CloudLinkPlanRequiredBanner />}
       <div className="rounded-xl border border-theme p-6">
         <div className="flex items-start gap-4">
           <div className="w-10 h-10 rounded-xl bg-theme-secondary flex items-center justify-center shrink-0">

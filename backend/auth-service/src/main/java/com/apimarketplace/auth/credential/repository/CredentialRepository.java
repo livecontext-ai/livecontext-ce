@@ -683,6 +683,29 @@ public class CredentialRepository {
     }
 
     /**
+     * ACTIVE/EXPIRING credentials of {@code tenantId} a BYOK client may have issued: those whose
+     * stored {@code client_id} / {@code oauth_client_id} is {@code clientId} (any integration, so
+     * a client shared across integrations is covered), plus legacy rows that store no client id at
+     * all but hold OAuth tokens. The caller decides which of them the deletion really orphans, integration match
+     * included ({@code CredentialService.findByokDependents}), with the same name normalizer as
+     * the refresh resolver, which SQL cannot reproduce.
+     */
+    public List<Credential> findActiveByTenantIdAndIssuerOrLegacy(String tenantId, String clientId) {
+        String sql = """
+            SELECT * FROM auth.credentials
+            WHERE tenant_id = ?
+              AND status IN ('active', 'expiring')
+              AND (credential_data->>'client_id' = ?
+                   OR credential_data->>'oauth_client_id' = ?
+                   OR (credential_data->>'client_id' IS NULL AND credential_data->>'oauth_client_id' IS NULL
+                       AND (credential_data->>'access_token' IS NOT NULL
+                            OR credential_data->>'refresh_token' IS NOT NULL)))
+            ORDER BY is_default DESC, created_at DESC
+            """;
+        return jdbc.query(sql, new CredentialRowMapper(), tenantId, clientId, clientId);
+    }
+
+    /**
      * Count ACTIVE/EXPIRING credentials by tenant matching the same normalized-integration
      * predicate as {@link #findActiveByTenantIdAndIntegrationNormalized}. Used by
      * {@code GET /my/{name}/delete-impact} so the displayed count matches what the cascade

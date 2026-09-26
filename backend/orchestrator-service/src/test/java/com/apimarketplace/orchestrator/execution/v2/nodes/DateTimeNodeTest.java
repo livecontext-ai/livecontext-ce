@@ -1267,4 +1267,42 @@ class DateTimeNodeTest {
             }
         };
     }
+
+    @Nested
+    @DisplayName("templated durationAmount")
+    class TemplatedDurationAmount {
+
+        private DateTimeNode templatedNode(Object resolvedAmount) {
+            Core.DateTimeConfig config = new Core.DateTimeConfig(
+                "add", "2025-01-01T00:00:00Z", null, null, "UTC", null, "days", 0, null, null);
+            DateTimeNode node = new DateTimeNode("core:datetime", config);
+            node.acceptServices(ServiceRegistry.builder().templateAdapter(mockTemplateAdapter).build());
+            node.setDeferredScalars(Map.of("dateTime", Map.of("durationAmount", "{{core:x.output.n}}")));
+            when(mockTemplateAdapter.resolveTemplates(any(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:x.output.n}}", resolvedAmount)));
+            return node;
+        }
+
+        @Test
+        @DisplayName("regression: a {{...}} durationAmount is resolved; it used to drop the whole dateTime config")
+        @SuppressWarnings("unchecked")
+        void templatedAmountIsResolved() {
+            NodeExecutionResult result = templatedNode("5").execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            assertTrue(String.valueOf(result.output().get("result")).startsWith("2025-01-06"),
+                String.valueOf(result.output().get("result")));
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(5L, params.get("durationAmount"));
+        }
+
+        @Test
+        @DisplayName("a {{...}} durationAmount resolving to a non-number fails, naming the field")
+        void templatedAmountNotANumberFails() {
+            NodeExecutionResult result = templatedNode("soon").execute(context);
+
+            assertFalse(result.isSuccess());
+            assertTrue(result.errorMessage().orElse("").contains("dateTime"), result.errorMessage().orElse(""));
+        }
+    }
 }

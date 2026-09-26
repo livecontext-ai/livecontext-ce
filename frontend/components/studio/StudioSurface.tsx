@@ -14,8 +14,7 @@ import { takeStudioRecipe, recipeToRequest } from '@/lib/generation/studioHandof
 import { STUDIO_MESSAGE_TYPE, generationWasCharged, type StudioRequestEnvelope } from '@/lib/generation/studioMessage';
 import type { GenerationModel } from '@/lib/api/orchestrator/generation.service';
 import { StudioComposer } from '@/components/studio/StudioComposer';
-import { StudioLookSwitch } from '@/components/studio/StudioLookSwitch';
-import { StudioLookProvider, studioLookClass, useStudioLook } from '@/hooks/useStudioLook';
+import { StudioBackdrop } from '@/components/studio/StudioBackdrop';
 import { useMobileDetection } from '@/hooks/useMobileDetection';
 import { StudioTurnCard } from '@/components/studio/StudioTurnCard';
 import { StudioApps } from '@/components/studio/StudioApps';
@@ -26,6 +25,12 @@ import { HomeModeSwitch } from '@/components/chat/HomeModeSwitch';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { openFilesPanel } from '@/lib/sidePanel/openFilesPanel';
 import type { GenerationHistoryEntry } from '@/lib/api/storage-api';
+import {
+  outcomeOfGenerationResult,
+  trackStudioGenerationSubmitted,
+  trackStudioModelSelected,
+} from '@/lib/generation/studioAnalytics';
+import type { StudioTurnErrorCode } from '@/hooks/useStudioTurn';
 
 /**
  * The studio: a composer, and the thread of what has been made with it.
@@ -60,26 +65,6 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
   // and a thrown context here would take the whole studio down to open a file.
   const sidePanel = useSidePanelSafe();
   const { models, availability, isLoading: modelsLoading } = useGenerationModels(canGenerate);
-
-  /**
-   * The ground this surface draws itself on, and the one visual decision the studio makes for
-   * itself rather than inheriting.
-   *
-   * <p>Applied as a class on the surface's own root, which REDEFINES the app's colour tokens for
-   * everything inside it. That is what makes the treatment one block of CSS instead of a second
-   * styling of every control in here: the composer, the pickers, the turn cards and the history all
-   * read the same tokens they already read.
-   *
-   * <p>The ground is painted only when the studio look is chosen. On the app's own theme the class
-   * is empty and the surface stays exactly as transparent as it was, so a reader who never touches
-   * the switch sees no change at all - which is what makes this an offer rather than a redecoration.
-   *
-   * <p>One spelling, from `studioLookClass`, which carries the ground as well as the tokens. The
-   * provider beside it is for the menus: a popover renders in a portal on the document, so it
-   * cannot inherit any of this and has to be handed it through React instead.
-   */
-  const [look, setLook] = useStudioLook();
-  const lookClass = studioLookClass(look);
 
   const [selectedModel, setSelectedModel] = React.useState<GenerationModel | null>(null);
   // A prompt handed back by "reuse", consumed once by the composer.
@@ -127,6 +112,13 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
     }
     setSelectedModel(next);
   }, [selectedModel]);
+
+  // The composer's pick is the reader's choice; the other callers of handleSelectModel restore a
+  // model (from the thread, a recipe, a reuse) and are not reported.
+  const handleUserSelectModel = React.useCallback((next: GenerationModel) => {
+    trackStudioModelSelected(next, 'studio');
+    handleSelectModel(next);
+  }, [handleSelectModel]);
 
   // The conversation this surface is actually reading: the one in the route, or the one a turn
   // created before the route caught up. Without the second half, a studio that created its
@@ -241,6 +233,26 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
     onTurnRecorded: refreshThread,
   });
 
+  // The submission awaiting its analytics outcome. A turn that never reached the thread comes back
+  // from `run` as null, and only the hook's `error` says why, so those outcomes are reported from
+  // the error below; a recorded or lost turn is reported in handleSubmit, which clears this first.
+  const awaitingOutcomeRef = React.useRef<{
+    model: Pick<GenerationModel, 'model' | 'kind' | 'provider'>;
+    credentialSource: 'platform' | 'user';
+  } | null>(null);
+  React.useEffect(() => {
+    const submitted = awaitingOutcomeRef.current;
+    if (!error || !submitted) return;
+    awaitingOutcomeRef.current = null;
+    const byCode: Record<StudioTurnErrorCode, 'refused' | 'failed' | 'lost'> = {
+      refused: 'refused',
+      connection_lost: 'lost',
+      conversation_create_failed: 'failed',
+      unexpected: 'failed',
+    };
+    trackStudioGenerationSubmitted(submitted.model, submitted.credentialSource, byCode[error.code], 'studio');
+  }, [error]);
+
   const handleSubmit = React.useCallback(async (input: {
     prompt: string;
     params: Record<string, unknown>;
@@ -267,6 +279,10 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
       credentialSource,
     };
     setPendingRequest(mine);
+    // A second submit while one is in flight is refused by `run` without an answer; it must not
+    // take over the slot of the turn that is actually running.
+    const submitted = { model: selectedModel, credentialSource };
+    if (!awaitingOutcomeRef.current) awaitingOutcomeRef.current = submitted;
     try {
       const outcome = await run({
         prompt: input.prompt,
@@ -281,8 +297,20 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
       });
       if (!outcome) {
         // Nothing was sent and nothing was charged, so the words and the files are still worth
-        // keeping: this is the one case where the composer holds its draft.
+        // keeping: this is the one case where the composer holds its draft. Its analytics outcome,
+        // if the turn was attempted at all, is reported from the hook's error (see above).
         return false;
+      }
+      // Reported once: a lost turn also sets the hook's error, and whichever of the two paths
+      // runs first takes the slot.
+      if (awaitingOutcomeRef.current === submitted) {
+        awaitingOutcomeRef.current = null;
+        trackStudioGenerationSubmitted(
+          submitted.model,
+          submitted.credentialSource,
+          outcome.status === 'lost' ? 'lost' : outcomeOfGenerationResult(outcome.result),
+          'studio',
+        );
       }
 
       // The URL arrives once the turn has landed, not when the conversation is created.
@@ -439,7 +467,7 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
     <StudioComposer
       models={models}
       selectedModel={selectedModel}
-      onSelectModel={handleSelectModel}
+      onSelectModel={handleUserSelectModel}
       onSubmit={handleSubmit}
       isRunning={isRunning}
       credentialSource={credentialSource}
@@ -449,10 +477,6 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
       reuse={reused}
       onReuseConsumed={() => setReused(null)}
       autoFocus={!hasThread}
-      // The ground this surface draws itself on. Rendered by the composer because the composer is
-      // the one element every studio layout has; the preference itself lives here, beside the
-      // wrapper that carries it.
-      lookSwitch={<StudioLookSwitch look={look} onChange={setLook} />}
       // Offered only on a studio that has nothing open yet. Once a thread exists its kind is fixed
       // - the server refuses a change - so a switch here would offer something that cannot happen
       // to THIS conversation; leaving means starting a new one.
@@ -497,8 +521,8 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
      * 640px is Tailwind's `sm`, the width the chat splits on, so both change shape together. */
     if (isNarrowViewport) {
       return (
-        <StudioLookProvider value={look}>
-          <div className={`flex min-h-0 flex-1 flex-col ${lookClass}`}>
+        <StudioBackdrop>
+          <div className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto py-4">
               {/* The chat's mobile welcome, same `pt-8` and `mb-4`. */}
               <div className="pt-8 shrink-0 px-2">
@@ -514,13 +538,13 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
             {/* OUTSIDE the scroller, which is what pins it to the bottom. */}
             {composer}
           </div>
-        </StudioLookProvider>
+        </StudioBackdrop>
       );
     }
 
     return (
-      <StudioLookProvider value={look}>
-        <div className={`flex min-h-0 flex-1 flex-col overflow-y-auto py-4 ${lookClass}`}>
+      <StudioBackdrop>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto py-4">
           {/* The SAME anchor as the chat home (pt-[22vh]), so flipping the mode switch does not move
               the composer under the reader's cursor. The two surfaces are one page with two
               composers; a different offset would make the switch feel like a page load. */}
@@ -553,13 +577,13 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
               applications row. */}
           {generationHistory}
         </div>
-      </StudioLookProvider>
+      </StudioBackdrop>
     );
   }
 
   return (
-    <StudioLookProvider value={look}>
-      <div className={`flex min-h-0 flex-1 flex-col ${lookClass}`}>
+    <StudioBackdrop>
+      <div className="flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl px-4 py-6">
             {messagesLoading && !hasThread && (
@@ -599,7 +623,7 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
         </div>
 
       </div>
-    </StudioLookProvider>
+    </StudioBackdrop>
   );
 }
 

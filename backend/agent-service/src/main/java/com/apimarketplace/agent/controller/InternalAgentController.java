@@ -1407,6 +1407,13 @@ public class InternalAgentController {
         dto.setLoopConsecutiveStop(entity.getLoopConsecutiveStop());
         // Per-agent reasoning-effort override (bridge/CLI providers).
         dto.setReasoningEffort(entity.getReasoningEffort());
+        // V299 - does this agent ask permission for sensitive actions outside a chat.
+        dto.setRequireToolAuthorization(entity.getRequireToolAuthorization());
+        // V523 - where its permission requests and questions go. The orchestrator reads the
+        // agent through here and nowhere else, so a field left out of this copy is a choice the
+        // person made in the modal that never reaches a single delivery.
+        dto.setChatChannelLinkId(entity.getChatChannelLinkId());
+        dto.setChatChannelEnabled(entity.isChatChannelEnabled());
         // Stage 5.2b - per-agent compaction-model override (V106).
         dto.setCompactionModelProvider(entity.getCompactionModelProvider());
         dto.setCompactionModelName(entity.getCompactionModelName());

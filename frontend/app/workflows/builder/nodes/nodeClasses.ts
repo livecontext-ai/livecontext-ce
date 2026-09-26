@@ -4,7 +4,7 @@ import {
   Cpu,
   Database,
   GitBranch,
-  Network,
+  Plug,
   Pencil,
   Plus,
   Search,
@@ -232,8 +232,8 @@ export const NODE_CLASSES: BuilderNodeClass[] = [
   }),
   new BuilderNodeClass({
     id: 'mcp-tool',
-    label: 'MCP Tool',
-    description: 'Use MCP tools',
+    label: 'Integration Tool',
+    description: 'Use an integration tool',
     kind: 'tool',
     nodeType: 'flowNode',
     family: 'mcp-tool',
@@ -253,8 +253,8 @@ export const NODE_CLASSES: BuilderNodeClass[] = [
   }),
   new BuilderNodeClass({
     id: 'mcp',
-    label: 'MCP',
-    description: 'Model Context Protocol tools and interfaces',
+    label: 'Integration',
+    description: 'Connect apps and services such as Gmail, Slack or Notion',
     kind: 'tool',
     nodeType: 'flowNode',
     family: 'mcp',
@@ -881,9 +881,9 @@ export const NODE_CATEGORY_META: Record<
     icon: Zap,
   },
   mcp: {
-    label: 'MCPs',
-    description: 'Model Context Protocol tools and interfaces',
-    icon: Network,
+    label: 'Integrations',
+    description: 'Connect apps and services such as Gmail, Slack or Notion',
+    icon: Plug,
   },
   ai: {
     label: 'AI',

@@ -38,7 +38,9 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -423,5 +425,103 @@ class UserResolutionServiceLoginAccountingTest {
         } catch (Exception e) {
             throw new IllegalStateException("Failed to build test JWT", e);
         }
+    }
+
+    @Test
+    @DisplayName("a Google account signing in through workspace SSO is counted as a saml login, not google")
+    void samlLoginOfGoogleAccountIsCountedAsSaml() {
+        // Keycloak links the workspace SAML IdP to the existing account, so the stored
+        // authProvider stays GOOGLE while THIS authentication came through SAML. Deriving the
+        // method from the stored provider reported every such SSO login as "google".
+        user.setAuthProvider(AuthProvider.GOOGLE);
+        // Lenient: the fixed code never asks the stored provider on a SAML login.
+        lenient().when(authEventRecorder.providerTag(AuthProvider.GOOGLE)).thenReturn("google");
+        when(userRepository.recordAuthenticationIfNewer(eq(USER_ID), any())).thenReturn(1);
+
+        service.resolveUser(PROVIDER_ID, sign(new JWTClaimsSet.Builder()
+                .subject(PROVIDER_ID)
+                .claim("email", "tester@test.com")
+                .claim("identity_provider", "org-aaaaaaaabbbbccccddddeeeeeeeeeeee-saml")
+                .claim("auth_time", Date.from(Instant.now().truncatedTo(ChronoUnit.SECONDS)))));
+
+        verify(authEventRecorder).recordLoginSuccess(USER_ID, "saml");
+        verify(authEventRecorder, never()).recordLoginSuccess(USER_ID, "google");
+    }
+
+    @Test
+    @DisplayName("a Google-brokered login of a Google account keeps the stored method")
+    void googleLoginKeepsStoredMethod() {
+        user.setAuthProvider(AuthProvider.GOOGLE);
+        when(authEventRecorder.providerTag(AuthProvider.GOOGLE)).thenReturn("google");
+        when(userRepository.recordAuthenticationIfNewer(eq(USER_ID), any())).thenReturn(1);
+
+        service.resolveUser(PROVIDER_ID, sign(new JWTClaimsSet.Builder()
+                .subject(PROVIDER_ID)
+                .claim("email", "tester@test.com")
+                .claim("identity_provider", "google")
+                .claim("auth_time", Date.from(Instant.now().truncatedTo(ChronoUnit.SECONDS)))));
+
+        verify(authEventRecorder).recordLoginSuccess(USER_ID, "google");
+    }
+
+    // -- SAML workspace refusal: reported once per sign-in, not once per resolution --
+
+    private static final String SAML_ALIAS = "org-aaaaaaaabbbbccccddddeeeeeeeeeeee-saml";
+
+    private OrganizationSamlLoginService refusingSamlService() {
+        OrganizationSamlLoginService saml = mock(OrganizationSamlLoginService.class);
+        doThrow(new SamlMembershipException("Member limit reached"))
+                .when(saml).ensureMembershipForIdentityProvider(eq(user), eq(SAML_ALIAS), anyBoolean());
+        ReflectionTestUtils.setField(service, "samlLoginService", saml);
+        return saml;
+    }
+
+    private String samlJwt(Instant authTime) {
+        return sign(new JWTClaimsSet.Builder()
+                .subject(PROVIDER_ID)
+                .claim("email", "tester@test.com")
+                .claim("identity_provider", SAML_ALIAS)
+                .claim("auth_time", Date.from(authTime.truncatedTo(ChronoUnit.SECONDS))));
+    }
+
+    @Test
+    @DisplayName("SAML refusal: the real sign-in reports it, the retries of the same token do not, and all still fail")
+    void samlRefusalReportedOncePerSignIn() {
+        OrganizationSamlLoginService saml = refusingSamlService();
+        String jwt = samlJwt(Instant.now());
+
+        UserResolutionResponse first = service.resolveUser(PROVIDER_ID, jwt);
+        UserResolutionResponse retry = service.resolveUser(PROVIDER_ID, jwt);
+
+        assertThat(first).isNull();
+        assertThat(retry).as("a repeat resolution is still refused").isNull();
+        verify(saml, times(1)).ensureMembershipForIdentityProvider(user, SAML_ALIAS, true);
+        verify(saml, times(1)).ensureMembershipForIdentityProvider(user, SAML_ALIAS, false);
+    }
+
+    @Test
+    @DisplayName("SAML refusal: a NEWER sign-in after a refused one is reported again")
+    void samlRefusalOfANewerSignInIsReported() {
+        OrganizationSamlLoginService saml = refusingSamlService();
+
+        service.resolveUser(PROVIDER_ID, samlJwt(Instant.now().minusSeconds(3600)));
+        service.resolveUser(PROVIDER_ID, samlJwt(Instant.now()));
+
+        verify(saml, times(2)).ensureMembershipForIdentityProvider(user, SAML_ALIAS, true);
+    }
+
+    @Test
+    @DisplayName("SAML refusal: a session whose sign-in is already recorded is refused silently")
+    void samlRefusalOfAnAlreadyRecordedSessionIsNotReported() {
+        // The connection was disabled after this person signed in: every request of the old
+        // session is now refused, and none of them is a sign-in.
+        Instant sessionStart = Instant.now().minusSeconds(7200).truncatedTo(ChronoUnit.SECONDS);
+        user.setLastAuthenticatedAt(LocalDateTime.ofInstant(sessionStart, ZoneOffset.UTC));
+        OrganizationSamlLoginService saml = refusingSamlService();
+
+        assertThat(service.resolveUser(PROVIDER_ID, samlJwt(sessionStart))).isNull();
+
+        verify(saml).ensureMembershipForIdentityProvider(user, SAML_ALIAS, false);
+        verify(saml, never()).ensureMembershipForIdentityProvider(user, SAML_ALIAS, true);
     }
 }

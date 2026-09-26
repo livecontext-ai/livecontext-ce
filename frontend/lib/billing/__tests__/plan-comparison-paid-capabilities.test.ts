@@ -36,6 +36,17 @@ describe('paid capabilities are priced where they are gated', () => {
     expect(rows.map((row) => row.id)).toContain(key);
   });
 
+  // feature:notification_email -> STARTER (V528). Credit alerts are emailed on every plan and
+  // channel alerts are never gated, which the tooltip says; the ROW is about the rest of the email.
+  it('email alerts are listed from Starter up, not on Free, and filed under usage', () => {
+    for (const plan of ['starter', 'pro', 'team', 'enterprise']) {
+      expect(PLAN_FEATURE_KEYS[plan]).toContain('emailAlerts');
+    }
+    expect(PLAN_FEATURE_KEYS.free).not.toContain('emailAlerts');
+    const usage = buildPlanComparison().find((section) => section.id === 'usage');
+    expect(usage?.rows.map((row) => row.id)).toContain('emailAlerts');
+  });
+
   it('places both in the building section rather than letting them fall through to the last one', () => {
     // The matrix appends an unplaced key to whatever section happens to be last, so a key added to
     // PLAN_FEATURE_KEYS alone is visible but filed under Support. Being explicit keeps them beside

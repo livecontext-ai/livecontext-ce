@@ -319,6 +319,14 @@ public class OAuth2Service {
             }
         }
 
+        // V513: an own OAuth client (a tenant BYOK row, or in CE the install's row) may have chosen
+        // which of those scopes to request, because TikTok, Figma and LinkedIn refuse the WHOLE
+        // authorization over a single scope the app was not given. Applied last, so it narrows
+        // whichever set the two widenings above produced.
+        if (platformRow != null && (platformRow.tenantId() != null || isCeEmbeddedMode())) {
+            providerConfig = applySelectedScopes(platformRow, providerConfig, integrationName);
+        }
+
         // A declared second scope family with no parameter to carry it: the members are dropped
         // from the request (see OAuth2ProviderConfig.unroutableUserScopes). Nothing in the seed
         // corpus is in this state, and the seed validator refuses it, but credential metadata also
@@ -739,6 +747,13 @@ public class OAuth2Service {
             // LogSafeBody extracts only `error`+`error_description`, truncates, and scrubs
             // token-shaped substrings - providers occasionally echo the submitted refresh/access
             // token back in their error payload.
+            log.error("Token exchange HTTP error: status={} body={}",
+                    e.getStatusCode(), LogSafeBody.scrub(e.getResponseBodyAsString()));
+            removeStateFromRedis(state);
+            return buildRedirectUrl(oAuth2State, Map.of("error", "token_exchange_failed"));
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Any other HTTP status (a 5xx lands here): its message IS the raw provider body,
+            // which can echo the submitted code or a token. Scrubbed like the branch above.
             log.error("Token exchange HTTP error: status={} body={}",
                     e.getStatusCode(), LogSafeBody.scrub(e.getResponseBodyAsString()));
             removeStateFromRedis(state);
@@ -1857,6 +1872,37 @@ public class OAuth2Service {
         LinkedHashSet<String> scopes = new LinkedHashSet<>(providerConfig.scopes());
         scopes.addAll(extractByokOnlyScopes(template));
         return new ArrayList<>(scopes);
+    }
+
+    /**
+     * Narrow the scopes an own OAuth client requests to the ones it chose (V513
+     * {@code selected_scopes}). The selection is only ever INTERSECTED with the set the catalog
+     * already produced, never added to it: a scope the catalog has since dropped stays dropped,
+     * and a stale or hand-edited selection cannot inject a scope the catalog does not declare.
+     * No selection, or a selection that matches none of the catalog scopes (every choice since
+     * removed from the catalog), keeps the full set: an authorization request with no scope at
+     * all is refused by every provider, so falling back is the only outcome that can succeed.
+     */
+    OAuth2ProviderConfig applySelectedScopes(PlatformCredentialModels.PlatformCredential row,
+                                             OAuth2ProviderConfig providerConfig,
+                                             String integrationName) {
+        List<String> selection = row.selectedScopeList();
+        if (selection.isEmpty()) {
+            return providerConfig;
+        }
+        List<String> kept = providerConfig.scopes().stream().filter(selection::contains).toList();
+        if (kept.isEmpty()) {
+            log.warn("OAuth2 {}: the own client's scope selection {} matches none of the catalog scopes {}; "
+                            + "requesting the full set", integrationName, selection, providerConfig.scopes());
+            return providerConfig;
+        }
+        if (kept.size() == providerConfig.scopes().size()) {
+            return providerConfig;
+        }
+        List<String> dropped = providerConfig.scopes().stream().filter(s -> !kept.contains(s)).toList();
+        log.info("OAuth2 {}: own client requests {} of {} catalog scopes (not selected: {})",
+                integrationName, kept.size(), providerConfig.scopes().size(), dropped);
+        return providerConfig.withScopes(kept);
     }
 
     /**

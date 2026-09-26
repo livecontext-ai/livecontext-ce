@@ -43,7 +43,7 @@ public class H2StepDataNativeRepository extends StepDataNativeRepository {
                 condition_result, selected_branch, loop_id, loop_iteration,
                 loop_exit_reason, merge_strategy, merge_received_branches,
                 merge_skipped_branches, item_id, trigger_id, skip_reason,
-                skip_source_node, normalized_key, item_number
+                skip_source_node, normalized_key, item_number, is_mocked
             ) VALUES (
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
@@ -52,7 +52,7 @@ public class H2StepDataNativeRepository extends StepDataNativeRepository {
                 ?, ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?, ?,
-                ?, ?, ?
+                ?, ?, ?, ?
             )
             """;
 
@@ -102,7 +102,8 @@ public class H2StepDataNativeRepository extends StepDataNativeRepository {
                     entity.getSkipReason(),
                     entity.getSkipSourceNode(),
                     entity.getNormalizedKey(),
-                    entity.getItemNumber()
+                    entity.getItemNumber(),
+                    entity.isMocked()
             );
 
             return rows > 0;

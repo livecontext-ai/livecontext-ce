@@ -123,7 +123,11 @@ public class UtilityNodeCreator extends CreatorBase {
             return triggerRequiredError("wait");
         }
 
-        Integer duration = parseDuration(parameters.get("duration"));
+        // A {{...}} duration is kept as written and resolved by the node at run time, in
+        // milliseconds; the unit suffixes ('30s', '5m') apply to a literal only.
+        String durationTemplate = parameters.get("duration") instanceof String d && d.contains("{{") ? d.trim()
+            : parameters.get("delay") instanceof String d2 && d2.contains("{{") ? d2.trim() : null;
+        Integer duration = durationTemplate != null ? Integer.valueOf(0) : parseDuration(parameters.get("duration"));
         if (duration == null) duration = parseDuration(parameters.get("delay"));
         if (duration == null) {
             Integer seconds = getInt(parameters, "seconds");
@@ -153,7 +157,7 @@ public class UtilityNodeCreator extends CreatorBase {
         node.put("label", label);
         node.put("type", "wait");
         node.put("position", calculatePosition(session, NodeType.WAIT));
-        node.put("wait", Map.of("duration", duration));
+        node.put("wait", Map.of("duration", durationTemplate != null ? durationTemplate : duration));
 
         // 3. Add and finalize
         session.getCores().add(LabelNormalizer.normalizeVariableReferencesDeep(node));
@@ -161,8 +165,10 @@ public class UtilityNodeCreator extends CreatorBase {
         finalizeNode(session, sessionStore, NodeType.WAIT, nodeId, node, connectAfter);
 
         return buildSuccessResponse("wait", nodeId, label, normalizedLabel, connectAfter,
-            Map.of("duration_ms", duration, "duration_human", formatDuration(duration)),
-            Map.of("duration_ms", duration));
+            durationTemplate != null
+                ? Map.of("duration", durationTemplate, "duration_human", "resolved at run time, in milliseconds")
+                : Map.of("duration_ms", duration, "duration_human", formatDuration(duration)),
+            durationTemplate != null ? Map.of("duration", durationTemplate) : Map.of("duration_ms", duration));
     }
 
     // ==================== Download File ====================
@@ -924,6 +930,7 @@ public class UtilityNodeCreator extends CreatorBase {
         splitNode.put("type", "split");
         splitNode.put("list", items);
         splitNode.put("maxItems", maxItems);
+        keepTemplate(splitNode, "maxItems", parameters, "maxItems", "max_items");
         splitNode.put("splitStrategy", splitStrategy);
         splitNode.put("position", calculatePosition(session, NodeType.SPLIT));
 
@@ -1004,6 +1011,7 @@ public class UtilityNodeCreator extends CreatorBase {
         node.put("position", calculatePosition(session, NodeType.LOOP));
         if (condition != null) node.put("loopCondition", condition);
         node.put("maxIterations", maxIterations);
+        keepTemplate(node, "maxIterations", parameters, "max_iterations", "maxIterations", "limit");
 
         // 4. Add and finalize
         session.getCores().add(LabelNormalizer.normalizeVariableReferencesDeep(node));
@@ -1237,6 +1245,7 @@ public class UtilityNodeCreator extends CreatorBase {
         httpConfig.put("bodyType", bodyType);
         if (body != null) httpConfig.put("body", body);
         httpConfig.put("timeout", timeout);
+        keepTemplate(httpConfig, "timeout", parameters, "timeout");
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -1261,6 +1270,7 @@ public class UtilityNodeCreator extends CreatorBase {
         savedParams.put("bodyType", bodyType);
         if (body != null) savedParams.put("body", body);
         savedParams.put("timeout", timeout);
+        keepTemplate(savedParams, "timeout", parameters, "timeout");
 
         return buildSuccessResponse("http_request", nodeId, label, normalizedLabel, connectAfter,
             Map.of("method", method,
@@ -1481,8 +1491,10 @@ public class UtilityNodeCreator extends CreatorBase {
 
         Map<String, Object> limitConfig = new LinkedHashMap<>();
         limitConfig.put("count", count);
+        keepTemplate(limitConfig, "count", parameters, "count", "limit", "n", "size");
         limitConfig.put("from", from);
         limitConfig.put("offset", offset);
+        keepTemplate(limitConfig, "offset", parameters, "offset", "skip");
         if (input != null && !input.isBlank()) limitConfig.put("input", input);
 
         Map<String, Object> node = new LinkedHashMap<>();
@@ -1568,6 +1580,7 @@ public class UtilityNodeCreator extends CreatorBase {
         Map<String, Object> setConfig = new LinkedHashMap<>();
         setConfig.put("assignments", assignmentsList);
         setConfig.put("keepOnlySet", keepOnlySet);
+        keepTemplate(setConfig, "keepOnlySet", parameters, "keepOnlySet", "keep_only_set", "only_set");
         if (input != null && !input.isBlank()) setConfig.put("input", input);
 
         Map<String, Object> node = new LinkedHashMap<>();
@@ -1672,6 +1685,7 @@ public class UtilityNodeCreator extends CreatorBase {
         if (rootSelector != null && !rootSelector.isBlank()) htmlExtractConfig.put("rootSelector", rootSelector);
         htmlExtractConfig.put("fields", fieldsList);
         htmlExtractConfig.put("cleanWhitespace", cleanWhitespace);
+        keepTemplate(htmlExtractConfig, "cleanWhitespace", parameters, "cleanWhitespace", "clean_whitespace");
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -1752,6 +1766,7 @@ public class UtilityNodeCreator extends CreatorBase {
         putIfPresent(taskConfig, "search", getString(parameters, "search"));
         Object limitObj = parameters.get("limit");
         if (limitObj instanceof Number n) taskConfig.put("limit", n.intValue());
+        keepTemplate(taskConfig, "limit", parameters, "limit");
         Object taskContextObj = parameters.get("taskContext");
         if (taskContextObj == null) taskContextObj = parameters.get("task_context");
         if (taskContextObj instanceof Map<?, ?> ctxMap && !ctxMap.isEmpty()) {
@@ -1878,15 +1893,16 @@ public class UtilityNodeCreator extends CreatorBase {
         // which silently dropped a quoted value.
         Integer port = getInt(parameters, "port");
         if (port != null) sshConfig.put("port", port);
+        keepTemplate(sshConfig, "port", parameters, "port");
         Integer timeout = getInt(parameters, "timeout");
         if (timeout != null) sshConfig.put("timeout", timeout);
+        keepTemplate(sshConfig, "timeout", parameters, "timeout");
         // credentialId: pin a stored SSH credential (runtime falls back when absent).
-        // Coerced from a numeric string. A NON-numeric value is dropped here rather than
-        // preserved: unlike the approval delegation (parsed field-by-field), this config is
-        // deserialized whole by Jackson (parseConfigSafe), which hard-fails on a non-numeric
-        // Long and would drop the ENTIRE node config, strictly worse than a per-field drop.
+        // Coerced from a numeric string; a {{...}} reference is kept and resolved at run time
+        // (keepTemplate). Any other non-numeric value is dropped: it names no credential.
         Long credentialId = getLong(parameters, "credentialId", "credential_id");
         if (credentialId != null) sshConfig.put("credentialId", credentialId);
+        keepTemplate(sshConfig, "credentialId", parameters, "credentialId", "credential_id");
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -1955,12 +1971,15 @@ public class UtilityNodeCreator extends CreatorBase {
         // port/timeout: coerce numeric strings too (see executeAddSsh).
         Integer port = getInt(parameters, "port");
         if (port != null) sftpConfig.put("port", port);
+        keepTemplate(sftpConfig, "port", parameters, "port");
         Integer timeout = getInt(parameters, "timeout");
         if (timeout != null) sftpConfig.put("timeout", timeout);
-        // credentialId: pin a stored SFTP credential; numeric-string coerced, non-numeric
-        // dropped (see executeAddSsh for the Jackson whole-config rationale).
+        keepTemplate(sftpConfig, "timeout", parameters, "timeout");
+        // credentialId: pin a stored SFTP credential; numeric-string coerced, a {{...}} reference kept for run time,
+        // anything else dropped (see executeAddSsh).
         Long credentialId = getLong(parameters, "credentialId", "credential_id");
         if (credentialId != null) sftpConfig.put("credentialId", credentialId);
+        keepTemplate(sftpConfig, "credentialId", parameters, "credentialId", "credential_id");
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -2052,15 +2071,19 @@ public class UtilityNodeCreator extends CreatorBase {
         // port/timeout: coerce numeric strings too (see executeAddSsh).
         Integer port = getInt(parameters, "port");
         if (port != null) dbConfig.put("port", port);
+        keepTemplate(dbConfig, "port", parameters, "port");
         // sslEnabled: coerce "true"/"false" strings via getBoolean, not just Boolean.
         Boolean sslEnabled = getBoolean(parameters, "sslEnabled", "ssl_enabled", "ssl");
         if (sslEnabled != null) dbConfig.put("sslEnabled", sslEnabled);
+        keepTemplate(dbConfig, "sslEnabled", parameters, "sslEnabled", "ssl_enabled", "ssl");
         Integer timeout = getInt(parameters, "timeout");
         if (timeout != null) dbConfig.put("timeout", timeout);
-        // credentialId: pin a stored database credential; numeric-string coerced, non-numeric
-        // dropped (see executeAddSsh for the Jackson whole-config rationale).
+        keepTemplate(dbConfig, "timeout", parameters, "timeout");
+        // credentialId: pin a stored database credential; numeric-string coerced, a {{...}} reference kept for run time,
+        // anything else dropped (see executeAddSsh).
         Long credentialId = getLong(parameters, "credentialId", "credential_id");
         if (credentialId != null) dbConfig.put("credentialId", credentialId);
+        keepTemplate(dbConfig, "credentialId", parameters, "credentialId", "credential_id");
         Object paramsObj = parameters.get("queryParams");
         if (paramsObj == null) paramsObj = parameters.get("query_params");
         if (paramsObj instanceof List<?> paramsList) {
@@ -2267,6 +2290,7 @@ public class UtilityNodeCreator extends CreatorBase {
         if (targetTimezone != null) dateTimeConfig.put("targetTimezone", targetTimezone);
         if (durationUnit != null) dateTimeConfig.put("durationUnit", durationUnit);
         if (durationAmount != null) dateTimeConfig.put("durationAmount", durationAmount);
+        keepTemplate(dateTimeConfig, "durationAmount", parameters, "durationAmount", "duration_amount");
         if (secondValue != null) dateTimeConfig.put("secondValue", secondValue);
         if (extractPart != null) dateTimeConfig.put("extractPart", extractPart);
 
@@ -2389,6 +2413,7 @@ public class UtilityNodeCreator extends CreatorBase {
         if (value != null) xmlConfig.put("value", value);
         if (rootElement != null) xmlConfig.put("rootElement", rootElement);
         if (preserveAttributes != null) xmlConfig.put("preserveAttributes", preserveAttributes);
+        keepTemplate(xmlConfig, "preserveAttributes", parameters, "preserveAttributes", "preserve_attributes");
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -2484,6 +2509,7 @@ public class UtilityNodeCreator extends CreatorBase {
         Map<String, Object> rssConfig = new LinkedHashMap<>();
         if (url != null) rssConfig.put("url", url);
         rssConfig.put("maxItems", maxItems);
+        keepTemplate(rssConfig, "maxItems", parameters, "maxItems", "max_items");
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -2601,6 +2627,7 @@ public class UtilityNodeCreator extends CreatorBase {
         config.put("mode", mode);
         if ("text".equals(mode)) {
             if (chunking != null) config.put("chunking", chunking);
+            keepTemplate(config, "chunking", parameters, "chunking");
             if (chunkSize != null) config.put("chunkSize", chunkSize);
             if (overlap != null) config.put("overlap", overlap);
             if (chunkingStrategy != null) config.put("chunkingStrategy", chunkingStrategy);
@@ -2610,6 +2637,7 @@ public class UtilityNodeCreator extends CreatorBase {
             config.put("delimiter", delimiter);
             if (sheetName != null) config.put("sheetName", sheetName);
             config.put("hasHeaders", hasHeaders);
+            keepTemplate(config, "hasHeaders", parameters, "hasHeaders", "has_headers");
         }
 
         Map<String, Object> node = new LinkedHashMap<>();
@@ -2667,8 +2695,11 @@ public class UtilityNodeCreator extends CreatorBase {
         if (inputB != null) config.put("inputB", inputB);
         config.put("matchFields", matchFields);
         config.put("returnMatched", returnMatched);
+        keepTemplate(config, "returnMatched", parameters, "returnMatched", "return_matched");
         config.put("returnOnlyA", returnOnlyA);
+        keepTemplate(config, "returnOnlyA", parameters, "returnOnlyA", "return_only_a");
         config.put("returnOnlyB", returnOnlyB);
+        keepTemplate(config, "returnOnlyB", parameters, "returnOnlyB", "return_only_b");
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -2727,7 +2758,9 @@ public class UtilityNodeCreator extends CreatorBase {
         if (workflowId != null) config.put("workflowId", workflowId);
         if (inputMapping != null) config.put("inputMapping", inputMapping);
         config.put("timeoutSeconds", timeoutSeconds);
+        keepTemplate(config, "timeoutSeconds", parameters, "timeoutSeconds", "timeout_seconds", "timeout");
         config.put("maxDepth", maxDepth);
+        keepTemplate(config, "maxDepth", parameters, "maxDepth", "max_depth");
 
         // Resolve workflow name for frontend display
         if (workflowId != null) {
@@ -2785,6 +2818,7 @@ public class UtilityNodeCreator extends CreatorBase {
 
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("statusCode", statusCode);
+        keepTemplate(config, "statusCode", parameters, "statusCode", "status_code", "status");
         if (body != null) config.put("body", body);
         config.put("contentType", contentType);
         // headers: RespondToWebhookNode applies these custom response headers; forward them
@@ -2835,10 +2869,9 @@ public class UtilityNodeCreator extends CreatorBase {
         String inReplyTo = getString(parameters, "inReplyTo", "in_reply_to", "replyToMessageId");
         String references = getString(parameters, "references");
         // credentialId: pin a specific SMTP credential (runtime falls back to the default
-        // when absent). Numeric strings are coerced (LLMs routinely quote numbers); a
-        // non-numeric value is dropped rather than preserved, because this config is
-        // deserialized whole by Jackson (parseConfigSafe) which hard-fails on a non-numeric
-        // Long and would drop the ENTIRE node config.
+        // when absent). Numeric strings are coerced (LLMs routinely quote numbers); a {{...}}
+        // reference is kept and resolved at run time (keepTemplate). Any other non-numeric
+        // value is dropped: it names no credential.
         Long credentialId = getLong(parameters, "credentialId", "credential_id");
 
         String normalizedLabel = WorkflowBuilderSession.normalizeLabel(label);
@@ -2860,9 +2893,11 @@ public class UtilityNodeCreator extends CreatorBase {
         if (subject != null) config.put("subject", subject);
         if (body != null) config.put("body", body);
         config.put("isHtml", isHtml);
+        keepTemplate(config, "isHtml", parameters, "isHtml", "is_html", "html");
         if (inReplyTo != null) config.put("inReplyTo", inReplyTo);
         if (references != null) config.put("references", references);
         if (credentialId != null) config.put("credentialId", credentialId);
+        keepTemplate(config, "credentialId", parameters, "credentialId", "credential_id");
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -2909,8 +2944,8 @@ public class UtilityNodeCreator extends CreatorBase {
         Integer beforeDays = getInt(parameters, "beforeDays", "before_days");
         Boolean downloadAttachments = getBoolean(parameters, "downloadAttachments", "download_attachments", "attachments");
         // credentialId: pin a specific IMAP credential (runtime falls back to the default
-        // when absent). Numeric strings are coerced; a non-numeric value is dropped rather
-        // than preserved (see executeAddSendEmail for the Jackson whole-config rationale).
+        // when absent). Numeric strings are coerced; a {{...}} reference is kept for run time
+        // (keepTemplate); anything else is dropped (see executeAddSendEmail).
         Long credentialId = getLong(parameters, "credentialId", "credential_id");
 
         String normalizedLabel = WorkflowBuilderSession.normalizeLabel(label);
@@ -2925,20 +2960,29 @@ public class UtilityNodeCreator extends CreatorBase {
         Map<String, Object> config = new LinkedHashMap<>();
         if (folder != null) config.put("folder", folder);
         if (unreadOnly != null) config.put("unreadOnly", unreadOnly);
+        keepTemplate(config, "unreadOnly", parameters, "unreadOnly", "unread_only", "unread");
         if (limit != null) config.put("limit", limit);
+        keepTemplate(config, "limit", parameters, "limit", "max", "count");
         if (markSeen != null) config.put("markSeen", markSeen);
+        keepTemplate(config, "markSeen", parameters, "markSeen", "mark_seen");
         if (sinceDays != null) config.put("sinceDays", sinceDays);
+        keepTemplate(config, "sinceDays", parameters, "sinceDays", "since_days");
         if (action != null) config.put("action", action);
         if (messageUid != null) config.put("messageUid", messageUid);
         if (targetFolder != null) config.put("targetFolder", targetFolder);
         if (createTargetIfMissing != null) config.put("createTargetIfMissing", createTargetIfMissing);
+        keepTemplate(config, "createTargetIfMissing", parameters, "createTargetIfMissing", "create_target_if_missing");
         if (fromContains != null) config.put("fromContains", fromContains);
         if (subjectContains != null) config.put("subjectContains", subjectContains);
         if (bodyContains != null) config.put("bodyContains", bodyContains);
         if (flaggedOnly != null) config.put("flaggedOnly", flaggedOnly);
+        keepTemplate(config, "flaggedOnly", parameters, "flaggedOnly", "flagged_only", "flagged");
         if (beforeDays != null) config.put("beforeDays", beforeDays);
+        keepTemplate(config, "beforeDays", parameters, "beforeDays", "before_days");
         if (downloadAttachments != null) config.put("downloadAttachments", downloadAttachments);
+        keepTemplate(config, "downloadAttachments", parameters, "downloadAttachments", "download_attachments", "attachments");
         if (credentialId != null) config.put("credentialId", credentialId);
+        keepTemplate(config, "credentialId", parameters, "credentialId", "credential_id");
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -2989,6 +3033,7 @@ public class UtilityNodeCreator extends CreatorBase {
         config.put("language", language);
         if (code != null) config.put("code", code);
         config.put("timeoutSeconds", timeoutSeconds);
+        keepTemplate(config, "timeoutSeconds", parameters, "timeoutSeconds", "timeout_seconds", "timeout");
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -3098,6 +3143,25 @@ public class UtilityNodeCreator extends CreatorBase {
     }
 
     // getString inherited from CreatorBase
+
+    /**
+     * Stores {@code field} as the {@code {{...}}} reference the caller wrote under any of
+     * {@code keys}, in place of the number or boolean the typed getter could not read from it.
+     *
+     * <p>The typed getters return null for a reference, so the field used to be omitted or given
+     * its default, and the reference never reached the plan. The plan parser keeps a reference in
+     * a numeric or boolean field and the node resolves it at run time, failing with the field
+     * named when it resolves to nothing or to a value the field cannot hold. A plain number or a
+     * non-reference string is left exactly as the getter handled it.
+     */
+    static void keepTemplate(Map<String, Object> target, String field, Map<String, Object> params, String... keys) {
+        for (String key : keys) {
+            if (params.get(key) instanceof String text && text.contains("{{")) {
+                target.put(field, text.trim());
+                return;
+            }
+        }
+    }
 
     private Integer getInt(Map<String, Object> params, String... keys) {
         for (String key : keys) {

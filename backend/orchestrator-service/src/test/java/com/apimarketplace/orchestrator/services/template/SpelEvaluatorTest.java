@@ -1817,4 +1817,34 @@ class SpelEvaluatorTest {
             assertNull(result);
         }
     }
+
+    @Nested
+    @DisplayName("condition-path references resolve like the adapter path")
+    class AdapterParityTests {
+
+        private final PathNavigator navigator = new PathNavigator();
+
+        @Test
+        @DisplayName("regression: {{core:Check_Status.output.ok}} finds the node stored under its normalized key")
+        void prefixedLabelIsNormalized() {
+            Map<String, Object> ctx = new HashMap<>();
+            ctx.put("core:check_status", Map.of("output", Map.of("ok", true)));
+
+            assertEquals(true, spelEvaluator.resolveVariableForDiagnostics("core:Check_Status.output.ok", ctx, navigator));
+            assertEquals(Map.of("output", Map.of("ok", true)),
+                spelEvaluator.resolveVariableForDiagnostics("core:Check_Status", ctx, navigator));
+        }
+
+        @Test
+        @DisplayName("regression: a trigger field named like a step no longer hides that step's dotted path")
+        void triggerFieldDoesNotShadowStepAlias() {
+            Map<String, Object> ctx = new HashMap<>();
+            ctx.put("summary", "trigger text");                                   // trigger field at top level
+            ctx.put("core:summary", Map.of("output", Map.of("text", "node text"))); // the step
+
+            assertEquals("node text", spelEvaluator.resolveVariableForDiagnostics("summary.output.text", ctx, navigator));
+            assertEquals("trigger text", spelEvaluator.resolveVariableForDiagnostics("summary", ctx, navigator),
+                "the bare field keeps its meaning");
+        }
+    }
 }

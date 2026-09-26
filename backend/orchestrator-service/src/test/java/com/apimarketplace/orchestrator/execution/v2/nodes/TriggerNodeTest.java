@@ -271,6 +271,28 @@ class TriggerNodeTest {
         }
 
         @Test
+        @DisplayName("a failed params resolution is REPORTED as the failure, never as the raw plan map")
+        void reportsResolutionFailureInsteadOfRawParams() {
+            Map<String, Object> triggerInput = Map.of("mapped_user", "{{trigger:e.output.data.user}}");
+            Trigger trigger = new Trigger("trig-1", "Webhook", "single", "webhook", triggerInput);
+            TriggerNode node = new TriggerNode("trigger:webhook", trigger);
+            node.setTemplateAdapter(mockTemplateAdapter);
+
+            when(mockTemplateAdapter.resolveTemplates(any(), any()))
+                .thenThrow(new RuntimeException("Template error"));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isSuccess());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> reported = (Map<String, Object>) result.output().get("resolved_params");
+            assertFalse(reported.containsKey("mapped_user"),
+                "the configured {{...}} must not be shown as what the trigger ran with");
+            assertEquals("Template error", reported.get("paramsResolutionError"));
+            assertFalse(result.output().containsKey("mapped_user"), "a mapping that did not resolve is not in the output");
+        }
+
+        @Test
         @DisplayName("Should work with legacy constructor (no Trigger object)")
         void shouldWorkWithLegacyConstructor() {
             TriggerNode node = new TriggerNode("trigger:webhook", "trig-123");

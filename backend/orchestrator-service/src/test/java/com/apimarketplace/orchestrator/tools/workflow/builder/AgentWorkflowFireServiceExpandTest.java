@@ -251,4 +251,25 @@ class AgentWorkflowFireServiceExpandTest {
         assertThat(call).doesNotContain("iteration=");
         assertThat(call).doesNotContain("spawn=");
     }
+
+    @Test
+    @DisplayName("resolved_params: a whole prompt reaches the reading agent unchanged, a string past 128 KB is capped like an output")
+    void resolvedParamsAreCappedLikeTheOutput() {
+        String prompt = "P".repeat(100_000);
+        String huge = "H".repeat(com.apimarketplace.agent.tools.common.ToolResultSizeCap.MAX_STRING_BYTES + 1);
+        WorkflowStepDataEntity s = step(0, null, null);
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("prompt", prompt);
+        input.put("blob", huge);
+        s.setInputData(input);
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        service.enrichZoomFromStep(result, s, "tenant-1", null, null, null);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> reported = (Map<String, Object>) result.get("resolved_params");
+        assertThat(reported.get("prompt")).isEqualTo(prompt);
+        assertThat(reported.get("blob")).isNotEqualTo(huge);
+        assertThat(String.valueOf(reported.get("blob"))).hasSizeLessThan(huge.length());
+    }
 }

@@ -2,6 +2,7 @@ package com.apimarketplace.auth.web;
 
 import com.apimarketplace.auth.service.ChangelogSeenService;
 import com.apimarketplace.auth.service.ChangelogSeenService.ChangelogState;
+import com.apimarketplace.auth.service.ChangelogSeenService.SeenOutcome;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -90,15 +91,30 @@ public class ChangelogController {
                     "error", "key must be 1-120 characters of letters, digits, dot, dash or underscore",
                     "receivedLength", key == null ? 0 : key.length()));
         }
-        boolean written = changelogSeenService.markSeen(userId, key);
-        if (!written) {
-            // 200, not an error: the client asked for something the deployment does not do. It
-            // reads `enabled` and stops announcing, which is exactly what a disabled feature
-            // should look like from the outside.
-            log.debug("Changelog acknowledgement ignored - the feature is disabled on this deployment");
-            return ResponseEntity.ok(new SeenResponse(false, null));
-        }
-        return ResponseEntity.ok(new SeenResponse(true, key));
+        SeenOutcome outcome = changelogSeenService.markSeen(userId, key);
+        return switch (outcome) {
+            case RECORDED -> ResponseEntity.ok(new SeenResponse(true, key));
+            case DISABLED -> {
+                // 200, not an error: the client asked for something the deployment does not do.
+                // It reads `enabled` and stops announcing, which is exactly what a disabled
+                // feature should look like from the outside.
+                log.debug("Changelog acknowledgement ignored - the feature is disabled on this deployment");
+                yield ResponseEntity.ok(new SeenResponse(false, null));
+            }
+            case UNKNOWN_USER -> {
+                // The header names an account that no longer exists: the gateway caches user
+                // resolution for minutes, so a session outlives the deletion of its account. This
+                // used to be a 500 on the foreign key.
+                //
+                // 404, deliberately NOT 401. The web client treats a 401 as a dead session: it
+                // refreshes the token, retries, and on a second 401 redirects to login. A
+                // background acknowledgement must not be what logs someone out; the requests that
+                // decide the session do that. A 404 is dropped silently by the client (no retry,
+                // the optimistic "seen" state is kept).
+                log.info("Changelog acknowledgement ignored - no account has userId={}", userId);
+                yield ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "user not found"));
+            }
+        };
     }
 
     /**

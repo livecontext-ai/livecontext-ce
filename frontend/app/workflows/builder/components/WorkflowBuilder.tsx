@@ -30,7 +30,7 @@ import { reconcilePlanCredentials } from '@/lib/credentials/reconcilePlanCredent
 import type { Credential } from '@/lib/api/orchestrator';
 import { normalizeLabel, triggerKey, agentKey } from '../utils/labelNormalizer';
 import { isNavigateRef, navigateTargetLabel } from '../utils/interfaceActionRefs';
-import { findLiveFormTriggerNode } from '../utils/formTriggerNodeMatcher';
+import { findLiveFormTriggerNode, pickFormTriggerFields } from '../utils/formTriggerNodeMatcher';
 import { syncRunStateToReactFlow } from '../services/runStateSyncService';
 import type { TriggerPanelConfig } from './TriggerPanel';
 import type { ApplicationConfig } from '@/components/chat/ApplicationTabContent';
@@ -62,7 +62,10 @@ import { useRunCameraFollow } from '../hooks/useRunCameraFollow';
 import { isRunStatusActive } from '@/components/workflow/run-panel/runFormatting';
 import { useWorkflowRunContext } from '@/contexts/WorkflowRunContext';
 import { calculateNodePosition } from '../utils/nodePositioning';
-import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import {
+  WorkflowCanvasDirectionScope,
+  useWorkflowLayoutDirectionSafe,
+} from '@/contexts/WorkflowLayoutDirectionContext';
 import { resolveEffectiveRunId } from '../utils/effectiveRunId';
 import Toast, { useToast } from '@/components/Toast';
 import { useTranslations } from 'next-intl';
@@ -118,7 +121,20 @@ interface WorkflowBuilderProps {
   onSettingsOpenChange?: (isOpen: boolean) => void;
 }
 
-export function WorkflowBuilder({
+/**
+ * Every canvas owns its reading direction: a workflow and the sub-workflow opened from it
+ * in the side panel are on screen together and may read different ways. See
+ * `WorkflowCanvasDirectionScope`.
+ */
+export function WorkflowBuilder(props: WorkflowBuilderProps = {}) {
+  return (
+    <WorkflowCanvasDirectionScope>
+      <WorkflowBuilderCanvas {...props} />
+    </WorkflowCanvasDirectionScope>
+  );
+}
+
+function WorkflowBuilderCanvas({
   workflowId,
   runId,
   planOverride,
@@ -138,7 +154,7 @@ export function WorkflowBuilder({
 }: WorkflowBuilderProps = {}) {
   const router = useRouter();
   // Drives where a hover-"+" drops the new node (below in vertical, right in horizontal).
-  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const { direction: layoutDirection, setWorkflowDirection } = useWorkflowLayoutDirectionSafe();
   const t = useTranslations('workflowBuilder');
   const tCredentials = useTranslations('credentials');
   const { toasts, addToast, removeToast } = useToast();
@@ -282,6 +298,7 @@ export function WorkflowBuilder({
     isRunMode,
     onDirtyChange,
     onRefreshBlocked,
+    layoutDirection,
   });
 
   // UI state
@@ -870,15 +887,16 @@ export function WorkflowBuilder({
       }));
   }, [runState?.batchSteps]);
 
-  // Camera follow during a run. It lives HERE, with the canvas, rather than in the
+  // Camera follow during a run (the agent-build half lives in useWorkflowEventListeners,
+  // where the agent's plan lands). It lives HERE, with the canvas, rather than in the
   // run panel: that panel is one side-panel tab, so following would stop the moment
   // the user opened Chat or collapsed the panel to see more of the graph, while the
   // toolbar toggle still read as pressed.
   useRunCameraFollow({
     steps: streamedSteps,
     workflowId,
-    // A parked node keeps reporting `running` in the stream, so the camera would
-    // otherwise sit on an approval that will never move.
+    // A parked node keeps reporting `running` in the stream; this set lets the hook
+    // rank it as WAITING, framed only while nothing else runs.
     awaitingSignalAliases: pauseResumeState.awaitingSignalSteps,
     // The canvas paint is frozen on a past epoch; following the live run there
     // would fling the camera at nodes that render as pending.
@@ -1002,7 +1020,7 @@ export function WorkflowBuilder({
       const formTriggerData = (formTriggerNode?.data as any)?.formTriggerData;
       const configFields = trigger.config?.fields || [];
       const planParams = planTrigger?.params || {};
-      const rawFields = formTriggerData?.fields || configFields || planParams.fields || [];
+      const rawFields = pickFormTriggerFields(formTriggerData?.fields, configFields, planParams.fields);
 
       return {
         triggerId,
@@ -1494,7 +1512,13 @@ export function WorkflowBuilder({
 
   // workflowLoaded is what tells the stack "this graph is the baseline, not an edit":
   // the builder mounts empty and the loader paints the real graph a beat later.
-  const { undo, redo, canUndo, canRedo } = useHistory(nodes, edges, setNodes, setEdges, workflowLoaded);
+  const historyDirection = React.useMemo(
+    () => ({ value: layoutDirection, set: setWorkflowDirection }),
+    [layoutDirection, setWorkflowDirection],
+  );
+  const { undo, redo, canUndo, canRedo } = useHistory(
+    nodes, edges, setNodes, setEdges, workflowLoaded, historyDirection,
+  );
 
   // Loop-back classification for validation: the same derivation the canvas renders and the
   // save path serializes, so all three agree on which edges close a loop.

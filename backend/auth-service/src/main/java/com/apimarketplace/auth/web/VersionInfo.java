@@ -1,5 +1,6 @@
 package com.apimarketplace.auth.web;
 
+import com.apimarketplace.auth.web.version.VersionComparator;
 import com.apimarketplace.auth.web.version.VersionUpdateService.VersionUpdateView;
 import com.apimarketplace.common.web.AppEditionProvider;
 import org.springframework.boot.info.GitProperties;
@@ -125,8 +126,8 @@ public record VersionInfo(
      *   <li>else the Maven build version ({@code git.build.version}), or {@code "dev"}
      *       as a last resort when nothing is known.</li>
      * </ol>
-     * Shared by the controller and the version-check poller so both compare the same
-     * string. A from-source {@code dev-<sha>} value is intentionally not a parseable
+     * This is the DISPLAYED version (Settings card and its update comparison); the update
+     * check reports {@link #reportedVersion()} instead. A from-source {@code dev-<sha>} value is intentionally not a parseable
      * semver, so the update check never wrongly flags a source build as behind a
      * published release.
      */
@@ -153,6 +154,32 @@ public record VersionInfo(
             return buildVersion.trim();
         }
         return UNKNOWN_VERSION;
+    }
+
+    /**
+     * The version this install REPORTS on the update check: the stamped release tag, else
+     * {@code "dev"}.
+     *
+     * <p>Deliberately narrower than {@link #resolveVersion(GitProperties)}, which is what the
+     * Settings card displays. The cloud counts this value per install, and only a released image
+     * carries a tag. The display fallbacks are not releases: a commit sha would fingerprint a fork,
+     * and the Maven build version is the POM's, which is never bumped (it read {@code 0.1.6} through
+     * the whole v0.3 line), so a from-source build reporting it was counted as an old release.
+     */
+    public static String reportedVersion() {
+        return reportedVersion(appVersionOverride());
+    }
+
+    /** {@link #reportedVersion()} with the release tag passed in, for tests. */
+    static String reportedVersion(String appVersion) {
+        if (appVersion == null || appVersion.isBlank()) {
+            return UNKNOWN_VERSION;
+        }
+        String tag = appVersion.trim();
+        // A from-source build may stamp APP_VERSION itself (the build compose suggests
+        // dev-<sha>). Only a value whose numeric core parses goes on the wire; a suffix is not
+        // inspected here, the cloud recorder decides what it keeps.
+        return VersionComparator.canonicalOrNull(tag) != null ? tag : UNKNOWN_VERSION;
     }
 
     /**

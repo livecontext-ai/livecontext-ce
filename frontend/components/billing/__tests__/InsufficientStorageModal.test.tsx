@@ -51,7 +51,6 @@ vi.mock('@/lib/api/storage-api', () => ({
 vi.mock('@/hooks/usePricingEvent', () => ({ usePricingEvent: () => ({ event: null }) }));
 
 import InsufficientStorageModal, { INSUFFICIENT_STORAGE_EVENT } from '../InsufficientStorageModal';
-import { FREE_AI_CREDITS } from '@/lib/billing/pricing-constants';
 
 function openViaEvent() {
   act(() => {
@@ -80,38 +79,22 @@ describe('InsufficientStorageModal', () => {
     expect(screen.queryByText('modals.insufficientStorage.features.freeStorage')).toBeNull();
   });
 
-  it('states both Free pots: the storage it keeps, and each monthly allowance', () => {
-    mocks.plans.value = [{ code: 'FREE', includedAiCredits: 250 }];
+  it('states the Free storage and its one monthly credits pool', () => {
     render(<InsufficientStorageModal />);
     openViaEvent();
 
     const text = dialogText();
     expect(text).toContain('modals.insufficientStorage.features.freeStorage');
     expect(text).toContain('modals.insufficientStorage.features.freeCredits');
-    // The live figure, not the shipped one: reading the plan row is the point.
-    expect(text).toContain('modals.insufficientStorage.features.freeAiCredits(250)');
   });
 
-  it('drops the allowance line when the free tier is closed', () => {
-    // Allowance 0 is how an admin closes the free tier. A "0 AI credits" bullet
-    // would look like a feature while advertising nothing, the same rule the
-    // plan cards apply.
-    mocks.plans.value = [{ code: 'FREE', includedAiCredits: 0 }];
+  it('regression: names no separate AI credits line, even if a plan row still carries one', () => {
+    // The Free plan's separate monthly AI allowance was merged into its monthly
+    // credits; a stale plan row must not bring a second pot back onto the card.
+    mocks.plans.value = [{ code: 'FREE', includedAiCredits: 250 }];
     render(<InsufficientStorageModal />);
     openViaEvent();
 
-    expect(dialogText()).toContain('modals.insufficientStorage.features.freeCredits');
-    expect(dialogText()).not.toContain('modals.insufficientStorage.features.freeAiCredits');
-  });
-
-  it('falls back to the shipped figure while the plans request is in flight', () => {
-    // No row yet is not "no allowance": showing nothing would tell the reader
-    // the free tier is closed for as long as the request takes.
-    render(<InsufficientStorageModal />);
-    openViaEvent();
-
-    expect(dialogText()).toContain(
-      `modals.insufficientStorage.features.freeAiCredits(${FREE_AI_CREDITS})`,
-    );
+    expect(dialogText()).not.toContain('freeAiCredits');
   });
 });

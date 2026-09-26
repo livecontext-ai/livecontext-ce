@@ -69,7 +69,7 @@ class CreditServiceRewardNodeTest {
     @DisplayName("claim succeeds -> 0-cost WORKFLOW_NODE_PROMO row, wallet untouched")
     void freeWhenClaimed() {
         mockBalance("100");
-        when(ledgerRepository.existsBySourceId(SRC)).thenReturn(false);
+        when(ledgerRepository.existsNonRejectionBySourceId(SRC)).thenReturn(false);
         when(rewardService.claimFreeWorkflowNode(USER)).thenReturn(true);
 
         CreditConsumeResult result = metered().consumeForWorkflowNode(USER, SRC);
@@ -90,7 +90,7 @@ class CreditServiceRewardNodeTest {
     @DisplayName("no claim -> normal 1-credit WORKFLOW_NODE debit")
     void debitWhenNoClaim() {
         mockBalance("100");
-        when(ledgerRepository.existsBySourceId(SRC)).thenReturn(false);
+        when(ledgerRepository.existsNonRejectionBySourceId(SRC)).thenReturn(false);
         when(rewardService.claimFreeWorkflowNode(USER)).thenReturn(false);
 
         CreditConsumeResult result = metered().consumeForWorkflowNode(USER, SRC);
@@ -108,7 +108,7 @@ class CreditServiceRewardNodeTest {
     @DisplayName("idempotent retry (sourceId already charged) never consults the reward benefit")
     void idempotentSkipsReward() {
         mockBalance("100");
-        when(ledgerRepository.existsBySourceId(SRC)).thenReturn(true);
+        when(ledgerRepository.existsNonRejectionBySourceId(SRC)).thenReturn(true);
 
         CreditConsumeResult result = metered().consumeForWorkflowNode(USER, SRC);
 

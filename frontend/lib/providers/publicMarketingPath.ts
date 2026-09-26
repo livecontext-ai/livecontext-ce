@@ -1,4 +1,5 @@
 import { routing } from '@/i18n/routing';
+import { isDocsHost } from '@/lib/docs/docsHostRewrite';
 
 // Public marketing/docs surfaces whose content MUST be server-rendered for
 // SEO/GEO. On these paths the blocking auth UI in smart-providers (full-screen
@@ -35,12 +36,24 @@ import { routing } from '@/i18n/routing';
 // the spinner at the top of the body.
 const PUBLIC_MARKETING_PREFIXES = ['/compare', '/about', '/contact', '/legal', '/changelog', '/docs', '/marketplace', '/u', '/status', '/integrations', '/models', '/videos', '/for'];
 
-export function isPublicMarketingPath(pathname: string | null): boolean {
-  if (!pathname) return false;
+// `host`: the documentation subdomain serves its pages at CLEAN paths (`/glossary`),
+// rewritten onto the `/docs/*` routes. The server renders those pages under their
+// `/docs/...` route (public by prefix), but in the browser `usePathname()` reports
+// the clean path, which no prefix here covers. Without the host check the client
+// took the page for a protected one during hydration and swapped it for the auth
+// spinner: a React #418 hydration mismatch on every docs page but the Overview.
+// Every docs page on that host is public, so the host answers for it. The one
+// exception is the app itself (`/app`, with or without a locale): a few crafted URLs
+// can still reach an app route on the docs host, and it must keep its auth gate
+// there exactly as the server render does.
+export function isPublicMarketingPath(pathname: string | null, host?: string | null): boolean {
+  if (!pathname) return isDocsHost(host);
   const firstSegment = pathname.split('/')[1] ?? '';
   const withoutLocale = (routing.locales as readonly string[]).includes(firstSegment)
     ? pathname.slice(firstSegment.length + 1) || '/'
     : pathname;
+  const isAppRoute = withoutLocale === '/app' || withoutLocale.startsWith('/app/');
+  if (isDocsHost(host) && !isAppRoute) return true;
   if (withoutLocale === '/') return true;
   return PUBLIC_MARKETING_PREFIXES.some(
     (prefix) => withoutLocale === prefix || withoutLocale.startsWith(`${prefix}/`),

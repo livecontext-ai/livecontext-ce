@@ -32,8 +32,9 @@ package com.apimarketplace.agent.catalog.bundle;
  *                         {@code enabled} flag (bundle and seed paths: the
  *                         payload's enabled is a signed cloud-admin decision).
  *                         false → new inserts are forced {@code enabled=false}
- *                         (SYNC-only review-gate: untrusted feeds must not
- *                         auto-expose new models).
+ *                         AND an update never writes {@code enabled} (SYNC-only
+ *                         review-gate: untrusted feeds must not auto-expose new
+ *                         models, neither on insert nor on a later refresh).
  */
 public record MergeOptions(String source, String label,
                            Long bundleVersion, boolean deprecateMissing,

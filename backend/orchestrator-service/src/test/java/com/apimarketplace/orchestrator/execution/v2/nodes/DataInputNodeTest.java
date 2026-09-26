@@ -133,11 +133,7 @@ class DataInputNodeTest {
 
             // Mock template resolution: return the text as-is for simplicity
             when(mockTemplateAdapter.resolveTemplates(any(), any()))
-                .thenAnswer(inv -> {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> toResolve = (Map<String, Object>) inv.getArgument(0);
-                    return Map.of("__expr__", toResolve.get("__expr__"));
-                });
+                .thenAnswer(inv -> inv.getArgument(0));
 
             NodeExecutionResult result = node.execute(context);
 
@@ -200,8 +196,8 @@ class DataInputNodeTest {
             node.setTemplateAdapter(mockTemplateAdapter);
 
             when(mockTemplateAdapter.resolveTemplates(any(), any()))
-                .thenReturn(Map.of("__expr__", "Hello John"))
-                .thenReturn(Map.of("__expr__", "Analyse this document"));
+                .thenAnswer(TemplateResolutionStubs.every("Hello John"))
+                .thenAnswer(TemplateResolutionStubs.every("Analyse this document"));
 
             NodeExecutionResult result = node.execute(context);
 
@@ -224,7 +220,7 @@ class DataInputNodeTest {
         }
 
         @Test
-        @DisplayName("Should handle resolution failure gracefully")
+        @DisplayName("a resolution that throws fails the node instead of emitting the raw template")
         void shouldHandleResolutionFailureGracefully() {
             DataInputNode node = new DataInputNode("core:my_input", List.of(
                 new Core.DataInputItem("item_1", "prompt", "text", "{{invalid.expression}}", null)
@@ -234,10 +230,10 @@ class DataInputNodeTest {
             when(mockTemplateAdapter.resolveTemplates(any(), any()))
                 .thenThrow(new RuntimeException("Resolution error"));
 
-            NodeExecutionResult result = node.execute(context);
-
-            assertTrue(result.isSuccess());
-            assertEquals("{{invalid.expression}}", result.output().get("prompt"));
+            // It used to COMPLETE with the raw "{{invalid.expression}}" as the item's value, which
+            // every downstream node then read as data. A resolution that throws fails the node.
+            IllegalStateException e = assertThrows(IllegalStateException.class, () -> node.execute(context));
+            assertTrue(e.getMessage().contains("{{invalid.expression}}"), e.getMessage());
         }
 
         @Test
@@ -272,7 +268,7 @@ class DataInputNodeTest {
             node.setTemplateAdapter(mockTemplateAdapter);
 
             when(mockTemplateAdapter.resolveTemplates(any(), any()))
-                .thenReturn(Map.of("__expr__", "Hello"));
+                .thenAnswer(TemplateResolutionStubs.every("Hello"));
 
             NodeExecutionResult result = node.execute(context);
 
@@ -288,7 +284,7 @@ class DataInputNodeTest {
             node.setTemplateAdapter(mockTemplateAdapter);
 
             when(mockTemplateAdapter.resolveTemplates(any(), any()))
-                .thenReturn(Map.of("__expr__", "Hello"));
+                .thenAnswer(TemplateResolutionStubs.every("Hello"));
 
             NodeExecutionResult result = node.execute(context);
 
@@ -440,9 +436,8 @@ class DataInputNodeTest {
         @Test
         @DisplayName("an item that resolved reports the value the node produced, not a second resolution of it")
         void reportsTheValueTheNodeProduced() {
-            Map<String, Object> resolved = new HashMap<>();
-            resolved.put("__expr__", "Analyse this document");
-            when(mockTemplateAdapter.resolveTemplates(any(), any())).thenReturn(resolved);
+            when(mockTemplateAdapter.resolveTemplates(any(), any()))
+                .thenAnswer(TemplateResolutionStubs.every("Analyse this document"));
             DataInputNode node = new DataInputNode("core:inputs", List.of(
                 new Core.DataInputItem("item_1", "question", "text", "{{trigger:start.query}}", null)));
             node.setTemplateAdapter(mockTemplateAdapter);

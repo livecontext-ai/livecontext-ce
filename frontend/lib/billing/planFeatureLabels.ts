@@ -37,29 +37,6 @@ export interface PlanFeatureLabelDeps {
    * facts, and a message that ignores one renders unchanged.
    */
   creditFacts: Record<string, string | number>;
-  /**
-   * The Free plan's monthly AI allowance (V494), already locale-formatted.
-   *
-   * <p>Read from the live plan rather than frozen into a translation: an admin
-   * changes it with one UPDATE, and a card that had the old number baked in would
-   * quietly advertise something the product no longer grants. Undefined while the
-   * plans request is in flight, which is why the line falls back to a figure-free
-   * wording instead of rendering "undefined credits".
-   */
-  aiCredits?: string;
-}
-
-/**
- * Whether a locale-formatted allowance means "this plan grants none".
- *
- * <p>The value arrives already formatted (the caller owns the app locale), so this
- * strips the formatting rather than guessing which separator a locale used, and only
- * then asks whether anything is left but zeros.
- */
-function grantsNoAllowance(formatted?: string): boolean {
-  if (formatted === undefined) return false;
-  const digits = formatted.replace(/[^0-9]/g, '');
-  return digits.length > 0 && /^0+$/.test(digits);
 }
 
 /** `label||tooltip`, the shape FeatureLabel splits on. */
@@ -74,10 +51,10 @@ function withTooltip(label: string, tooltip: string): string {
  * <p>Exported rather than letting that surface name the message, because the message key
  * is special-cased here and `planFeatureLabels.test.ts` pins it to exactly one file. The
  * insufficient-credits dialog used to compose its own sentence for this pot by appending
- * the PAID tooltip to a local note, which said "chat and agents draw the separate
- * allowance instead" and then priced the pot with a short agent exchange, two sentences
- * apart. On FREE the monthly bucket funds only WORKFLOW_NODE, so the second half quoted
- * a price that pot cannot pay, to the one reader who has just run out of it.
+ * the PAID tooltip to a local note, and the two ended up describing different rules. The
+ * Free pot pays for workflow nodes and for chat/agent turns on free-tier models only, so
+ * the paid tooltip (which prices any model) over-promises to the one reader who has just
+ * run out of it.
  */
 export function freeCreditsTooltip(
   tCards: PlanFeatureLabelDeps['tCards'],
@@ -87,15 +64,10 @@ export function freeCreditsTooltip(
 }
 
 export function planFeatureLabels(planId: string, deps: PlanFeatureLabelDeps): string[] {
-  const { tCards, tPricing, credits, creditFacts, aiCredits } = deps;
+  const { tCards, tPricing, credits, creditFacts } = deps;
   const creditsTooltip = tPricing('compare.dimensions.creditsTooltip', creditFacts);
 
-  return (PLAN_FEATURE_KEYS[planId] || [])
-    // An allowance an admin has set to zero is how the free tier is CLOSED, so the
-    // line is dropped rather than rendered as "0 AI credits per month" - a bullet
-    // that advertises nothing while looking like a feature.
-    .filter((key) => key !== 'aiCreditsFree' || !grantsNoAllowance(aiCredits))
-    .map((key) => {
+  return (PLAN_FEATURE_KEYS[planId] || []).map((key) => {
     switch (key) {
       // The paid plans' monthly pack. It is the line every visitor compares
       // plans on and the one nobody can price from its own words: "50,000
@@ -109,23 +81,11 @@ export function planFeatureLabels(planId: string, deps: PlanFeatureLabelDeps): s
       case 'creditsCustom':
         return withTooltip(tCards('features.creditsCustom'), creditsTooltip);
 
-      // Free monthly credits: same "i", different answer. They run workflows;
-      // agents draw the separate AI allowance on the line below.
+      // Free monthly credits: same "i", different answer. One pool that runs
+      // workflows and chat/agent turns, but only on the models marked Free.
       case 'creditsFree':
         return withTooltip(tCards('features.creditsFree'),
                            freeCreditsTooltip(tCards, creditFacts));
-
-      // The Free plan's separate monthly AI allowance (V494). Its own line, not a
-      // clause on the credits line, because it is the answer to the question a
-      // visitor actually arrives with: can I talk to an agent without paying? The
-      // "i" carries the two conditions the number alone cannot: it is monthly, and
-      // it only applies to the models opened to the free tier.
-      case 'aiCreditsFree':
-        return aiCredits
-          ? withTooltip(tCards('features.aiCreditsFree', { credits: aiCredits }),
-                        tCards('features.aiCreditsFreeTooltip', creditFacts))
-          : withTooltip(tCards('features.aiCreditsFreeUnknown'),
-                        tCards('features.aiCreditsFreeTooltip', creditFacts));
 
       // Managed integration credentials for cloud-linked self-hosted installs
       // (relay + per-call credit markup).

@@ -4,7 +4,6 @@ import com.apimarketplace.catalog.domain.ApiCatalogBundleEntity;
 import com.apimarketplace.catalog.domain.ApiCatalogBundleSyncStatusEntity;
 import com.apimarketplace.catalog.repository.ApiCatalogBundleRepository;
 import com.apimarketplace.catalog.repository.ApiCatalogBundleSyncStatusRepository;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -46,8 +45,6 @@ import java.util.Optional;
 @Slf4j
 @Service
 public class ApiCatalogBundleApplier {
-
-    private static final TypeReference<Map<String, Object>> JSON_MAP = new TypeReference<>() {};
 
     private final ApiCatalogMergeService mergeService;
     private final ApiCatalogGenerationPriceApplier priceApplier;
@@ -145,36 +142,52 @@ public class ApiCatalogBundleApplier {
             return ApplyResult.alreadyApplied(bundle.version());
         }
 
-        // 1. Gunzip + parse payload.
-        List<Map<String, Object>> apiMaps;
-        List<Map<String, Object>> templateMaps;
-        List<Map<String, Object>> priceMaps;
+        // 1. Validate the payload in one streaming pass, WITHOUT materialising it: the
+        // catalog gunzips to hundreds of MB and the CE heap is 1 GB (see
+        // ApiCatalogPayloadStream). Every refusal on the payload's shape happens here,
+        // before any row is written.
+        ApiCatalogPayloadStream payload = new ApiCatalogPayloadStream(objectMapper, verifiedGzipBytes);
+        ApiCatalogPayloadStream.Scan scan;
         try {
-            byte[] raw = ApiCatalogBundlePayload.gunzip(verifiedGzipBytes);
-            Map<String, Object> root = objectMapper.readValue(raw, JSON_MAP);
-            apiMaps = listOfMaps(root.get("apis"));
-            if (apiMaps == null) return ApplyResult.failed("payload has no 'apis' array");
-            templateMaps = listOfMaps(root.get("credentialTemplates"));
-            if (templateMaps == null) templateMaps = List.of();
-            // Absent on every bundle built by a cloud older than V430, and on
-            // any cloud with no published generation price. Absent means "this
-            // bundle says nothing about prices", never "there are no prices",
-            // so it is a no-op rather than a reason to fail or to unprice.
-            priceMaps = listOfMaps(root.get("generationPrices"));
+            scan = payload.scan();
         } catch (Exception e) {
             return ApplyResult.failed("payload gunzip/parse failed: " + e.getMessage());
         }
+        if (!scan.apisIsArray()) return ApplyResult.failed("payload has no 'apis' array");
+        if (scan.duplicateApis()) return ApplyResult.failed("payload has more than one 'apis' key");
+        if (scan.nonObjectApis() > 0) {
+            return ApplyResult.failed("payload 'apis' has " + scan.nonObjectApis() + " entries that are not objects");
+        }
+        List<Map<String, Object>> templateMaps = scan.templates();
+        // Absent on every bundle built by a cloud older than V430, and on
+        // any cloud with no published generation price. Absent means "this
+        // bundle says nothing about prices", never "there are no prices",
+        // so it is a no-op rather than a reason to fail or to unprice.
+        List<Map<String, Object>> priceMaps = scan.prices();
 
         // 1b. Wipe guard: a signed-but-empty bundle would reach the orphan
         // sweep with an empty present-list and soft-deprecate EVERY
         // bundle-managed API on this install. Refuse before any merge work.
-        if (apiMaps.isEmpty()) {
+        if (scan.apiCount() == 0) {
             return ApplyResult.failed(
                     "bundle contains no APIs - refusing to deprecate the entire catalog");
         }
 
-        // 2. Delegate the per-row merge (one TX per API + a final sweep TX).
-        ApiCatalogMergeService.MergeResult merge = mergeService.merge(apiMaps, templateMaps);
+        // 2. Delegate the per-row merge (one TX per API + a final sweep TX), fed one API
+        // at a time from a second streaming pass over the same verified bytes.
+        ApiCatalogMergeService.MergeResult merge;
+        try {
+            merge = mergeService.merge(payload.apis(), templateMaps);
+        } catch (java.io.UncheckedIOException e) {
+            // The scan above read these exact bytes, so this is not expected. If it ever
+            // happens the merge stopped part way: the APIs already upserted are committed
+            // (one TX each, as on any partial apply), the orphan sweep and the template
+            // upsert did NOT run, and the bundle row is not recorded, so the next tick
+            // retries this version. The scheduler records APPLY_FAILED with this detail on
+            // the sync-status row, as for every other failed apply (writing it here too would
+            // count the failure twice).
+            return ApplyResult.failed("payload re-read failed during merge: " + e.getMessage());
+        }
         if (merge.upsertedApis() == 0 && merge.failedApis() > 0) {
             // Nothing landed - treat as failure so operators see it, and do
             // NOT record the bundle row (a retry must not be short-circuited
@@ -419,9 +432,8 @@ public class ApiCatalogBundleApplier {
 
     private ParsedPrices parsePricesQuietly(byte[] verifiedGzipBytes, long version) {
         try {
-            byte[] raw = ApiCatalogBundlePayload.gunzip(verifiedGzipBytes);
-            Map<String, Object> root = objectMapper.readValue(raw, JSON_MAP);
-            return new ParsedPrices(true, listOfMaps(root.get("generationPrices")));
+            // Streamed: the full payload does not fit the CE heap (see ApiCatalogPayloadStream).
+            return new ParsedPrices(true, new ApiCatalogPayloadStream(objectMapper, verifiedGzipBytes).scan().prices());
         } catch (Exception e) {
             log.warn("API catalog bundle v{} is already applied but its payload could not be re-read "
                     + "for prices ({}: {}) - pricing left unchanged", version,

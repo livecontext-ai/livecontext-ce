@@ -337,8 +337,10 @@ function shortenConfigured(value: unknown): string {
 
 
 /**
- * The parameters a node was launched with, shown while it is still running:
- * raw configured expressions, unresolved by definition.
+ * The parameters a node is CONFIGURED with, shown when the run has no row for it (still
+ * running, parked, skipped, never reached): raw expressions, unresolved by definition. The
+ * heading says so, because under "Launched with" a raw {{...}} read as a reference the node
+ * had failed to resolve. The full value is on hover; the inline text is capped.
  */
 function ConfiguredParamsList({
   entries,
@@ -362,7 +364,10 @@ function ConfiguredParamsList({
             {getLabel(key)}
           </span>
           <span className="flex-shrink-0 text-slate-400">:</span>
-          <span className="min-w-0 break-all font-mono text-sm text-slate-600 dark:text-slate-300">
+          <span
+            className="min-w-0 break-all font-mono text-sm text-slate-600 dark:text-slate-300"
+            title={typeof expression === 'string' ? expression : JSON.stringify(expression) ?? ''}
+          >
             {shortenConfigured(expression)}
           </span>
         </div>

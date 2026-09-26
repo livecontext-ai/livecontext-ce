@@ -1006,13 +1006,17 @@ export class NodeCreationService {
           ? approvalCfg.continuationMode
           : undefined;
 
-        // Optional external-channel delegation (v1: telegram) - mirrors the exporter
+        // Optional external-channel delegation (any chat channel) - mirrors the exporter
         // in edgeProcessor.ts so the approval.delegation block round-trips losslessly.
         const rawDelegation = approvalCfg.delegation;
         let approvalDelegation: Record<string, unknown> | undefined;
         if (rawDelegation && typeof rawDelegation === 'object'
           && typeof rawDelegation.channel === 'string' && rawDelegation.channel.trim() !== '') {
           approvalDelegation = { channel: rawDelegation.channel };
+          // A picked destination (an id, or 'default') - mirrors the exporter.
+          if (typeof rawDelegation.linkId === 'string' && rawDelegation.linkId.trim() !== '') {
+            approvalDelegation.linkId = rawDelegation.linkId.trim();
+          }
           // Tolerate a numeric-string credentialId ("40") from hand-written or
           // agent-generated plans: coerce to a NUMBER, drop only true non-numerics.
           const rawCredentialId = rawDelegation.credentialId;

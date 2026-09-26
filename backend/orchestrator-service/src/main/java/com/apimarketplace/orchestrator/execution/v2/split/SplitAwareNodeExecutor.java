@@ -2660,9 +2660,7 @@ public class SplitAwareNodeExecutor {
         if (parentContextOpt.isEmpty()) {
             logger.warn("[SplitAware] No parent split context found for nested split: nodeId={}", nodeId);
             // Fallback: execute as a normal split
-            return splitNodeExecutor.execute(
-                runId, nodeId, node.getListExpression(), node.getSplitMaxItems(),
-                node.getSplitStrategy(), workflowItemIndex, context);
+            return executeSplitWithResolvedCap(splitNodeExecutor, runId, nodeId, node, workflowItemIndex, context);
         }
 
         SplitContext parentContext = parentContextOpt.get();
@@ -2712,9 +2710,7 @@ public class SplitAwareNodeExecutor {
 
                         // Execute the inner split with the enriched context
                         // This creates a context with a unique scoped key (e.g., core:inner_loop:0/s0)
-                        NodeExecutionResult splitResult = splitNodeExecutor.execute(
-                            runId, nodeId, node.getListExpression(), node.getSplitMaxItems(),
-                            node.getSplitStrategy(), workflowItemIndex, itemContext);
+                        NodeExecutionResult splitResult = executeSplitWithResolvedCap(splitNodeExecutor, runId, nodeId, node, workflowItemIndex, itemContext);
 
                         if (splitResult.isSuccess()) {
                             // Traverse successors with the enriched context
@@ -2824,9 +2820,7 @@ public class SplitAwareNodeExecutor {
 
             // Execute the inner split to evaluate the expression and get inner items.
             // This creates a scoped context, but we'll replace it with a flat one.
-            NodeExecutionResult splitResult = splitNodeExecutor.execute(
-                runId, nodeId, node.getListExpression(), node.getSplitMaxItems(),
-                node.getSplitStrategy(), workflowItemIndex, itemContext);
+            NodeExecutionResult splitResult = executeSplitWithResolvedCap(splitNodeExecutor, runId, nodeId, node, workflowItemIndex, itemContext);
 
             if (splitResult.isFailure()) {
                 logger.error("[SplitAware] Nested split expression failed for parent item {}: nodeId={}", i, nodeId);
@@ -3363,5 +3357,23 @@ public class SplitAwareNodeExecutor {
         logger.info("[SplitAware] Inherited transitive routing: nodeId={}, routedIndices={}, mode={}",
             node.getNodeId(), inherited, useUnion ? "UNION" : "INTERSECTION");
         return inherited;
+    }
+
+    /**
+     * Runs a (nested or fallback) split with its maxItems resolved against {@code ctx}. A cap the
+     * plan wrote as {@code {{...}}} that resolves to nothing or to a non-positive number fails
+     * THIS split with the reason, instead of escaping as an engine exception.
+     */
+    static NodeExecutionResult executeSplitWithResolvedCap(SplitNodeExecutor splitNodeExecutor,
+                                                           String runId, String nodeId, ExecutionNode node,
+                                                           int workflowItemIndex, ExecutionContext ctx) {
+        int maxItems;
+        try {
+            maxItems = node.getSplitMaxItems(ctx);
+        } catch (IllegalStateException e) {
+            return NodeExecutionResult.failure(nodeId, e.getMessage(), 0);
+        }
+        return splitNodeExecutor.execute(runId, nodeId, node.getListExpression(), maxItems,
+            node.getSplitStrategy(), workflowItemIndex, ctx);
     }
 }

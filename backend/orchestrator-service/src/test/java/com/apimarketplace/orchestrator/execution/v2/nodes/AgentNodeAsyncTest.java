@@ -1124,4 +1124,109 @@ class AgentNodeAsyncTest {
             null                     // orderedEntries
         , null);
     }
+
+    @Nested
+    @DisplayName("Async classify: what the model receives, and what the Params column will show")
+    class AsyncClassifyModelInput {
+
+        private final String longPrompt = "Classify this incoming email." + " Body line of the mail.".repeat(250);
+
+        private AgentNode asyncClassify() {
+            AgentNode node = new AgentNode("agent:test_node", new Agent(
+                "agent-config-1", "classify", "Test Agent", null, null,
+                "openai", "gpt-4o", null, longPrompt,
+                0.7, 4096, 10, 5, List.of(), null,
+                Map.of(), List.of(Map.of("label", "billing", "description", "Money")),
+                null, List.of(), null, null));
+            node.acceptServices(buildServiceRegistry());
+            node.setAsyncQueueEnabled(true);
+            return node;
+        }
+
+        @Test
+        @DisplayName("BUG: the snapshot the completion persists carries the whole prompt, not its first 120 characters")
+        void snapshotCarriesTheWholePrompt() {
+            asyncClassify().execute(context);
+
+            ArgumentCaptor<PendingAgent> captor = ArgumentCaptor.forClass(PendingAgent.class);
+            verify(mockPendingAgentRegistry).register(captor.capture());
+            assertThat(captor.getValue().resolvedInputData())
+                .containsEntry("prompt", longPrompt)
+                .containsEntry("content", longPrompt);
+        }
+
+        @Test
+        @DisplayName("with no content configured the queued content IS the prompt, one string, so the worker sends it once")
+        void queuedContentIsThePrompt() {
+            NodeExecutionResult result = asyncClassify().execute(context);
+
+            AgentExecutionRequestMessage message = (AgentExecutionRequestMessage) result.output().get("queueMessage");
+            assertThat(message.requestPayload().get("prompt")).isEqualTo(longPrompt);
+            assertThat(message.requestPayload().get("content")).isEqualTo(longPrompt);
+        }
+    }
+
+    @Nested
+    @DisplayName("Async classify: the queued content when one is configured")
+    class AsyncClassifyConfiguredContent {
+
+        private NodeExecutionResult runWith(String prompt, Map<String, Object> params) {
+            AgentNode node = new AgentNode("agent:test_node", new Agent(
+                "agent-config-1", "classify", "Test Agent", null, null,
+                "openai", "gpt-4o", null, prompt,
+                0.7, 4096, 10, 5, List.of(), null,
+                params, List.of(Map.of("label", "billing", "description", "Money")),
+                null, List.of(), null, null));
+            node.acceptServices(buildServiceRegistry());
+            node.setAsyncQueueEnabled(true);
+            return node.execute(context);
+        }
+
+        private Map<String, Object> payload(NodeExecutionResult result) {
+            return ((AgentExecutionRequestMessage) result.output().get("queueMessage")).requestPayload();
+        }
+
+        @Test
+        @DisplayName("BUG: a separately configured content is queued as the content, beside the prompt")
+        void separateContentIsQueued() {
+            Map<String, Object> payload = payload(runWith("Route by department", Map.of("content", "My invoice is wrong")));
+
+            assertThat(payload.get("prompt")).isEqualTo("Route by department");
+            assertThat(payload.get("content")).isEqualTo("My invoice is wrong");
+        }
+
+        @Test
+        @DisplayName("BUG: a content the prompt embeds is queued as the prompt itself, so the worker sends it once")
+        void embeddedContentIsQueuedAsThePrompt() {
+            Map<String, Object> payload = payload(runWith("Classify: {{trigger:start.output.user_input}}",
+                Map.of("content", "{{trigger:start.output.user_input}}")));
+
+            assertThat(payload.get("content")).isEqualTo(payload.get("prompt"));
+        }
+    }
+
+    @Nested
+    @DisplayName("Async guardrail: the queued content with no content configured")
+    class AsyncGuardrailContent {
+
+        @Test
+        @DisplayName("BUG: the queued content IS the queued prompt, one string, so the worker sends it once")
+        void queuedContentIsThePrompt() {
+            AgentNode node = new AgentNode("agent:test_node", new Agent(
+                "agent-config-1", "guardrail", "Test Agent", null, null,
+                "openai", "gpt-4o", null, "Check this reply before it goes out",
+                0.7, 4096, 10, 5, List.of(), null,
+                Map.of("action", "flag"), List.of(),
+                null, List.of(Map.of("id", "no_leak", "description", "No internal data")), null, null));
+            node.acceptServices(buildServiceRegistry());
+            node.setAsyncQueueEnabled(true);
+
+            NodeExecutionResult result = node.execute(context);
+
+            Map<String, Object> payload =
+                ((AgentExecutionRequestMessage) result.output().get("queueMessage")).requestPayload();
+            assertThat(payload.get("prompt")).isEqualTo("Check this reply before it goes out");
+            assertThat(payload.get("content")).isEqualTo(payload.get("prompt"));
+        }
+    }
 }

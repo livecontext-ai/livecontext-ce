@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Brain, Eye, Globe, Layers, Search, Wrench, X } from 'lucide-react';
-import { getProviderDisplayName, getProviderIconSlug, getProviderIconSrc } from '@/lib/ai-providers/providerIcons';
-import { isMonoDarkIconSlug } from '@/lib/credentials/monoIconSlugs';
+import { getProviderDisplayName, getProviderIconSrc } from '@/lib/ai-providers/providerIcons';
+import { ServiceLogo } from '@/components/ui/service-logo';
 import { CATALOG_MODELS, type CatalogModel, type ModelCapability } from './modelsData';
 import { formatMonthKey, formatPrice, formatReleased, formatTokens, formatYear, groupDigits } from './modelsFormat';
 import { providerHref } from './modelsQuery';
@@ -33,14 +33,14 @@ function ProviderMark({ provider, size = 16 }: { provider: string; size?: number
   const src = getProviderIconSrc(provider);
   if (!src) return null;
   return (
-    <img
+    <ServiceLogo
       src={src}
       alt=""
       aria-hidden="true"
       loading="lazy"
       width={size}
       height={size}
-      className={`shrink-0 logo-color ${isMonoDarkIconSlug(getProviderIconSlug(provider)) ? 'logo-mono' : ''}`}
+      className="shrink-0 logo-color"
       style={{ width: size, height: size }}
     />
   );

@@ -318,7 +318,11 @@ public class AgentConfigProvider {
         Integer loopConsecutiveStop,
         // Per-agent reasoning effort for bridge/CLI providers
         // (minimal|low|medium|high|xhigh). Null ⇒ inherit per-model default.
-        String reasoningEffort
+        String reasoningEffort,
+        // V299 - when true this agent asks permission for a sensitive action even in
+        // the contexts that are otherwise exempt (workflow node, scheduled task,
+        // sub-agent, agent-backed chat). Null/false ⇒ the pre-existing behaviour.
+        Boolean requireToolAuthorization
     ) {
         /** Back-compat constructor (no reasoningEffort) for existing call/test sites. */
         public AgentConfig(String agentId, String name, String systemPrompt, String modelProvider,
@@ -328,6 +332,22 @@ public class AgentConfigProvider {
             this(agentId, name, systemPrompt, modelProvider, modelName, temperature, maxTokens, maxIterations,
                  toolsConfig, creditBudget, creditsConsumed, maxPerResourcePerTurn, loopIdenticalStop,
                  loopConsecutiveStop, null);
+        }
+
+        /** Back-compat constructor (no requireToolAuthorization) for existing call/test sites. */
+        public AgentConfig(String agentId, String name, String systemPrompt, String modelProvider,
+                           String modelName, Double temperature, Integer maxTokens, Integer maxIterations,
+                           ToolsConfig toolsConfig, Double creditBudget, Double creditsConsumed,
+                           Integer maxPerResourcePerTurn, Integer loopIdenticalStop, Integer loopConsecutiveStop,
+                           String reasoningEffort) {
+            this(agentId, name, systemPrompt, modelProvider, modelName, temperature, maxTokens, maxIterations,
+                 toolsConfig, creditBudget, creditsConsumed, maxPerResourcePerTurn, loopIdenticalStop,
+                 loopConsecutiveStop, reasoningEffort, null);
+        }
+
+        /** True when this agent must be asked about sensitive actions wherever it runs. */
+        public boolean requiresToolAuthorization() {
+            return Boolean.TRUE.equals(requireToolAuthorization);
         }
 
         public boolean hasSystemPrompt() {
@@ -550,9 +570,15 @@ public class AgentConfigProvider {
             creditBudget, creditsConsumed);
 
         String reasoningEffort = getTextOrNull(agent, "reasoningEffort");
+        // A field the producer does not send reads as absent, which is the default
+        // and the pre-existing behaviour: an agent nobody armed is never gated.
+        Boolean requireToolAuthorization = agent.has("requireToolAuthorization")
+                && !agent.get("requireToolAuthorization").isNull()
+                ? agent.get("requireToolAuthorization").asBoolean() : null;
 
         return new AgentConfig(agentId, name, systemPrompt, modelProvider, modelName, temperature, maxTokens, maxIterations, toolsConfig, creditBudget, creditsConsumed,
-            maxPerResourcePerTurn, loopIdenticalStop, loopConsecutiveStop, reasoningEffort);
+            maxPerResourcePerTurn, loopIdenticalStop, loopConsecutiveStop, reasoningEffort,
+            requireToolAuthorization);
     }
 
     /**
@@ -971,6 +997,72 @@ public class AgentConfigProvider {
             log.debug("findAvailableModelByModelId lookup failed for {}: {}", modelId, e.getMessage());
             return null;
         }
+    }
+
+    /** The pair a chat turn runs on: the one asked for, or its replacement while it is disabled. */
+    public record EffectiveModel(String provider, String model, boolean substituted) {}
+
+    private record CachedEffective(EffectiveModel value, Instant expiresAt) {}
+
+    /** Per-pair answers, same 15 s window the resolver in agent-service caches its disabled set for. */
+    private final Map<String, CachedEffective> effectiveModelCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static final Duration EFFECTIVE_MODEL_TTL = Duration.ofSeconds(15);
+
+    /**
+     * Keys are caller-supplied model strings, so the map is bounded: past this size it is
+     * simply cleared (a cold miss costs one small internal call, a leak costs the heap).
+     */
+    private static final int EFFECTIVE_MODEL_CACHE_MAX = 512;
+
+    /**
+     * Ask agent-service which pair a turn on {@code (provider, model)} must run on (V515). A
+     * model an admin disabled comes back as its replacement. Needed here because a chat turn
+     * on a CLI model goes to the bridge straight from this service and never reaches
+     * agent-service's execution entry points, where every other run is swapped.
+     *
+     * <p>Fails open: an unreachable agent-service or an unexpected body returns the pair
+     * unchanged, which is exactly what ran before replacements existed.
+     */
+    public EffectiveModel resolveEffectiveModel(String provider, String model) {
+        EffectiveModel unchanged = new EffectiveModel(provider, model, false);
+        if (provider == null || provider.isBlank() || model == null || model.isBlank()) {
+            return unchanged;
+        }
+        String cacheKey = provider + "\u0000" + model;
+        CachedEffective cached = effectiveModelCache.get(cacheKey);
+        if (cached != null && Instant.now().isBefore(cached.expiresAt())) {
+            return cached.value();
+        }
+        try {
+            String url = agentServiceUrl + "/api/internal/agent/models/effective?provider={provider}&model={model}";
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url, HttpMethod.GET, new HttpEntity<>(new HttpHeaders()), String.class, provider, model);
+            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+                return cacheEffective(cacheKey, unchanged);
+            }
+            JsonNode root = objectMapper.readTree(response.getBody());
+            String p = getTextOrNull(root, "provider");
+            String m = getTextOrNull(root, "model");
+            boolean substituted = root.path("substituted").asBoolean(false);
+            EffectiveModel resolved = (substituted && p != null && m != null)
+                    ? new EffectiveModel(p, m, true)
+                    : unchanged;
+            return cacheEffective(cacheKey, resolved);
+        } catch (Exception e) {
+            log.debug("Effective-model lookup failed for {}/{}; running it as asked: {}", provider, model, e.getMessage());
+            // Cached too: while agent-service is down, every turn would otherwise pay the full
+            // request timeout before running the pair it would have run anyway.
+            return cacheEffective(cacheKey, unchanged);
+        }
+    }
+
+    private EffectiveModel cacheEffective(String cacheKey, EffectiveModel value) {
+        if (effectiveModelCache.size() >= EFFECTIVE_MODEL_CACHE_MAX) {
+            effectiveModelCache.clear();
+        }
+        effectiveModelCache.put(cacheKey, new CachedEffective(value, Instant.now().plus(EFFECTIVE_MODEL_TTL)));
+        return value;
     }
 
     /**

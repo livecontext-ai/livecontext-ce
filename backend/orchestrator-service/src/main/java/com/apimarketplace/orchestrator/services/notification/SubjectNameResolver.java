@@ -39,6 +39,10 @@ public interface SubjectNameResolver {
     String APPLICATION = "APPLICATION";
     String ORG_INVITATION = "ORG_INVITATION";
     String BADGE        = "BADGE";
+    /** An agent itself, not a task of it (V518): blocked with nobody to ask. */
+    String AGENT        = "AGENT";
+    /** The account's credit wallet (V528): credits running low or exhausted. */
+    String BILLING      = "BILLING";
 
     /**
      * Stable string discriminator matching the {@code subject_type} column

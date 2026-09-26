@@ -16,12 +16,13 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 function ToolIcon({ iconSlug }: { iconSlug?: string }) {
   const [error, setError] = useState(false);
   if (!iconSlug || error) return <Wrench className="h-4 w-4 flex-shrink-0 text-theme-secondary" />;
   return (
-    <Image
+    <ServiceLogo as={Image}
       src={`/icons/services/${iconSlug}.svg`}
       alt={iconSlug}
       width={16}

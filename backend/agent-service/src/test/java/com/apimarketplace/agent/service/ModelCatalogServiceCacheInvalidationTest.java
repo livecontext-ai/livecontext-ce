@@ -91,7 +91,7 @@ class ModelCatalogServiceCacheInvalidationTest {
     void resetAllInvalidatesBothCaches() {
         service.resetAll();
 
-        verify(repository).deleteAll();
+        verify(repository).deleteAll(java.util.List.of());
         verify(cachedRateLimitProvider).refreshCache();
         verify(credentialRepository).clearHasDbKeyCacheAll();
     }

@@ -1,14 +1,13 @@
 'use client';
 
 import * as React from 'react';
-import { Info } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { OptionalSection } from '../OptionalSection';
 import { useTranslations } from 'next-intl';
 import type { BuilderNodeData } from '../../../types';
 import type { ConnectionProps } from '../ExpressionField';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 interface DownloadFileParametersFormProps {
   node: Node<BuilderNodeData>;
@@ -64,32 +63,22 @@ export function DownloadFileParametersForm({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('downloadFile.url')}</span>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-                >
-                  <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                  <p className="font-semibold text-slate-900 dark:text-slate-100">{t('downloadFile.title')}</p>
-                  <p>{t('downloadFile.description')}</p>
-                  <div className="space-y-1.5 text-xs">
-                    <p className="font-medium">{t('downloadFile.supportedFormats')}</p>
-                    <ul className="list-disc list-inside space-y-0.5 text-slate-500 dark:text-slate-400">
-                      <li><span className="font-medium text-slate-600 dark:text-slate-300">{t('downloadFile.images')}</span> PNG, JPG, GIF, WebP, SVG, BMP, TIFF</li>
-                      <li><span className="font-medium text-slate-600 dark:text-slate-300">{t('downloadFile.documents')}</span> PDF, Word, Excel, PowerPoint</li>
-                      <li><span className="font-medium text-slate-600 dark:text-slate-300">{t('downloadFile.media')}</span> MP4, WebM, MP3, WAV, OGG</li>
-                      <li><span className="font-medium text-slate-600 dark:text-slate-300">{t('downloadFile.data')}</span> JSON, CSV, XML, TXT</li>
-                      <li><span className="font-medium text-slate-600 dark:text-slate-300">{t('downloadFile.archives')}</span> ZIP, TAR, GZ, RAR, 7Z</li>
-                    </ul>
-                  </div>
+            <InfoPopover label={t('downloadFile.url')} size="sm" side="right" align="start">
+              <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                <p className="font-semibold text-slate-900 dark:text-slate-100">{t('downloadFile.title')}</p>
+                <p>{t('downloadFile.description')}</p>
+                <div className="space-y-1.5 text-xs">
+                  <p className="font-medium">{t('downloadFile.supportedFormats')}</p>
+                  <ul className="list-disc list-inside space-y-0.5 text-slate-500 dark:text-slate-400">
+                    <li><span className="font-medium text-slate-600 dark:text-slate-300">{t('downloadFile.images')}</span> PNG, JPG, GIF, WebP, SVG, BMP, TIFF</li>
+                    <li><span className="font-medium text-slate-600 dark:text-slate-300">{t('downloadFile.documents')}</span> PDF, Word, Excel, PowerPoint</li>
+                    <li><span className="font-medium text-slate-600 dark:text-slate-300">{t('downloadFile.media')}</span> MP4, WebM, MP3, WAV, OGG</li>
+                    <li><span className="font-medium text-slate-600 dark:text-slate-300">{t('downloadFile.data')}</span> JSON, CSV, XML, TXT</li>
+                    <li><span className="font-medium text-slate-600 dark:text-slate-300">{t('downloadFile.archives')}</span> ZIP, TAR, GZ, RAR, 7Z</li>
+                  </ul>
                 </div>
-              </PopoverContent>
-            </Popover>
+              </div>
+            </InfoPopover>
           </div>
           <span className="text-sm text-slate-500 dark:text-slate-400">{t('required')}</span>
         </div>

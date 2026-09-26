@@ -1,6 +1,7 @@
 package com.apimarketplace.auth.credential.service;
 
 import com.apimarketplace.auth.credential.domain.CredentialModels.*;
+import com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential;
 import com.apimarketplace.auth.credential.domain.CredentialRenameRefusedException;
 import com.apimarketplace.auth.credential.repository.CredentialRepository;
 import com.apimarketplace.common.icon.IconSlugNormalizer;
@@ -898,22 +899,18 @@ public class CredentialService {
      * clear diagnostic fields useful for support. The method is idempotent: a second
      * call after every dependent has already been revoked returns {@code 0}.
      *
+     * <p><b>Who is a dependent.</b> Only the credentials the deleted client ISSUED and that no
+     * remaining row can keep refreshing: see {@link #findByokDependents}. A credential connected
+     * through the platform-shared client is never touched. Before this rule every active
+     * credential of the integration was revoked, so deleting a TikTok sandbox key erased the
+     * tokens of four production accounts connected through the platform app (prod, 2026-09-23).
+     *
      * @return number of dependent credentials transitioned (excludes already-terminal rows)
      */
     @Transactional
-    public int revokeForByokDelete(String tenantId, String integration) {
-        if (tenantId == null || tenantId.isBlank() || integration == null || integration.isBlank()) {
-            return 0;
-        }
-        // The BYOK row stores integration_name in normalized form (no separators, lowercased).
-        // auth.credentials.integration stores the RAW iconSlug from the catalog template,
-        // which may contain '-' or '_' (e.g. "audit-tracking", "azure_translator"). The
-        // normalized-comparison repo method handles the asymmetry - see its javadoc.
-        // Re-normalize on this side defensively in case the caller passes a non-normalized
-        // form; the SQL is symmetric so a doubly-normalized input is a no-op.
-        String normalizedIntegration = normalizeForCascade(integration);
-        List<Credential> dependents = credentialRepository
-                .findActiveByTenantIdAndIntegrationNormalized(tenantId, normalizedIntegration);
+    public int revokeForByokDelete(String tenantId, PlatformCredential deletedRow,
+                                   List<PlatformCredential> rowsStillServingItsClient) {
+        List<Credential> dependents = findByokDependents(tenantId, deletedRow, rowsStillServingItsClient);
         if (dependents.isEmpty()) {
             return 0;
         }
@@ -952,20 +949,9 @@ public class CredentialService {
 
         if (revoked > 0) {
             log.info("Revoked {} user credentials following BYOK delete: tenant={}, integration={}",
-                    revoked, tenantId, integration);
+                    revoked, tenantId, deletedRow.integrationName());
         }
         return revoked;
-    }
-
-    /**
-     * Mirror of the SQL normalization used by
-     * {@link CredentialRepository#findActiveByTenantIdAndIntegrationNormalized}: strip
-     * everything except {@code [a-zA-Z0-9]}, then lowercase. Symmetric with the SQL so
-     * the parameter and the row-side comparison reach the same canonical form.
-     */
-    private static String normalizeForCascade(String name) {
-        if (name == null) return null;
-        return name.replaceAll("[^a-zA-Z0-9]", "").toLowerCase(java.util.Locale.ROOT);
     }
 
     /**
@@ -982,12 +968,92 @@ public class CredentialService {
      * {@code "audit-tracking"}, {@code "azure_translator"}) are correctly
      * matched against their normalized BYOK row name.
      */
-    public int countDependentForByokDelete(String tenantId, String integration) {
-        if (tenantId == null || tenantId.isBlank() || integration == null || integration.isBlank()) {
-            return 0;
+    public int countDependentForByokDelete(String tenantId, PlatformCredential deletedRow,
+                                           List<PlatformCredential> rowsStillServingItsClient) {
+        return findByokDependents(tenantId, deletedRow, rowsStillServingItsClient).size();
+    }
+
+    /**
+     * The active credentials a BYOK row deletion orphans, shared by the cascade and the
+     * delete-impact count so the number the user is shown is the number that is revoked.
+     * Integration-agnostic: the issuer is the {@code client_id} (or {@code oauth_client_id}) the
+     * OAuth callback stores on every credential and every refresh reads back.
+     *
+     * <p>Candidates are selected by ISSUER, not by integration name, so a credential issued
+     * through a row registered under another name (one Google client serving gmail and drive,
+     * resolved by credential name) is found too. For a credential the deleted client issued:
+     * <ul>
+     *   <li>with its own stored client secret (every callback since the inline copy exists),
+     *       it keeps refreshing on that copy, so it is spared exactly when another row (a BYOK row
+     *       of this tenant in any workspace, or the platform row) still holds the same client;</li>
+     *   <li>without one, its refresh re-resolves an ENABLED row of its integration in its exact
+     *       scope (its workspace, or personal for a personal credential) or the platform row
+     *       ({@code PlatformCredentialRepository.ORG_TENANT_FILTER}), so only such a reachable row
+     *       spares it.</li>
+     * </ul>
+     * A credential that stores no client id cannot say who issued it: it is a dependent only when
+     * it holds OAuth tokens, is of the deleted row's integration and could reach the deleted row
+     * (same exact scope). Prod had no such active credential when this rule shipped (24 of 24
+     * refreshable credentials store their client). A deleted row with no client id (not an OAuth
+     * client) orphans nothing. Integration names are compared with the normalizer the refresh
+     * resolver uses ({@link PlatformCredentialService#normalizeIntegrationName}).
+     */
+    List<Credential> findByokDependents(String tenantId, PlatformCredential deletedRow,
+                                        List<PlatformCredential> rowsStillServingItsClient) {
+        String deletedClientId = deletedRow != null ? deletedRow.clientId() : null;
+        if (tenantId == null || tenantId.isBlank() || deletedClientId == null || deletedClientId.isBlank()) {
+            return List.of();
         }
-        return credentialRepository.countActiveByTenantIdAndIntegrationNormalized(
-                tenantId, normalizeForCascade(integration));
+        List<PlatformCredential> remaining = rowsStillServingItsClient != null ? rowsStillServingItsClient : List.of();
+        String deletedIntegration = PlatformCredentialService.normalizeIntegrationName(deletedRow.integrationName());
+        return credentialRepository.findActiveByTenantIdAndIssuerOrLegacy(tenantId, deletedClientId)
+                .stream()
+                .filter(c -> isOrphanedBy(c, deletedRow, deletedIntegration, remaining))
+                .toList();
+    }
+
+    private static boolean isOrphanedBy(Credential credential, PlatformCredential deletedRow,
+                                        String deletedIntegration, List<PlatformCredential> remaining) {
+        Map<String, Object> data = credential.credentialData() != null ? credential.credentialData() : Map.of();
+        String issuer = issuerOf(data);
+        if (issuer == null) {
+            boolean holdsTokens = data.get("refresh_token") != null || data.get("access_token") != null;
+            return holdsTokens
+                    && deletedIntegration.equals(PlatformCredentialService.normalizeIntegrationName(credential.integration()))
+                    && reachable(deletedRow, credential);
+        }
+        if (!issuer.equals(deletedRow.clientId())) {
+            return false;
+        }
+        boolean ownSecret = data.get("oauth_client_secret") != null || data.get("client_secret") != null;
+        String integration = PlatformCredentialService.normalizeIntegrationName(credential.integration());
+        boolean spared = remaining.stream()
+                .filter(row -> issuer.equals(row.clientId()))
+                .anyMatch(row -> ownSecret
+                        || (row.isEnabled()
+                            && reachable(row, credential)
+                            && java.util.Objects.equals(integration,
+                                    PlatformCredentialService.normalizeIntegrationName(row.integrationName()))));
+        return !spared;
+    }
+
+    /**
+     * Whether the refresh resolver of {@code credential} can land on {@code row}: the platform row,
+     * or a BYOK row in the credential's EXACT scope. A personal row is not reachable from a
+     * workspace credential, nor a workspace row from a personal one.
+     */
+    private static boolean reachable(PlatformCredential row, Credential credential) {
+        return row.tenantId() == null
+                || java.util.Objects.equals(row.organizationId(), credential.organizationId());
+    }
+
+    private static String issuerOf(Map<String, Object> data) {
+        String issuer = stringOrNull(data.get("client_id"));
+        return issuer != null ? issuer : stringOrNull(data.get("oauth_client_id"));
+    }
+
+    private static String stringOrNull(Object value) {
+        return value instanceof String str && !str.isBlank() ? str : null;
     }
 
     /**

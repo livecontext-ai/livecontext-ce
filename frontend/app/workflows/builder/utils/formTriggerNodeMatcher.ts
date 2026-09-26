@@ -34,3 +34,19 @@ export function findLiveFormTriggerNode(
     return nodeLabel != null && nodeLabel === wantedLabel;
   });
 }
+
+/**
+ * The field list a waiting form trigger is rendered with: the FIRST NON-EMPTY of the
+ * live node's fields (unsaved builder edits), the backend trigger config's fields and
+ * the plan's params fields.
+ *
+ * Non-empty, not merely defined: the config list defaults to [], which is truthy, so a
+ * plain `||` chain never reached the plan's fields. The form then arrived with no
+ * fields until the live node data loaded, and a template seed applied in that window
+ * filled nothing (the user had to ask for the example values twice).
+ */
+export function pickFormTriggerFields(
+  ...candidates: Array<unknown[] | null | undefined>
+): any[] {
+  return (candidates.find(f => Array.isArray(f) && f.length > 0) as any[] | undefined) ?? [];
+}

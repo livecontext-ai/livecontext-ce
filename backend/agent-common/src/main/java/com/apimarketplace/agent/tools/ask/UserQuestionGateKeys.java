@@ -27,4 +27,19 @@ public final class UserQuestionGateKeys {
     public static boolean belongsTo(String toolCallId, String gateKey) {
         return gateKey != null && gateKey.equals(forToolCall(toolCallId));
     }
+
+    /**
+     * The call id inside a question gate key, or null when the key is not one.
+     *
+     * <p>The inverse of {@link #forToolCall}, so a record that stored only the gate key can
+     * still name the call the answer endpoint keys on. Returns null rather than guessing on a
+     * key of another shape, because the shape is a security check and a lenient parse here
+     * would hand an authorization park's key back as if it were a question's.
+     */
+    public static String toolCallIdOf(String gateKey) {
+        if (gateKey == null || !gateKey.endsWith(SUFFIX) || gateKey.length() == SUFFIX.length()) {
+            return null;
+        }
+        return gateKey.substring(0, gateKey.length() - SUFFIX.length());
+    }
 }

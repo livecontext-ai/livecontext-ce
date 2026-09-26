@@ -29,6 +29,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatUtcDateTime } from "@/lib/utils/dateFormatters";
 import { IS_CE } from "@/lib/edition";
+import OrganizationSsoDomainsSection from "@/components/organization/OrganizationSsoDomainsSection";
 
 type Props = {
   orgId: string;
@@ -451,6 +452,8 @@ export default function OrganizationSsoPanel({ orgId, currentUserRole, supportsT
                   )}
                 </dl>
               </div>
+
+              <OrganizationSsoDomainsSection orgId={orgId} />
 
               <div className="flex justify-end">
                 <Button

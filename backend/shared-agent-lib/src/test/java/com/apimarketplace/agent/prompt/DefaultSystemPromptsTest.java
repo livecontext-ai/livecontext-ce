@@ -213,7 +213,7 @@ class DefaultSystemPromptsTest {
                 .containsExactly(
                         "catalog", "table", "interface", "agent", "skill", "memory", "workflow",
                         "application", "web_search", "generation", "files", "mailbox", "wait",
-                        "ask_user");
+                        "ask_user", "channel");
     }
 
     /**

@@ -7,6 +7,7 @@ import { DocsMobileNav } from './_components/DocsMobileNav';
 import { DocsToc } from './_components/DocsToc';
 import { DocsPrevNext } from './_components/DocsPrevNext';
 import { IS_CE } from '@/lib/edition';
+import { DOCS_ARTICLE_ID } from './_components/docsIds';
 
 // Docs shell. Reuses the public `LandingShell` chrome (header, footer, light-by-
 // default decoupled theme persisted under `docs-theme`, so flipping it here never
@@ -34,19 +35,28 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
       themeStorageKey="docs-theme"
       themeRespectStored
       siteBaseUrl={siteBaseUrl}
+      // First Tab stop of every docs page: jumps past the site header and the
+      // sidebar straight to the article (WCAG 2.4.1 bypass blocks).
+      skipLinkTarget={DOCS_ARTICLE_ID}
     >
       <div className="docs-layout">
-        <aside className="docs-sidebar">
+        <aside className="docs-sidebar" aria-label="Documentation sidebar">
           <DocsNav />
         </aside>
         <div className="docs-content">
           <DocsMobileNav />
-          {children}
+          {/* Skip-link and post-navigation focus target: the article itself, after the
+              mobile Menu button, so the next Tab lands in the content. */}
+          <div className="docs-article" id={DOCS_ARTICLE_ID} tabIndex={-1}>
+            {children}
+          </div>
           <DocsPrevNext />
         </div>
-        <aside className="docs-toc">
+        {/* Plain column wrapper: the landmark is DocsToc's own <nav>, which renders
+            only when the page has at least two headings (never an empty landmark). */}
+        <div className="docs-toc">
           <DocsToc />
-        </aside>
+        </div>
       </div>
     </LandingShell>
   );

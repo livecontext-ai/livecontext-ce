@@ -93,7 +93,8 @@ class PlatformCredentialRepositoryPostgresIT {
                     max_calls_per_run INTEGER NOT NULL DEFAULT 500,
                     variant VARCHAR(50) NOT NULL DEFAULT 'primary',
                     show_unverified_app_warning BOOLEAN NOT NULL DEFAULT TRUE,
-                    organization_id VARCHAR(255) DEFAULT NULL
+                    organization_id VARCHAR(255) DEFAULT NULL,
+                    selected_scopes TEXT
                 )
                 """);
         // Mirrors V362: org dimension added to the uniqueness index.
@@ -320,6 +321,75 @@ class PlatformCredentialRepositoryPostgresIT {
                 .as("api_key must be encrypted at rest (ENC: prefix)")
                 .isNotEqualTo("new-api-key")
                 .startsWith("ENC:");
+    }
+
+    @Test
+    @DisplayName("selected_scopes (V513) is written on insert, replaced on update and cleared back to NULL")
+    void selectedScopesRoundTrip() {
+        PlatformCredential base = platformWide("tiktok");
+        PlatformCredential withSelection = new PlatformCredential(
+                null, base.integrationName(), base.displayName(), base.authType(),
+                base.clientId(), base.clientSecret(), base.apiKey(), base.username(), base.password(),
+                base.authUrl(), base.tokenUrl(), base.defaultScopes(),
+                base.iconSlug(), base.category(), base.description(),
+                base.showUnverifiedAppWarning(), base.isEnabled(), base.customFields(),
+                base.defaultMarkupCredits(), base.maxCallsPerRun(),
+                base.createdAt(), base.updatedAt(), base.createdBy(), base.tenantId(), base.variant(),
+                base.organizationId(), "user.info.basic video.publish");
+        PlatformCredential inserted = repository.save(withSelection);
+        assertThat(repository.findByIntegrationName("tiktok").orElseThrow().selectedScopeList())
+                .containsExactly("user.info.basic", "video.publish");
+
+        repository.save(new PlatformCredential(
+                inserted.id(), base.integrationName(), base.displayName(), base.authType(),
+                base.clientId(), null, null, base.username(), null,
+                base.authUrl(), base.tokenUrl(), base.defaultScopes(),
+                base.iconSlug(), base.category(), base.description(),
+                base.showUnverifiedAppWarning(), base.isEnabled(), base.customFields(),
+                base.defaultMarkupCredits(), base.maxCallsPerRun(),
+                base.createdAt(), base.updatedAt(), base.createdBy(), base.tenantId(), base.variant(),
+                base.organizationId(), "video.upload"));
+        assertThat(repository.findByIntegrationName("tiktok").orElseThrow().selectedScopes())
+                .isEqualTo("video.upload");
+
+        repository.save(new PlatformCredential(
+                inserted.id(), base.integrationName(), base.displayName(), base.authType(),
+                base.clientId(), null, null, base.username(), null,
+                base.authUrl(), base.tokenUrl(), base.defaultScopes(),
+                base.iconSlug(), base.category(), base.description(),
+                base.showUnverifiedAppWarning(), base.isEnabled(), base.customFields(),
+                base.defaultMarkupCredits(), base.maxCallsPerRun(),
+                base.createdAt(), base.updatedAt(), base.createdBy(), base.tenantId(), base.variant(),
+                base.organizationId(), null));
+        assertThat(repository.findByIntegrationName("tiktok").orElseThrow().selectedScopes())
+                .as("the service decides what NULL means; the repository must store it, not COALESCE it away")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("findRowsHoldingClient: the tenant's other rows (any workspace, any integration) and platform rows with that client, never the excluded row or another tenant's")
+    void findRowsHoldingClient() {
+        PlatformCredential deleted = repository.save(withClient(platformWide("tiktok").withTenantId("t1"), "cid-1", "org-a"));
+        PlatformCredential otherWorkspace = repository.save(withClient(platformWide("tiktok").withTenantId("t1"), "cid-1", "org-b"));
+        PlatformCredential platform = repository.save(withClient(platformWide("tiktok_business"), "cid-1", null));
+        repository.save(withClient(platformWide("figma").withTenantId("t2"), "cid-1", null));
+        repository.save(withClient(platformWide("gmail").withTenantId("t1"), "other-cid", null));
+
+        List<PlatformCredential> rows = repository.findRowsHoldingClient("cid-1", "t1", deleted.id());
+
+        assertThat(rows).extracting(PlatformCredential::id)
+                .containsExactlyInAnyOrder(otherWorkspace.id(), platform.id());
+    }
+
+    private static PlatformCredential withClient(PlatformCredential base, String clientId, String orgId) {
+        return new PlatformCredential(
+                null, base.integrationName(), base.displayName(), base.authType(),
+                clientId, base.clientSecret(), base.apiKey(), base.username(), base.password(),
+                base.authUrl(), base.tokenUrl(), base.defaultScopes(),
+                base.iconSlug(), base.category(), base.description(),
+                base.showUnverifiedAppWarning(), base.isEnabled(), base.customFields(),
+                base.defaultMarkupCredits(), base.maxCallsPerRun(),
+                base.createdAt(), base.updatedAt(), base.createdBy(), base.tenantId(), base.variant(), orgId);
     }
 
     @Test

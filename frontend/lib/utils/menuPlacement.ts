@@ -6,11 +6,11 @@
  * anchoring a 192px menu at `rect.left` is fine on a desktop and runs off the
  * right edge of a phone the moment the trigger sits on the right of a card.
  *
- * This is the one clamp for all of them. `usePopoverPosition` (the builder's
- * right-aligned info popovers) and `usePortalMenu` (the canvas trigger menus)
- * are the two hooks that already existed for this job; they call in here rather
- * than keeping a clamp each, so there is a single place where "inside the
- * screen" is defined.
+ * This is the one clamp for all of them. `usePortalMenu` (the canvas trigger
+ * menus) calls in here rather than keeping a clamp of its own, so there is a
+ * single place where "inside the screen" is defined. (The builder's info
+ * popovers used to place themselves here too; they are Radix popovers now,
+ * through `components/ui/info-popover`, and Radix keeps them on screen.)
  */
 
 /** Gutter kept between a menu and the edge of the screen. */

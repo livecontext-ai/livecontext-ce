@@ -90,6 +90,9 @@ public class GenerateNode extends BaseNode {
     @Override
     public NodeExecutionResult execute(ExecutionContext context) {
         long startTime = System.currentTimeMillis();
+        // The resolved params once they exist, so every later failure reports what the node ran
+        // with rather than the configured templates (which read as "unresolved" in the column).
+        Map<String, Object> resolved = null;
 
         try {
             if (generationExecutionService == null) {
@@ -99,13 +102,13 @@ public class GenerateNode extends BaseNode {
             // Resolve the WHOLE params map first: every param accepts templates,
             // and whole-value templates keep their RAW type (a FileRef used as a
             // reference image stays a map, a duration stays a number).
-            Map<String, Object> resolved = resolveParams(context);
-            Map<String, Object> resolvedParams = reportableParams(resolved);
+            resolved = resolveParams(context);
+            Map<String, Object> resolvedParams = reportableParams(resolved, context);
 
             String model = stringValue(resolved.get("model"));
             model = model != null ? model.trim().toLowerCase(Locale.ROOT) : null;
             if (model == null || model.isBlank()) {
-                return failure(context, startTime,
+                return failure(context, startTime, resolved,
                     // No UI navigation here: this message is read by an agent
                     // that has no screen, only the tools it can call.
                     "model is required. Set params={model: '<model-id>'}. List the ids with "
@@ -119,7 +122,7 @@ public class GenerateNode extends BaseNode {
                 : credentialSource.trim().toLowerCase(Locale.ROOT);
             if (credentialSource != null && !credentialSource.isBlank()
                     && !CREDENTIAL_SOURCES.contains(credentialSource)) {
-                return failure(context, startTime,
+                return failure(context, startTime, resolved,
                     "credential_source must be 'platform' (use the platform's key and be billed the "
                         + "platform price) or 'user' (use your own key and be billed nothing by the "
                         + "platform), got '" + credentialSource + "'");
@@ -174,12 +177,12 @@ public class GenerateNode extends BaseNode {
                 if (recoverable != null) {
                     logger.error("Generate node failed with a paid asset still at the provider: "
                             + "nodeId={}, model={}", nodeId, model);
-                    return failure(context, startTime, result.error()
+                    return failure(context, startTime, resolved, result.error()
                             + " This call was charged and the asset exists at the provider, but it "
                             + "could not be stored. Download it now, the link expires shortly: "
                             + recoverable);
                 }
-                return failure(context, startTime, result.error());
+                return failure(context, startTime, resolved, result.error());
             }
 
             Map<String, Object> data = result.data();
@@ -189,14 +192,15 @@ public class GenerateNode extends BaseNode {
                 // money. Reporting success with nothing in `file` would let the
                 // rest of the workflow run on an empty asset and hide that.
                 logger.error("Generate node produced no asset: nodeId={}, model={}", nodeId, model);
-                return failure(context, startTime,
+                return failure(context, startTime, resolved,
                     "The generation ran but produced no file, so there is nothing for the next node to "
                         + "use. This call was still charged. Check the model's limits and run again.");
             }
 
             Map<String, Object> output = new LinkedHashMap<>();
-            // Same bounding as the failure path: small values verbatim, oversized described.
-            output.put("resolved_params", ReportedParams.forReport(resolvedParams));
+            // Already gated by reportableParams: a second pass would describe the prompt it
+            // deliberately reported whole.
+            output.put("resolved_params", resolvedParams);
             output.put("file", file);
             output.put("model", data.getOrDefault("model", model));
             output.put("kind", data.get("kind"));
@@ -215,7 +219,7 @@ public class GenerateNode extends BaseNode {
 
         } catch (Exception e) {
             logger.error("Generate node failed unexpectedly: nodeId={}, error={}", nodeId, e.getMessage(), e);
-            return failure(context, startTime, "Generation failed: " + e.getMessage());
+            return failure(context, startTime, resolved, "Generation failed: " + e.getMessage());
         }
     }
 
@@ -281,17 +285,30 @@ public class GenerateNode extends BaseNode {
     }
 
     private NodeExecutionResult failure(ExecutionContext context, long startTime, String message) {
+        return failure(context, startTime, null, message);
+    }
+
+    /**
+     * @param resolved the resolved params, or {@code null} when the failure happened BEFORE or
+     *        DURING resolution: then the templates the author wrote are the only honest thing to
+     *        show. After resolution, the column shows what the node ran with; it used to show the
+     *        templates on every failure, including the ones that happened after they resolved
+     *        (an unknown model, a refused parameter, a provider error), so a reference that
+     *        worked read as one that did not.
+     */
+    private NodeExecutionResult failure(ExecutionContext context, long startTime,
+                                        Map<String, Object> resolved, String message) {
+        Map<String, Object> source = resolved != null ? resolved : params;
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("file", null);
-        out.put("model", stringValue(params.get("model")));
-        // Unresolved here on purpose: every failure that reaches this method does so
-        // BEFORE or DURING resolution, so the templates the author wrote are the only
-        // honest thing to show. A generation is billed, and a reader asking why it did
-        // not happen had, until now, an empty Params column to work from.
-        out.put("resolved_params", reportableParams(params));
+        out.put("model", stringValue(source.get("model")));
+        out.put("resolved_params", resolved != null ? reportableParams(resolved, context) : reportableParams(params, null));
         return NodeExecutionResult.failureWithOutput(nodeId, message,
             enrichWithMetadata(out, context), System.currentTimeMillis() - startTime);
     }
+
+    /** The params a generation model reads as TEXT: reported whole, like an agent's prompt. */
+    private static final List<String> MODEL_TEXT_PARAMS = List.of("prompt", "negative_prompt");
 
     /**
      * Every configured parameter except the credential reference.
@@ -301,8 +318,12 @@ public class GenerateNode extends BaseNode {
      * reason; `resolved_params` is read by the same people, so it stays out here too.
      * Everything else - model, prompt, size, duration, the reference image - is what
      * a reader needs to understand a generation they were charged for.
+     *
+     * @param context the run, when {@code source} is RESOLVED; {@code null} when it is the
+     *        configured params (a failure before resolution), which are templates and hold no
+     *        variable's value
      */
-    private static Map<String, Object> reportableParams(Map<String, Object> source) {
+    private Map<String, Object> reportableParams(Map<String, Object> source, ExecutionContext context) {
         Map<String, Object> reportable = new LinkedHashMap<>();
         if (source == null) return reportable;
         for (Map.Entry<String, Object> entry : source.entrySet()) {
@@ -310,10 +331,34 @@ public class GenerateNode extends BaseNode {
             if (entry.getValue() == null) continue;
             reportable.put(entry.getKey(), entry.getValue());
         }
-        // A prompt has no length limit and a reference image can arrive as a data URI, and
-        // this map lands on the step row of every item. Small values are untouched - the
-        // prompt IS what a reader came for - and only what exceeds the budget is described.
-        // The credential filter above stays first: masking by name is a separate rule.
+        // A reference image can arrive as a data URI, and this map lands on the step row of
+        // every item: what exceeds the budget is described. The prompt is the exception, it is
+        // what a reader came for: reported whole (ModelInput), with a workspace variable in
+        // it withheld. The credential filter above stays first: masking by name is a separate rule.
+        for (Map.Entry<String, Object> entry : reportable.entrySet()) {
+            String key = entry.getKey();
+            if (MODEL_TEXT_PARAMS.contains(key) && entry.getValue() instanceof String text) {
+                entry.setValue(new ReportedParams.ModelInput(maskedModelText(key, text, context)));
+            } else if (context != null && params.get(key) != null) {
+                // Any other param: withheld (a scalar) or described by shape (a structure) when
+                // its configured template pulls a workspace variable, bounded as before otherwise.
+                entry.setValue(ReportedParams.valueFromConfigured(params.get(key), entry.getValue()));
+            }
+        }
         return ReportedParams.forReport(reportable);
+    }
+
+    /** The resolved text, or its template re-resolved with every workspace variable withheld. */
+    private String maskedModelText(String key, String resolvedText, ExecutionContext context) {
+        if (context == null || !(params.get(key) instanceof String template)
+                || !ReportedParams.referencesAnyWorkspaceVariable(template)) {
+            return resolvedText;
+        }
+        try {
+            return resolveTemplateString(ReportedParams.maskWorkspaceReferences(template), context);
+        } catch (RuntimeException e) {
+            // The report must never fail the node it reports on, nor fall back to the clear value.
+            return ReportedParams.WITHHELD_WORKSPACE_VARIABLE;
+        }
     }
 }

@@ -150,8 +150,12 @@ public class ExecutionQueueService implements ExecutionQueue, DisposableBean {
             metrics.recordCompleted(userPlan, tenantId, outcomeOf(result));
             return result;
         } catch (TimeoutException e) {
-            // Timeout: cancel and remove from queue
-            item.cancel();
+            // The deadline bounds the WAIT, not the run: an item a worker already started keeps
+            // executing and completes its epoch normally, so it is reported as still running,
+            // never as "could not start". Only an item that never started is cancelled.
+            if (!item.tryCancel()) {
+                return verdictForStartedItem(item, runId, triggerId, triggerType, userPlan, tenantId);
+            }
             queue.remove(item);
             String normalizedPlan = userPlan != null ? userPlan.toUpperCase() : "FREE";
             String message = "Execution queue timeout: your workflow could not start within "
@@ -176,6 +180,31 @@ public class ExecutionQueueService implements ExecutionQueue, DisposableBean {
             metrics.recordCompleted(userPlan, tenantId, ExecutionQueueMetrics.OUTCOME_CANCELLED);
             return TriggerExecutionResult.failure(runId, triggerId, triggerType, "Execution interrupted");
         }
+    }
+
+    /**
+     * The wait ran out on an item a worker had already STARTED. If it finished in the meantime its
+     * real outcome is returned; otherwise it is reported as still running, which it is.
+     */
+    TriggerExecutionResult verdictForStartedItem(QueuedExecution item, String runId, String triggerId,
+                                                 TriggerType triggerType, String userPlan, String tenantId) {
+        CompletableFuture<TriggerExecutionResult> future = item.getFuture();
+        if (future.isDone()) {
+            try {
+                TriggerExecutionResult finished = future.join();
+                metrics.recordCompleted(userPlan, tenantId, outcomeOf(finished));
+                return finished;
+            } catch (CompletionException | CancellationException failed) {
+                Throwable cause = failed.getCause() != null ? failed.getCause() : failed;
+                String reason = cause.getMessage() != null ? cause.getMessage() : cause.getClass().getSimpleName();
+                metrics.recordCompleted(userPlan, tenantId, ExecutionQueueMetrics.OUTCOME_FAILURE);
+                return TriggerExecutionResult.failure(runId, triggerId, triggerType, "Execution failed: " + reason);
+            }
+        }
+        logger.info("[ExecutionQueue] Sync wait ended while run {} is still executing; "
+            + "it continues in the background", runId);
+        metrics.recordCompleted(userPlan, tenantId, ExecutionQueueMetrics.OUTCOME_STILL_RUNNING);
+        return TriggerExecutionResult.stillRunning(runId, triggerId, triggerType);
     }
 
     private static String outcomeOf(TriggerExecutionResult result) {
@@ -313,7 +342,7 @@ public class ExecutionQueueService implements ExecutionQueue, DisposableBean {
                             // so double-recording (and inflating wait_ms for work that never ran)
                             // would misrepresent queue latency. The caller's wait is still captured
                             // transitively via the timeout/cancelled outcome counter.
-                            if (dispatched.isCancelled()) {
+                            if (!dispatched.tryStart()) {
                                 workerSemaphore.release();
                                 return;
                             }
@@ -373,6 +402,14 @@ public class ExecutionQueueService implements ExecutionQueue, DisposableBean {
     @Override
     public int getQueueSize() {
         return queue.size();
+    }
+
+    /**
+     * Trigger executions running on this instance right now (the shutdown drain waits on it).
+     */
+    @Override
+    public int getLocalActiveExecutions() {
+        return activeExecutions.get();
     }
 
     /**

@@ -214,6 +214,118 @@ class InternalAccessControllerTest {
         }
 
         @Test
+        @DisplayName("ERROR with the producer's errorMessage records THAT reason in Redis and the DB, not the placeholder")
+        void errorFinalizeRecordsProducerReason() {
+            when(streamStateService.error("stream-1", "LLM provider timeout")).thenReturn(Mono.just(true));
+
+            ResponseEntity<Void> response = controller.finalizeStream("stream-1",
+                    Map.of("state", "ERROR", "errorMessage", "LLM provider timeout"));
+
+            assertThat(response.getStatusCode().value()).isEqualTo(200);
+            verify(streamStateService).error("stream-1", "LLM provider timeout");
+            verify(streamService).markStreamAsError("stream-1", "LLM provider timeout");
+        }
+
+        @Test
+        @DisplayName("ERROR with a blank errorMessage falls back to the placeholder")
+        void errorFinalizeBlankReasonFallsBack() {
+            when(streamStateService.error("stream-1", "Agent execution error")).thenReturn(Mono.just(true));
+
+            controller.finalizeStream("stream-1", Map.of("state", "ERROR", "errorMessage", "   "));
+
+            verify(streamStateService).error("stream-1", "Agent execution error");
+            verify(streamService).markStreamAsError("stream-1", "Agent execution error");
+        }
+
+        @Test
+        @DisplayName("ERROR with an oversized errorMessage is bounded before it is stored")
+        void errorFinalizeBoundsOversizedReason() {
+            String huge = "x".repeat(InternalAccessController.MAX_STREAM_ERROR_LENGTH + 500);
+            String bounded = "x".repeat(InternalAccessController.MAX_STREAM_ERROR_LENGTH) + "...";
+            when(streamStateService.error("stream-1", bounded)).thenReturn(Mono.just(true));
+
+            controller.finalizeStream("stream-1", Map.of("state", "ERROR", "errorMessage", huge));
+
+            verify(streamService).markStreamAsError("stream-1", bounded);
+        }
+
+        @Test
+        @DisplayName("ERROR finalize logs once at WARN with the real reason, and never at ERROR")
+        void errorFinalizeLogsOnceAtWarn() {
+            when(streamStateService.error(anyString(), anyString())).thenReturn(Mono.just(true));
+            ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                    org.slf4j.LoggerFactory.getLogger(InternalAccessController.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            try {
+                controller.finalizeStream("stream-1",
+                        Map.of("state", "ERROR", "errorMessage", "LLM provider timeout"));
+            } finally {
+                logger.detachAppender(appender);
+            }
+
+            assertThat(appender.list)
+                    .noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+            assertThat(appender.list)
+                    .filteredOn(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+                    .singleElement()
+                    .satisfies(e -> assertThat(e.getFormattedMessage()).contains("LLM provider timeout"));
+        }
+
+        @Test
+        @DisplayName("the WARN line carries at most ~500 chars of the reason while the stored value keeps 2000")
+        void errorFinalizeCapsTheLoggedReason() {
+            String huge = "y".repeat(InternalAccessController.MAX_STREAM_ERROR_LENGTH);
+            when(streamStateService.error(anyString(), anyString())).thenReturn(Mono.just(true));
+            ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                    org.slf4j.LoggerFactory.getLogger(InternalAccessController.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            try {
+                controller.finalizeStream("stream-1", Map.of("state", "ERROR", "errorMessage", huge));
+            } finally {
+                logger.detachAppender(appender);
+            }
+
+            verify(streamService).markStreamAsError("stream-1", huge);
+            assertThat(appender.list)
+                    .filteredOn(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+                    .singleElement()
+                    .satisfies(e -> assertThat(e.getFormattedMessage().length())
+                            .isLessThan(InternalAccessController.MAX_LOGGED_STREAM_ERROR_LENGTH + 100));
+        }
+
+        @Test
+        @DisplayName("the legacy 'error' key is accepted when 'errorMessage' is absent")
+        void errorFinalizeAcceptsLegacyErrorKey() {
+            when(streamStateService.error("stream-1", "legacy reason")).thenReturn(Mono.just(true));
+
+            controller.finalizeStream("stream-1", Map.of("state", "ERROR", "error", "legacy reason"));
+
+            verify(streamService).markStreamAsError("stream-1", "legacy reason");
+        }
+
+        @Test
+        @DisplayName("Wire contract: the JSON errorMessage field reaches the stored reason (MockMvc)")
+        void errorFinalizeOverHttpCarriesReason() throws Exception {
+            when(streamStateService.error("stream-1", "Tool quota exceeded")).thenReturn(Mono.just(true));
+            org.springframework.test.web.servlet.MockMvc mockMvc =
+                    org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+
+            mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                            .post("/api/internal/streams/stream-1/finalize")
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content("{\"state\":\"ERROR\",\"errorMessage\":\"Tool quota exceeded\"}"))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+
+            verify(streamService).markStreamAsError("stream-1", "Tool quota exceeded");
+        }
+
+        @Test
         @DisplayName("Should stay 200 (best-effort) when the DB row update fails on COMPLETED")
         void shouldTolerateDbMarkFailureOnCompleted() {
             when(streamStateService.complete("stream-1")).thenReturn(Mono.just(true));

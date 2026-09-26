@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import { orchestratorApi } from '@/lib/api';
-import { Monitor, ChevronLeft, ChevronRight, ExternalLink, X } from 'lucide-react';
+import { Monitor, ChevronLeft, ChevronRight, ExternalLink, X, Maximize2 } from 'lucide-react';
 import { PreviewActionMenu, ActionIcons } from './PreviewActionMenu';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { SimpleToast } from './SimpleToast';
@@ -239,7 +239,24 @@ export function InterfacePreviewBlock({ interfaceId, onError, onDelete }: Interf
         ) : (
           /* Live preview - native viewport (same primitive as /app/interface/[id]) */
           <div className="relative" style={{ height: 400 }}>
-            <div className="absolute inset-0 z-10" />
+            {/* No click-catching layer over the iframe: it swallowed the wheel and the
+                scrollbar, so a tall interface showed a scrollbar nobody could use. A click
+                inside a sandboxed iframe never reaches this card, so opening the side
+                panel goes through this button (and the footer row below). */}
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); handleCardClick(); }}
+              aria-label={t('open')}
+              title={t('open')}
+              className={`absolute top-2 right-2 z-10 flex items-center gap-1.5 px-2.5 py-1.5 text-sm font-medium text-theme-primary bg-white/90 dark:bg-slate-800/90 backdrop-blur-sm border border-theme rounded-md shadow-sm transition-opacity duration-200 ${
+                // Hidden = not clickable either: on touch there is no hover, and an invisible
+                // target would steal taps meant for the interface's own top-right corner.
+                isHovered ? 'opacity-100' : 'opacity-0 pointer-events-none focus-visible:opacity-100 focus-visible:pointer-events-auto'
+              }`}
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+              {t('open')}
+            </button>
             <InterfacePreview
               htmlTemplate={htmlTemplate}
               cssTemplate={cssTemplate}

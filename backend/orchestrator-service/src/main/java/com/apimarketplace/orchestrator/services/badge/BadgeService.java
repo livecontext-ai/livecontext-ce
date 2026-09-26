@@ -3,10 +3,13 @@ package com.apimarketplace.orchestrator.services.badge;
 import com.apimarketplace.auth.client.AuthClient;
 import com.apimarketplace.orchestrator.domain.badge.UserBadgeEntity;
 import com.apimarketplace.orchestrator.repository.UserBadgeRepository;
+import com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter;
+import com.apimarketplace.orchestrator.services.lifecycle.TrophyEmailReporter;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -77,6 +80,11 @@ public class BadgeService {
     private final BadgeStatsCollector statsCollector;
     private final BadgeNotificationEmitter notificationEmitter;
     private final AuthClient authClient;
+    private final TrophyEmailReporter trophyEmails;
+
+    /** Product analytics; optional so a unit test can build the service without it. */
+    @Autowired(required = false)
+    private EngagementAnalyticsEmitter analytics;
 
     /** tenantId -> claimed poll slot. Bounded, so a large user base cannot leak. */
     private final Cache<String, Instant> pollSlots = Caffeine.newBuilder()
@@ -102,11 +110,13 @@ public class BadgeService {
     public BadgeService(UserBadgeRepository badgeRepository,
                         BadgeStatsCollector statsCollector,
                         BadgeNotificationEmitter notificationEmitter,
-                        AuthClient authClient) {
+                        AuthClient authClient,
+                        TrophyEmailReporter trophyEmails) {
         this.badgeRepository = badgeRepository;
         this.statsCollector = statsCollector;
         this.notificationEmitter = notificationEmitter;
         this.authClient = authClient;
+        this.trophyEmails = trophyEmails;
     }
 
     /**
@@ -228,11 +238,20 @@ public class BadgeService {
 
         boolean backfill = alreadyUnlocked.isEmpty()
                 && unlocked.size() > BACKFILL_NOTIFICATION_THRESHOLD;
+        String orgId = backfill ? organizationId : resolveNotificationOrg(tenantId, organizationId);
+        if (analytics != null) {
+            // Every real insert, announced or not: a backfill is flagged, never hidden.
+            for (BadgeDefinition definition : unlocked) {
+                analytics.badgeUnlocked(tenantId, orgId, definition, backfill);
+            }
+        }
         if (!backfill) {
-            String orgId = resolveNotificationOrg(tenantId, organizationId);
             for (int i = 0; i < unlocked.size(); i++) {
                 notificationEmitter.emitUnlocked(tenantId, orgId, unlocked.get(i), unlockValues.get(i));
             }
+            // Email only for the few unlocks worth one (popularity, first publication, gold or
+            // platinum), and only from THIS pass's real inserts, so it can never repeat.
+            trophyEmails.badgesUnlocked(tenantId, List.copyOf(unlocked), Set.copyOf(alreadyUnlocked));
         }
         log.info("[badges] tenant {} unlocked {} badge(s){}: {}", tenantId, unlocked.size(),
                 backfill ? " (backfill, not announced)" : "",

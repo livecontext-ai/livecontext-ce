@@ -506,6 +506,86 @@ public class PlatformCredentialPricingService {
     }
 
     /**
+     * Publish the catalog's starting price for every generation model this
+     * credential has NEVER priced, and touch nothing else.
+     *
+     * <p><b>The gap this closes (cloud).</b> {@link #bootstrapV1IfAbsent} runs
+     * once per credential, so a model added to a provider after its first
+     * version, or a platform key an administrator creates after the import,
+     * was never priced: every platform-key call to it was refused as not
+     * available, with nothing telling the administrator why.
+     *
+     * <p><b>Never overrides a decision.</b> A row is added only when its
+     * (endpoint, model) pair appears in NO version of this credential's
+     * history. A live price is left alone whatever the catalog says, and a
+     * price an administrator published and later removed stays removed,
+     * because removing it was the decision. Rows are stamped
+     * {@link PriceSource#ADMIN} like the seeded v1: on this install the price
+     * is the platform owner's from the moment it lands.
+     *
+     * <p>An endpoint that ever carried an endpoint-wide row (no model) counts as
+     * decided for every one of its models: a model row would take precedence over
+     * that flat price and silently replace it.
+     *
+     * <p><b>Ordering with the importer.</b> On a credential with no version this
+     * publishes v1, after which the importer's {@link #bootstrapV1IfAbsent} stands
+     * down. That is the intended outcome for a key created after the import (the
+     * importer will never run for it). Generation credentials get a null default
+     * from the importer, so nothing is lost; a credential the importer gives a
+     * default (today only {@code llm_openai} / {@code llm_google}) carries no
+     * generation model, so this never reaches it.
+     *
+     * <p>Publishes nothing when nothing is missing, so the caller may re-offer
+     * the whole catalog on every tick for free.
+     */
+    @Transactional
+    public BundlePriceApplyResult addNeverPricedPrices(Long credentialId,
+                                                       List<PriceSpec> catalogPrices,
+                                                       String createdBy) {
+        if (credentialId == null || catalogPrices == null || catalogPrices.isEmpty()) {
+            return BundlePriceApplyResult.unchanged(0, 0);
+        }
+        // Held to commit, so two ticks (or a tick and an admin publish) cannot
+        // both decide the same row is missing.
+        acquireAdvisoryLock(credentialId);
+
+        Set<String> everPublished = new HashSet<>();
+        for (Object[] row : entryRepo.findEverPublishedKeys(credentialId)) {
+            everPublished.add(entryKey((UUID) row[0], (String) row[1]));
+        }
+
+        List<PriceSpec> added = new ArrayList<>();
+        int alreadyDecided = 0;
+        for (PriceSpec price : catalogPrices) {
+            if (price == null || price.apiToolId() == null) {
+                continue;
+            }
+            // An endpoint-wide row (no model) prices EVERY model of that endpoint, and a model row
+            // would override it (model row first, then endpoint row). An administrator who priced
+            // the endpoint as a whole has therefore decided every model of it, including new ones.
+            if (everPublished.contains(entryKey(price.apiToolId(), null))
+                    || !everPublished.add(priceKey(price))) {
+                alreadyDecided++;
+                continue;
+            }
+            added.add(price);
+        }
+        if (added.isEmpty()) {
+            return BundlePriceApplyResult.unchanged(0, alreadyDecided);
+        }
+
+        BigDecimal carriedDefault = versionRepo.findLatest(credentialId)
+                .map(PlatformCredentialPricingVersion::getDefaultMarkupCredits)
+                .orElse(null);
+        PlatformCredentialPricingVersion published = publishNextVersion(
+                credentialId, carriedDefault, added, createdBy, true);
+        log.info("Catalog starting prices published for credential {}: v{} ({} never-priced model(s) added, "
+                        + "{} already decided and left alone)",
+                credentialId, published.getVersion(), added.size(), alreadyDecided);
+        return BundlePriceApplyResult.published(published, added.size(), alreadyDecided);
+    }
+
+    /**
      * The same price, stated as bundle-owned.
      *
      * <p>Forced here rather than trusted from the caller: the provenance decides

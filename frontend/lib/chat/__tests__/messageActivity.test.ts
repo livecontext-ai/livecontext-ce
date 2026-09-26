@@ -181,3 +181,14 @@ describe('toAutoOpenDetail', () => {
     expect(detail).toEqual({ type: 'workflow_run', id: 'wf1', title: 'Run', runId: 'r9' });
   });
 });
+
+describe('isOpenableVisualization - workflow(action=present) rows', () => {
+  it('re-presents a table on click', () => {
+    expect(isOpenableVisualization({ type: 'present_table', id: '7' } as ToolVisualization)).toBe(true);
+  });
+
+  it('re-presents an Application only with the run it belongs to', () => {
+    expect(isOpenableVisualization({ type: 'present_application', id: 'wf-1', runId: 'run-1' } as ToolVisualization)).toBe(true);
+    expect(isOpenableVisualization({ type: 'present_application', id: 'wf-1' } as ToolVisualization)).toBe(false);
+  });
+});

@@ -16,18 +16,16 @@ import java.math.BigDecimal;
  * client-side) plus a local cost projection to refuse iterations that would push the
  * tenant into negative balance.</p>
  *
- * <p><b>Why the SPENDABLE balance and not {@code fetchBalance()} (V494).</b> A FREE
- * account holds a second pot, the AI allowance, which only LLM work may draw on. This
- * guard sits on exactly that path, so the allowance is part of the budget here: asking
- * for the plain balance would stop a free agent at zero while the pot funding it was
- * still full. The distinction is not cosmetic in the other direction either, which is
- * why the workflow budget and the image gate deliberately keep {@code fetchBalance()}:
- * quoting the allowance to them would advertise money they can never spend.</p>
+ * <p><b>Why the SPENDABLE balance and not {@code fetchBalance()} (V494, V512).</b> On
+ * the FREE plan the monthly credits fund an LLM turn only on a model an admin opened to
+ * the free tier; on any other model only the PAYG top-up does. The spendable figure is
+ * resolved server-side by the same routing the debit uses, so this guard budgets the
+ * loop against exactly the money THIS model's turns can draw, where the plain balance
+ * would let a free account run a non-free model on monthly credits no debit for it can
+ * reach.</p>
  *
- * <p>The provider and model are passed with it, because the allowance only funds the
- * models an admin opened to the free tier. Without them the guard would quote a pot no
- * debit on THIS model can draw, and budget an agent loop against money it cannot spend -
- * the same error as withholding it, in the other direction.</p>
+ * <p>The provider and model are passed with it for that reason: without them the server
+ * cannot tell which of the two answers applies.</p>
  *
  * <p>Tenant guard is intended to be the <em>first</em> guard in the chain because it
  * dominates: when the macro budget is gone, the agent budget is moot.</p>

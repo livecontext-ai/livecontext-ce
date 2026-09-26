@@ -138,7 +138,9 @@ class AgentToolsControllerTest {
             Map.entry("approvedServices", List.of("deepseek")),
             Map.entry("viewingWorkflowId", "workflow-1"),
             Map.entry("viewingWorkflowName", "Workflow One"),
-            Map.entry("orgId", "org-1")
+            Map.entry("orgId", "org-1"),
+            Map.entry("requireToolAuthorization", true),
+            Map.entry("unattendedRun", true)
         )).join();
 
         ToolsProvider.ToolExecutionContext context = contextCaptor.getValue();
@@ -153,6 +155,12 @@ class AgentToolsControllerTest {
         assertThat(context.credentials()).containsEntry("__agentId__", "agent-1");
         assertThat(context.credentials()).containsEntry("allowedAgentIds", List.of("child-1"));
         assertThat(context.credentials()).containsEntry("agentAccessMode", "read");
+        // The arming and the "nobody is watching" fact travel WITH the call. A key not
+        // copied in this relay is simply gone by the time the gate reads it, and the gate
+        // then treats an armed agent as unarmed and an unattended run as a person typing:
+        // the sensitive action runs unasked, and nothing is ever delivered anywhere.
+        assertThat(context.credentials()).containsEntry("__requireToolAuthorization__", true);
+        assertThat(context.credentials()).containsEntry("__unattendedRun__", true);
     }
 
     @Test

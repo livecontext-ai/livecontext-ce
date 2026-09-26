@@ -31,6 +31,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("OrganizationSamlLoginService")
@@ -44,6 +45,7 @@ class OrganizationSamlLoginServiceTest {
     @Mock private OrganizationRepository organizationRepository;
     @Mock private OrganizationMemberService memberService;
     @Mock private OrganizationAuditService auditService;
+    @Mock private OrganizationSsoDomainService domainService;
 
     private Organization organization;
     private User user;
@@ -64,7 +66,47 @@ class OrganizationSamlLoginServiceTest {
                 memberRepository,
                 organizationRepository,
                 memberService,
-                auditService);
+                auditService,
+                domainService);
+        // The existing scenarios are about membership, so their email is on a verified domain.
+        org.mockito.Mockito.lenient()
+                .when(domainService.isEmailOnVerifiedDomain(ORG_ID, "member@example.com")).thenReturn(true);
+    }
+
+    @Test
+    @DisplayName("a NEW SAML member whose email is not on a verified domain is refused before the workspace is locked")
+    void offDomainEmailCannotJoin() {
+        // The IdP is the workspace admin's and asserts any email; Keycloak trusts it. Without this
+        // rule a Team workspace could mint a member in the name of user@example.com.
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+        User outsider = new User("outsider", "user@example.com", AuthProvider.SAML, "kc-outsider");
+        outsider.setId(77L);
+        when(memberRepository.findActiveByOrganizationIdAndUserId(ORG_ID, 77L)).thenReturn(Optional.empty());
+        when(domainService.isEmailOnVerifiedDomain(ORG_ID, "user@example.com")).thenReturn(false);
+
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(outsider, ALIAS))
+                .isInstanceOf(SamlMembershipException.class)
+                .hasMessageContaining("not on a domain verified");
+
+        verify(organizationRepository, never()).findByIdForUpdate(any());
+        verify(memberRepository, never()).save(any());
+        verify(auditService, never()).record(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("an EXISTING member keeps signing in through SAML even though the workspace has verified no domain")
+    void existingMemberIsNotLockedOutByTheDomainRule() {
+        // The domain rule shipped after SAML did. Applied to members too, it would lock every
+        // workspace configured before it out of its own SSO on deploy.
+        OrganizationMember membership = new OrganizationMember(organization, user, OrganizationRole.MEMBER, true);
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+        when(memberRepository.findActiveByOrganizationIdAndUserId(ORG_ID, 42L)).thenReturn(Optional.of(membership));
+        org.mockito.Mockito.lenient()
+                .when(domainService.isEmailOnVerifiedDomain(ORG_ID, "member@example.com")).thenReturn(false);
+
+        assertThat(service.ensureMembershipForIdentityProvider(user, ALIAS)).contains(ORG_ID);
+        verify(domainService, never()).isEmailOnVerifiedDomain(any(), any());
+        verify(memberRepository, never()).save(any());
     }
 
     @Test
@@ -205,5 +247,152 @@ class OrganizationSamlLoginServiceTest {
                         currentMembers,
                         pendingInvitations,
                         supportsTeam ? "TEAM" : "FREE"));
+    }
+
+    // ── sso_member_joined analytics ────────────────────────────────────────────
+
+    private com.apimarketplace.auth.analytics.AuthAnalyticsEmitter wireAnalytics() {
+        com.apimarketplace.auth.analytics.AuthAnalyticsEmitter analytics =
+                org.mockito.Mockito.mock(com.apimarketplace.auth.analytics.AuthAnalyticsEmitter.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "analytics", analytics);
+        return analytics;
+    }
+
+    @Test
+    @DisplayName("sso_member_joined: a new member is counted as joined with its role and workspace")
+    void analyticsJoined() {
+        var analytics = wireAnalytics();
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+        when(memberRepository.findActiveByOrganizationIdAndUserId(ORG_ID, 42L))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.empty());
+        when(organizationRepository.findByIdForUpdate(ORG_ID)).thenReturn(Optional.of(organization));
+        stubTeamStatus(true, 10, 1, 0);
+        when(memberRepository.findActiveDefaultByUserId(42L)).thenReturn(Optional.empty());
+        when(memberRepository.save(any(OrganizationMember.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.ensureMembershipForIdentityProvider(user, ALIAS);
+
+        verify(analytics).ssoMemberJoined(42L, ORG_ID.toString(), "joined", null, OrganizationRole.MEMBER);
+    }
+
+    @Test
+    @DisplayName("sso_member_joined: an existing member is NOT counted (the check runs per resolution, not per sign-in)")
+    void analyticsExistingMemberNotCounted() {
+        var analytics = wireAnalytics();
+        OrganizationMember membership = new OrganizationMember(organization, user, OrganizationRole.MEMBER, true);
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+        when(memberRepository.findActiveByOrganizationIdAndUserId(ORG_ID, 42L)).thenReturn(Optional.of(membership));
+
+        service.ensureMembershipForIdentityProvider(user, ALIAS);
+
+        verifyNoInteractions(analytics);
+    }
+
+    @Test
+    @DisplayName("sso_member_joined: each refusal is counted with its reason BEFORE the exception, and still throws")
+    void analyticsRejections() {
+        var analytics = wireAnalytics();
+
+        // Unknown alias: no connection, so no workspace to attribute.
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(user, ALIAS))
+                .isInstanceOf(SamlMembershipException.class);
+        verify(analytics).ssoMemberJoined(42L, null, "rejected", "connection_inactive", null);
+
+        // Off-domain email.
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+        when(memberRepository.findActiveByOrganizationIdAndUserId(ORG_ID, 42L)).thenReturn(Optional.empty());
+        when(domainService.isEmailOnVerifiedDomain(ORG_ID, "member@example.com")).thenReturn(false);
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(user, ALIAS))
+                .isInstanceOf(SamlMembershipException.class);
+        verify(analytics).ssoMemberJoined(42L, ORG_ID.toString(), "rejected", "domain_not_verified", null);
+
+        // Plan without teams, then a full workspace.
+        when(domainService.isEmailOnVerifiedDomain(ORG_ID, "member@example.com")).thenReturn(true);
+        when(organizationRepository.findByIdForUpdate(ORG_ID)).thenReturn(Optional.of(organization));
+        when(memberService.getTeamStatus(ORG_ID))
+                .thenReturn(new OrganizationMemberService.TeamStatus(false, 1, 1, 0, "FREE"))
+                .thenReturn(new OrganizationMemberService.TeamStatus(true, 2, 2, 0, "TEAM"));
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(user, ALIAS))
+                .hasMessageContaining("Team or Enterprise");
+        verify(analytics).ssoMemberJoined(42L, ORG_ID.toString(), "rejected", "plan_not_team", null);
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(user, ALIAS))
+                .hasMessageContaining("Member limit reached");
+        verify(analytics).ssoMemberJoined(42L, ORG_ID.toString(), "rejected", "member_limit", null);
+
+        // The insert itself refused.
+        when(memberService.getTeamStatus(ORG_ID)).thenReturn(new OrganizationMemberService.TeamStatus(true, 10, 1, 0, "TEAM"));
+        when(memberRepository.findActiveDefaultByUserId(42L)).thenReturn(Optional.empty());
+        when(memberRepository.save(any(OrganizationMember.class)))
+                .thenThrow(new DataIntegrityViolationException("uq_org_member"));
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(user, ALIAS))
+                .hasMessageContaining("Could not join SAML workspace")
+                .hasCauseInstanceOf(DataIntegrityViolationException.class);
+        verify(analytics).ssoMemberJoined(42L, ORG_ID.toString(), "rejected", "save_failed", null);
+    }
+
+    @Test
+    @DisplayName("sso_member_joined: a failing emitter changes nothing about the admission")
+    void analyticsFailureDoesNotChangeOutcome() {
+        var analytics = wireAnalytics();
+        org.mockito.Mockito.doThrow(new RuntimeException("posthog down"))
+                .when(analytics).ssoMemberJoined(any(), any(), any(), any(), any());
+        OrganizationMember membership = new OrganizationMember(organization, user, OrganizationRole.MEMBER, true);
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+        when(memberRepository.findActiveByOrganizationIdAndUserId(ORG_ID, 42L)).thenReturn(Optional.of(membership));
+
+        assertThat(service.ensureMembershipForIdentityProvider(user, ALIAS)).contains(ORG_ID);
+
+        // And a refusal still surfaces as the refusal, not as the emitter's error.
+        OrganizationSamlConnection inactive = activeConnection();
+        inactive.setStatus(OrganizationSamlConnection.Status.ERROR);
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(inactive));
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(user, ALIAS))
+                .isInstanceOf(SamlMembershipException.class)
+                .hasMessageContaining("not active");
+    }
+
+    @Test
+    @DisplayName("sso_member_joined: a non-SAML identity provider emits nothing")
+    void analyticsNotSaml() {
+        var analytics = wireAnalytics();
+
+        service.ensureMembershipForIdentityProvider(user, "google");
+
+        org.mockito.Mockito.verifyNoInteractions(analytics);
+    }
+
+    @Test
+    @DisplayName("sso_member_joined: a repeat resolution (reportRejection=false) still refuses but reports nothing")
+    void analyticsRejectionNotReportedOnRepeatResolution() {
+        var analytics = wireAnalytics();
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+        when(memberRepository.findActiveByOrganizationIdAndUserId(ORG_ID, 42L)).thenReturn(Optional.empty());
+        when(domainService.isEmailOnVerifiedDomain(ORG_ID, "member@example.com")).thenReturn(false);
+
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(user, ALIAS, false))
+                .isInstanceOf(SamlMembershipException.class)
+                .hasMessageContaining("not on a domain verified");
+
+        verifyNoInteractions(analytics);
+    }
+
+    @Test
+    @DisplayName("sso_member_joined: a join is reported even off a real sign-in (a membership is created once)")
+    void analyticsJoinReportedRegardlessOfFlag() {
+        var analytics = wireAnalytics();
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+        when(memberRepository.findActiveByOrganizationIdAndUserId(ORG_ID, 42L))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.empty());
+        when(organizationRepository.findByIdForUpdate(ORG_ID)).thenReturn(Optional.of(organization));
+        stubTeamStatus(true, 10, 1, 0);
+        when(memberRepository.findActiveDefaultByUserId(42L)).thenReturn(Optional.empty());
+        when(memberRepository.save(any(OrganizationMember.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.ensureMembershipForIdentityProvider(user, ALIAS, false);
+
+        verify(analytics).ssoMemberJoined(42L, ORG_ID.toString(), "joined", null, OrganizationRole.MEMBER);
     }
 }

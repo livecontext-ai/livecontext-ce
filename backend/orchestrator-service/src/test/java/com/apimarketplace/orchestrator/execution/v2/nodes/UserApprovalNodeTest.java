@@ -246,6 +246,60 @@ class UserApprovalNodeTest {
         }
 
         @Test
+        @DisplayName("reports the resolved context as contextResolved beside the configured contextTemplate (was: only the {{...}} text)")
+        void reportsResolvedContextBesideTemplate() {
+            UserApprovalNode node = UserApprovalNode.builder()
+                .nodeId("core:manager_approval")
+                .approverRoles(List.of("manager"))
+                .requiredApprovals(1)
+                .timeoutMs(86400000L)
+                .contextTemplate("Approve refund of {{amount}}?")
+                .build();
+            node.setSignalService(signalService);
+            node.setClock(FIXED_CLOCK);
+            node.setTemplateAdapter(templateAdapter);
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+            when(templateAdapter.evaluateTemplate("Approve refund of {{amount}}?", context))
+                .thenReturn("Approve refund of 120 EUR?");
+
+            NodeExecutionResult result = node.execute(context);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> reported = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("Approve refund of {{amount}}?", reported.get("contextTemplate"));
+            assertEquals("Approve refund of 120 EUR?", reported.get("contextResolved"));
+        }
+
+        @Test
+        @DisplayName("a {{$vars.x}} contextTemplate is shown to the approver but withheld in Params")
+        void workspaceVariableContextIsWithheld() {
+            UserApprovalNode node = UserApprovalNode.builder()
+                .nodeId("core:manager_approval")
+                .approverRoles(List.of("manager"))
+                .requiredApprovals(1)
+                .timeoutMs(86400000L)
+                .contextTemplate("{{$vars.x}}")
+                .build();
+            node.setSignalService(signalService);
+            node.setClock(FIXED_CLOCK);
+            node.setTemplateAdapter(templateAdapter);
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+            when(templateAdapter.evaluateTemplate("{{$vars.x}}", context)).thenReturn("s3cr3t");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals("s3cr3t", result.output().get("approval_context"), "the approver reads the value");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> reported = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(com.apimarketplace.orchestrator.services.template.ReportedParams.WITHHELD_WORKSPACE_VARIABLE,
+                reported.get("contextResolved"));
+        }
+
+        @Test
         @DisplayName("SOFT-REQUIRED: contextTemplate set but no template adapter -> approvalContext null and the node still yields")
         void contextTemplateWithoutAdapterStillYields() {
             UserApprovalNode node = UserApprovalNode.builder()
@@ -404,6 +458,60 @@ class UserApprovalNodeTest {
         }
 
         @Test
+        @DisplayName("a picked destination travels to the signal as linkId, verbatim (an id or 'default', never a template)")
+        void embedsPickedDestination() {
+            for (String linkId : List.of("default", "3f2b1c9e-7a4d-4c1b-9e2f-8d6a5b4c3e21")) {
+                org.mockito.Mockito.clearInvocations(signalService);
+                UserApprovalNode node = buildDelegatedNode(
+                    new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                        "slack", null, "", "Ship it?", "", List.of(), null, null, linkId));
+                node.setTemplateAdapter(templateAdapter);
+                when(context.runId()).thenReturn("run-1");
+                when(context.itemId()).thenReturn("0");
+                when(templateAdapter.evaluateTemplate("Ship it?", context)).thenReturn("Ship it?");
+
+                node.execute(context);
+
+                Map<String, Object> delegation = (Map<String, Object>) capturedSignalConfig().get("delegation");
+                assertEquals(linkId, delegation.get("linkId"));
+                assertEquals("slack", delegation.get("channel"));
+            }
+        }
+
+        @Test
+        @DisplayName("a node that names its own chat carries NO linkId (older signal shape unchanged)")
+        void noLinkIdForNamedChat() {
+            UserApprovalNode node = buildDelegatedNode(
+                new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "telegram", 42L, "123456", "", "", List.of(), null, null));
+            node.setTemplateAdapter(templateAdapter);
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            node.execute(context);
+
+            Map<String, Object> delegation = (Map<String, Object>) capturedSignalConfig().get("delegation");
+            assertTrue(!delegation.containsKey("linkId"), "no linkId key for a named chat");
+        }
+
+        @Test
+        @DisplayName("a LITERAL chatId with nothing to resolve is kept as configured")
+        void literalChatIdIsKept() {
+            UserApprovalNode node = buildDelegatedNode(
+                new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "telegram", 42L, "123456", "", "", List.of(), null, null));
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            node.execute(context);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> delegation = (Map<String, Object>) capturedSignalConfig().get("delegation");
+            assertEquals("123456", delegation.get("chatId"));
+        }
+
+        @Test
         @DisplayName("delegation configured: the yield output advertises delegated_channel")
         void outputAdvertisesDelegatedChannel() {
             UserApprovalNode node = buildDelegatedNode(
@@ -419,8 +527,8 @@ class UserApprovalNodeTest {
         }
 
         @Test
-        @DisplayName("SOFT: a failing chatId template falls back to the raw configured string and the node still yields")
-        void chatIdTemplateFailureFallsBackToRawAndStillYields() {
+        @DisplayName("SOFT: a chatId template that resolves to nothing is OMITTED (never sent as the literal {{...}}) and the node still yields")
+        void chatIdTemplateFailureIsOmittedAndStillYields() {
             UserApprovalNode node = buildDelegatedNode(
                 new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
                     "telegram", 42L, "{{bad.expr}}", "", "", List.of(), null, null));
@@ -437,7 +545,9 @@ class UserApprovalNodeTest {
             Map<String, Object> config = capturedSignalConfig();
             @SuppressWarnings("unchecked")
             Map<String, Object> delegation = (Map<String, Object>) config.get("delegation");
-            assertEquals("{{bad.expr}}", delegation.get("chatId"));
+            // It used to be sent to the channel AS the chat id. Omitted, the notifier records
+            // the delivery as failed ("missing chatId") and the approval still waits.
+            assertFalse(delegation.containsKey("chatId"));
             // blank messageTemplate never resolves: the message key is omitted, not blank
             assertFalse(delegation.containsKey("message"));
         }

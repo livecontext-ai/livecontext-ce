@@ -732,4 +732,58 @@ class ClassifyServiceTest {
             assertThat(response.cacheUsage()).isNull();
         }
     }
+
+    @Nested
+    @DisplayName("What the model is sent: the prompt and the content, each once")
+    class PromptAndContent {
+
+        private static final String JSON = "{\"selected_category\":\"billing\",\"confidence\":0.9,\"reasoning\":\"r\"}";
+
+        private String sentPrompt(String content, String prompt) {
+            when(agentLoopService.execute(any(), isNull())).thenReturn(loopResult(JSON, 10, 8, 2));
+            ClassifyResponseDto result = service.execute(
+                new ClassifyRequestDto(content, prompt, CATEGORIES, "openai", null, null, null, null, null));
+            return result.userPrompt();
+        }
+
+        @Test
+        @DisplayName("BUG: a configured content is sent beside the prompt instead of being dropped")
+        void contentConfiguredBesideThePromptReachesTheModel() {
+            String sent = sentPrompt("Hello, my invoice #42 is wrong", "Route by department");
+
+            assertThat(sent)
+                .contains("## Classification Instruction\nRoute by department")
+                .contains("## Content to Classify\nHello, my invoice #42 is wrong");
+        }
+
+        @Test
+        @DisplayName("a prompt that IS the content (no content configured) is sent once")
+        void promptEqualToContentIsSentOnce() {
+            String text = "Classify this email: Hello, my invoice #42 is wrong";
+
+            String sent = sentPrompt(text, text);
+
+            assertThat(sent).contains("## Classification Instruction\n" + text);
+            assertThat(sent).doesNotContain("## Content to Classify");
+            assertThat(sent.indexOf(text)).isEqualTo(sent.lastIndexOf(text));
+        }
+
+        @Test
+        @DisplayName("content alone is sent as the content")
+        void contentAloneIsTheContent() {
+            String sent = sentPrompt("Hello, my invoice #42 is wrong", null);
+
+            assertThat(sent).contains("## Content to Classify\nHello, my invoice #42 is wrong");
+            assertThat(sent).doesNotContain("## Classification Instruction");
+        }
+
+        @Test
+        @DisplayName("a blank content beside a prompt sends the instruction alone")
+        void blankContentSendsTheInstructionAlone() {
+            String sent = sentPrompt("   ", "Route by department");
+
+            assertThat(sent).contains("## Classification Instruction\nRoute by department");
+            assertThat(sent).doesNotContain("## Content to Classify");
+        }
+    }
 }

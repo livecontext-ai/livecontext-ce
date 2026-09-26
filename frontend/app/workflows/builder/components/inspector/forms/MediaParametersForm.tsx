@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { ArrowDown, ArrowUp, ChevronRight, Info, Plus, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronRight, Plus, Trash2 } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { useTranslations } from 'next-intl';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
@@ -10,7 +10,6 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { OptionalSection } from '../OptionalSection';
 import type { BuilderNodeData } from '../../../types';
 import type { ConnectionProps } from '../ExpressionField';
@@ -69,6 +68,7 @@ import {
   type MediaSubtitleCue,
   type MediaTrack,
 } from '../../../utils/mediaParams';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 interface MediaParametersFormProps {
   node: Node<BuilderNodeData>;
@@ -693,22 +693,12 @@ export function MediaParametersForm({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('media.operation')}</span>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-                >
-                  <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                  <p className="font-semibold text-slate-900 dark:text-slate-100">{t('media.title')}</p>
-                  <p>{t('media.description')}</p>
-                </div>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label={t('media.operation')} size="sm" side="right" align="start">
+              <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                <p className="font-semibold text-slate-900 dark:text-slate-100">{t('media.title')}</p>
+                <p>{t('media.description')}</p>
+              </div>
+            </InfoPopover>
           </div>
           <span className="text-sm text-slate-500 dark:text-slate-400">{t('required')}</span>
         </div>

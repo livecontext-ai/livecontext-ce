@@ -54,6 +54,8 @@ export const PUBLIC_ASSET_DIRECTORIES = [
  * refuse.
  */
 export const PUBLIC_ROOT_FILES = [
+  // The mark signed at the foot of every lifecycle email (deploy/lifecycle-emails).
+  'email-signature-mark.png',
   'favicon.ico',
   'hero-flow.html',
   'liveContext-logo-light.png',
@@ -63,8 +65,6 @@ export const PUBLIC_ROOT_FILES = [
   // The IndexNow key file. Its whole job is to be fetchable at this exact
   // path: a submission whose key cannot be read is rejected.
   '4ad6f065a0c6c00ee09d73874348013f.txt',
-  'mcp.png',
-  'mcp_black.png',
   'og-image.jpg',
   'widget-demo.html',
 ] as const;

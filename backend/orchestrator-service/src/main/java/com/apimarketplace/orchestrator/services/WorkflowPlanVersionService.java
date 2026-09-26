@@ -5,6 +5,7 @@ import com.apimarketplace.common.plan.PlanStripUtils;
 import com.apimarketplace.common.storage.service.StorageBreakdownService;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowPlanVersionEntity;
+import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan;
 import com.apimarketplace.orchestrator.repository.WorkflowPlanVersionRepository;
 import com.apimarketplace.orchestrator.repository.WorkflowRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -687,6 +688,43 @@ public class WorkflowPlanVersionService {
     @Transactional(readOnly = true)
     public Optional<WorkflowPlanVersionEntity> getVersion(UUID workflowId, int version) {
         return versionRepository.findByWorkflowIdAndVersion(workflowId, version);
+    }
+
+    /**
+     * The plan a run report is built against, and whether it is the run's own plan version.
+     * {@code prunedVersion} is set when the run points at a version that retention
+     * ({@code workflow.versioning.max-versions}) has since deleted, so the plan is the
+     * workflow's current one.
+     */
+    public record RunPlan(WorkflowPlan plan, Integer prunedVersion) {
+        /** Returns the report with a {@code plan_note} when the run's own version is gone. */
+        public Map<String, Object> annotate(Map<String, Object> report) {
+            if (prunedVersion == null || report == null) return report;
+            Map<String, Object> out = new java.util.LinkedHashMap<>(report);
+            out.put("plan_note", "Plan version " + prunedVersion + " used by this run is no longer kept, "
+                    + "so node names and structure come from the current plan and may differ "
+                    + "from what this run executed.");
+            return out;
+        }
+    }
+
+    /**
+     * Resolve the plan a run executed: its own plan version when still kept, else the workflow's
+     * current plan. Takes ids, never the run's lazy {@code WorkflowEntity}: the agent tool modules
+     * call this outside any session, and reading {@code getPlan()} on that proxy threw
+     * LazyInitializationException for every run whose version had been pruned.
+     */
+    @Transactional(readOnly = true)
+    public RunPlan resolvePlanForRun(UUID workflowId, Integer planVersion, String tenantId) {
+        if (planVersion != null) {
+            Optional<WorkflowPlanVersionEntity> version = versionRepository.findByWorkflowIdAndVersion(workflowId, planVersion);
+            if (version.isPresent()) {
+                return new RunPlan(WorkflowPlan.fromMap(version.get().getPlan(), workflowId.toString(), tenantId), null);
+            }
+        }
+        WorkflowEntity current = workflowRepository.findById(workflowId)
+                .orElseThrow(() -> new IllegalStateException("Workflow not found: " + workflowId));
+        return new RunPlan(WorkflowPlan.fromMap(current.getPlan(), workflowId.toString(), tenantId), planVersion);
     }
 
     /**

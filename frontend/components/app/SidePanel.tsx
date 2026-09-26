@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useCallback, useId, useReducer } from 'react';
+import { isEscapeOwnedByOverlay } from '@/lib/ui/escapeOwnership';
 import { useTranslations } from 'next-intl';
 import { X, GripVertical, Pin, MoreVertical, ExternalLink, Trash2, PanelRightOpen, PanelRight, PanelBottom, PictureInPicture2, ChevronsUpDown, ChevronsDownUp, Maximize2, Minimize2 } from 'lucide-react';
 import { BulkDeleteModal } from '@/components/ui/BulkDeleteModal';
@@ -39,28 +40,6 @@ const COLLAPSED_HEIGHT = 36;
  *  which is what the tooltip and the expanded window are for. */
 const COLLAPSED_WIDTH = 180;
 const COLLAPSED_RENDER_SIZE = { width: COLLAPSED_WIDTH, height: COLLAPSED_HEIGHT };
-
-/**
- * The roles the app's overlay primitives render, i.e. the layers that own the
- * Escape key while they are open: modals and Popover content (`dialog` /
- * `alertdialog`), Select (`listbox`) and DropdownMenu (`menu`).
- */
-const OVERLAY_ROLES = '[role="dialog"], [role="alertdialog"], [role="listbox"], [role="menu"]';
-
-/**
- * The element's own top-level ancestor under `document.body`, i.e. the app tree.
- *
- * Anything the app renders in place sits inside it; anything portalled (every
- * Radix overlay) is a sibling of it. That is the only line that separates "on
- * top of the panel" from "hidden behind it" without measuring pixels.
- */
-function appRootOf(el: HTMLElement | null): HTMLElement | null {
-  let node: HTMLElement | null = el;
-  while (node?.parentElement && node.parentElement !== document.body) {
-    node = node.parentElement;
-  }
-  return node;
-}
 
 /**
  * SidePanel - the unified right panel for the entire app.
@@ -584,11 +563,10 @@ export function SidePanel() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
       const panel = panelRef.current;
-      const appRoot = appRootOf(panel);
-      const owned = [...document.querySelectorAll(OVERLAY_ROLES)].some((el) => (
-        panel?.contains(el) || !appRoot?.contains(el)
-      ));
-      if (owned) return;
+      if (isEscapeOwnedByOverlay(panel, panel)) return;
+      // Handled here: the chat inside the panel also listens for Escape (to stop its answer),
+      // and leaving full screen must not stop it on the way.
+      e.preventDefault();
       setMaximized(false);
     };
     window.addEventListener('keydown', onKeyDown);

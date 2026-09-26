@@ -148,7 +148,7 @@ class CreditServicePayerRedirectIntegrationTest {
     @Test
     @DisplayName("consumeForWorkflowNode(member) redirects to OWNER; idempotency keyed on OWNER")
     void workflowNodeConsumeRedirectsToOwner() {
-        when(ledgerRepository.existsBySourceId("src-2")).thenReturn(false);
+        when(ledgerRepository.existsNonRejectionBySourceId("src-2")).thenReturn(false);
 
         CreditConsumeResult result = service.consumeForWorkflowNode(MEMBER_ID, "src-2");
 

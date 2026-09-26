@@ -668,4 +668,50 @@ class LimitNodeTest {
         assertEquals("  ", config.get("input"));
         assertFalse(config.containsKey("input_expression"));
     }
+
+    @Nested
+    @DisplayName("templated count / offset")
+    class TemplatedScalars {
+
+        private LimitNode templatedNode(Object resolvedCount) {
+            LimitNode node = LimitNode.builder()
+                .nodeId("core:limit")
+                .count(10)
+                .offset(0)
+                .inputExpression("{{items}}")
+                .build();
+            node.setTemplateAdapter(mockTemplateAdapter);
+            node.setDeferredScalars(Map.of("limit", Map.of("count", "{{core:x.output.n}}")));
+            when(mockTemplateAdapter.resolveTemplates(anyMap(), any())).thenAnswer(inv -> {
+                Map<String, Object> in = inv.getArgument(0);
+                Map<String, Object> out = new HashMap<>();
+                in.forEach((key, value) -> out.put(key,
+                    "{{items}}".equals(value) ? TEN_ITEMS
+                        : "{{core:x.output.n}}".equals(value) ? resolvedCount : value));
+                return out;
+            });
+            return node;
+        }
+
+        @Test
+        @DisplayName("regression: a {{...}} count runs with its resolved value, not the default the typed config held")
+        @SuppressWarnings("unchecked")
+        void templatedCountIsResolved() {
+            NodeExecutionResult result = templatedNode(3).execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            assertEquals(List.of("a", "b", "c"), result.output().get("items"));
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(3, params.get("count"));
+        }
+
+        @Test
+        @DisplayName("a {{...}} count resolving to text that is not a number fails, naming the field")
+        void templatedCountNotANumberFails() {
+            NodeExecutionResult result = templatedNode("many").execute(context);
+
+            assertFalse(result.isSuccess());
+            assertTrue(result.errorMessage().orElse("").contains("limit"), result.errorMessage().orElse(""));
+        }
+    }
 }

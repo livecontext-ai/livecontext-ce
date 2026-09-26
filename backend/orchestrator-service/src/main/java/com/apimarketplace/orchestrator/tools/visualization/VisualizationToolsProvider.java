@@ -138,7 +138,7 @@ public class VisualizationToolsProvider implements ToolsProvider {
             log.info("🔄 [VISUALIZE] Already displayed {}:{} in conversation {}", type, id, conversationId);
 
             // Fetch title for the visualization
-            String displayTitle = fetchDisplayTitle(type, id, title, tenantId);
+            String displayTitle = fetchDisplayTitle(type, id, title, tenantId, context != null ? context.orgId() : null);
 
             // Return with visualization metadata so frontend can still display it
             Map<String, Object> metadata = Map.of(
@@ -160,7 +160,7 @@ public class VisualizationToolsProvider implements ToolsProvider {
         // Execute visualization (accept both "table" and "datasource" for backwards compatibility)
         ToolExecutionResult result = switch (type.toLowerCase()) {
             case "workflow" -> visualizeWorkflow(id, title, tenantId);
-            case "table", "datasource" -> visualizeDatasource(id, title, tenantId);
+            case "table", "datasource" -> visualizeDatasource(id, title, tenantId, context != null ? context.orgId() : null);
             case "interface" -> visualizeInterface(id, title, tenantId);
             case "agent" -> visualizeAgent(id, title, tenantId);
             default -> ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, "Invalid type. Valid values: workflow, table, interface, agent");
@@ -227,7 +227,7 @@ public class VisualizationToolsProvider implements ToolsProvider {
     /**
      * Fetch the display title for a resource (used for already_displayed responses)
      */
-    private String fetchDisplayTitle(String type, String id, String providedTitle, String tenantId) {
+    private String fetchDisplayTitle(String type, String id, String providedTitle, String tenantId, String orgId) {
         if (providedTitle != null && !providedTitle.isBlank()) {
             return providedTitle;
         }
@@ -239,7 +239,7 @@ public class VisualizationToolsProvider implements ToolsProvider {
                     yield workflow.map(w -> w.getName()).orElse(null);
                 }
                 case "table", "datasource" -> {
-                    DataSourceDto datasource = dataSourceClient.getDataSource(Long.parseLong(id), tenantId);
+                    DataSourceDto datasource = dataSourceClient.getDataSource(Long.parseLong(id), tenantId, orgId);
                     yield datasource != null ? datasource.name() : null;
                 }
                 case "interface" -> {
@@ -307,10 +307,10 @@ public class VisualizationToolsProvider implements ToolsProvider {
         }
     }
 
-    private ToolExecutionResult visualizeDatasource(String id, String title, String tenantId) {
+    private ToolExecutionResult visualizeDatasource(String id, String title, String tenantId, String orgId) {
         try {
             Long datasourceId = Long.parseLong(id);
-            DataSourceDto datasource = dataSourceClient.getDataSource(datasourceId, tenantId);
+            DataSourceDto datasource = dataSourceClient.getDataSource(datasourceId, tenantId, orgId);
 
             if (datasource == null) {
                 return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "Table not found: " + id);

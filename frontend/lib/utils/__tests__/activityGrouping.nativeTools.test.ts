@@ -117,7 +117,43 @@ describe('getToolIconType - native Claude Code tools', () => {
     expect(getToolIconType(tool)).toBe(expected);
   });
 
-  it('unknown tools still fall back to the generic api icon', () => {
-    expect(getToolIconType('SomethingNew')).toBe('api');
+  it('unknown tools fall back to the neutral tool icon, not the API plug', () => {
+    expect(getToolIconType('SomethingNew')).toBe('tool');
+  });
+});
+
+// action='present' lives on the tool that owns each resource (workflow, table,
+// interface, agent). Without its own label the row read a bare "present".
+describe('getToolDescription - present on each owning tool', () => {
+  it('table: names the table it shows', () => {
+    expect(getToolDescription('table', JSON.stringify({ action: 'present', table_id: 7 }),
+      { type: 'present_table', id: '7', title: 'Leads' })).toBe('Show table "Leads"');
+    expect(getToolDescription('table', JSON.stringify({ action: 'present', table_id: 7 }))).toBe('Show table #7');
+  });
+
+  it('interface: names the page it shows', () => {
+    expect(getToolDescription('interface', JSON.stringify({ action: 'present', interface_id: 'abc' }),
+      { type: 'present_interface', id: 'abc', title: 'Lead board' })).toBe('Show interface "Lead board"');
+  });
+
+  it('agent: names the agent it shows, from the visualization', () => {
+    expect(getToolDescription('agent', JSON.stringify({ action: 'present', agent_id: 'a1' }),
+      { type: 'present_agent', id: 'a1', title: 'Scout' })).toBe('Show agent "Scout"');
+    expect(getToolDescription('agent', JSON.stringify({ action: 'present', agent_id: 'a1' }))).toBe('Show agent');
+  });
+
+  it('workflow: names the view and what it shows', () => {
+    expect(getToolDescription('workflow', JSON.stringify({ action: 'present', view: 'application', run_id: 'r1' }),
+      { type: 'present_application', id: 'wf', title: 'Lead Finder', runId: 'r1' })).toBe('Show application "Lead Finder"');
+    expect(getToolDescription('workflow', JSON.stringify({ action: 'present' }))).toBe('Show workflow');
+  });
+});
+
+describe('getToolDescription - files present', () => {
+  it('names the file it shows, and leaves the other files actions to the generic fallback', () => {
+    expect(getToolDescription('files', JSON.stringify({ action: 'present', file_id: 'f1' }),
+      { type: 'present_file', id: 'f1', title: 'report.pdf' })).toBe('Show file "report.pdf"');
+    expect(getToolDescription('files', JSON.stringify({ action: 'present', file_id: 'f1' }))).toBe('Show file');
+    expect(getToolDescription('files', JSON.stringify({ action: 'list' }))).toBe('list');
   });
 });

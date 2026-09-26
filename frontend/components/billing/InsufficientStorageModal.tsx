@@ -10,7 +10,6 @@ import { useTranslations } from 'next-intl';
 import { useRouter } from 'next/navigation';
 import { calcPrice as calcPriceBase } from '@/lib/billing/pricing-constants';
 import { useSubscription } from '@/lib/hooks/smart-hooks-complete';
-import { useFreeAiCredits } from '@/lib/hooks/useFreeAiCredits';
 import { getClientLocale } from '@/lib/utils/locale';
 import FoundingPriceNote from '@/components/pricing/FoundingPriceNote';
 import ReferencePrice from '@/components/pricing/ReferencePrice';
@@ -110,9 +109,6 @@ export default function InsufficientStorageModal() {
   const calcPrice = (planId: string) => calcPriceBase(planId, billingCycle, 0);
   // Same server-resolved window as the pricing page, so the two never disagree.
   const { event: pricingEvent } = usePricingEvent();
-  // Live, admin-configurable allowance rather than the seeded constant, same
-  // source the pricing card and the comparison table read.
-  const freeAiCredits = useFreeAiCredits();
 
   // This dialog appears BECAUSE the write was refused, so its numbers have to be the ones that
   // refused it. The allowance is shared across the account's workspaces: showing this
@@ -136,15 +132,6 @@ export default function InsufficientStorageModal() {
       features: [
         t('features.freeStorage'),
         t('features.freeCredits'),
-        // Both pots, as everywhere else prices are stated: the monthly credits
-        // fund workflows, the AI allowance funds chat and agent turns. Dropped
-        // when an admin has closed the free tier (allowance 0), the same rule
-        // the plan cards apply.
-        ...(freeAiCredits > 0
-          ? [t('features.freeAiCredits', {
-              credits: freeAiCredits.toLocaleString(getClientLocale()),
-            })]
-          : []),
       ],
     },
     {

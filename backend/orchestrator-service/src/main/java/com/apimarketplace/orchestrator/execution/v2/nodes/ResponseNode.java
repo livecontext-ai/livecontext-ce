@@ -43,12 +43,9 @@ public class ResponseNode extends BaseNode {
         String resolvedMessage = messageTemplate;
 
         try {
-            if (templateAdapter != null && messageTemplate != null && !messageTemplate.isBlank()) {
-                // Resolve the message template using SpEL
-                Map<String, Object> toResolve = Map.of("__message__", messageTemplate);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object messageValue = resolved.get("__message__");
-                resolvedMessage = messageValue != null ? messageValue.toString() : messageTemplate;
+            if (messageTemplate != null && !messageTemplate.isBlank()) {
+                String messageValue = resolveTemplateString(messageTemplate, context);
+                resolvedMessage = messageValue != null ? messageValue : "";
             } else {
                 resolvedMessage = messageTemplate;
             }

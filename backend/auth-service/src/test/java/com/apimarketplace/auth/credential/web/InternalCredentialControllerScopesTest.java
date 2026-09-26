@@ -1,9 +1,5 @@
 package com.apimarketplace.auth.credential.web;
 
-import com.apimarketplace.auth.credential.domain.CredentialModels.Credential;
-import com.apimarketplace.auth.credential.domain.CredentialModels.CredentialEnvironment;
-import com.apimarketplace.auth.credential.domain.CredentialModels.CredentialStatus;
-import com.apimarketplace.auth.credential.domain.CredentialModels.CredentialType;
 import com.apimarketplace.auth.credential.service.CredentialService;
 import com.apimarketplace.auth.credential.service.InternalCredentialService;
 import com.apimarketplace.auth.credential.service.PlatformCredentialPricingService;
@@ -13,13 +9,13 @@ import com.apimarketplace.common.security.CredentialEncryptionService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentMatchers;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -33,17 +29,17 @@ import static org.mockito.Mockito.when;
  * {@code GET /api/internal/credentials/scopes} - the OAuth-scope preflight catalog-service
  * calls before executing a tool ({@code HttpExecutionService.preflightScopeCheck}).
  *
- * <p>These tests exist for one reason: the endpoint must resolve through
- * {@link CredentialService#findByNameIdentifyingIntegration}, NOT the raw by-name lookup.
- * {@code name} here is a requirement SLUG, while a credential's name is free text a user
- * typed, so a raw match answers the preflight with whatever row happens to carry that label
- * and compares one provider's granted scopes against another provider's requirement.
+ * <p>Resolution lives in {@link InternalCredentialService#getCredentialScopes}, which tries
+ * the integration-FILTERED by-name lookup first and only then falls back to the INTEGRATION,
+ * exactly like the token path. That fallback is why the guard runs at all: a credential's
+ * name is free text the user typed, and in production the two Gmail credentials are called
+ * "Jaden" and "Gmail Credential" while the requirement is keyed on `gmail`. Name-only
+ * resolution answered 404 every time and the catalog side failed OPEN, so the preflight
+ * fired 0 times while the provider refused 91 calls for the very scope gap it screens for.
  *
- * <p>It is also the one caller of that lookup with NO integration fallback: what the filter
- * rejects becomes a 404, and the catalog side then fails OPEN (a missing credential means
- * "skip the check"). So a regression here does not raise an error anywhere, it just quietly
- * stops enforcing scopes. Nothing else in the suite would notice a one-line revert to the
- * unfiltered lookup.
+ * <p>A regression here raises no error anywhere, it just quietly stops enforcing scopes.
+ * Hence the two properties pinned below: the endpoint must go through that shared
+ * resolution, and a credential belonging to ANOTHER provider must never answer.
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("InternalCredentialController GET /scopes")
@@ -70,35 +66,57 @@ class InternalCredentialControllerScopesTest {
     @InjectMocks
     private InternalCredentialController controller;
 
-    @Test
-    @DisplayName("resolves through the integration-filtered lookup, never the raw by-name one")
-    void usesTheFilteredLookup() {
-        when(userCredentialService.findByNameIdentifyingIntegration("user-1", "gmail"))
-                .thenReturn(Optional.of(credential("gmail", "gmail", CredentialType.OAuth2,
-                        List.of("https://mail.google.com/"))));
+    private static InternalCredentialService.CredentialScopes scopes(
+            String type, List<String> granted, String integration, String name) {
+        return new InternalCredentialService.CredentialScopes(type, granted, integration, name);
+    }
 
-        ResponseEntity<Map<String, Object>> response = controller.getCredentialScopes("user-1", "gmail");
+    @Test
+    @DisplayName("resolves through the shared credential resolution, never a raw by-name lookup")
+    void usesTheSharedResolution() {
+        when(credentialService.getCredentialScopes("user-1", "gmail", null))
+                .thenReturn(Optional.of(scopes(
+                        "OAuth2", List.of("https://mail.google.com/"), "gmail", "Gmail Credential")));
+
+        ResponseEntity<Map<String, Object>> response =
+                controller.getCredentialScopes("user-1", "gmail", null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).containsEntry("integration", "gmail");
         assertThat(response.getBody()).containsEntry("scopes", List.of("https://mail.google.com/"));
-        // The raw lookup would answer for a credential of any provider; this endpoint must
-        // never reach it. (The method no longer exists on the service, so this verify also
-        // documents intent for whoever is tempted to add it back.)
-        verify(userCredentialService).findByNameIdentifyingIntegration("user-1", "gmail");
+        // The credential answering here is named "Gmail Credential", not "gmail": that is the
+        // production shape a name-only lookup could never find.
+        assertThat(response.getBody()).containsEntry("name", "Gmail Credential");
+        // Reaching the raw by-name lookup would answer for a credential of any provider.
+        verify(userCredentialService, never())
+                .findByNameIdentifyingIntegration(ArgumentMatchers.anyString(), ArgumentMatchers.anyString());
     }
 
     @Test
-    @DisplayName("404s when the name belongs to a credential of another provider")
+    @DisplayName("forwards the workspace so an org-shared credential resolves like its token does")
+    void forwardsTheOrganization() {
+        when(credentialService.getCredentialScopes("user-1", "gmail", "org-9"))
+                .thenReturn(Optional.of(scopes("OAuth2", List.of("email"), "gmail", "Shared Gmail")));
+
+        ResponseEntity<Map<String, Object>> response =
+                controller.getCredentialScopes("user-1", "gmail", "org-9");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        verify(credentialService).getCredentialScopes("user-1", "gmail", "org-9");
+    }
+
+    @Test
+    @DisplayName("404s when no credential of that integration exists")
     void mislabelledCredentialDoesNotAnswer() {
-        // A Slack key a user happened to name "elevenlabs". The filtered lookup rejects it,
-        // so the preflight must find nothing rather than compare Slack's granted scopes
-        // against ElevenLabs' requirement and reach a verdict about the wrong account.
-        when(userCredentialService.findByNameIdentifyingIntegration("user-1", "elevenlabs"))
+        // A Slack key a user happened to name "elevenlabs" is rejected by the filtered
+        // lookup AND carries integration 'slack', so the integration fallback misses it too.
+        // The preflight must find nothing rather than compare Slack's granted scopes against
+        // ElevenLabs' requirement and reach a verdict about the wrong account.
+        when(credentialService.getCredentialScopes("user-1", "elevenlabs", null))
                 .thenReturn(Optional.empty());
 
         ResponseEntity<Map<String, Object>> response =
-                controller.getCredentialScopes("user-1", "elevenlabs");
+                controller.getCredentialScopes("user-1", "elevenlabs", null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(response.getBody()).isNull();
@@ -109,10 +127,11 @@ class InternalCredentialControllerScopesTest {
     void nonOauth2CredentialReportsNullScopes() {
         // An empty list would read as "this credential was granted zero scopes" and fail the
         // preflight; null is what tells the caller the scope concept does not apply.
-        when(userCredentialService.findByNameIdentifyingIntegration("user-1", "smtp"))
-                .thenReturn(Optional.of(credential("smtp", "", CredentialType.API_Key, List.of())));
+        when(credentialService.getCredentialScopes("user-1", "smtp", null))
+                .thenReturn(Optional.of(scopes("API_Key", null, "smtp", "my mailer")));
 
-        ResponseEntity<Map<String, Object>> response = controller.getCredentialScopes("user-1", "smtp");
+        ResponseEntity<Map<String, Object>> response =
+                controller.getCredentialScopes("user-1", "smtp", null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).containsEntry("type", "API_Key");
@@ -122,37 +141,14 @@ class InternalCredentialControllerScopesTest {
     @Test
     @DisplayName("carries no secret: the body names the credential without exposing its data")
     void bodyCarriesNoSecret() {
-        when(userCredentialService.findByNameIdentifyingIntegration("user-1", "gmail"))
-                .thenReturn(Optional.of(credential("gmail", "gmail", CredentialType.OAuth2,
-                        List.of("email"))));
+        when(credentialService.getCredentialScopes("user-1", "gmail", null))
+                .thenReturn(Optional.of(scopes("OAuth2", List.of("email"), "gmail", "Gmail Credential")));
 
-        ResponseEntity<Map<String, Object>> response = controller.getCredentialScopes("user-1", "gmail");
+        ResponseEntity<Map<String, Object>> response =
+                controller.getCredentialScopes("user-1", "gmail", null);
 
         assertThat(response.getBody()).containsOnlyKeys("type", "scopes", "integration", "name");
         assertThat(response.getBody().toString()).doesNotContain("super-secret");
-        verify(encryptionService, never()).decrypt(org.mockito.ArgumentMatchers.anyString());
-    }
-
-    private Credential credential(String name, String integration, CredentialType type,
-                                  List<String> scopes) {
-        return new Credential(
-                42L,
-                "user-1",
-                "org-1",
-                name,
-                integration,
-                type,
-                CredentialEnvironment.Production,
-                CredentialStatus.active,
-                "Test credential",
-                Map.of("access_token", "super-secret"),
-                scopes,
-                List.of(),
-                "user-1",
-                "icon",
-                true,
-                null,
-                Instant.parse("2026-05-04T10:00:00Z"),
-                Instant.parse("2026-05-05T10:00:00Z"));
+        verify(encryptionService, never()).decrypt(ArgumentMatchers.anyString());
     }
 }

@@ -1505,6 +1505,11 @@ export interface MyOAuthApp {
    * workspace; compare to the active org to render a "This workspace" badge.
    */
   organizationId: string | null;
+  /**
+   * V513: the catalog scopes this connection chose to request. Empty = no selection,
+   * so every catalog scope is requested.
+   */
+  selectedScopes?: string[];
 }
 
 /**
@@ -1553,6 +1558,11 @@ export interface CreatePlatformCredentialRequest {
    * callers - the backend then defaults to the `primary` row for back-compat.
    */
   variant?: string;
+  /**
+   * V513 BYOK scope selection. Omitted = leave the stored selection unchanged; [] = no
+   * selection (request every catalog scope); otherwise the only scopes the connect requests.
+   */
+  selectedScopes?: string[];
 }
 
 export interface UpdatePlatformCredentialRequest {

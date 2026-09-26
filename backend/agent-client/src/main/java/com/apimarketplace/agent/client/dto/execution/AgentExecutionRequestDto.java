@@ -239,6 +239,15 @@ public record AgentExecutionRequestDto(
     }
 
     /**
+     * Return a copy whose BILLED pair is replaced: a model an admin disabled, swapped for
+     * the model that replaces it (V515). Same field copy as {@link #withExecutionTarget},
+     * named for what it means here: the replacement IS the billed identity of the run.
+     */
+    public AgentExecutionRequestDto withModel(String newProvider, String newModel) {
+        return withExecutionTarget(newProvider, newModel);
+    }
+
+    /**
      * Credentials key the bridge server matches EXACTLY to enter restricted "API mode".
      * Public so the other writer of this marker (the classify / guardrail / sub-agent
      * paths, via {@code ExecutionLinkRouter}) cannot drift onto a different spelling:

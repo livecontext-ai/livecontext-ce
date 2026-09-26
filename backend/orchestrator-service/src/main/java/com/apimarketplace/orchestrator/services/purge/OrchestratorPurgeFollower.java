@@ -28,7 +28,24 @@ public class OrchestratorPurgeFollower implements PurgeFollower.Handler, PurgeFo
             "orchestrator.workflow_runs",
             "orchestrator.workflows",
             "orchestrator.projects",
-            "orchestrator.notifications");
+            "orchestrator.notifications",
+            "orchestrator.chat_authorization_requests",
+            "orchestrator.chat_channel_links",
+            "orchestrator.chat_channel_bots",
+            "orchestrator.notification_preferences",
+            "orchestrator.notification_incidents",
+            "orchestrator.notification_deliveries");
+
+    /**
+     * Tables holding a PERSON's rows inside workspaces they do not own (their
+     * notification choices, incidents and delivery history), which a workspace
+     * purge of somebody else's workspace would never reach. Pinned by its test.
+     */
+    public static final List<String> USER_TABLES = List.of(
+            "orchestrator.notification_preferences",
+            "orchestrator.notification_incidents",
+            "orchestrator.notification_deliveries",
+            "orchestrator.lifecycle_monthly_recaps");
 
     private final JdbcTemplate jdbc;
     private final PurgeFollower follower;
@@ -72,10 +89,26 @@ public class OrchestratorPurgeFollower implements PurgeFollower.Handler, PurgeFo
         jdbc.update("DELETE FROM orchestrator.workflows WHERE organization_id::text = ?", orgId);
         jdbc.update("DELETE FROM orchestrator.projects WHERE organization_id::text = ?", orgId);
         jdbc.update("DELETE FROM orchestrator.notifications WHERE organization_id::text = ?", orgId);
+        // Children before parents: the FKs cascade, but deleting a parent first would
+        // make the child delete a no-op that still LOOKS like it ran, and this
+        // follower's contract is that every table it names is emptied by its own
+        // statement.
+        jdbc.update("DELETE FROM orchestrator.chat_authorization_requests WHERE organization_id::text = ?", orgId);
+        jdbc.update("DELETE FROM orchestrator.chat_channel_links WHERE organization_id::text = ?", orgId);
+        jdbc.update("DELETE FROM orchestrator.chat_channel_bots WHERE organization_id::text = ?", orgId);
+        jdbc.update("DELETE FROM orchestrator.notification_preferences WHERE organization_id::text = ?", orgId);
+        jdbc.update("DELETE FROM orchestrator.notification_incidents WHERE organization_id::text = ?", orgId);
+        jdbc.update("DELETE FROM orchestrator.notification_deliveries WHERE organization_id::text = ?", orgId);
     }
 
     @Override
     public void purgeUser(String userId) {
-        // Nothing in this schema is user-owned outside a workspace.
+        // A person's notification rows can sit in workspaces they were only a
+        // member of; everything else in this schema lives and dies with its workspace.
+        jdbc.update("DELETE FROM orchestrator.notification_preferences WHERE tenant_id = ?", userId);
+        jdbc.update("DELETE FROM orchestrator.notification_incidents WHERE tenant_id = ?", userId);
+        jdbc.update("DELETE FROM orchestrator.notification_deliveries WHERE tenant_id = ?", userId);
+        // Which monthly recaps this person was sent: personal, never workspace-scoped.
+        jdbc.update("DELETE FROM orchestrator.lifecycle_monthly_recaps WHERE tenant_id = ?", userId);
     }
 }

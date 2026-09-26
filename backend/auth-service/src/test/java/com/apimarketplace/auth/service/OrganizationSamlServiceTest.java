@@ -217,4 +217,17 @@ class OrganizationSamlServiceTest {
         when(memberService.getTeamStatus(ORG_ID))
                 .thenReturn(new OrganizationMemberService.TeamStatus(supportsTeam, supportsTeam ? 10 : 1, 1, 0, supportsTeam ? "TEAM" : "FREE"));
     }
+
+    @Test
+    @DisplayName("isOrganizationSamlAlias accepts only the exact alias shape aliasFor produces")
+    void isOrganizationSamlAliasMatchesOnlyTheGeneratedShape() {
+        java.util.UUID orgId = java.util.UUID.fromString("00000000-0000-0000-0000-000000000000");
+        assertThat(OrganizationSamlService.isOrganizationSamlAlias(OrganizationSamlService.aliasFor(orgId))).isTrue();
+        assertThat(OrganizationSamlService.isOrganizationSamlAlias("org-E1375D5DA0854513987145620539DFA1-saml")).isTrue();
+        assertThat(OrganizationSamlService.isOrganizationSamlAlias(null)).isFalse();
+        assertThat(OrganizationSamlService.isOrganizationSamlAlias("google")).isFalse();
+        assertThat(OrganizationSamlService.isOrganizationSamlAlias("org-e1375d5da0854513987145620539dfa-saml")).isFalse();
+        assertThat(OrganizationSamlService.isOrganizationSamlAlias("org-e1375d5da0854513987145620539dfa1-saml-x")).isFalse();
+        assertThat(OrganizationSamlService.isOrganizationSamlAlias("org-00000000-0000-0000-0000-000000000000-saml")).isFalse();
+    }
 }

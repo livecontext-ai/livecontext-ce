@@ -89,6 +89,9 @@ public class OrganizationAuditEvent {
         public static final String SAML_SSO_CONFIGURED  = "ORG_SAML_SSO_CONFIGURED";
         public static final String SAML_SSO_DELETED     = "ORG_SAML_SSO_DELETED";
         public static final String SAML_SSO_MEMBER_JOINED = "ORG_SAML_SSO_MEMBER_JOINED";
+        public static final String SSO_DOMAIN_ADDED     = "ORG_SSO_DOMAIN_ADDED";
+        public static final String SSO_DOMAIN_VERIFIED  = "ORG_SSO_DOMAIN_VERIFIED";
+        public static final String SSO_DOMAIN_REMOVED   = "ORG_SSO_DOMAIN_REMOVED";
         private Type() {}
     }
 }

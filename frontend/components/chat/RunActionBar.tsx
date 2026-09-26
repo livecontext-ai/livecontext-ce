@@ -6,6 +6,7 @@ import { PauseCircle, StepForward, CheckCircle, XCircle, ChevronDown, ChevronUp 
 import { useTranslations } from 'next-intl';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { blockerNodeLabel, type RunBlocker } from '@/lib/workflow/runBlockers';
+import { track } from '@/lib/analytics/analytics';
 
 /** See the floor effect below. Matches the interface Continue button's window. */
 const RESOLVE_RESET_MS = 10_000;
@@ -103,6 +104,11 @@ export function RunActionBar({
     setResolving(resolution);
     try {
       await onResolveApproval(current, resolution);
+      // Only a resolution the server accepted counts as resolved.
+      track('run_blocker_resolved', {
+        blocker_kind: 'approval',
+        resolution: resolution === 'APPROVED' ? 'approved' : 'rejected',
+      });
     } catch {
       // The message is the server's own English, so it is not shown; the bar
       // says the action did not go through and stays clickable.
@@ -254,7 +260,12 @@ export function RunActionBar({
           <button
             type="button"
             data-testid="application-run-action-continue"
-            onClick={onContinue}
+            onClick={() => {
+              // The continue's outcome is owned by the application (it awaits it and reports a
+              // refusal through continueFailure), so the click is what is counted here.
+              track('run_blocker_resolved', { blocker_kind: 'interface_continue', resolution: 'continued' });
+              onContinue();
+            }}
             disabled={isContinuing || continueDisabled}
             // NOT `continueInterfaceLoading`: that key means "the signal queue
             // has not arrived". Here the queue is known and the item on screen

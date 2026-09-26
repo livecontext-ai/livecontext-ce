@@ -1841,4 +1841,49 @@ class TemplateEngineTest {
             assertEquals("{not json", templateEngine.resolveWithMap("{{s}}", Map.of("s", "{not json")));
         }
     }
+
+    @Nested
+    @DisplayName("asText: the one text form of a resolved value")
+    class AsTextTests {
+
+        @Test
+        @DisplayName("a map and a list are JSON, never Java toString")
+        void structuresAreJson() {
+            assertEquals("{\"a\":1}", TemplateEngine.asText(Map.of("a", 1)));
+            assertEquals("[1,2]", TemplateEngine.asText(List.of(1, 2)));
+        }
+
+        @Test
+        @DisplayName("a file-shaped map is its display URL, never its JSON")
+        void fileMapIsItsUrl() {
+            Map<String, Object> file = new LinkedHashMap<>();
+            file.put("_type", "file");
+            file.put("id", "44444444-4444-4444-4444-444444444444");
+            file.put("name", "photo.png");
+
+            assertEquals("/api/proxy/files/by-id/44444444-4444-4444-4444-444444444444/raw?disposition=inline",
+                TemplateEngine.asText(file));
+        }
+
+        @Test
+        @DisplayName("a file serialised as JSON TEXT is its display URL too, checked before the String branch")
+        void serializedFileStringIsItsUrl() {
+            // A table cell written by an agent arrives as text; returning the String as-is would put
+            // raw JSON into an <img src>.
+            String serialized = "{\"_type\":\"file\",\"id\":\"44444444-4444-4444-4444-444444444444\","
+                + "\"name\":\"photo.png\"}";
+
+            assertEquals("/api/proxy/files/by-id/44444444-4444-4444-4444-444444444444/raw?disposition=inline",
+                TemplateEngine.asText(serialized));
+        }
+
+        @Test
+        @DisplayName("null stays null and scalars are their plain text")
+        void nullAndScalars() {
+            assertNull(TemplateEngine.asText(null));
+            assertEquals("abc", TemplateEngine.asText("abc"));
+            assertEquals("42", TemplateEngine.asText(42));
+            assertEquals("true", TemplateEngine.asText(true));
+        }
+    }
 }

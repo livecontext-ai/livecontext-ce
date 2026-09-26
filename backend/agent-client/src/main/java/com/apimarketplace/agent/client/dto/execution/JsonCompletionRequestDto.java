@@ -26,4 +26,10 @@ public record JsonCompletionRequestDto(
     String system,
     String user,
     String tenantId
-) {}
+) {
+
+    /** Copy with the model pair replaced (a disabled model swapped for its replacement, V515). */
+    public JsonCompletionRequestDto withModel(String newProvider, String newModel) {
+        return new JsonCompletionRequestDto(newProvider, newModel, system, user, tenantId);
+    }
+}

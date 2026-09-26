@@ -5,7 +5,6 @@ import { useTranslations } from 'next-intl';
 import { Info, Pencil, ChevronDown } from 'lucide-react';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
 import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Select,
   SelectContent,
@@ -15,6 +14,7 @@ import {
 } from '@/components/ui/select';
 import { NONE_SENTINEL } from './forms/TaskParametersForm';
 import { GoogleDrivePickerField } from './forms/GoogleDrivePickerField';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 /**
  * Connection props that are always passed to ExpressionEditor
@@ -212,16 +212,9 @@ export function ExpressionField({
             <span className="text-[10px] text-[var(--text-tertiary)] font-mono">({typeHint})</span>
           )}
           {infoContent && (
-            <Popover>
-              <PopoverTrigger asChild>
-                <button type="button" className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
-                  <Info className="h-3 w-3 text-slate-400" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[280px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <p className="text-xs text-slate-600 dark:text-slate-300">{infoContent}</p>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label={label} size="sm" side="right" align="start" contentClassName="w-[280px] p-3">
+              <p className="text-xs text-slate-600 dark:text-slate-300">{infoContent}</p>
+            </InfoPopover>
           )}
         </div>
         {isRequired && (

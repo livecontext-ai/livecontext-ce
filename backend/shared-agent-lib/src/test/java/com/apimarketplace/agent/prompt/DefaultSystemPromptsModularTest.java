@@ -386,4 +386,47 @@ class DefaultSystemPromptsModularTest {
                 .doesNotContain("Help First");
         }
     }
+
+    @Nested
+    @DisplayName("Deliver a result the user can see")
+    class DeliverUsableResultTests {
+
+        @Test
+        @DisplayName("Orbi's prompt asks for a table, an interface, and presenting the run")
+        void orbiCarriesTheRule() {
+            String prompt = DefaultSystemPrompts.build(null, true, true).systemPrompt();
+
+            assertThat(prompt)
+                .contains("# Deliver a result the user can see")
+                .contains("workflow(action='present', view='application'");
+        }
+
+        @Test
+        @DisplayName("the rule is left out when the agent cannot build all three pieces")
+        void leftOutWithoutAllThreeModules() {
+            assertThat(DefaultSystemPrompts.build(Set.of("workflow", "table"), true, true).systemPrompt())
+                .doesNotContain("# Deliver a result the user can see");
+            assertThat(DefaultSystemPrompts.build(Set.of("workflow", "interface"), true, true).systemPrompt())
+                .doesNotContain("# Deliver a result the user can see");
+        }
+
+        // SubAgentExecutionHandler and scoped agents call the 2-arg build (sub-agents even pass
+        // conversationMode=true): a delegated worker must never be told to build extra resources.
+        @Test
+        @DisplayName("scoped agents and sub-agents (the 2-arg build) never carry the rule")
+        void scopedAgentsAndSubAgentsDoNotCarryTheRule() {
+            assertThat(DefaultSystemPrompts.build(null, true).systemPrompt())
+                .doesNotContain("# Deliver a result the user can see");
+            assertThat(DefaultSystemPrompts.buildAgentDefault(null).systemPrompt())
+                .doesNotContain("# Deliver a result the user can see");
+        }
+
+        @Test
+        @DisplayName("the workflow page prompt tells the agent how to present the result")
+        void workflowPagePromptMentionsPresent() {
+            String prompt = DefaultSystemPrompts.buildWorkflowPrompt("WF", "wf-1", "ACTIVE", null, null, null, false);
+
+            assertThat(prompt).contains("workflow(action='present'");
+        }
+    }
 }

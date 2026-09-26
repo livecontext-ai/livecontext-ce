@@ -153,22 +153,16 @@ describe('every plan explains what its credits buy', () => {
       // wrong. `real` leaves an unsupplied placeholder literal, which is the
       // same tell, and it is checked on EVERY line of EVERY plan rather than on
       // the one that regressed last time.
-      //
-      // Both allowance branches: the Free card renders a different line when the
-      // live allowance has not arrived yet, and it carries the same tooltip.
-      for (const aiCredits of [undefined, '1,000']) {
-        const lines = planFeatureLabels(planId, {
-          ...DEPS,
-          aiCredits,
-          tCards: real('pricing.planCards'),
-          tPricing: real('pricing'),
-        });
-        for (const line of lines) {
-          const [label, tooltip] = line.split('||');
-          expect(label, `${planId} label: ${label}`).not.toMatch(/\{[a-zA-Z]+\}/);
-          if (tooltip !== undefined) {
-            expect(tooltip, `${planId} tooltip: ${tooltip}`).not.toMatch(/\{[a-zA-Z]+\}/);
-          }
+      const lines = planFeatureLabels(planId, {
+        ...DEPS,
+        tCards: real('pricing.planCards'),
+        tPricing: real('pricing'),
+      });
+      for (const line of lines) {
+        const [label, tooltip] = line.split('||');
+        expect(label, `${planId} label: ${label}`).not.toMatch(/\{[a-zA-Z]+\}/);
+        if (tooltip !== undefined) {
+          expect(tooltip, `${planId} tooltip: ${tooltip}`).not.toMatch(/\{[a-zA-Z]+\}/);
         }
       }
     },
@@ -342,40 +336,13 @@ describe('one mapping, not one per surface', () => {
   // in all six locales and fails on next-intl's own FORMATTING_ERROR.
 });
 
-describe("the Free plan's AI allowance line (V494)", () => {
-  const withAllowance = (aiCredits?: string) => planFeatureLabels('free', { ...DEPS, aiCredits });
-
-  it('quotes the configured figure', () => {
-    expect(withAllowance('250').some((l) => l.includes('features.aiCreditsFree') && l.includes('250')))
-      .toBe(true);
-  });
-
-  it('DROPS the line when the plan grants none, instead of advertising zero', () => {
-    // Setting included_ai_credits to 0 is how an admin closes the free tier. Rendering
-    // "0 AI credits per month" would keep it on the card as a feature that gives
-    // nothing, which is worse than saying nothing at all.
-    const lines = withAllowance('0');
+describe('the Free plan card states ONE pool', () => {
+  it('regression: carries no separate AI credits line', () => {
+    // The Free plan's separate monthly AI allowance was merged into its monthly
+    // credits, so the card must not advertise a second pot.
+    const lines = planFeatureLabels('free', DEPS);
 
     expect(lines.some((l) => l.includes('aiCreditsFree'))).toBe(false);
-    // ...and only that line: the rest of the Free card is untouched.
     expect(lines.some((l) => l.includes('features.creditsFree'))).toBe(true);
-  });
-
-  it('drops it for a formatted zero in any locale shape', () => {
-    // The value arrives already locale-formatted, so the check must not depend on
-    // which separator a locale would have used.
-    expect(withAllowance('0,0').some((l) => l.includes('aiCreditsFree'))).toBe(false);
-  });
-
-  it('keeps a figure-free wording while the request is in flight', () => {
-    // Undefined is "not answered yet", which is not "none": the line must stay, or a
-    // card would gain and lose a bullet as the page settles.
-    const lines = withAllowance(undefined);
-
-    expect(lines.some((l) => l.includes('features.aiCreditsFreeUnknown'))).toBe(true);
-  });
-
-  it('keeps any non-zero figure, including one with a grouping separator', () => {
-    expect(withAllowance('1,000').some((l) => l.includes('features.aiCreditsFree'))).toBe(true);
   });
 });

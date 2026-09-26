@@ -115,6 +115,16 @@ public class AgentController {
             return inactivityError;
         }
 
+        ResponseEntity<Object> channelError = validateChatChannelLinkId(request);
+        if (channelError != null) {
+            return channelError;
+        }
+        if (request.containsKey("chatChannelEnabled") && strictBoolean(request.get("chatChannelEnabled")) == null) {
+            return ResponseEntity.badRequest().body(Map.of(
+                "error", "invalid_chat_channel_enabled",
+                "message", "chatChannelEnabled must be true or false"));
+        }
+
         ResponseEntity<Object> compactionModelError = validateCompactionModel(request);
         if (compactionModelError != null) {
             return compactionModelError;
@@ -179,6 +189,18 @@ public class AgentController {
                 extractor.getInteger(request, "inactivityTimeout"));
         }
 
+        // V523 - where this agent's requests and questions are sent (null = workspace default).
+        if (request.containsKey("chatChannelLinkId")) {
+            created = agentService.setChatChannelLinkId(
+                created.getId(), tenantId, organizationId,
+                parseChatChannelLinkId(request.get("chatChannelLinkId")));
+        }
+        // V524 - the on/off card. Off also disarms sensitive-action asking (see the setter).
+        if (request.containsKey("chatChannelEnabled")) {
+            created = agentService.setChatChannelEnabled(
+                created.getId(), tenantId, organizationId, strictBoolean(request.get("chatChannelEnabled")));
+        }
+
         // V106 columns, user-facing write path - per-agent compaction SUMMARISER model.
         // Dedicated setter (own scope gate) like the compaction enable/cadence above.
         // Pre-validated (both-or-neither), so the post-create setter never throws.
@@ -225,6 +247,36 @@ public class AgentController {
      * {@code setInactivityTimeout} setter (run AFTER create) never throws, so a bad value
      * cannot leave an orphaned agent. Mirrors {@link #validateCompactionAfterTurns}.
      */
+    /**
+     * Validate the optional {@code chatChannelLinkId} (V523) BEFORE persistence: absent, null or
+     * blank (the workspace default), or a UUID. Anything else is a 400, so the post-create setter
+     * never throws and a typo can never be stored as "default" by accident.
+     */
+    private ResponseEntity<Object> validateChatChannelLinkId(Map<String, Object> request) {
+        if (request.containsKey("chatChannelLinkId")) {
+            Object raw = request.get("chatChannelLinkId");
+            if (raw != null && !raw.toString().isBlank() && parseChatChannelLinkId(raw) == null) {
+                return ResponseEntity.badRequest().<Object>body(Map.of(
+                    "error", "invalid_chat_channel_link_id",
+                    "message", "chatChannelLinkId must be a destination id from the workspace's channels, "
+                        + "or null for the workspace default"));
+            }
+        }
+        return null;
+    }
+
+    /** A UUID, or null for "the workspace default" (absent, null or blank). */
+    private static UUID parseChatChannelLinkId(Object raw) {
+        if (raw == null || raw.toString().isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw.toString().trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
     private ResponseEntity<Object> validateInactivityTimeout(Map<String, Object> request) {
         if (request.containsKey("inactivityTimeout")) {
             Integer it = extractor.getInteger(request, "inactivityTimeout");
@@ -510,6 +562,16 @@ public class AgentController {
             return inactivityError;
         }
 
+        ResponseEntity<Object> channelError = validateChatChannelLinkId(request);
+        if (channelError != null) {
+            return channelError;
+        }
+        if (request.containsKey("chatChannelEnabled") && strictBoolean(request.get("chatChannelEnabled")) == null) {
+            return ResponseEntity.badRequest().body(Map.of(
+                "error", "invalid_chat_channel_enabled",
+                "message", "chatChannelEnabled must be true or false"));
+        }
+
         ResponseEntity<Object> compactionModelError = validateCompactionModel(request);
         if (compactionModelError != null) {
             return compactionModelError;
@@ -581,6 +643,18 @@ public class AgentController {
             updated = agentService.setInactivityTimeout(
                 id, tenantId, callerOrgId,
                 extractor.getInteger(request, "inactivityTimeout"));
+        }
+
+        // V523 - chat destination (patch semantics: absent => unchanged; null/blank => workspace default).
+        if (request.containsKey("chatChannelLinkId")) {
+            updated = agentService.setChatChannelLinkId(
+                id, tenantId, callerOrgId,
+                parseChatChannelLinkId(request.get("chatChannelLinkId")));
+        }
+        // V524 - the on/off card (patch semantics: absent => unchanged).
+        if (request.containsKey("chatChannelEnabled")) {
+            updated = agentService.setChatChannelEnabled(
+                id, tenantId, callerOrgId, strictBoolean(request.get("chatChannelEnabled")));
         }
 
         // Per-agent compaction SUMMARISER model (patch semantics: absent => unchanged;
@@ -793,6 +867,66 @@ public class AgentController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build();
         }
+    }
+
+    /**
+     * Arm or disarm this agent's tool-authorization requirement.
+     *
+     * <p>Body: {@code { "required": true }}. Armed, the agent asks permission for a
+     * sensitive action wherever it runs, including unattended executions, and the
+     * request is delivered to the workspace's linked chat when nobody is watching.
+     */
+    @PatchMapping("/{id:[0-9a-fA-F\\-]{36}}/tool-authorization")
+    public ResponseEntity<Map<String, Object>> setRequireToolAuthorization(
+            @PathVariable("id") UUID id,
+            HttpServletRequest httpRequest,
+            @RequestBody Map<String, Object> request) {
+
+        String tenantId = tenantResolver.resolveOrNull(httpRequest);
+        tenantResolver.validate(tenantId);
+        String orgId = httpRequest.getHeader("X-Organization-ID");
+        String orgRole = httpRequest.getHeader("X-Organization-Role");
+
+        // NOT extractor.getBoolean: it parses any string with Boolean.parseBoolean, so
+        // "maybe" reads as false. On this flag that is not a lenient default, it is a
+        // silent DISARM of an agent somebody armed on purpose, answered with 200. Strict
+        // here, exactly like the MCP path: only a real boolean, or the two words.
+        Boolean required = strictBoolean(request.get("required"));
+        if (required == null) {
+            return ResponseEntity.badRequest().body(Map.of("error",
+                    "'required' must be true or false. Nothing was changed."));
+        }
+        try {
+            AgentEntity saved = agentService.setRequireToolAuthorization(id, tenantId, orgId, orgRole, required);
+            return ResponseEntity.ok(Map.of(
+                    "agentId", id.toString(),
+                    "requireToolAuthorization", saved.getRequireToolAuthorization()));
+        } catch (AgentService.ChannelRequiredException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    /**
+     * A boolean, or nothing. Never a default: the caller of this endpoint is deciding
+     * whether an agent has to ask a human before acting, and a value we cannot read has
+     * to be refused rather than guessed in the permissive direction.
+     */
+    private static Boolean strictBoolean(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof String text) {
+            String trimmed = text.trim();
+            if ("true".equalsIgnoreCase(trimmed)) {
+                return Boolean.TRUE;
+            }
+            if ("false".equalsIgnoreCase(trimmed)) {
+                return Boolean.FALSE;
+            }
+        }
+        return null;
     }
 
     /**

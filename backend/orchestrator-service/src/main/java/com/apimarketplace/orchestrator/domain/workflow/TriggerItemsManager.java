@@ -85,7 +85,8 @@ public class TriggerItemsManager {
     public void setChatTriggerInput(String stepId, Map<String, Object> input) {
         if (stepId != null && input != null) {
             chatTriggerInputs.put(stepId, new HashMap<>(input));
-            logger.info("[ChatTrigger] Stored input for stepId={}: {}", stepId, input);
+            // Keys only: this is the user's chat input, not diagnostic data.
+            logger.info("[ChatTrigger] Stored input for stepId={}: keys={}", stepId, input.keySet());
         }
     }
 
@@ -108,7 +109,8 @@ public class TriggerItemsManager {
     public void setWebhookTriggerPayload(String stepId, Map<String, Object> payload) {
         if (stepId != null && payload != null) {
             webhookTriggerPayloads.put(stepId, new HashMap<>(payload));
-            logger.info("[WebhookTrigger] Stored payload for stepId={}: {}", stepId, payload);
+            // Keys only: the payload is third-party content and may carry secrets.
+            logger.info("[WebhookTrigger] Stored payload for stepId={}: keys={}", stepId, payload.keySet());
         }
     }
 

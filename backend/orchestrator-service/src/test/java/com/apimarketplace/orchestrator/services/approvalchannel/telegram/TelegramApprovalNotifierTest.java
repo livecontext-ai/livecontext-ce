@@ -80,6 +80,7 @@ class TelegramApprovalNotifierTest {
     @Mock private ToolsGateway toolsGateway;
     @Mock private ApprovalChannelDeliveryRepository deliveryRepository;
     @Mock private SignalWaitRepository signalWaitRepository;
+    @Mock private com.apimarketplace.orchestrator.services.approvalchannel.ConnectorApprovalNotifier destinations;
     @Captor private ArgumentCaptor<Map<String, Object>> paramsCaptor;
     @Captor private ArgumentCaptor<Map<String, Object>> billingCaptor;
 
@@ -91,7 +92,7 @@ class TelegramApprovalNotifierTest {
         meterRegistry = new SimpleMeterRegistry();
         notifier = new TelegramApprovalNotifier(
                 toolsGatewayProvider, deliveryRepository, signalWaitRepository,
-                new ObjectMapper(), meterRegistry);
+                new ObjectMapper(), meterRegistry, destinations);
     }
 
     private SignalWaitEntity signal() {
@@ -159,6 +160,23 @@ class TelegramApprovalNotifierTest {
     @Nested
     @DisplayName("notifyPending() - send payload")
     class NotifyPendingSendPayload {
+
+        @Test
+        @DisplayName("regression: a chat given as @channelname is stored as the numeric id Telegram sent to, which is what a press carries")
+        void storesTheChatTelegramActuallySentTo() {
+            ApprovalChannelDeliveryEntity delivery = stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(new ExecutionResult(true, Map.of("result",
+                            Map.of("message_id", 7, "chat", Map.of("id", -1001234567890L))), null, null));
+
+            notifier.notifyPending(signal(), new ApprovalDelegationConfig("telegram", CREDENTIAL_ID, "@ops_channel",
+                    "msg", null, List.of(), null, null), run(), null);
+
+            // The press on this message comes back with chat -1001234567890; kept as "@ops_channel",
+            // the origin binding would have refused it as coming from another chat.
+            assertThat(delivery.getChatId()).isEqualTo("-1001234567890");
+        }
 
         @Test
         @DisplayName("sends telegram-send-message with chat_id, text and an inline keyboard of exactly two buttons")
@@ -397,15 +415,43 @@ class TelegramApprovalNotifierTest {
         }
 
         @Test
-        @DisplayName("blank chatId marks the delivery FAILED without sending")
+        @DisplayName("blank chatId with no connected Telegram destination marks the delivery FAILED without sending")
         void blankChatIdFailsWithoutSend() {
             ApprovalChannelDeliveryEntity delivery = stubOwnedInsert();
+            when(destinations.destinationFor(eq("telegram"), any(), any())).thenReturn(
+                    new com.apimarketplace.orchestrator.services.approvalchannel.ConnectorApprovalNotifier.Destination(
+                            CREDENTIAL_ID, null, List.of(), "nothing connected"));
 
             notifier.notifyPending(signal(),
                     new ApprovalDelegationConfig("telegram", CREDENTIAL_ID, "  ", "msg", null, List.of(), null, null), run(), null);
 
             verify(toolsGateway, never()).executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap());
             assertThat(delivery.getStatus()).isEqualTo(DeliveryStatus.FAILED);
+            assertThat(delivery.getError()).contains("no connected Telegram destination");
+        }
+
+        @Test
+        @DisplayName("blank chatId sends to the workspace's connected Telegram destination, with its credential")
+        void blankChatIdUsesTheConnectedDestination() {
+            stubOwnedInsert();
+            when(destinations.destinationFor(eq("telegram"), any(), any())).thenReturn(
+                    new com.apimarketplace.orchestrator.services.approvalchannel.ConnectorApprovalNotifier.Destination(
+                            77L, "-100555", List.of(), null));
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(sendSuccess(9));
+
+            notifier.notifyPending(signal(),
+                    new ApprovalDelegationConfig("telegram", null, null, "msg", null, List.of(), null, null), run(), null);
+
+            // The same rule as the other services: connect Telegram once, and an approval node
+            // naming only the channel reaches that chat.
+            verify(toolsGateway).executeTool(any(ToolRef.class), paramsCaptor.capture(), eq(TENANT_ID),
+                    billingCaptor.capture());
+            assertThat(paramsCaptor.getValue()).containsEntry("chat_id", "-100555");
+            assertThat(billingCaptor.getValue()).containsEntry("__selectedCredentialId__", 77L);
+            verify(deliveryRepository).insertPendingIfAbsent(any(), anyString(), anyString(), anyString(), any(),
+                    any(), any(), any(), any(), anyInt(), eq(77L), eq("-100555"), any(), any());
         }
 
         @Test
@@ -945,6 +991,51 @@ class TelegramApprovalNotifierTest {
                     .containsEntry("text", "Original approval message\n\n🚫 Approval cancelled");
             assertThat(delivery.getStatus()).isEqualTo(DeliveryStatus.CANCELLED);
             verify(deliveryRepository).save(delivery);
+        }
+    }
+
+    @Nested
+    @DisplayName("analytics: channel_request_delivered (workflow_approval)")
+    class Analytics {
+
+        @Test
+        @DisplayName("a sent approval, a refused send and a missing chat are each reported under the run's owner")
+        void reportsOutcomes() {
+            com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter analytics = org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(notifier, "analytics", analytics);
+            stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(sendSuccess(123)).thenReturn(failure("chat not found"));
+
+            notifier.notifyPending(signal(), config("ok?"), run(), null);
+            notifier.notifyPending(signal(), config("ok?"), run(), null);
+            notifier.notifyPending(signal(), new ApprovalDelegationConfig("telegram", CREDENTIAL_ID, null,
+                    "ok?", null, List.of(), null, null), run(), null);
+
+            verify(analytics).channelRequestDelivered(TENANT_ID, null, com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter.RequestType.WORKFLOW_APPROVAL,
+                    "telegram", com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter.RequestStatus.SENT);
+            verify(analytics).channelRequestDelivered(TENANT_ID, null, com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter.RequestType.WORKFLOW_APPROVAL,
+                    "telegram", com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter.RequestStatus.FAILED);
+            verify(analytics).channelRequestDelivered(TENANT_ID, null, com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter.RequestType.WORKFLOW_APPROVAL,
+                    "telegram", com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter.RequestStatus.NO_CHANNEL);
+        }
+
+        @Test
+        @DisplayName("a send that THROWS is reported as a failed delivery, once")
+        void throwingSendIsReportedFailed() {
+            com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter analytics = org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(notifier, "analytics", analytics);
+            stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenThrow(new IllegalStateException("socket closed"));
+
+            notifier.notifyPending(signal(), config("ok?"), run(), null);
+
+            verify(analytics).channelRequestDelivered(TENANT_ID, null, com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter.RequestType.WORKFLOW_APPROVAL,
+                    "telegram", com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter.RequestStatus.FAILED);
+            org.mockito.Mockito.verifyNoMoreInteractions(analytics);
         }
     }
 }

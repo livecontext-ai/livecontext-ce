@@ -321,7 +321,11 @@ public class ConversationToolExecutionService implements ToolExecutionService {
                 return ToolResult.builder()
                     .toolCall(toolCall)
                     .success(false)
-                    .error("Tool result not found for id: " + toolCallId)
+                    // Said with the way out: the usual miss is a call of the turn still running,
+                    // whose results are only saved when the turn ends.
+                    .error("Tool result not found for id: " + toolCallId + ". A result is saved when its turn "
+                        + "ends, so a call made earlier in this same turn cannot be fetched yet: call that tool "
+                        + "again instead (with its own expand / max_items options if its answer was shortened).")
                     .durationMs(System.currentTimeMillis() - startTime)
                     .build();
             }
@@ -1396,6 +1400,14 @@ public class ConversationToolExecutionService implements ToolExecutionService {
         // Pass streamId and toolCallId for tool callbacks (e.g., websearch screenshots)
         if (credentials != null && credentials.get("__streamId__") != null) {
             request.put("streamId", credentials.get("__streamId__"));
+        }
+        // The arming travels WITH the call. Dropped here, the gate at the other end
+        // sees an agent nobody armed and the sensitive action runs unasked.
+        if (credentials != null && credentials.get("__requireToolAuthorization__") != null) {
+            request.put("requireToolAuthorization", credentials.get("__requireToolAuthorization__"));
+        }
+        if (credentials != null && credentials.get("__unattendedRun__") != null) {
+            request.put("unattendedRun", credentials.get("__unattendedRun__"));
         }
         if (credentials != null && credentials.get("__reviewerExecutionId__") != null) {
             request.put("reviewerExecutionId", credentials.get("__reviewerExecutionId__"));

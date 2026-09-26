@@ -13,7 +13,7 @@ import { ImageGenerationVisualizeCard } from './ImageGenerationVisualizeCard';
 import { FileVisualizeCard } from './FileVisualizeCard';
 import { AlertCircle } from 'lucide-react';
 export interface VisualizeBlockProps {
-  type: 'workflow' | 'workflow_run' | 'datasource' | 'table' | 'interface' | 'credential' | 'application' | 'agent' | 'web_search' | 'agent_browse' | 'image_generation' | 'file';
+  type: 'workflow' | 'workflow_run' | 'present_application' | 'present_run' | 'present_table' | 'present_workflow' | 'present_interface' | 'present_agent' | 'present_file' | 'datasource' | 'table' | 'interface' | 'credential' | 'application' | 'agent' | 'web_search' | 'agent_browse' | 'image_generation' | 'file';
   id: string;
   title?: string;
   /** For workflow_run: the run ID */

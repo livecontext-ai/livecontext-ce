@@ -18,7 +18,12 @@ const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   track: vi.fn(),
+  leaveForChat: vi.fn(),
 }));
+
+// The one navigation to the chat, observed rather than inferred from a spinner that the loading
+// and saving states also show.
+vi.mock('@/lib/navigation/leaveForChat', () => ({ leaveForChat: mocks.leaveForChat }));
 
 vi.mock('next-intl', () => ({
   // Keys echo, so queries can find controls by their key text.
@@ -32,11 +37,22 @@ vi.mock('@/lib/providers/smart-providers', () => ({
     isLoading: false,
     isAuthenticated: true,
     loginWithRedirect: vi.fn(),
+    // The page destructures logout for its sign-out hatches. Absent, the first
+    // future case here that reaches one dies on "logout is not a function".
+    logout: vi.fn(),
   }),
 }));
 
 vi.mock('@/lib/api', () => ({
   apiClient: { get: mocks.apiGet, post: mocks.apiPost },
+}));
+
+// The credential-redirect handler reads the address through next/navigation, which returns null
+// outside a router context. A real URLSearchParams over window.location keeps the test driving
+// the same code the browser does, including the history-API cleanup.
+vi.mock('next/navigation', () => ({
+  usePathname: () => window.location.pathname,
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 vi.mock('@/lib/edition', () => ({ IS_CE: false }));
@@ -87,6 +103,9 @@ const pressed = (name: string | RegExp) =>
 
 describe('Onboarding persona questionnaire', () => {
   beforeEach(() => {
+    // restoreAllMocks does not clear a vi.fn call history: without this, one completing test
+    // makes every later leaveForChat assertion pass on its own.
+    mocks.leaveForChat.mockReset();
     sessionStorage.clear();
     mocks.apiGet.mockReset();
     mocks.apiPost.mockReset();
@@ -234,8 +253,9 @@ describe('Onboarding persona questionnaire', () => {
     // The one that could be written, was.
     await waitFor(() => expect(sessionStorage.getItem('lc_show_app_suggestions')).toBe('1'));
     expect(sessionStorage.getItem(WELCOME_GIFT_FLAG)).toBeNull();
-    // And the completion itself still reaches its end state.
-    await waitFor(() => expect(screen.getByTestId('spinner')).toBeInTheDocument());
+    // And the completion itself still reaches its end state: the completed spinner, which is
+    // the redirect to the chat.
+    expect(await screen.findByTestId('spinner')).toBeInTheDocument();
   });
 
   it('reaches the completed state and hands off, whatever the answers were', async () => {
@@ -262,7 +282,35 @@ describe('Onboarding persona questionnaire', () => {
     // `pageState === 'completed'`), so reaching it means the user is not
     // stranded - jsdom cannot follow the navigation itself.
     expect(screen.queryByText('step3.title')).not.toBeInTheDocument();
-    expect(screen.getByTestId('spinner')).toBeInTheDocument();
+    // Straight to the chat: connecting apps is no longer an onboarding step (the setup
+    // checklist carries it), so nothing stands between the last answer and the redirect.
+    await waitFor(() => expect(mocks.leaveForChat).toHaveBeenCalledWith('en'));
+    expect(mocks.leaveForChat).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('step4.title')).not.toBeInTheDocument();
+    // The hand-offs were armed before the page was left.
+    expect(sessionStorage.getItem(WELCOME_GIFT_FLAG)).toBe('1');
+  });
+
+  it('an already-onboarded account coming back with ?success=true goes to the chat: no panel to resume', async () => {
+    // The removed path: a credential redirect used to reopen the apps panel. Nothing can start
+    // one from onboarding any more, so a stray ?success=true is just an onboarded account.
+    window.history.replaceState({}, '', '/en/onboarding?success=true&credentialId=42');
+    mocks.apiGet.mockImplementation(async (path: string) => {
+      if (path === '/auth/email/status') return { verified: true };
+      if (path === '/auth-service/api/onboarding/status') {
+        return { needsOnboarding: false, completed: true, skipped: false, currentStep: 3 };
+      }
+      return {};
+    });
+    try {
+      renderPage();
+
+      await waitFor(() => expect(mocks.leaveForChat).toHaveBeenCalledWith('en'));
+    expect(mocks.leaveForChat).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText('step4.title')).not.toBeInTheDocument();
+    } finally {
+      window.history.replaceState({}, '', '/en/onboarding');
+    }
   });
 
   it('restores only answers that are options in this edition (CE goal and unknown tool are dropped)', async () => {

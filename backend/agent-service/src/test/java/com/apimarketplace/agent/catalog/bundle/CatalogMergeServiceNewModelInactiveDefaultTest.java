@@ -25,8 +25,9 @@ import static org.mockito.Mockito.when;
  * New models introduced by a FEED SYNC land INACTIVE by default - a refresh can
  * add many models at once and auto-enabling them would silently expose
  * un-reviewed models to the picker and chat. The admin opts each one in from
- * /settings/ai-providers. Only fresh INSERTS are forced off; existing rows
- * keep their current enabled state untouched.
+ * /settings/ai-providers. Fresh INSERTS are forced off, and a later refresh
+ * never writes enabled on an existing row, so the gate cannot be undone by the
+ * next sync.
  *
  * <p>The review-gate is SYNC-ONLY since V381. Both trusted, cloud-curated
  * paths honor the payload's enabled on insert ({@code honorEnabledOnInsert=true}):
@@ -154,11 +155,130 @@ class CatalogMergeServiceNewModelInactiveDefaultTest {
     }
 
     @Test
-    @DisplayName("Update branch is independent of the insert default: an existing DISABLED model can be re-enabled by an unprotected payload")
-    void existingModelUpdateBranchUnaffectedByInsertDefault() {
-        // Existing disabled row, "enabled" NOT protected, payload enables it.
-        // The update branch applies the payload (enabled=true) - the insert-only
-        // force-off must not bleed into the update path and keep it false.
+    @DisplayName("A second refresh does not turn a model inserted disabled ON - regression for the auto-enable on sync")
+    void secondSyncKeepsAnInsertedDisabledModelOff() {
+        // Prod 2026-09-23: claude-code/claude-opus-5-5 was inserted enabled=false by
+        // the sync, and the next refresh nulled `enabled` (no feed carries it, and the
+        // sync update is a full overwrite). NULL reads as ON in every picker, so the
+        // model went live without an admin click.
+        ModelConfigOverrideEntity existing = new ModelConfigOverrideEntity();
+        existing.setId(9L);
+        existing.setProvider("claude-code");
+        existing.setModelId("claude-opus-5-5");
+        existing.setDisplayName("Claude Opus 5.5");
+        existing.setEnabled(false);
+        existing.setUserModifiedFields(new String[]{"ranking"});
+        when(modelRepo.findByProviderAndModelId("claude-code", "claude-opus-5-5")).thenReturn(Optional.of(existing));
+
+        merge.merge(List.of(payload("claude-code", "claude-opus-5-5")), MergeOptions.forSync());
+
+        assertThat(existing.getEnabled())
+                .as("the review gate must survive every later refresh, not only the insert")
+                .isFalse();
+        verify(modelRepo).save(existing);
+    }
+
+    @Test
+    @DisplayName("Insert then refresh, end to end: the model inserted by the first sync is still disabled after the second")
+    void insertThenRefreshKeepsTheModelDisabled() {
+        when(modelRepo.findMaxRanking()).thenReturn(0);
+        ModelConfigOverrideEntity[] saved = new ModelConfigOverrideEntity[1];
+        when(modelRepo.findByProviderAndModelId("openai", "gpt-6-sol"))
+                .thenAnswer(inv -> Optional.ofNullable(saved[0]));
+        when(modelRepo.save(any())).thenAnswer(inv -> {
+            ModelConfigOverrideEntity e = inv.getArgument(0);
+            if (e.getId() == null) e.setId(7L);
+            saved[0] = e;
+            return e;
+        });
+
+        merge.merge(List.of(payload("openai", "gpt-6-sol")), MergeOptions.forSync());
+        merge.merge(List.of(payload("openai", "gpt-6-sol")), MergeOptions.forSync());
+
+        assertThat(saved[0].getEnabled())
+                .as("the second refresh used to null enabled, which every picker reads as ON")
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("A feed sync leaves a NULL enabled NULL (the fix freezes the column, it never forces a live model off)")
+    void syncUpdateLeavesNullEnabledUntouched() {
+        ModelConfigOverrideEntity existing = new ModelConfigOverrideEntity();
+        existing.setId(9L);
+        existing.setProvider("anthropic");
+        existing.setModelId("claude-sonnet-5");
+        existing.setDisplayName("claude-sonnet-5");
+        existing.setEnabled(null);
+        existing.setUserModifiedFields(new String[0]);
+        when(modelRepo.findByProviderAndModelId("anthropic", "claude-sonnet-5")).thenReturn(Optional.of(existing));
+
+        merge.merge(List.of(payload("anthropic", "claude-sonnet-5")), MergeOptions.forSync());
+
+        assertThat(existing.getEnabled()).isNull();
+    }
+
+    @Test
+    @DisplayName("A SEED update still writes the enabled it carries (curated baseline, PATCH semantics)")
+    void seedUpdateStillWritesCarriedEnabled() {
+        ModelConfigOverrideEntity existing = new ModelConfigOverrideEntity();
+        existing.setId(9L);
+        existing.setProvider("openai");
+        existing.setModelId("gpt-5.4");
+        existing.setDisplayName("gpt-5.4");
+        existing.setEnabled(true);
+        existing.setUserModifiedFields(new String[0]);
+        when(modelRepo.findByProviderAndModelId("openai", "gpt-5.4")).thenReturn(Optional.of(existing));
+
+        Map<String, Object> row = seedRow("openai", "gpt-5.4");
+        row.put("enabled", false);
+
+        merge.merge(List.of(row), MergeOptions.forSeed());
+
+        assertThat(existing.getEnabled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("A feed sync never writes enabled on update, even when the payload carries enabled=true")
+    void syncUpdateIgnoresPayloadEnabled() {
+        // Enabling is an admin decision. Before this fix an unprotected payload
+        // enabled=true switched a disabled row on; the sync is untrusted either way.
+        ModelConfigOverrideEntity existing = new ModelConfigOverrideEntity();
+        existing.setId(9L);
+        existing.setProvider("openai");
+        existing.setModelId("gpt-6-sol");
+        existing.setDisplayName("gpt-6-sol");
+        existing.setEnabled(false);
+        existing.setUserModifiedFields(new String[0]);
+        when(modelRepo.findByProviderAndModelId("openai", "gpt-6-sol")).thenReturn(Optional.of(existing));
+
+        Map<String, Object> row = payload("openai", "gpt-6-sol");
+        row.put("enabled", true);
+
+        merge.merge(List.of(row), MergeOptions.forSync());
+
+        assertThat(existing.getEnabled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("A feed sync leaves an admin-enabled model ON (the fix freezes enabled, it does not force it off)")
+    void syncUpdateLeavesAnEnabledModelOn() {
+        ModelConfigOverrideEntity existing = new ModelConfigOverrideEntity();
+        existing.setId(9L);
+        existing.setProvider("openai");
+        existing.setModelId("gpt-5.4");
+        existing.setDisplayName("gpt-5.4");
+        existing.setEnabled(true);
+        existing.setUserModifiedFields(new String[0]);
+        when(modelRepo.findByProviderAndModelId("openai", "gpt-5.4")).thenReturn(Optional.of(existing));
+
+        merge.merge(List.of(payload("openai", "gpt-5.4")), MergeOptions.forSync());
+
+        assertThat(existing.getEnabled()).isTrue();
+    }
+
+    @Test
+    @DisplayName("A BUNDLE update still applies the payload's enabled - the signed cloud decision ships to CE")
+    void bundleUpdateStillAppliesPayloadEnabled() {
         ModelConfigOverrideEntity existing = new ModelConfigOverrideEntity();
         existing.setId(9L);
         existing.setProvider("openai");
@@ -171,11 +291,9 @@ class CatalogMergeServiceNewModelInactiveDefaultTest {
         Map<String, Object> row = payload("openai", "gpt-5.4");
         row.put("enabled", true);
 
-        merge.merge(List.of(row), MergeOptions.forSync());
+        merge.merge(List.of(row), MergeOptions.forBundle(1L));
 
-        assertThat(existing.getEnabled())
-                .as("update branch applies the payload - the insert force-off does not bleed in")
-                .isTrue();
+        assertThat(existing.getEnabled()).isTrue();
     }
 
     @Test
@@ -193,7 +311,7 @@ class CatalogMergeServiceNewModelInactiveDefaultTest {
         ArgumentCaptor<ModelConfigOverrideEntity> captor = ArgumentCaptor.forClass(ModelConfigOverrideEntity.class);
         verify(modelRepo).save(captor.capture());
         assertThat(captor.getValue().getEnabled())
-                .as("forSeed keeps enabled=true on insert, unlike bundle/sync which force off")
+                .as("forSeed keeps enabled=true on insert, unlike sync which forces it off")
                 .isTrue();
         assertThat(captor.getValue().getSource())
                 .as("a seed row with no explicit source is stamped with forSeed()'s 'curated'")

@@ -1,5 +1,7 @@
 package com.apimarketplace.catalog.mapping.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.apimarketplace.catalog.mapping.SourceFormat;
 import com.apimarketplace.catalog.mapping.dsl.FieldSpec;
 import com.apimarketplace.catalog.mapping.dsl.MappingSpec;
@@ -23,6 +25,8 @@ import java.util.stream.Collectors;
 @Service
 @Transactional
 public class MappingResolverService {
+
+    private static final Logger log = LoggerFactory.getLogger(MappingResolverService.class);
 
     private static final int PREVIEW_LIMIT = 200;
     private static final int GLOBALS_PARENT_DEPTH = 10;
@@ -439,6 +443,9 @@ public class MappingResolverService {
             return definitions != null && !definitions.isEmpty();
 
         } catch (Exception e) {
+            // Still answers "no mapping" (callers turn that into a 200 the storage side treats as
+            // normal), so this line is the only place a lookup failure shows up: keep it at ERROR.
+            log.error("Mapping lookup failed for tool {}, reporting it as unmapped: {}", toolId, e.getMessage(), e);
             return false;
         }
     }

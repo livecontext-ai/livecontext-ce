@@ -704,10 +704,11 @@ public class MonolithSecurityFilter implements Filter {
                 || path.startsWith("/api/internal/auth/pricing/")
                 || path.startsWith("/api/internal/browser-agent/")
                 || path.startsWith("/api/internal/bridge-access/")
-                // Delegated-approval channel callback (Telegram button clicks). Public by
-                // design, mirroring the cloud gateway's /approval-callback/** route: the
-                // 128-bit capability token inside the payload is the auth, plus the optional
-                // Telegram secret_token header check in the controller.
+                // Chat-channel callbacks (Telegram, Slack, Discord, WhatsApp presses and the
+                // Teams decision page). Public by design, mirroring the cloud gateway's
+                // /approval-callback/** route: the 128-bit capability token inside the payload
+                // is the auth, plus each provider's own check in its controller (Telegram
+                // secret_token, Slack HMAC, Discord Ed25519, WhatsApp verify token).
                 || path.startsWith("/api/internal/approval-callback/"));
     }
 

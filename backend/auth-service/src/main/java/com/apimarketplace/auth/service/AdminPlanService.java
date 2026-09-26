@@ -58,6 +58,13 @@ public class AdminPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.apimarketplace.auth.analytics.AuthAnalyticsEmitter analytics;
 
+    /**
+     * Lifecycle emails (Resend): the contact property {@code plan} follows the plan. Optional
+     * like the analytics emitter above; a null field sends nothing.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails;
+
     private static final Logger log = LoggerFactory.getLogger(AdminPlanService.class);
 
     /** The only plan codes an admin may grant from the admin-credits page. FREE = revert. */
@@ -207,6 +214,7 @@ public class AdminPlanService {
         log.info("Admin {} assigned comp plan {} -> {} to user {} (subId={})",
                 adminUserId, previousPlanCode, plan.getCode(), targetUserId, saved.getId());
         if (analytics != null) analytics.planGranted(targetUserId, previousPlanCode, plan.getCode());
+        if (lifecycleEmails != null) lifecycleEmails.syncContact(targetUserId);
         return AssignPlanResult.ok(previousPlanCode, plan.getCode());
     }
 

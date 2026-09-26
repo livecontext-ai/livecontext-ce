@@ -2,7 +2,16 @@ package com.apimarketplace.orchestrator.services;
 
 import com.apimarketplace.orchestrator.config.WorkflowExecutionConfig;
 import com.apimarketplace.orchestrator.domain.workflow.Trigger;
+import com.apimarketplace.orchestrator.services.triggers.ChatTriggerResolver;
 import com.apimarketplace.orchestrator.services.triggers.DataSourceTriggerResolver;
+import com.apimarketplace.orchestrator.services.triggers.ErrorTriggerResolver;
+import com.apimarketplace.orchestrator.services.triggers.FormTriggerResolver;
+import com.apimarketplace.orchestrator.services.triggers.ManualTriggerResolver;
+import com.apimarketplace.orchestrator.services.triggers.TriggerUserResolver;
+import com.apimarketplace.orchestrator.services.triggers.WebhookTriggerResolver;
+import com.apimarketplace.orchestrator.services.triggers.WorkflowTriggerResolver;
+import com.apimarketplace.orchestrator.trigger.TriggerType;
+import com.apimarketplace.datasource.client.DataSourceClient;
 import com.apimarketplace.orchestrator.services.triggers.ScheduleTriggerResolver;
 import com.apimarketplace.orchestrator.services.triggers.TriggerItemContextBuilder;
 import com.apimarketplace.orchestrator.services.triggers.TriggerPayloadBuilder;
@@ -83,5 +92,60 @@ class TriggerResolverServiceTest {
         assertThatThrownBy(() -> service.resolveTrigger(schedule, "tenant-1"))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("Unsupported trigger type: schedule");
+    }
+
+    private static TriggerResolverService serviceWith(List<TriggerTypeHandler> handlers) {
+        return new TriggerResolverService(
+                handlers,
+                mock(TriggerPayloadBuilder.class),
+                mock(TriggerItemContextBuilder.class),
+                mock(DataSourceTriggerResolver.class),
+                mock(WorkflowExecutionConfig.class));
+    }
+
+    /** Every production TriggerTypeHandler (the @Component set Spring injects). */
+    private static List<TriggerTypeHandler> productionHandlers() {
+        return List.of(
+                new ChatTriggerResolver(),
+                new DataSourceTriggerResolver(mock(WorkflowExecutionConfig.class), mock(DataSourceClient.class),
+                        mock(TriggerPayloadBuilder.class), mock(TriggerUserResolver.class)),
+                new ManualTriggerResolver(),
+                new ScheduleTriggerResolver(),
+                new WebhookTriggerResolver(),
+                new WorkflowTriggerResolver(),
+                new FormTriggerResolver(),
+                new ErrorTriggerResolver());
+    }
+
+    @Test
+    @DisplayName("Form trigger dispatches to FormTriggerResolver - regression for 'Unsupported trigger type: form'")
+    void formTriggerIsDispatched() {
+        TriggerResolverService service = serviceWith(productionHandlers());
+        Trigger form = new Trigger("trigger:contact", "Contact", "single", "form", Map.of(), null);
+
+        Map<String, Object> result = service.resolveTrigger(form, "tenant-1");
+
+        assertThat(result.get("type")).isEqualTo("form");
+        assertThat(result.get("count")).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("Every TriggerType value has a production resolver, so none can reach 'Unsupported trigger type'")
+    void everyTriggerTypeHasAHandler() {
+        TriggerResolverService service = serviceWith(productionHandlers());
+
+        for (TriggerType type : TriggerType.values()) {
+            assertThat(service.supportsTriggerType(type.getValue()))
+                    .as("TriggerType.%s has no TriggerTypeHandler", type)
+                    .isTrue();
+        }
+    }
+
+    @Test
+    @DisplayName("supportsTriggerType is false for an unknown type, a null type and an empty handler list")
+    void supportsTriggerTypeFalseCases() {
+        assertThat(serviceWith(productionHandlers()).supportsTriggerType("table_typo")).isFalse();
+        assertThat(serviceWith(productionHandlers()).supportsTriggerType(null)).isFalse();
+        assertThat(serviceWith(List.of()).supportsTriggerType("schedule")).isFalse();
     }
 }

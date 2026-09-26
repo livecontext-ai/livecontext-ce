@@ -25,6 +25,9 @@ export interface AutoOpenVisualization {
 //     (GroupedToolCard); no side panel at all.
 export const AUTO_OPEN_TYPES: readonly string[] = [
   'workflow', 'table', 'datasource', 'application', 'agent', 'workflow_run', 'agent_browse', 'image_generation',
+  // Emitted only by action='present' (workflow, table, interface, agent, files): the agent choosing what the user
+  // looks at. Handled on EVERY page (AppHeader), unlike the chat-only types above.
+  'present_application', 'present_run', 'present_table', 'present_workflow', 'present_interface', 'present_agent', 'present_file',
 ];
 
 /** Stable dedup key - one queued entry per resource. */

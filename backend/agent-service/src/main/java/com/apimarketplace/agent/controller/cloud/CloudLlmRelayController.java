@@ -15,11 +15,14 @@ import com.apimarketplace.agent.domain.UsageInfo;
 import com.apimarketplace.agent.factory.BridgeAvailabilityFilter;
 import com.apimarketplace.agent.factory.LLMProviderFactory;
 import com.apimarketplace.agent.provider.LLMProvider;
+import com.apimarketplace.agent.domain.ModelConfigOverrideEntity;
 import com.apimarketplace.agent.repository.ModelConfigOverrideRepository;
 import com.apimarketplace.agent.service.cloud.CeRelayAccrualStore;
 import com.apimarketplace.agent.service.cloud.CeRelaySettlementService;
 import com.apimarketplace.agent.streaming.StreamingCallback;
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
+import com.apimarketplace.common.plan.CeLinkRefusal;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -369,8 +372,11 @@ public class CloudLlmRelayController {
         if (cloudUserId == null) {
             return ValidationResult.error(HttpStatus.UNAUTHORIZED, "AUTHENTICATION_REQUIRED");
         }
-        if (!authClient.userOwnsActiveCeLink(String.valueOf(cloudUserId), installId)) {
-            return ValidationResult.error(HttpStatus.FORBIDDEN, "CE_LINK_NOT_ACTIVE");
+        // Linked AND paid: a suspended link (plan not paid) answers CLOUD_LINK_PLAN_REQUIRED,
+        // an unlinked one CE_LINK_NOT_ACTIVE; both bodies come from the shared CeLinkRefusal.
+        CeLinkAccessResult access = authClient.ceLinkAccess(String.valueOf(cloudUserId), installId);
+        if (access == null || !access.isActive()) {
+            return ValidationResult.linkRefused(access);
         }
         return ValidationResult.success();
     }
@@ -381,28 +387,31 @@ public class CloudLlmRelayController {
     }
 
     /**
-     * True when the CALLER explicitly asked for a model the cloud no longer curates. A relay
-     * completion may only run a model the cloud actually manages: the cloud's
-     * {@code model_config_overrides} table is the exact source the catalog bundle is built
-     * from, so an explicitly-requested {@code (provider, model)} with no row there is in no
-     * bundle a linked CE could be holding - the CE is on a stale (or foreign) catalog and the
-     * user picked a model the cloud no longer manages. The caller rejects such a request early
-     * with {@code MODEL_NOT_SUPPORTED}, BEFORE the budget gate, so an unknown model can never
-     * masquerade as {@code INSUFFICIENT_CREDITS} (the budget check would also fail it, for the
-     * wrong reason). The CE turns this code into a "refresh your model bundle" prompt.
+     * True when the CALLER explicitly asked for a model a CE install may not use. The relay runs
+     * exactly the models the CE bundle ships: {@link ModelConfigOverrideEntity#isAvailableToCe}
+     * is the one rule both read, so a model is refused here iff it is absent from the catalog,
+     * disabled for CE, retired or deprecated. The caller rejects such a request early with
+     * {@code MODEL_NOT_SUPPORTED}, BEFORE the budget gate, so it is never billed and can never
+     * masquerade as {@code INSUFFICIENT_CREDITS}. The CE turns this code into a "refresh your
+     * model bundle" prompt, and its next bundle no longer lists the model.
+     *
+     * <p>This used to check ABSENCE only, on the theory that a disabled model "simply stops being
+     * offered once the next bundle drops the row". No bundle ever dropped a disabled row, so a
+     * linked CE kept running models the cloud had switched off for weeks (prod 2026-09-25:
+     * {@code google/gemini-3.1-flash-lite-preview}, {@code anthropic/claude-sonnet-4-6}).
      *
      * <p>Only validates an EXPLICIT model: a blank request resolves to the provider default,
      * which is trusted and skipped - the guard targets exactly "the model the user wanted",
-     * never a fallback. Absence-only otherwise: a present-but-disabled or deprecated row still
-     * relays, so an in-flight install running a model the cloud is sunsetting is not cut off
-     * mid-stream - it simply stops being offered once the next bundle drops the row.
+     * never a fallback.
      */
     private boolean isUnmanagedRequestedModel(LLMProvider provider, CompletionRequest request, String model) {
         String requested = request.model();
         if (requested == null || requested.isBlank()) {
             return false;
         }
-        return modelConfigRepository.findByProviderAndModelId(provider.getProviderName(), model).isEmpty();
+        return modelConfigRepository.findByProviderAndModelId(provider.getProviderName(), model)
+                .map(row -> !row.isAvailableToCe())
+                .orElse(true);
     }
 
     private CompletionRequest withCloudTenant(CompletionRequest source,
@@ -586,16 +595,25 @@ public class CloudLlmRelayController {
                               Integer cachedTokens, Integer reasoningTokens) {
     }
 
-    private record ValidationResult(boolean ok, HttpStatus status, String errorCode) {
+    private record ValidationResult(boolean ok, HttpStatus status, String errorCode,
+                                    CeLinkAccessResult linkAccess) {
         static ValidationResult success() {
-            return new ValidationResult(true, HttpStatus.OK, null);
+            return new ValidationResult(true, HttpStatus.OK, null, null);
         }
 
         static ValidationResult error(HttpStatus status, String errorCode) {
-            return new ValidationResult(false, status, errorCode);
+            return new ValidationResult(false, status, errorCode, null);
+        }
+
+        /** A CE-link refusal: status and body are the shared {@link CeLinkRefusal} ones. */
+        static ValidationResult linkRefused(CeLinkAccessResult access) {
+            return new ValidationResult(false, HttpStatus.FORBIDDEN, CeLinkRefusal.errorCode(access), access);
         }
 
         ResponseEntity<Map<String, Object>> errorResponse() {
+            if (linkAccess != null) {
+                return CeLinkRefusal.response(linkAccess);
+            }
             return ResponseEntity.status(status).body(Map.of("error", errorCode));
         }
     }

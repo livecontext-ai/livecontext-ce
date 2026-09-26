@@ -29,6 +29,7 @@ public class WorkflowDraftAutoSaver {
     private final WorkflowBuilderSessionManager sessionManager;
     private final WorkflowManagementService workflowService;
     private final WorkflowPlanVersionService versionService;
+    private final WorkflowBuilderLoader loader;
 
     /**
      * Auto-save the current session as a draft and create/update a session-scoped version.
@@ -62,7 +63,11 @@ public class WorkflowDraftAutoSaver {
             //    without it, drafts created in an org workspace land NULL-org and
             //    disappear from org-scoped list endpoints (bell Triggers tab,
             //    workflow list, etc).
-            workflowService.saveDraft(planMap, tenantId, workflowId, session.getOrgId());
+            var saved = workflowService.saveDraft(planMap, tenantId, workflowId, session.getOrgId());
+            // What was just written becomes the baseline the next action compares the
+            // stored plan against (WorkflowBuilderLoader.resyncWithStoredPlan).
+            loader.recordStoredPlan(session, saved.getPlan());
+            sessionManager.getSessionStore().save(session);
 
             // 2. Create or update session-scoped version (new behavior)
             // Uses sessionId as label: if latest version has same sessionId → overwrite,
@@ -100,6 +105,7 @@ public class WorkflowDraftAutoSaver {
         var savedDraft = workflowService.saveDraft(session.buildPlanMap(), tenantId, null, session.getOrgId());
         String draftId = savedDraft.getId().toString();
         session.setLoadedWorkflowId(draftId);
+        loader.recordStoredPlan(session, savedDraft.getPlan());
         log.info("Created draft {} for session {} (orgScope={})", draftId, session.getSessionId(),
                 (session.getOrgId() != null && !session.getOrgId().isBlank()));
         return draftId;

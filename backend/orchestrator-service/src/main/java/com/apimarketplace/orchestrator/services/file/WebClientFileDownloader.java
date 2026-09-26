@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.services.file;
 
 import com.apimarketplace.common.web.UrlResolutionException;
 import com.apimarketplace.common.web.UrlSafetyValidator;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.utils.file.FileConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -118,22 +119,22 @@ public class WebClientFileDownloader implements FileDownloader {
             Hop result = fetchOnce(currentUrl, url, remainingOrTimeout(deadlineNanos, timeout), timeout);
 
             if (!result.isRedirect()) {
-                logger.debug("Downloaded {} bytes from {}", result.body().length, currentUrl);
+                logger.debug("Downloaded {} bytes from {}", result.body().length, safe(currentUrl));
                 return result.body();
             }
 
             if (hop >= MAX_REDIRECTS) {
                 throw new FileDownloadException(
-                    "Too many redirects (limit " + MAX_REDIRECTS + ") starting from " + url);
+                    "Too many redirects (limit " + MAX_REDIRECTS + ") starting from " + safe(url));
             }
 
             String next = resolveLocation(currentUrl, result);
             validateHop(next, currentUrl);
             if (!visited.add(next)) {
                 throw new FileDownloadException(
-                    "Redirect loop: " + next + " was already requested while downloading " + url);
+                    "Redirect loop: " + safe(next) + " was already requested while downloading " + safe(url));
             }
-            logger.debug("Following redirect {} -> {}", currentUrl, next);
+            logger.debug("Following redirect {} -> {}", safe(currentUrl), safe(next));
             currentUrl = next;
         }
     }
@@ -187,7 +188,7 @@ public class WebClientFileDownloader implements FileDownloader {
                                 // The URL is named because after a redirect it is NOT the one
                                 // the caller passed: a Drive link answering 403 from an
                                 // interstitial host sends the reader to inspect the wrong link.
-                                "Download failed with status " + status + " for " + currentUrl
+                                "Download failed with status " + status + " for " + safe(currentUrl)
                                     + (body.isBlank() ? "" : ": " + truncate(body, 200)),
                                 status.value()
                             )));
@@ -198,7 +199,7 @@ public class WebClientFileDownloader implements FileDownloader {
                 .block();
 
             if (hop == null) {
-                throw new FileDownloadException("No content received from URL: " + currentUrl);
+                throw new FileDownloadException("No content received from URL: " + safe(currentUrl));
             }
             return hop;
 
@@ -206,12 +207,14 @@ public class WebClientFileDownloader implements FileDownloader {
             throw e;
         } catch (Exception e) {
             if (e instanceof TimeoutException || e.getCause() instanceof TimeoutException) {
-                logger.error("Timeout downloading from {}", currentUrl);
+                logger.error("Timeout downloading from {}", safe(currentUrl));
                 throw new FileDownloadException("Download timeout after " + timeout.toSeconds() + "s", e);
             }
-            logger.error("Failed to download from {} (requested {}): {}", currentUrl, originalUrl, e.getMessage());
+            // WebClient words its failure around the url it called, query (signature) included.
+            String reason = ReportedParams.scrubUrl(ReportedParams.scrubUrl(e.getMessage(), currentUrl), originalUrl);
+            logger.error("Failed to download from {} (requested {}): {}", safe(currentUrl), safe(originalUrl), reason);
             throw new FileDownloadException(
-                "Download failed for " + currentUrl + ": " + e.getMessage(), e);
+                "Download failed for " + safe(currentUrl) + ": " + reason, e);
         }
     }
 
@@ -224,15 +227,15 @@ public class WebClientFileDownloader implements FileDownloader {
         if (location == null || location.isBlank()) {
             throw new FileDownloadException(
                 "Download failed with status " + redirect.status()
-                    + ": redirect without a Location header, from " + currentUrl,
+                    + ": redirect without a Location header, from " + safe(currentUrl),
                 redirect.status());
         }
         try {
             return URI.create(currentUrl).resolve(encodeIllegalCharacters(location.trim())).toString();
         } catch (IllegalArgumentException e) {
             throw new FileDownloadException(
-                "Cannot follow redirect from " + currentUrl + ": malformed Location "
-                    + truncate(location, 200),
+                "Cannot follow redirect from " + safe(currentUrl) + ": malformed Location "
+                    + truncate(safe(location), 200),
                 redirect.status(), e);
         }
     }
@@ -289,7 +292,7 @@ public class WebClientFileDownloader implements FileDownloader {
             // query of a presigned URL, to a plaintext connection. Browsers allow it; a
             // server-side fetcher has no reason to.
             throw new UrlNotAllowedException(
-                "Refused to follow redirect from " + from + " to " + target
+                "Refused to follow redirect from " + safe(from) + " to " + safe(target)
                     + ": it downgrades https to http");
         }
         try {
@@ -300,17 +303,20 @@ public class WebClientFileDownloader implements FileDownloader {
             // process under load, not the URL, and the same URL will very likely pass a
             // moment later. It must stay an ordinary FileDownloadException, because that
             // is what tells an agent to retry rather than rewrite a URL that was fine.
-            throw new FileDownloadException("Could not check " + target + ": " + e.getMessage(), e);
+            throw new FileDownloadException("Could not check " + safe(target) + ": "
+                    + ReportedParams.scrubUrl(e.getMessage(), target), e);
         } catch (RuntimeException e) {
             // RuntimeException, not just IllegalArgumentException: the validator resolves
             // DNS on a shared executor and can surface other unchecked failures. Every one
             // of them means "this URL was not cleared", and download() owes its callers a
             // FileDownloadException rather than whatever the resolver happened to throw.
             if (from == null) {
-                throw new UrlNotAllowedException("Refused to download " + target + ": " + e.getMessage());
+                throw new UrlNotAllowedException("Refused to download " + safe(target) + ": "
+                        + ReportedParams.scrubUrl(e.getMessage(), target));
             }
             throw new UrlNotAllowedException(
-                "Refused to follow redirect from " + from + " to " + target + ": " + e.getMessage());
+                "Refused to follow redirect from " + safe(from) + " to " + safe(target) + ": "
+                        + ReportedParams.scrubUrl(e.getMessage(), target));
         }
     }
 
@@ -342,5 +348,14 @@ public class WebClientFileDownloader implements FileDownloader {
         boolean isRedirect() {
             return body == null;
         }
+    }
+
+    /**
+     * A url as a message or log line may show it: credential query parameters (a presigned
+     * url's signature, {@code ?token=}, {@code ?key=}) withheld. These messages are logged and
+     * returned to the caller as the step's or tool's error.
+     */
+    private static String safe(String url) {
+        return url == null ? null : ReportedParams.maskUrlSecrets(url);
     }
 }

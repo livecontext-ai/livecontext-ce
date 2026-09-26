@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { cn } from "@/lib/utils";
 import type { LlmProviderStatus, LlmProviderDefinition } from "@/lib/api/orchestrator/types";
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 interface ProviderCardProps {
   definition: LlmProviderDefinition;
@@ -64,7 +65,7 @@ export default function ProviderCard({ definition, status, onSave, onDelete, t }
       <div className="flex items-start justify-between mb-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-theme-tertiary rounded-lg flex items-center justify-center">
-            <img
+            <ServiceLogo
               src={`/icons/services/${definition.providerName}.svg`}
               alt={definition.displayName}
               className="w-6 h-6"

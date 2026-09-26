@@ -80,10 +80,6 @@ vi.mock('@/components/marketplace/ShowcasePreview', () => ({
   ShowcasePreview: () => <div data-testid="showcase-preview" />,
 }));
 
-vi.mock('@/app/workflows/builder/components/inspector/forms/shared/FieldInfoTooltip', () => ({
-  FieldInfoTooltip: () => null,
-}));
-
 vi.mock('@/components/LoadingSpinner', () => ({
   default: () => <div data-testid="loading-spinner" />,
 }));

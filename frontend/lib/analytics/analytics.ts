@@ -45,7 +45,9 @@ export function isAnalyticsConfigured(): boolean {
   return Boolean(POSTHOG_KEY);
 }
 
-/** Props attached to every captured event. */
+/** Props attached to every captured event. Their keys are RESERVED: {@link track}
+ * applies them after the caller's props, so an event cannot overwrite them (a caller
+ * that needs "where was this started from" sends `entry_point`, never `surface`). */
 function commonProps(): AnalyticsProps {
   return { app_edition: EDITION, surface: 'frontend', organization_id: currentOrgId };
 }
@@ -224,7 +226,9 @@ export function track(event: AnalyticsEvent, props: AnalyticsProps = {}): boolea
   const ph = client();
   if (!initialized || !ph) return false;
   try {
-    ph.capture(event, { ...commonProps(), ...props });
+    // Common props LAST: `surface`, `app_edition` and `organization_id` are reserved
+    // and must read the same on every event, whatever a caller passes.
+    ph.capture(event, { ...props, ...commonProps() });
     return true;
   } catch {
     return false;

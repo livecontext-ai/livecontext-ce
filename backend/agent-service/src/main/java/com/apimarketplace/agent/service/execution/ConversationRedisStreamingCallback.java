@@ -456,8 +456,9 @@ public class ConversationRedisStreamingCallback {
             event.put("timestamp", Instant.now().toString());
             publish(event);
 
-            // Finalize stream in conversation-service (marks as ERROR for snapshot)
-            finalizeStreamInConversationService("ERROR");
+            // Finalize stream in conversation-service (marks as ERROR for snapshot), with the
+            // reason, so the stored stream error names the real cause.
+            finalizeStreamAsErrorInConversationService(error);
 
             // Terminal path: stream no longer needs a shutdown handle nor a liveness heartbeat
             activeStreamRegistry.unregister(streamId);
@@ -846,6 +847,14 @@ public class ConversationRedisStreamingCallback {
         private void finalizeStreamInConversationService(String terminalState) {
             try {
                 conversationClient.finalizeStream(streamId, terminalState);
+            } catch (Exception e) {
+                log.warn("[CONV_STREAM] Failed to finalize stream {}: {}", streamId, e.getMessage());
+            }
+        }
+
+        private void finalizeStreamAsErrorInConversationService(String errorMessage) {
+            try {
+                conversationClient.finalizeStream(streamId, "ERROR", errorMessage);
             } catch (Exception e) {
                 log.warn("[CONV_STREAM] Failed to finalize stream {}: {}", streamId, e.getMessage());
             }

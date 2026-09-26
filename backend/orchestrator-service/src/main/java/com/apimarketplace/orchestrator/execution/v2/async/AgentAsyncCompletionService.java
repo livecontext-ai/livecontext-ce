@@ -10,6 +10,7 @@ import com.apimarketplace.orchestrator.execution.v2.nodes.ExecutionNode;
 import com.apimarketplace.orchestrator.execution.v2.nodes.NodeExecutionResult;
 import com.apimarketplace.orchestrator.execution.v2.services.NodeSearchService;
 import com.apimarketplace.orchestrator.execution.v2.services.SignalResumeService;
+import com.apimarketplace.orchestrator.services.agent.GuardrailRuleEvaluator;
 import com.apimarketplace.orchestrator.execution.v2.services.V2ExecutionEventService;
 import com.apimarketplace.orchestrator.execution.v2.services.V2StepByStepContextManager;
 import com.apimarketplace.orchestrator.execution.v2.services.V2StepByStepService;
@@ -1118,8 +1119,10 @@ public class AgentAsyncCompletionService {
         // failure / terminal / exception paths (which never reach this method) are covered; a second
         // clear here is an idempotent Redis DELETE. performDeferredReset is itself idempotent (no-ops
         // once the run is WAITING_TRIGGER), so a cross-replica double-close is safe too.
+        // Redis entry only: this delivery is still running here (the epoch close below), so the
+        // local count the shutdown drain waits on is released by the outer finally, not here.
         if (inFlightStore != null && correlationId != null) {
-            inFlightStore.clear(correlationId);
+            inFlightStore.deleteStagedEntry(correlationId);
         }
         if (registry.hasPendingFor(runId, dagTriggerId, epoch)) {
             logger.debug("[AgentAsyncCompletion] Deferred reset not yet - async agents still in flight: runId={}, triggerId={}, epoch={}",
@@ -1302,6 +1305,32 @@ public class AgentAsyncCompletionService {
     }
 
     /**
+     * Folds the deterministic guardrail verdicts decided before the enqueue into the worker's
+     * result, with the same rule {@code AgentNode} applies inline
+     * ({@link GuardrailRuleEvaluator#merge}): the model judged only the remaining rules.
+     */
+    @SuppressWarnings("unchecked")
+    static void mergeGuardrailPrecomputed(Map<String, Object> output, Map<?, ?> precomputed) {
+        GuardrailRuleEvaluator.Outcome outcome =
+            GuardrailRuleEvaluator.Outcome.fromMap((Map<String, Object>) precomputed);
+        Object passed = output.get("passed");
+        List<String> violations = output.get("violations") instanceof List<?> list
+            ? list.stream().map(String::valueOf).toList() : List.of();
+        Map<String, Object> details = output.get("details") instanceof Map<?, ?> m
+            ? (Map<String, Object>) m : Map.of();
+        Object sanitized = output.get("sanitized");
+        GuardrailRuleEvaluator.Merged merged = GuardrailRuleEvaluator.merge(outcome,
+            passed instanceof Boolean b ? b : Boolean.valueOf(violations.isEmpty()),
+            violations, details, sanitized instanceof String s ? s : null);
+        output.put("passed", merged.passed());
+        output.put("violations", merged.violations());
+        output.put("details", merged.details());
+        output.put("sanitized", merged.sanitized());
+        // The worker's summary counted only the model's rules.
+        output.remove("response");
+    }
+
+    /**
      * Build a {@link StepExecutionResult} from the worker's payload, preserving error
      * details on failure (mirrors {@code NodeCompletionService.convertToStepResult} +
      * the error-meta enrichment in {@code emitNodeComplete}).
@@ -1330,14 +1359,26 @@ public class AgentAsyncCompletionService {
             ? new HashMap<>(result.result())
             : new HashMap<>();
 
+        // The guardrail rules decided before the enqueue (keywords, regex, length, PII
+        // patterns, custom expression, competitor names) travel in the snapshot under a
+        // reserved key: merged with the model's verdict here, and never shown as a parameter.
+        Map<String, Object> snapshot = pending.resolvedInputData();
+        if (snapshot != null && snapshot.containsKey(GuardrailRuleEvaluator.PRECOMPUTED_KEY)) {
+            snapshot = new java.util.LinkedHashMap<>(snapshot);
+            Object precomputed = snapshot.remove(GuardrailRuleEvaluator.PRECOMPUTED_KEY);
+            if (result.success() && precomputed instanceof Map<?, ?> map) {
+                mergeGuardrailPrecomputed(output, map);
+            }
+        }
+
         injectAgentMetadata(output, execution, pending);
 
         // Re-inject the resolved input that was snapshotted before the async yield.
         // The worker result only contains the agent output (selected_category, passed,
         // etc.) - without this, StepDataPersistenceService.extractInputData() finds
         // nothing and the inspector "Resolved parameters" panel stays empty.
-        if (pending.resolvedInputData() != null && !pending.resolvedInputData().isEmpty()) {
-            output.put("resolved_params", pending.resolvedInputData());
+        if (snapshot != null && !snapshot.isEmpty()) {
+            output.put("resolved_params", snapshot);
         }
 
         if (result.success()) {
@@ -2257,6 +2298,7 @@ public class AgentAsyncCompletionService {
             if (keyRoute instanceof String kr && !kr.isBlank()) {
                 req.setKeyRoute(kr);
             }
+            com.apimarketplace.orchestrator.execution.v2.nodes.AgentNode.stampModelReplacement(req, metrics);
             Object loopDetected = metrics.get("loopDetected");
             req.setLoopDetected(Boolean.TRUE.equals(loopDetected));
             Object loopType = metrics.get("loopType");

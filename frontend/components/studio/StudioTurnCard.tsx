@@ -142,11 +142,7 @@ export function StudioTurnCard({
 
         {result?.success && (
           fileId ? (
-            // `studio-asset-frame` is inert on the application's own look and draws a hairline on
-            // the studio one, where the ground is a wall rather than paper: without it a
-            // white-background generation has no edge against a light wall, and a dark one none
-            // against the darkroom. See the block in globals.css.
-            <div className="studio-asset-frame h-[46vh] overflow-hidden rounded-xl">
+            <div className="h-[46vh] overflow-hidden rounded-xl">
               <FileDetailView
                 entryId={fileId}
                 s3Key={file?.path ? String(file.path) : undefined}

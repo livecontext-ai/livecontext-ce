@@ -8,8 +8,10 @@ import com.apimarketplace.orchestrator.domain.execution.ApprovalChannelDeliveryE
 import com.apimarketplace.orchestrator.domain.execution.ApprovalChannelDeliveryEntity.DeliveryStatus;
 import com.apimarketplace.orchestrator.domain.execution.SignalResolution;
 import com.apimarketplace.orchestrator.domain.execution.SignalWaitEntity;
+import com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter;
 import com.apimarketplace.orchestrator.services.approvalchannel.ApprovalChannelNotifier;
 import com.apimarketplace.orchestrator.services.approvalchannel.ApprovalDelegationConfig;
+import com.apimarketplace.orchestrator.services.approvalchannel.ConnectorApprovalNotifier;
 import com.apimarketplace.orchestrator.services.interfaces.ExecutionResult;
 import com.apimarketplace.orchestrator.services.interfaces.ToolsGateway;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -18,6 +20,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.security.SecureRandom;
@@ -85,13 +88,20 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
     private final com.apimarketplace.orchestrator.repository.SignalWaitRepository signalWaitRepository;
     private final ObjectMapper objectMapper;
     private final MeterRegistry meterRegistry;
+    private final ConnectorApprovalNotifier destinations;
+
+    /** Product analytics; optional so a unit test can build the notifier without it. */
+    @Autowired(required = false)
+    private EngagementAnalyticsEmitter analytics;
 
     public TelegramApprovalNotifier(
             ObjectProvider<ToolsGateway> toolsGatewayProvider,
             com.apimarketplace.orchestrator.repository.ApprovalChannelDeliveryRepository deliveryRepository,
             com.apimarketplace.orchestrator.repository.SignalWaitRepository signalWaitRepository,
             ObjectMapper objectMapper,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            ConnectorApprovalNotifier destinations) {
+        this.destinations = destinations;
         this.toolsGatewayProvider = toolsGatewayProvider;
         this.deliveryRepository = deliveryRepository;
         this.signalWaitRepository = signalWaitRepository;
@@ -107,14 +117,31 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
     @Override
     public void notifyPending(SignalWaitEntity signal, ApprovalDelegationConfig config,
                               WorkflowRunEntity run, String workflowName) {
+        boolean reported = false;
         try {
+            // No chat on the node: the workspace's connected Telegram destination, as for every other
+            // provider. Anything unresolved keeps the node's own values, and the missing chat is then
+            // reported on the delivery row below.
+            Long credentialId = config.credentialId();
+            String chatId = config.chatId();
+            List<String> allowed = config.allowedUserIds();
+            ConnectorApprovalNotifier.Destination connected =
+                    destinations.destinationFor(CHANNEL_ID, config, run.getOrgId());
+            if (connected != null && connected.problem() == null) {
+                if (chatId == null || chatId.isBlank()) {
+                    credentialId = connected.credentialId();
+                }
+                chatId = connected.chatId();
+                allowed = connected.allowedUserIds();
+            }
+            String conflict = connected != null && connected.allowListConflict() ? connected.problem() : null;
             String token = generateToken();
             int inserted = deliveryRepository.insertPendingIfAbsent(
                     signal.getId(), CHANNEL_ID, TokenAtRest.encrypt(token), TokenAtRest.hash(token),
                     run.getTenantId(), run.getOrgId(), signal.getRunId(), signal.getNodeId(),
                     signal.getItemId() != null ? signal.getItemId() : "0", signal.getEpoch(),
-                    config.credentialId(), config.chatId(),
-                    toJsonOrNull(config.allowedUserIds()), Instant.now());
+                    credentialId, chatId,
+                    toJsonOrNull(allowed), Instant.now());
             if (inserted == 0) {
                 // Replay/replica race: another dispatch already owns this delivery.
                 return;
@@ -124,19 +151,27 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
                 return;
             }
             ApprovalChannelDeliveryEntity delivery = deliveryOpt.get();
+            if (conflict != null) {
+                fail(delivery, conflict);
+                reported = trackDelivered(run, EngagementAnalyticsEmitter.RequestStatus.FAILED);
+                return;
+            }
 
             // Only chatId is truly required. credentialId is optional: when absent the
             // catalog call carries NO credential markers and the catalog applies its
             // implicit fallback (the tenant's own telegram credential), exactly like an
             // mcp:telegram step with no explicit credential selected. This is the common
             // agent-built shape: the builder LLM rarely knows the numeric credential id.
-            if (config.chatId() == null || config.chatId().isBlank()) {
-                fail(delivery, "Delegation misconfigured: missing chatId");
+            if (chatId == null || chatId.isBlank()) {
+                fail(delivery, "No Telegram chat: the approval node gives no chatId and this workspace has "
+                        + "no connected Telegram destination.");
+                reported = trackDelivered(run, EngagementAnalyticsEmitter.RequestStatus.NO_CHANNEL);
                 return;
             }
             ToolsGateway gateway = toolsGatewayProvider.getIfAvailable();
             if (gateway == null) {
                 fail(delivery, "Catalog tools gateway unavailable in this deployment");
+                reported = trackDelivered(run, EngagementAnalyticsEmitter.RequestStatus.FAILED);
                 return;
             }
 
@@ -157,7 +192,7 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
             // bytes) or a String HTTP URL / file_id passed through verbatim.
             boolean isPhoto = config.image() != null;
             Map<String, Object> params = new LinkedHashMap<>();
-            params.put("chat_id", config.chatId());
+            params.put("chat_id", chatId);
             if (isPhoto) {
                 params.put("photo", config.image());
                 // Reserve verdict room: the resolution edit appends "\n\n<verdict>"
@@ -171,16 +206,23 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
 
             ExecutionResult result = gateway.executeTool(
                     isPhoto ? TOOL_SEND_PHOTO : TOOL_SEND_MESSAGE, params,
-                    run.getTenantId(), userCredential(config.credentialId()));
+                    run.getTenantId(), userCredential(credentialId));
 
             if (result.isSuccess()) {
                 delivery.setStatus(DeliveryStatus.SENT);
                 delivery.setMessageText(text);
                 delivery.setMessageId(extractMessageId(result));
+                // A chat given as "@channelname" is answered from its numeric id: store that one, or
+                // every press on this message would be refused as coming from another chat.
+                String sentTo = extractChatId(result);
+                if (sentTo != null) {
+                    delivery.setChatId(sentTo);
+                }
                 delivery.setSentAt(Instant.now());
                 deliveryRepository.save(delivery);
+                reported = trackDelivered(run, EngagementAnalyticsEmitter.RequestStatus.SENT);
                 logger.info("[approval-telegram] sent approval message: signal={}, chat={}, messageId={}",
-                        signal.getId(), config.chatId(), delivery.getMessageId());
+                        signal.getId(), chatId, delivery.getMessageId());
                 // Close the send/resolve race: if the signal was decided (or cancelled)
                 // while the send was in flight, the SignalResolvedEvent fan-out has
                 // already run and missed this delivery (it only edits SENT rows). Re-read
@@ -196,12 +238,19 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
                 fail(delivery, result.getErrorMessage() != null
                         ? result.getErrorMessage()
                         : isPhoto ? "Telegram send_photo failed" : "Telegram send_message failed");
+                reported = trackDelivered(run, EngagementAnalyticsEmitter.RequestStatus.FAILED);
             }
         } catch (Exception ex) {
             meterRegistry.counter("approval.delegation.errors",
                     "type", ex.getClass().getSimpleName()).increment();
             logger.warn("[approval-telegram] swallowed send for signal {}: {}",
                     signal.getId(), ex.getMessage());
+            if (!reported) {
+                // A send that THROWS instead of returning a failed result is a failed
+                // delivery too; a row already reported (e.g. SENT, then a post-send read
+                // throwing) is not counted twice.
+                trackDelivered(run, EngagementAnalyticsEmitter.RequestStatus.FAILED);
+            }
         }
     }
 
@@ -330,6 +379,15 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
     // HELPERS
     // ========================================================================
 
+    /** distinct_id = the run's owner, the person the approval waits on. */
+    private boolean trackDelivered(WorkflowRunEntity run, EngagementAnalyticsEmitter.RequestStatus status) {
+        if (analytics != null) {
+            analytics.channelRequestDelivered(run.getTenantId(), run.getOrgId(),
+                    EngagementAnalyticsEmitter.RequestType.WORKFLOW_APPROVAL, CHANNEL_ID, status);
+        }
+        return true;
+    }
+
     private void fail(ApprovalChannelDeliveryEntity delivery, String error) {
         meterRegistry.counter("approval.delegation.errors", "type", "SendFailed").increment();
         logger.warn("[approval-telegram] delivery {} failed: {}", delivery.getId(), error);
@@ -396,6 +454,15 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
         byte[] bytes = new byte[16];
         RANDOM.nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    /** The chat Telegram actually sent to: { ok, result: { chat: { id } } }, or null. */
+    private static String extractChatId(ExecutionResult result) {
+        Object resultObj = result.output() != null ? result.output().get("result") : null;
+        if (resultObj instanceof Map<?, ?> map && map.get("chat") instanceof Map<?, ?> chat && chat.get("id") != null) {
+            return String.valueOf(chat.get("id"));
+        }
+        return null;
     }
 
     /** send_message AND send_photo projected output: { ok, result: { message_id, ... } }. */

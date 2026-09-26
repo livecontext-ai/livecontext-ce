@@ -129,6 +129,7 @@ class StepDataNativeRepositoryV264PostgresIT {
                 + "  skip_source_node VARCHAR(255),"
                 + "  normalized_key VARCHAR(255),"
                 + "  item_number INTEGER,"
+                + "  is_mocked BOOLEAN NOT NULL DEFAULT false,"
                 + "  CONSTRAINT idx_workflow_step_data_unique_v6 UNIQUE "
                 + "    (workflow_run_id, step_alias, trigger_id, iteration, item_index, epoch, spawn, status)"
                 + ")");

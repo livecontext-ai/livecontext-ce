@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.tools.file;
 
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.agent.domain.ToolParameter;
 import com.apimarketplace.agent.registry.AgentToolDefinition;
 import com.apimarketplace.agent.registry.ToolCategory;
@@ -156,7 +157,7 @@ public class FileToolsProvider implements ToolsProvider {
         }
 
         try {
-            log.info("Downloading file from URL: {}", url);
+            log.info("Downloading file from URL: {}", ReportedParams.maskUrlSecrets(url));
 
             // Download the file using injected downloader
             byte[] content = fileDownloader.download(url);
@@ -206,16 +207,20 @@ public class FileToolsProvider implements ToolsProvider {
             // Before FileDownloadException, which it extends. A refusal is not transient:
             // reporting it as EXECUTION_FAILED tells an agent to retry, and it would retry
             // the same refusal until it runs out of iterations.
-            log.warn("Refused to download from {}: {}", url, e.getMessage());
+            log.warn("Refused to download from {}: {}", ReportedParams.maskUrlSecrets(url), e.getMessage());
             return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, e.getMessage());
         } catch (FileDownloader.FileDownloadException e) {
-            log.error("Download failed from {}: {}", url, e.getMessage());
+            log.error("Download failed from {}: {}", ReportedParams.maskUrlSecrets(url), e.getMessage());
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to download file: " + e.getMessage());
         } catch (IllegalArgumentException e) {
-            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, "Invalid URL: " + url);
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                    "Invalid URL: " + ReportedParams.maskUrlSecrets(url));
         } catch (Exception e) {
-            log.error("Failed to download file from {}: {}", url, e.getMessage(), e);
-            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to download file: " + e.getMessage());
+            // Any client exception may word itself around the url; withhold its credentials.
+            String reason = ReportedParams.scrubUrl(e.getMessage(), url);
+            log.error("Failed to download file from {}: {} ({})", ReportedParams.maskUrlSecrets(url), reason,
+                    e.getClass().getName());
+            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to download file: " + reason);
         }
     }
 

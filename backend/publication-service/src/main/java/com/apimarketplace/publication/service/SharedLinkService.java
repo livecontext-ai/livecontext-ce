@@ -1,5 +1,6 @@
 package com.apimarketplace.publication.service;
 
+import com.apimarketplace.common.web.LogSafePath;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.apimarketplace.common.security.token.TokenAtRest;
 import com.apimarketplace.publication.security.PublicationTokenAtRestBackfill;
@@ -67,7 +68,7 @@ public class SharedLinkService {
             if (!sameScope) {
                 throw new IllegalArgumentException("Resource token already in use");
             }
-            logger.debug("Shared link already exists for resourceToken={}", resourceToken);
+            logger.debug("Shared link already exists for resourceToken={}", LogSafePath.tokenPreview(resourceToken));
             return existing.get();
         }
 
@@ -99,7 +100,7 @@ public class SharedLinkService {
             return saved;
         } catch (DataIntegrityViolationException e) {
             // Race condition: another thread created the link between our check and save
-            logger.debug("Concurrent registration for resourceToken={}, returning existing", resourceToken);
+            logger.debug("Concurrent registration for resourceToken={}, returning existing", LogSafePath.tokenPreview(resourceToken));
             return findActiveByResourceToken(resourceToken)
                     .filter(link -> ScopeGuard.isInStrictScope(
                             tenantId, organizationId,

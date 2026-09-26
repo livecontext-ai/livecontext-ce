@@ -30,6 +30,19 @@ public class KeycloakSamlIdentityProviderClient {
 
     private static final String SAML_USER_ATTRIBUTE_IDP_MAPPER = "saml-user-attribute-idp-mapper";
 
+    /**
+     * One Keycloak mapper reads ONE attribute name, and IdPs disagree on the name: ADFS and
+     * Entra ID send the xmlsoap claim URIs, Okta, Google Workspace, JumpCloud and most SaaS
+     * IdPs send plain names, and Shibboleth-style IdPs send the LDAP OIDs. Keycloak skips a
+     * mapper whose attribute is absent from the assertion, so declaring every common spelling
+     * is harmless and is what fills the profile whichever IdP the workspace connects. If an
+     * IdP sends two spellings of one field with DIFFERENT values, which one wins is Keycloak's
+     * mapper order, not this list's.
+     * Mappers are matched by NAME on every upsert, so the three original names are kept
+     * unchanged: a connection provisioned before this list grew gets them updated in place
+     * and the new ones added when it is next saved. Names are imported at the first login
+     * (syncMode IMPORT), so a user who already logged in keeps the profile they got then.
+     */
     private static final List<SamlAttributeMapperSpec> DEFAULT_ATTRIBUTE_MAPPERS = List.of(
             new SamlAttributeMapperSpec(
                     "livecontext-email",
@@ -42,7 +55,17 @@ public class KeycloakSamlIdentityProviderClient {
             new SamlAttributeMapperSpec(
                     "livecontext-last-name",
                     "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname",
-                    "lastName")
+                    "lastName"),
+            new SamlAttributeMapperSpec("livecontext-email-plain", "email", "email"),
+            new SamlAttributeMapperSpec("livecontext-email-mail", "mail", "email"),
+            new SamlAttributeMapperSpec("livecontext-email-oid", "urn:oid:0.9.2342.19200300.100.1.3", "email"),
+            new SamlAttributeMapperSpec("livecontext-first-name-plain", "firstName", "firstName"),
+            new SamlAttributeMapperSpec("livecontext-first-name-given", "givenName", "firstName"),
+            new SamlAttributeMapperSpec("livecontext-first-name-oid", "urn:oid:2.5.4.42", "firstName"),
+            new SamlAttributeMapperSpec("livecontext-last-name-plain", "lastName", "lastName"),
+            new SamlAttributeMapperSpec("livecontext-last-name-sn", "sn", "lastName"),
+            new SamlAttributeMapperSpec("livecontext-last-name-surname", "surname", "lastName"),
+            new SamlAttributeMapperSpec("livecontext-last-name-oid", "urn:oid:2.5.4.4", "lastName")
     );
 
     private final RestTemplate restTemplate;

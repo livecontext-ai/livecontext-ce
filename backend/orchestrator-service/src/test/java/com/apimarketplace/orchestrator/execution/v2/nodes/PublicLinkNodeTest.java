@@ -65,7 +65,7 @@ class PublicLinkNodeTest {
         fileRef.put("name", "clip.mp4");
         fileRef.put("mimeType", "video/mp4");
         when(templateAdapter.resolveTemplates(anyMap(), any()))
-            .thenReturn(Map.of("__expr__", fileRef));
+            .thenAnswer(TemplateResolutionStubs.every(fileRef));
     }
 
     @Test
@@ -101,7 +101,7 @@ class PublicLinkNodeTest {
     @DisplayName("expression resolving to a plain string (not a FileRef) -> FAILS with actionable message")
     void nonFileRefResolutionFails() {
         when(templateAdapter.resolveTemplates(anyMap(), any()))
-            .thenReturn(Map.of("__expr__", "https://example.com/not-a-fileref.mp4"));
+            .thenAnswer(TemplateResolutionStubs.every("https://example.com/not-a-fileref.mp4"));
         NodeExecutionResult result = node("{{mcp:x.output.url}}", 60, realService).execute(context);
 
         assertFalse(result.isSuccess());
@@ -171,7 +171,7 @@ class PublicLinkNodeTest {
         assetCell.put("mimeType", "video/mp4");
         assetCell.put("size", 24438642);
         when(templateAdapter.resolveTemplates(anyMap(), any()))
-            .thenReturn(Map.of("__expr__", assetCell));
+            .thenAnswer(TemplateResolutionStubs.every(assetCell));
 
         NodeExecutionResult result = node("{{table:queue.output.items[0].video}}", 60, realService).execute(context);
 
@@ -193,7 +193,7 @@ class PublicLinkNodeTest {
         assetCell.put("url", "/api/proxy/files/by-id/c7963596-ab99-46af-9cb5-fccb64461702/raw");
         assetCell.put("name", "clip.mp4");
         when(templateAdapter.resolveTemplates(anyMap(), any()))
-            .thenReturn(Map.of("__expr__", assetCell));
+            .thenAnswer(TemplateResolutionStubs.every(assetCell));
 
         NodeExecutionResult result = node("{{table:queue.output.items[0].video}}", 60, realService).execute(context);
 
@@ -216,7 +216,7 @@ class PublicLinkNodeTest {
         malformed.put("_type", "file");
         malformed.put("path", 123);
         when(templateAdapter.resolveTemplates(anyMap(), any()))
-            .thenReturn(Map.of("__expr__", malformed));
+            .thenAnswer(TemplateResolutionStubs.every(malformed));
 
         NodeExecutionResult result = node("{{core:x.output.file}}", 60, realService).execute(context);
 
@@ -233,7 +233,7 @@ class PublicLinkNodeTest {
         repo.put("name", "livecontext");
         repo.put("url", "https://api.github.com/repos/x/livecontext");
         when(templateAdapter.resolveTemplates(anyMap(), any()))
-            .thenReturn(Map.of("__expr__", repo));
+            .thenAnswer(TemplateResolutionStubs.every(repo));
 
         NodeExecutionResult result = node("{{mcp:gh.output.repo}}", 60, realService).execute(context);
 
@@ -275,5 +275,44 @@ class PublicLinkNodeTest {
         assertFalse(params.containsKey("file_expression"));
         assertEquals(30, params.get("ttl_minutes"));
         assertEquals("inline", params.get("disposition"));
+    }
+
+    @Test
+    @DisplayName("reports what `file` RESOLVED to as `fileResolved`; the column used to show only the {{...}} expression, which read as unresolved")
+    @SuppressWarnings("unchecked")
+    void reportsResolvedFileBesideTheExpression() {
+        stubResolvedFile(OWN_KEY);
+
+        NodeExecutionResult result = node("{{core:dl.output.file}}", 60, realService).execute(context);
+
+        assertTrue(result.isSuccess());
+        Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+        assertEquals("{{core:dl.output.file}}", params.get("file"));
+        assertEquals("clip.mp4 (" + OWN_KEY + ")", params.get("fileResolved"));
+    }
+
+    @Test
+    @DisplayName("a file reference that resolves to nothing says so in `fileResolved`, instead of leaving the raw expression as the only trace")
+    @SuppressWarnings("unchecked")
+    void reportsFileResolvedToNothing() {
+        NodeExecutionResult result = node("{{core:missing.output.file}}", 30, realService).execute(context);
+
+        assertFalse(result.isSuccess());
+        Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+        assertEquals("(resolved to nothing)", params.get("fileResolved"));
+    }
+
+    @Test
+    @DisplayName("a {{$vars.f}} file expression publishes the file but its description is withheld in Params")
+    @SuppressWarnings("unchecked")
+    void workspaceVariableFileIsWithheld() {
+        stubResolvedFile(OWN_KEY);
+
+        NodeExecutionResult result = node("{{$vars.f}}", 60, realService).execute(context);
+
+        assertTrue(result.isSuccess(), "the node still used the file");
+        Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+        assertEquals(com.apimarketplace.orchestrator.services.template.ReportedParams.WITHHELD_WORKSPACE_VARIABLE,
+            params.get("fileResolved"));
     }
 }

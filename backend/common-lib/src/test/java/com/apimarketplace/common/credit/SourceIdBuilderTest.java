@@ -238,4 +238,31 @@ class SourceIdBuilderTest {
         assertThatThrownBy(() -> SourceIdBuilder.markupReserveInit("RUN", null, 1L))
                 .isInstanceOf(NullPointerException.class);
     }
+
+    @Test
+    @DisplayName("marketplacePurchase keys the PURCHASE (buyer organization + publication), never the publication alone")
+    void marketplacePurchaseKeyShape() {
+        String key = SourceIdBuilder.marketplacePurchase("org-1", "pub-1");
+        assertThat(key).isEqualTo("marketplace-purchase:org-1:pub-1");
+        // Two buyers of one publication must never share a ledger key (idx_cl_source_id_unique is
+        // global), and the same purchase must always rebuild the same key (retry = replay).
+        assertThat(SourceIdBuilder.marketplacePurchase("org-2", "pub-1")).isNotEqualTo(key);
+        assertThat(SourceIdBuilder.marketplacePurchase("org-1", "pub-1")).isEqualTo(key);
+        assertThat(SourceIdBuilder.isMarketplacePurchase(key)).isTrue();
+        assertThat(SourceIdBuilder.isMarketplacePurchase("pub-1")).isFalse();
+        assertThat(SourceIdBuilder.isMarketplacePurchase(null)).isFalse();
+    }
+
+    @Test
+    @DisplayName("marketplacePurchase refuses a missing buyer organization or publication instead of building a shared key")
+    void marketplacePurchaseRequiresBothParts() {
+        assertThatThrownBy(() -> SourceIdBuilder.marketplacePurchase(null, "pub-1"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SourceIdBuilder.marketplacePurchase("  ", "pub-1"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SourceIdBuilder.marketplacePurchase("org-1", null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SourceIdBuilder.marketplacePurchase("org-1", ""))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

@@ -103,6 +103,30 @@ public class ShedLockConfig {
     }
 
     /**
+     * Notification delivery (email through auth-service, one-way chat notices). Outbound
+     * calls that can take seconds (an SMTP send up to ~40 s) must not run on the thread that
+     * just committed a run's state, so on saturation a delivery is DROPPED, counted and logged,
+     * never run inline: unlike an approval, the notification it carries is already in the bell,
+     * and the incident rules keep a burst small in the first place.
+     */
+    @Bean("notificationDeliveryExecutor")
+    public TaskExecutor notificationDeliveryExecutor(io.micrometer.core.instrument.MeterRegistry meterRegistry) {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(500);
+        executor.setThreadNamePrefix("notification-delivery-");
+        executor.setRejectedExecutionHandler((task, pool) -> {
+            meterRegistry.counter("notification.delivery.dropped").increment();
+            org.slf4j.LoggerFactory.getLogger("notification-delivery")
+                    .warn("[notification-delivery] pool saturated ({} queued): a delivery was dropped, "
+                            + "the notification stays in the bell", pool.getQueue().size());
+        });
+        executor.initialize();
+        return executor;
+    }
+
+    /**
      * Dedicated small pool for delegated-approval channel deliveries (Telegram send,
      * post-resolution message edits). These are outbound HTTP calls through the catalog
      * and MUST NOT run on the signal registration/resume threads: a slow channel API

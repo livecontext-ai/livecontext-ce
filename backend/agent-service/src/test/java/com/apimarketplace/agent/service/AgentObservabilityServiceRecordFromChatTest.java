@@ -870,6 +870,24 @@ class AgentObservabilityServiceRecordFromChatTest {
         }
 
         @Test
+        @DisplayName("regression: two turns of one conversation whose rows fail to save are billed under two DIFFERENT keys, never the conversation id")
+        void twoTurnsOfOneConversationGetDistinctKeysWhenTheRowFails() {
+            // The old fallback was the conversation id, which repeats on every turn: the second
+            // turn was answered by auth as "already paid" and never billed.
+            when(executionRepository.save(any())).thenThrow(new RuntimeException("DB down"));
+
+            service.recordFromChat(TENANT_ID, "org-test", buildFullRequest());
+            service.recordFromChat(TENANT_ID, "org-test", buildFullRequest());
+
+            ArgumentCaptor<String> sourceId = ArgumentCaptor.forClass(String.class);
+            verify(creditClient, times(2)).consumeCredits(
+                    eq(TENANT_ID), eq("CHAT_CONVERSATION"), sourceId.capture(), any(), any(), anyInt(), anyInt(),
+                    isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
+            assertThat(sourceId.getAllValues()).doesNotContain(CONV_ID);
+            assertThat(sourceId.getAllValues().get(0)).isNotEqualTo(sourceId.getAllValues().get(1));
+        }
+
+        @Test
         @DisplayName("BILLING: a refused own-key chat turn hands its route to the dead-letter row, so the replay bills the flat fee and not the token rate")
         void rejectedOwnKeyChatTurnKeepsItsRouteInTheDeadLetter() {
             ChatAgentObservabilityRequest req = buildFullRequest().withKeyRoute("OWN_KEY");

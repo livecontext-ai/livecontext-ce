@@ -2,15 +2,15 @@
 
 import * as React from 'react';
 import type { Node } from 'reactflow';
-import { Plus, Trash2, Info } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
 import { useTranslations } from 'next-intl';
 import type { BuilderNodeData } from '../../../types';
 import type { Connection } from '../useInspectorConnections';
 import { toSnakeCase } from '../../../utils/typeNormalizer';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 interface AggregateField {
   id: string;
@@ -107,27 +107,17 @@ export function AggregateParametersForm({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('aggregate.fieldsTitle')}</span>
-          <Popover>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-              >
-                <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-              <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                <p className="font-semibold text-slate-900 dark:text-slate-100">{t('aggregate.title')}</p>
-                <p>{t('aggregate.description')}</p>
-                <ul className="list-disc list-inside space-y-1 text-xs">
-                  <li>{t('aggregate.hint1')}</li>
-                  <li>{t('aggregate.hint2')}</li>
-                  <li>{t('aggregate.hint3')}</li>
-                </ul>
-              </div>
-            </PopoverContent>
-          </Popover>
+          <InfoPopover label={t('aggregate.fieldsTitle')} size="sm" side="right" align="start">
+            <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+              <p className="font-semibold text-slate-900 dark:text-slate-100">{t('aggregate.title')}</p>
+              <p>{t('aggregate.description')}</p>
+              <ul className="list-disc list-inside space-y-1 text-xs">
+                <li>{t('aggregate.hint1')}</li>
+                <li>{t('aggregate.hint2')}</li>
+                <li>{t('aggregate.hint3')}</li>
+              </ul>
+            </div>
+          </InfoPopover>
         </div>
         {!isRunMode && (
           <Button

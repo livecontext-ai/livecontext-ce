@@ -63,9 +63,9 @@ describe('landing footer Models column', () => {
     // This assertion used to demand the DOCS page, for a stated reason: no public page
     // listed the models, so eight per-family URLs would have been eight soft 404s. That
     // reason expired when /models shipped, and the URLs are no longer soft: ?provider=
-    // is a real filtered view, so "Grok" lands on Grok instead of on 91 models the
+    // is a real filtered view, so "DeepSeek" lands on DeepSeek instead of on 91 models the
     // visitor then has to search through. modelsQuery.test.ts checks the other half,
-    // that all eight provider keys actually have rows.
+    // that every family's provider key actually has rows.
     expect(shellSrc).toContain('providerHref(model.provider)');
     expect(shellSrc).toContain("import { providerHref } from '@/app/models/_components/modelsQuery';");
   });

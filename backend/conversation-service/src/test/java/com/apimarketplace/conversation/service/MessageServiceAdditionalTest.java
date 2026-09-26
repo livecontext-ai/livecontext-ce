@@ -62,7 +62,7 @@ class MessageServiceAdditionalTest {
     @BeforeEach
     void setUp() {
         messageService = new MessageService(
-                conversationRepository, messageRepository, messageAttachmentRepository, messageMapper, eventBus, objectMapper, storageBreakdownService, null);
+                conversationRepository, messageRepository, messageAttachmentRepository, messageMapper, eventBus, objectMapper, storageBreakdownService, null, org.mockito.Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class));
     }
 
     private Conversation buildActiveConversation() {

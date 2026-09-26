@@ -66,7 +66,7 @@ class MessageServiceCompactionHookTest {
                 eventBus,
                 objectMapper,
                 storageBreakdownService,
-                compactionOrchestrator);
+                compactionOrchestrator, org.mockito.Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class));
 
         when(messageRepository.save(any(Message.class))).thenAnswer(inv -> {
             Message m = inv.getArgument(0);
@@ -174,6 +174,18 @@ class MessageServiceCompactionHookTest {
 
         // No exception should escape - the caller (agent/chat) must never see compaction errors
         messageService.addMessage(CONV, assistantDto());
+    }
+
+    @Test
+    @DisplayName("refusal lines written by persistAttemptAndError never dispatch compaction (no model call on a refused run)")
+    void refusalLines_neverDispatchCompaction() {
+        stubConversation(null, null, null);
+
+        messageService.persistAttemptAndError(CONV, "scheduled prompt", "[Error] Insufficient credits");
+
+        verify(messageRepository, org.mockito.Mockito.times(2)).save(any(Message.class));
+        verify(compactionOrchestrator, org.mockito.Mockito.never())
+                .afterTurnAsync(any(), any(), any(), any(), any(), any());
     }
 
     // ----- helpers -----

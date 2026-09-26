@@ -144,6 +144,40 @@ public class AgentObservabilityService {
     // ==========================================================================
 
     /**
+     * The {@code source_id} one agent/chat execution is billed under.
+     *
+     * <p>It must be unique per CHARGE, because auth-service answers a debit whose key already
+     * carries the same charge as "already paid". The execution id is: it is the PK of the
+     * observability row, either the dispatcher-minted {@code executionId} the request carries or a
+     * fresh UUID generated for the row. When that row fails to save, the old fallbacks were the
+     * workflow node id and the conversation id, and both REPEAT: every run of one workflow node,
+     * every turn of one conversation. The second run was then either refused by the unique index
+     * or, once auth learned to recognise retries, answered as paid and never billed.
+     *
+     * <p>The replacement, in order: the recorded execution id; else the dispatcher-minted
+     * {@code executionId} of the request (the same value the row would have had, so the key is
+     * identical whether or not the save succeeded, and identical across any re-send of the same
+     * execution); else a UUID minted here. That last one is fresh per call, which is exactly the
+     * contract of the success path for such a request (its row id is a fresh UUID per call too),
+     * and it stays stable for the only retries of THIS charge that exist: the key is computed once
+     * and reused by the consume call and by the dead-letter entry it may leave, which the auth-side
+     * replay job re-sends verbatim.
+     */
+    static String billingSourceId(UUID recordedExecutionId, String requestedExecutionId) {
+        if (recordedExecutionId != null) {
+            return recordedExecutionId.toString();
+        }
+        if (requestedExecutionId != null && !requestedExecutionId.isBlank()) {
+            try {
+                return UUID.fromString(requestedExecutionId.trim()).toString();
+            } catch (IllegalArgumentException malformed) {
+                // Same rule as the row: a malformed id is ignored, never used as a key.
+            }
+        }
+        return UUID.randomUUID().toString();
+    }
+
+    /**
      * Record full observability data from an AgentObservabilityRequest DTO.
      * This is the unified entry point for workflow agents, sub-agents, classify, and guardrail executions.
      * The orchestrator converts its internal types (Agent, ExecutionContext, etc.) to this DTO
@@ -164,7 +198,7 @@ public class AgentObservabilityService {
         // Consume credits regardless of observability success (sync to capture creditsUsed).
         // Always consume - even 0-token executions incur platform cost (LLM API call was made).
         String sourceType = resolveSourceType(request.getAgentType());
-        String sourceId = executionId != null ? executionId.toString() : request.getNodeId();
+        String sourceId = billingSourceId(executionId, request.getExecutionId());
         // Cascade reservation settle amount (§4.5 AGENT_BUDGET_HIERARCHY.md). Captured after
         // credit consumption so we pass the REAL cost to settleReservationChain. Defaults to
         // ZERO on credit consumption failure → settle refunds the full reservation so the
@@ -365,6 +399,21 @@ public class AgentObservabilityService {
     }
 
     /**
+     * Copies the outcome of {@link ModelReplacementResolver#substituteIfDisabled} onto an
+     * observability request. {@code outcome == null} means the resolution did not run (resolver
+     * not wired, or the run was refused before it): nothing is stamped, so the analytics prop
+     * stays absent rather than a guessed {@code false}.
+     */
+    public static void stampModelReplacement(AgentObservabilityRequest request,
+                                             java.util.Optional<ModelReplacementResolver.Substitution> outcome) {
+        if (request == null || outcome == null) {
+            return;
+        }
+        request.setModelReplaced(outcome.isPresent());
+        request.setReplacedModel(outcome.map(ModelReplacementResolver.Substitution::replacedModel).orElse(null));
+    }
+
+    /**
      * Builds the PII-free property map for the {@code agent_run_stopped} event.
      * Package-private + static so it can be unit-tested without constructing the
      * full service. Emits enums / counts / UUIDs only - never tenant_id (that is
@@ -401,6 +450,19 @@ public class AgentObservabilityService {
         props.put("duration_ms", request.getDurationMs());
         props.put("credits_consumed", creditsConsumed != null ? creditsConsumed.doubleValue() : 0.0);
         props.put("node_id", request.getNodeId());
+        // Whose key served the run (own_key / platform); an unpinned producer sends none.
+        String keyRoute = request.getKeyRoute();
+        if (keyRoute != null && !keyRoute.isBlank()) {
+            props.put("key_route", keyRoute.trim().toLowerCase(java.util.Locale.ROOT));
+        }
+        // A disabled model swapped for its replacement (V515). Unknown (null) = omitted,
+        // never reported as false.
+        if (request.getModelReplaced() != null) {
+            props.put("model_replaced", request.getModelReplaced());
+            if (Boolean.TRUE.equals(request.getModelReplaced()) && request.getReplacedModel() != null) {
+                props.put("replaced_model", request.getReplacedModel());
+            }
+        }
         props.put("organization_id", request.getOrganizationId());
         if (request.getWorkflowRunId() != null) props.put("workflow_run_id", request.getWorkflowRunId().toString());
         if (request.getWorkflowId() != null) props.put("workflow_id", request.getWorkflowId().toString());
@@ -1047,7 +1109,7 @@ public class AgentObservabilityService {
             prometheusMetrics.recordUnreportedUsage(request.provider(), request.model(), request.stopReason());
         }
         BigDecimal chatCreditsConsumed = BigDecimal.ZERO;
-        String chatSourceId = executionId != null ? executionId.toString() : request.conversationId();
+        String chatSourceId = billingSourceId(executionId, unified.getExecutionId());
         try {
             // Cache-aware billing - same forwarding as recordFromRequest above.
             Map<String, Object> creditResult = creditClient.consumeCredits(

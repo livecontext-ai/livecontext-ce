@@ -286,7 +286,8 @@ describe('scheduling an agent from an empty slot', () => {
 
     await waitFor(() => expect(screen.queryByText('save-agent')).toBeNull());
     expect(getAgenda.mock.calls.length).toBe(before);
-    expect(track).not.toHaveBeenCalled();
+    // The slot click itself is reported (agenda_slot_opened); no creation is.
+    expect(track).not.toHaveBeenCalledWith('agent_created', expect.anything());
   });
 
   it('ignores a save that carried no id, which is what an EDIT reports', async () => {
@@ -298,7 +299,8 @@ describe('scheduling an agent from an empty slot', () => {
     act(() => modalProps!.onAgentCreated(undefined));
 
     await waitFor(() => expect(screen.queryByText('save-agent')).toBeNull());
-    expect(track).not.toHaveBeenCalled();
+    // The slot click itself is reported (agenda_slot_opened); no creation is.
+    expect(track).not.toHaveBeenCalledWith('agent_created', expect.anything());
     expect(getAgenda.mock.calls.length).toBe(before);
   });
 

@@ -1,4 +1,5 @@
 import type { XYPosition, Connection } from 'reactflow';
+import type { ChatChannelId } from '@/lib/chatChannels';
 
 export type NodeStatus = 'pending' | 'ready' | 'running' | 'completed' | 'failed' | 'skipped' | 'awaiting_signal';
 export type DerivedNodeStatus = NodeStatus | 'partial_success';
@@ -108,18 +109,26 @@ export interface ApprovalOutput {
 
 /**
  * Optional external-channel delegation for a user approval node (plan `approval.delegation`).
- * v1 supports Telegram only: the pending approval is pushed to the chat as a message with
- * inline approve/reject buttons; a tap resolves the approval in addition to the in-app paths.
- * chatId, messageTemplate and image are template-capable ({{...}}); a blank messageTemplate
- * falls back to the resolved contextTemplate. A non-blank image (e.g. an interface node's
- * screenshot output, or an HTTP image URL) turns the message into a single photo with the
- * message text as caption and the same buttons. Empty allowedUserIds = anyone in the chat
+ * The pending approval is pushed to Telegram, Slack, Discord, WhatsApp or Teams as a message
+ * with approve/reject buttons (links on Teams); a press resolves the approval in addition to
+ * the in-app paths. credentialId and chatId are optional: blank = the account and destination
+ * the workspace connected on that service. chatId, messageTemplate and image are
+ * template-capable ({{...}}); a blank messageTemplate falls back to the resolved
+ * contextTemplate. A non-blank image (Telegram only: e.g. an interface node's screenshot
+ * output, or an HTTP image URL) turns the message into a single photo with the message text
+ * as caption and the same buttons. Empty allowedUserIds = anyone in the chat
  * can decide. approveLabel/rejectLabel are optional custom button texts (template-capable);
  * blank = the channel defaults ("✅ Approve" / "❌ Reject"). Only the button text changes;
  * the approve/reject outcome is unaffected.
  */
 export interface ApprovalDelegation {
-  channel?: 'telegram';
+  channel?: ChatChannelId;
+  /**
+   * A workspace destination picked like a credential: its linkId, or 'default' for the
+   * workspace default. When set it decides the service, the account and the chat, so
+   * credentialId/chatId are not used. Absent = the node names a service (and optionally a chat).
+   */
+  linkId?: string;
   credentialId?: number;
   chatId?: string;
   messageTemplate?: string;
@@ -166,7 +175,9 @@ export interface GuardrailRule {
   config?: {
     // For keyword_filter
     keywordsExpression?: string; // Expression for keywords (comma-separated or variable)
-    mode?: 'block' | 'allow'; // block these keywords or allow only these
+    // keyword_filter: block these keywords or allow only these. regex_pattern: require = the
+    // content must match (default), block = the content must not contain a match.
+    mode?: 'block' | 'allow' | 'require';
     // For regex_pattern
     pattern?: string;
     // For length_check
@@ -176,8 +187,10 @@ export interface GuardrailRule {
     piiTypes?: ('email' | 'phone' | 'ssn' | 'credit_card' | 'address')[];
     // For topic_restriction / competitor_mention
     topicsExpression?: string; // Expression for topics (comma-separated or variable)
-    // For custom
+    // For custom: boolean expression, #input is the content, true = valid
     expression?: string;
+    // A rule imported from the builder's {ruleId: description} form: judged by the model
+    description?: string;
   };
 }
 
@@ -319,7 +332,7 @@ export interface BuilderNodeData {
   approvalOutputs?: ApprovalOutput[]; // The approval outcome paths
   approvalTimeoutMs?: number; // Timeout duration in milliseconds
   approvalContextTemplate?: string; // Template (literal + {{...}}) resolved at pause time and shown to the approver
-  approvalDelegation?: ApprovalDelegation; // Optional external-channel delegation (v1: telegram); undefined = in-app only
+  approvalDelegation?: ApprovalDelegation; // Optional external-channel delegation (any chat channel); undefined = in-app only
   approvalContinuationMode?: ApprovalContinuationMode; // Split-context continuation; undefined = all_items (default)
   // Branch selection (set by streaming batch-update for decision/switch/approval nodes)
   selectedBranch?: string; // The selected port (e.g., "if", "else", "approved", "rejected")

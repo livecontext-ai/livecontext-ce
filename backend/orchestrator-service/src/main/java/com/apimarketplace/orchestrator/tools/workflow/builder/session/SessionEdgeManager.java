@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.tools.workflow.builder.session;
 
 import com.apimarketplace.orchestrator.utils.EdgeRefParser;
+import com.apimarketplace.orchestrator.utils.LabelNormalizer;
 
 import java.util.*;
 
@@ -174,7 +175,11 @@ public class SessionEdgeManager {
     }
 
     /**
-     * Find nodes with no incoming connections (orphans, except triggers).
+     * Find nodes with no incoming connections (orphans, except triggers and sticky notes).
+     *
+     * <p>A note is an annotation on the canvas: it is never connected and never runs. It is
+     * in {@link SessionNodeFinder#getAllNodeIds()} so an agent can find and edit it, which
+     * made every note an "orphan" and failed the agent's save on any workflow carrying one.
      */
     public List<String> findOrphanNodes() {
         Set<String> allNodes = new HashSet<>(nodeFinder.getAllNodeIds());
@@ -187,7 +192,8 @@ public class SessionEdgeManager {
 
         List<String> orphans = new ArrayList<>();
         for (String nodeId : allNodes) {
-            if (!nodeId.startsWith("trigger:") && !nodesWithIncoming.contains(nodeId)) {
+            if (!nodeId.startsWith("trigger:") && !LabelNormalizer.isNoteKey(nodeId)
+                    && !nodesWithIncoming.contains(nodeId)) {
                 orphans.add(nodeId);
             }
         }
@@ -195,7 +201,8 @@ public class SessionEdgeManager {
     }
 
     /**
-     * Find nodes with no outgoing connections (dead ends).
+     * Find nodes with no outgoing connections (dead ends), sticky notes excepted for the
+     * same reason as {@link #findOrphanNodes()}.
      */
     public List<String> findDeadEndNodes() {
         Set<String> allNodes = new HashSet<>(nodeFinder.getAllNodeIds());
@@ -211,7 +218,7 @@ public class SessionEdgeManager {
 
         List<String> deadEnds = new ArrayList<>();
         for (String nodeId : allNodes) {
-            if (!nodesWithOutgoing.contains(nodeId)) {
+            if (!LabelNormalizer.isNoteKey(nodeId) && !nodesWithOutgoing.contains(nodeId)) {
                 deadEnds.add(nodeId);
             }
         }

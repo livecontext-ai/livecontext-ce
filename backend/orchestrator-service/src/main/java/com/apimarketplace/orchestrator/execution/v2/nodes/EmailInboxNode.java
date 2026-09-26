@@ -1,5 +1,7 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
+
 import com.apimarketplace.credential.client.CredentialClient;
 import com.apimarketplace.credential.client.dto.CredentialSummaryDto;
 import com.apimarketplace.orchestrator.domain.file.FileRef;
@@ -104,11 +106,28 @@ public class EmailInboxNode extends BaseNode {
         if (configured != null) this.mailTimeouts = configured;
     }
 
+    /**
+     * Every reported field the plan wrote as a {@code {{...}}} template goes through the
+     * workspace-variable rule: its value comes from the run, and a {{$vars.x}} must not print.
+     */
+    private void reportDeferred(Map<String, Object> resolvedParams) {
+        for (String field : List.of("limit", "sinceDays", "beforeDays", "markSeen", "downloadAttachments",
+                "unreadOnly", "flaggedOnly", "createTargetIfMissing")) {
+            String template = deferredScalar("emailInbox", field);
+            if (template != null && resolvedParams.containsKey(field)) {
+                resolvedParams.put(field, ReportedParams.valueFrom(template, resolvedParams.get(field)));
+            }
+        }
+    }
+
     @Override
     public NodeExecutionResult execute(ExecutionContext context) {
         logger.info("EmailInbox node executing: nodeId={}, itemId={}", nodeId, context.itemId());
 
         Map<String, Object> resolvedParams = new LinkedHashMap<>();
+        // The values the IMAP search runs on, kept apart from the REPORTED ones: a filter pulled
+        // from a workspace variable is withheld in the report, never in the search.
+        Map<String, Object> searchFilters = new LinkedHashMap<>();
         String action = emailInboxConfig != null ? emailInboxConfig.action() : "none";
         if (action == null || action.isBlank()) action = "none";
         // Every user-supplied field is SpEL-resolved, not just messageUid: a {{template}} in
@@ -126,6 +145,11 @@ public class EmailInboxNode extends BaseNode {
         Store store = null;
         Folder folder = null;
         try {
+            // This execution's config: a {{...}} limit, sinceDays, markSeen... resolved now,
+            // never the default. A local that shadows the field: the node is shared by
+            // concurrent items, and every read below must see THIS execution's values.
+            Core.EmailInboxConfig emailInboxConfig =
+                withDeferredScalars("emailInbox", this.emailInboxConfig, Core.EmailInboxConfig.class, context);
             if (credentialClient == null) {
                 throw new IllegalStateException("CredentialClient is not available");
             }
@@ -135,7 +159,11 @@ public class EmailInboxNode extends BaseNode {
             if (credentialId != null) {
                 imapCred = credentialClient.getCredentialById(context.tenantId(), credentialId);
                 if (imapCred.isEmpty()) {
-                    throw new IllegalStateException("Selected IMAP credential is unavailable. "
+                    String credentialTemplate = deferredScalar("emailInbox", "credentialId");
+                    throw new IllegalStateException(credentialTemplate != null
+                        ? "emailInbox.credentialId '" + credentialTemplate + "' resolved to credential " + credentialId
+                            + ", which is not available. No other mailbox was used."
+                        : "Selected IMAP credential is unavailable. "
                             + "Reconnect or select that account before running; no other mailbox was used.");
                 }
             } else {
@@ -171,9 +199,15 @@ public class EmailInboxNode extends BaseNode {
                 resolvedParams.put("downloadAttachments", emailInboxConfig.downloadAttachments());
                 if (emailInboxConfig.sinceDays() > 0) resolvedParams.put("sinceDays", emailInboxConfig.sinceDays());
                 if (emailInboxConfig.beforeDays() > 0) resolvedParams.put("beforeDays", emailInboxConfig.beforeDays());
-                if (notBlank(emailInboxConfig.fromContains())) resolvedParams.put("fromContains", emailInboxConfig.fromContains());
-                if (notBlank(emailInboxConfig.subjectContains())) resolvedParams.put("subjectContains", emailInboxConfig.subjectContains());
-                if (notBlank(emailInboxConfig.bodyContains())) resolvedParams.put("bodyContains", emailInboxConfig.bodyContains());
+                // RESOLVED once, here, and read back by buildSearchTerm: the report used to show the
+                // configured {{...}} while the IMAP search ran on its value, so a filter that
+                // worked read as unresolved.
+                putResolvedFilter(searchFilters, "fromContains", emailInboxConfig.fromContains(), context);
+                putResolvedFilter(searchFilters, "subjectContains", emailInboxConfig.subjectContains(), context);
+                putResolvedFilter(searchFilters, "bodyContains", emailInboxConfig.bodyContains(), context);
+                reportFilter(resolvedParams, searchFilters, "fromContains", emailInboxConfig.fromContains());
+                reportFilter(resolvedParams, searchFilters, "subjectContains", emailInboxConfig.subjectContains());
+                reportFilter(resolvedParams, searchFilters, "bodyContains", emailInboxConfig.bodyContains());
             }
             // Surfaced as soon as it is known, so a failure before the action still shows the
             // folder that was actually going to be addressed.
@@ -207,9 +241,9 @@ public class EmailInboxNode extends BaseNode {
                     throw new IllegalArgumentException("IMAP folder not found: " + folderName);
                 }
                 if ("none".equals(action)) {
-                    result = readMessages(folder, context, resolvedParams);
+                    result = readMessages(folder, context, resolvedParams, searchFilters, emailInboxConfig);
                 } else {
-                    result = applyAction(store, folder, action, targetFolder, context, resolvedParams);
+                    result = applyAction(store, folder, action, targetFolder, context, resolvedParams, emailInboxConfig);
                 }
             }
 
@@ -218,6 +252,7 @@ public class EmailInboxNode extends BaseNode {
             result.put("item_index", context.itemIndex());
             result.put("itemIndex", context.itemIndex());
             result.put("item_id", context.itemId());
+            reportDeferred(resolvedParams);
             result.put("resolved_params", resolvedParams);
             result.put("success", true);
 
@@ -226,10 +261,16 @@ public class EmailInboxNode extends BaseNode {
 
         } catch (Exception e) {
             // A missing credential is the caller's to fix and is already reported on the node,
-            // so it is logged as a refusal rather than an error. Anything else keeps ERROR with
-            // its stack trace: that is the shape only the platform can act on.
+            // so it is logged as a refusal rather than an error. A failure in the conversation
+            // with the customer's own mail server (BYE, a NO answer, a dropped folder or store
+            // connection, a read timeout, a refused login) is theirs or their provider's and is
+            // also already on the node: WARN, no stack trace (about 80 ERROR lines a week came
+            // from one flaky IMAP host). Anything else keeps ERROR with its stack trace, including
+            // every mail failure that can be ours (see isMailServerFailure).
             if (UserActionableFailure.isUserActionable(e.getMessage())) {
                 logger.warn("EmailInbox refused: nodeId={}, reason={}", nodeId, e.getMessage());
+            } else if (isMailServerFailure(e)) {
+                logger.warn("EmailInbox mail server failure: nodeId={}, error={}", nodeId, e.getMessage());
             } else {
                 logger.error("EmailInbox execution failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
             }
@@ -238,6 +279,7 @@ public class EmailInboxNode extends BaseNode {
             failOutput.put("item_index", context.itemIndex());
             failOutput.put("itemIndex", context.itemIndex());
             failOutput.put("item_id", context.itemId());
+            reportDeferred(resolvedParams);
             failOutput.put("resolved_params", resolvedParams);
             failOutput.put("success", false);
             // Errors quote server-provided names (folder, uid, attachment), so they carry NULs too.
@@ -256,7 +298,16 @@ public class EmailInboxNode extends BaseNode {
      * number of LIVE messages returned and the limit is never spent on logically-gone mail.
      */
     private Map<String, Object> readMessages(Folder folder, ExecutionContext context,
-                                             Map<String, Object> resolvedParams) throws Exception {
+                                             Map<String, Object> resolvedParams,
+                                             Map<String, Object> searchFilters) throws Exception {
+        return readMessages(folder, context, resolvedParams, searchFilters, this.emailInboxConfig);
+    }
+
+    /** {@code emailInboxConfig} is this execution's effective config (templated scalars resolved). */
+    private Map<String, Object> readMessages(Folder folder, ExecutionContext context,
+                                             Map<String, Object> resolvedParams,
+                                             Map<String, Object> searchFilters,
+                                             Core.EmailInboxConfig emailInboxConfig) throws Exception {
         boolean markSeen = emailInboxConfig != null && emailInboxConfig.markSeen();
         boolean downloadAttachments = emailInboxConfig != null && emailInboxConfig.downloadAttachments();
         int limit = emailInboxConfig != null ? emailInboxConfig.limit() : 10;
@@ -273,7 +324,7 @@ public class EmailInboxNode extends BaseNode {
         // and never returns them. This is the primary defence AND the performance guard: without
         // it, an unfiltered read pulls the WHOLE folder and the per-message isSet(DELETED) skip
         // below would trigger one FETCH (FLAGS) round trip per message (thousands on a big inbox).
-        SearchTerm term = buildSearchTerm(context);
+        SearchTerm term = buildSearchTerm(searchFilters, emailInboxConfig);
         Message[] messages = (term != null) ? folder.search(term) : folder.getMessages();
 
         // Bulk-prefetch FLAGS in ONE IMAP command so the \Deleted skip below reads cached flags
@@ -388,6 +439,14 @@ public class EmailInboxNode extends BaseNode {
     /** ACTION mode: act on a single message identified by its UID. {@code target} is the already-resolved targetFolder. */
     private Map<String, Object> applyAction(Store store, Folder folder, String action, String target,
                                             ExecutionContext context, Map<String, Object> resolvedParams)
+            throws Exception {
+        return applyAction(store, folder, action, target, context, resolvedParams, this.emailInboxConfig);
+    }
+
+    /** {@code emailInboxConfig} is this execution's effective config (templated scalars resolved). */
+    private Map<String, Object> applyAction(Store store, Folder folder, String action, String target,
+                                            ExecutionContext context, Map<String, Object> resolvedParams,
+                                            Core.EmailInboxConfig emailInboxConfig)
             throws Exception {
         String uidStr = resolveExpression(
                 emailInboxConfig != null ? emailInboxConfig.messageUid() : null, context);
@@ -560,6 +619,22 @@ public class EmailInboxNode extends BaseNode {
      * date range, from/subject/body) AND onto it. Never returns null.
      */
     private SearchTerm buildSearchTerm(ExecutionContext context) {
+        Map<String, Object> resolvedFilters = new LinkedHashMap<>();
+        if (emailInboxConfig != null) {
+            putResolvedFilter(resolvedFilters, "fromContains", emailInboxConfig.fromContains(), context);
+            putResolvedFilter(resolvedFilters, "subjectContains", emailInboxConfig.subjectContains(), context);
+            putResolvedFilter(resolvedFilters, "bodyContains", emailInboxConfig.bodyContains(), context);
+        }
+        return buildSearchTerm(resolvedFilters,
+            withDeferredScalars("emailInbox", emailInboxConfig, Core.EmailInboxConfig.class, context));
+    }
+
+    private SearchTerm buildSearchTerm(Map<String, Object> resolvedFilters) {
+        return buildSearchTerm(resolvedFilters, this.emailInboxConfig);
+    }
+
+    /** {@code emailInboxConfig} is this execution's effective config (templated scalars resolved). */
+    private SearchTerm buildSearchTerm(Map<String, Object> resolvedFilters, Core.EmailInboxConfig emailInboxConfig) {
         List<SearchTerm> terms = new ArrayList<>();
         // \Deleted excluded server-side, unconditionally. A logically-deleted message is gone.
         terms.add(new FlagTerm(new Flags(Flags.Flag.DELETED), false));
@@ -576,21 +651,46 @@ public class EmailInboxNode extends BaseNode {
         if (emailInboxConfig.beforeDays() > 0) {
             terms.add(new ReceivedDateTerm(ComparisonTerm.LE, daysAgo(emailInboxConfig.beforeDays())));
         }
-        String fromContains = resolveExpression(emailInboxConfig.fromContains(), context);
+        String fromContains = (String) resolvedFilters.get("fromContains");
         if (notBlank(fromContains)) {
             terms.add(new FromStringTerm(fromContains.trim()));
         }
-        String subjectContains = resolveExpression(emailInboxConfig.subjectContains(), context);
+        String subjectContains = (String) resolvedFilters.get("subjectContains");
         if (notBlank(subjectContains)) {
             terms.add(new SubjectTerm(subjectContains.trim()));
         }
-        String bodyContains = resolveExpression(emailInboxConfig.bodyContains(), context);
+        String bodyContains = (String) resolvedFilters.get("bodyContains");
         if (notBlank(bodyContains)) {
             terms.add(new BodyTerm(bodyContains.trim()));
         }
         if (terms.isEmpty()) return null;
         if (terms.size() == 1) return terms.get(0);
         return new AndTerm(terms.toArray(new SearchTerm[0]));
+    }
+
+    /**
+     * A configured filter that resolves to NOTHING fails the node. Dropping it would widen the
+     * search to the whole folder, and with markSeen or a move action the node would then act on
+     * every message while reporting success. Before the shared resolver it fell back to the
+     * literal {@code {{...}}}, which matched nothing: wrong too, but not destructive.
+     */
+    private void putResolvedFilter(Map<String, Object> target, String key, String configured,
+                                   ExecutionContext context) {
+        if (!notBlank(configured)) return;
+        String resolved = resolveExpression(configured, context);
+        if (!notBlank(resolved)) {
+            throw new IllegalStateException("The " + key + " filter '" + configured
+                + "' resolved to nothing. Refusing to search the whole folder in its place; check"
+                + " that the referenced node ran and that the path exists.");
+        }
+        target.put(key, resolved);
+    }
+
+    private static void reportFilter(Map<String, Object> resolvedParams, Map<String, Object> searchFilters,
+                                     String key, String configured) {
+        if (searchFilters.containsKey(key)) {
+            resolvedParams.put(key, ReportedParams.valueFrom(configured, searchFilters.get(key)));
+        }
     }
 
     private static Date daysAgo(int days) {
@@ -769,21 +869,13 @@ public class EmailInboxNode extends BaseNode {
     }
 
     private String resolveExpression(String expression, ExecutionContext context) {
-        if (expression == null || expression.isBlank()) return null;
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object result = resolved.get("__expr__");
-                // A resolved template carries UPSTREAM data (another node's output, a webhook body),
-                // and every resolved value here is echoed into resolved_params, which is emitted.
-                return result != null ? noNul(String.valueOf(result)) : expression;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression '{}': {}", expression, e.getMessage());
-                return expression;
-            }
+        if (expression == null || expression.isBlank()) {
+            return null;
         }
-        return expression;
+        // A resolved template carries UPSTREAM data (another node's output, a webhook body),
+        // and every resolved value here is echoed into resolved_params, which is emitted.
+        String resolved = resolveTemplateString(expression, context);
+        return resolved != null ? noNul(resolved) : null;
     }
 
     /**
@@ -842,4 +934,43 @@ public class EmailInboxNode extends BaseNode {
     }
 
     public static Builder builder() { return new Builder(); }
+
+    /**
+     * True when the failure came from the CONVERSATION with the customer's mail server: jakarta.mail
+     * raised it ({@link MessagingException} in the cause chain) AND its shape is one only that
+     * server or its provider can cause: a closed folder or store, a refused login, an IMAP protocol
+     * answer (BYE, NO, BAD: angus {@code ProtocolException}), or a read timeout.
+     *
+     * <p>Deliberately NOT matched, so they keep ERROR with a stack trace: a missing mail provider
+     * ({@link NoSuchProviderException}, a packaging bug of ours), an unsupported method or a parse
+     * failure (our own use of the API), and every failure to ESTABLISH the connection (angus
+     * {@code MailConnectException} / {@code SocketConnectException}, which wrap a connect timeout as
+     * well as a refusal, an unknown host or a TLS handshake), since a platform DNS, egress or
+     * truststore outage would raise those for every tenant. A read timeout inside a conversation that
+     * was already established stays WARN, even in the unlikely case the platform caused the slowdown.
+     */
+    static boolean isMailServerFailure(Throwable error) {
+        boolean raisedByJakartaMail = false;
+        boolean serverConversationShape = false;
+        for (Throwable t = error; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof NoSuchProviderException
+                    || t instanceof MethodNotSupportedException
+                    || t instanceof jakarta.mail.internet.ParseException
+                    || t instanceof org.eclipse.angus.mail.util.MailConnectException
+                    || t instanceof org.eclipse.angus.mail.util.SocketConnectException) {
+                return false;
+            }
+            if (t instanceof MessagingException) {
+                raisedByJakartaMail = true;
+            }
+            if (t instanceof FolderClosedException
+                    || t instanceof StoreClosedException
+                    || t instanceof AuthenticationFailedException
+                    || t instanceof org.eclipse.angus.mail.iap.ProtocolException
+                    || t instanceof java.net.SocketTimeoutException) {
+                serverConversationShape = true;
+            }
+        }
+        return raisedByJakartaMail && serverConversationShape;
+    }
 }

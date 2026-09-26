@@ -1588,4 +1588,27 @@ class AgentWorkflowFireServiceTest {
             assertThat(result).containsKey("output");
         }
     }
+
+    // ==================== countEpochsByRunIds - epoch_count of a run listing ====================
+
+    @Nested
+    @DisplayName("countEpochsByRunIds")
+    class CountEpochsTests {
+
+        @Test
+        @DisplayName("returns the batched count from the epoch service")
+        void delegates() {
+            when(epochService.countEpochsByRunIds(List.of("r1", "r2"))).thenReturn(Map.of("r1", 3L));
+
+            assertThat(service.countEpochsByRunIds(List.of("r1", "r2"))).containsExactly(Map.entry("r1", 3L));
+        }
+
+        @Test
+        @DisplayName("a failing lookup yields null (field omitted), never an empty map that would read as 0 epochs")
+        void failureYieldsNull() {
+            when(epochService.countEpochsByRunIds(any())).thenThrow(new RuntimeException("db down"));
+
+            assertThat(service.countEpochsByRunIds(List.of("r1"))).isNull();
+        }
+    }
 }

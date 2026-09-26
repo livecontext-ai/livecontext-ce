@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 
 /**
  * Unit tests for FindNode.
@@ -339,6 +340,30 @@ class FindNodeTest {
     // ===== CRUD toolId resolution =====
 
     @Nested
+    @DisplayName("CRUD params resolution failure")
+    class CrudParamsResolutionFailureTests {
+
+        @Test
+        @DisplayName("fails instead of querying the table with the raw params and the whole trigger payload")
+        void failsInsteadOfQueryingWithRawParams() {
+            Step stepConfig = new Step(null, "crud-find", "Find Users", null,
+                Map.of("status", "{{core:missing.output.status}}"), 123L, null, null);
+            FindNode node = new FindNode("table:find_users", stepConfig, null, 100, mockTemplateEngine);
+            node.setToolsGateway(mockToolsGateway);
+            V2TemplateAdapter failingAdapter = org.mockito.Mockito.mock(V2TemplateAdapter.class);
+            org.mockito.Mockito.when(failingAdapter.resolveTemplates(any(), any()))
+                .thenThrow(new RuntimeException("Template error"));
+            node.setTemplateAdapter(failingAdapter);
+
+            IllegalStateException failure = assertThrows(IllegalStateException.class, () -> node.execute(context));
+
+            assertTrue(failure.getMessage().contains("Template error"));
+            org.mockito.Mockito.verify(mockToolsGateway, org.mockito.Mockito.never())
+                .executeTool(any(), any(), any(), any());
+        }
+    }
+
+    @Nested
     @DisplayName("CRUD toolId resolution")
     class CrudToolIdTests {
 
@@ -361,6 +386,25 @@ class FindNodeTest {
 
             assertTrue(result.isSuccess());
             assertEquals(2, result.output().get("item_count"));
+        }
+
+        @Test
+        @DisplayName("the table read is marked as a step OUTPUT, so the catalog keeps its text whole")
+        @SuppressWarnings("unchecked")
+        void marksTheCallAsStepOutput() {
+            Step stepConfig = new Step(null, "crud-find", "Find Users", null, Map.of(), 123L, null, null);
+            FindNode node = new FindNode("table:find_users", stepConfig, null, 100, mockTemplateEngine);
+            node.setToolsGateway(mockToolsGateway);
+            lenient().when(mockToolsGateway.executeTool(any(ToolRef.class), any(), anyString(), any()))
+                .thenReturn(new ExecutionResult(true, Map.of("rows", List.of(Map.of("name", "Alice"))),
+                    List.of(), List.of()));
+
+            node.execute(context);
+
+            org.mockito.ArgumentCaptor<Map<String, Object>> ids = org.mockito.ArgumentCaptor.forClass(Map.class);
+            verify(mockToolsGateway).executeTool(any(ToolRef.class), any(), anyString(), ids.capture());
+            assertEquals(Boolean.TRUE, ids.getValue().get(
+                com.apimarketplace.orchestrator.services.impl.CatalogToolsGateway.STEP_OUTPUT_MARKER));
         }
 
         @Test

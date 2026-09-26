@@ -5,13 +5,13 @@
  * <p>Its sibling {@code UpgradeRequiredBadge} says which models the balance
  * cannot pay for, and on a Free account that lock lands on most of the menu. A
  * reader meeting only locks concludes that everything is locked, including the
- * model they were primed onto, which the allowance pays for in full. So the
+ * model they were primed onto, which the monthly credits pay for. So the
  * covered rows say so.
  *
  * <p>The cases below pin what the chip must not do: render when it does not
  * apply (so a paid plan, CE and a bare test mount no hook and no translator),
- * dictate a paragraph as the accessible name of the control it sits inside, or
- * quote a figure before the live plan row has answered. The sentence it shows is
+ * or dictate a paragraph as the accessible name of the control it sits inside.
+ * The sentence it shows is
  * pinned against the real message files in the sibling `FreeTierBadge.tooltip`
  * suite, which opens the tooltip rather than mocking the translator.
  */
@@ -28,21 +28,14 @@ vi.mock('next-intl', () => ({
   useLocale: () => 'en',
 }));
 
-const h = vi.hoisted(() => ({ credits: 100, resolved: true }));
-vi.mock('@/lib/hooks/useFreeAiCredits', () => ({
-  useFreeAiCreditsAnswer: () => ({ credits: h.credits, resolved: h.resolved }),
-}));
-
-import { ComposerFreeTierBadge, FreeTierBadge, quotableCredits } from '../FreeTierBadge';
+import { FreeTierBadge } from '../FreeTierBadge';
 
 afterEach(() => {
-  h.credits = 100;
-  h.resolved = true;
   cleanup();
 });
 
 describe('FreeTierBadge - the chip on a covered model', () => {
-  it('marks a model the free-tier allowance pays for', () => {
+  it('marks a model the Free monthly credits pay for', () => {
     render(<FreeTierBadge covered />);
 
     expect(screen.getByTestId('free-tier-badge')).toHaveTextContent('label');
@@ -62,7 +55,7 @@ describe('FreeTierBadge - the chip on a covered model', () => {
     // so anything hidden here joins that button's accessible name - and would be
     // read out again on every covered row of an open menu. The sentence lives in
     // the tooltip; what stays here is the few words the lock beside it carries.
-    render(<FreeTierBadge covered credits={100} />);
+    render(<FreeTierBadge covered />);
 
     // Asserted positively: the sentence's absence from a CLOSED tooltip is not
     // evidence of anything, so what this pins is that the hidden text is the short
@@ -84,45 +77,3 @@ describe('FreeTierBadge - the chip on a covered model', () => {
   });
 });
 
-describe('quotableCredits - whether the figure is worth quoting', () => {
-  it('quotes a live figure', () => {
-    expect(quotableCredits({ credits: 250, resolved: true })).toBe(250);
-  });
-
-  it('withholds it until the live plan row has answered', () => {
-    // Unresolved is either a request in flight or one that has exhausted its
-    // retries, and both hand back the seeded stand-in - a figure this account's
-    // plan may never grant. Quoting it on a failed fetch would leave a wrong
-    // number on screen permanently, since nothing revisits it.
-    expect(quotableCredits({ credits: 100, resolved: false })).toBeUndefined();
-  });
-
-  it('withholds it when the plan grants nothing', () => {
-    // Belt and braces rather than a state to expect: a plan row granting nothing
-    // leaves the allowance empty, so the verdict upstream marks no model free and
-    // this chip is never mounted. If it ever is, the word Free beside "0 credits a
-    // month" would be the worst of both.
-    expect(quotableCredits({ credits: 0, resolved: true })).toBeUndefined();
-  });
-});
-
-describe('ComposerFreeTierBadge - the one instance that quotes the figure', () => {
-  it('always renders as covered, because the composer decides when to mount it', () => {
-    // The catalogue and the verdict both live in ModelSelectorDropdown, which
-    // mounts this node only when the SELECTED model is free right now. Re-asking
-    // here would need the model, which this component does not have.
-    h.credits = 250;
-    render(<ComposerFreeTierBadge />);
-
-    expect(screen.getByTestId('free-tier-badge')).toHaveTextContent('label');
-  });
-
-  it('still renders the chip when there is no figure to quote', () => {
-    // The two are separate decisions: the model is free either way, and that is
-    // the part the reader needs.
-    h.resolved = false;
-    render(<ComposerFreeTierBadge />);
-
-    expect(screen.getByTestId('free-tier-badge')).toBeInTheDocument();
-  });
-});

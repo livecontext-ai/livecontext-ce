@@ -208,6 +208,36 @@ class CredentialRepositoryByokCascadePostgresTest {
 
     // ────────────────────────── helpers ──────────────────────────
 
+    @Test
+    @DisplayName("issuer query: rows whose stored client_id / oauth_client_id is the deleted client, of ANY integration, plus every legacy row with no client id that holds OAuth tokens")
+    void findsCandidatesByIssuerAndLegacyByIntegration() {
+        insertData("tenant-A", "issuedGmail", "gmail", Map.of("client_id", "gcp-1", "refresh_token", "rt"));
+        insertData("tenant-A", "issuedDriveSameClient", "google_drive", Map.of("client_id", "gcp-1"));
+        insertData("tenant-A", "oauthIdOnly", "gmail", Map.of("oauth_client_id", "gcp-1"));
+        insertData("tenant-A", "platformIssued", "gmail", Map.of("client_id", "platform-cid"));
+        insertData("tenant-A", "legacyGmail", "gmail", Map.of("refresh_token", "rt"));
+        insertData("tenant-A", "legacyOther", "slack", Map.of("refresh_token", "rt"));
+        insertData("tenant-B", "otherTenant", "gmail", Map.of("client_id", "gcp-1"));
+        insertData("tenant-A", "apiKeyNoTokens", "gmail", Map.of("api_key", "k"));
+
+        List<Credential> result =
+                repository.findActiveByTenantIdAndIssuerOrLegacy("tenant-A", "gcp-1");
+
+        assertThat(result).extracting(Credential::name)
+                .containsExactlyInAnyOrder("issuedGmail", "issuedDriveSameClient", "oauthIdOnly", "legacyGmail", "legacyOther");
+    }
+
+    private void insertData(String tenantId, String name, String integration, Map<String, Object> data) {
+        try {
+            jdbc.update("""
+                    INSERT INTO auth.credentials (tenant_id, name, integration, type, status, credential_data)
+                    VALUES (?, ?, ?, 'OAuth2', 'active', ?::jsonb)
+                    """, tenantId, name, integration, objectMapper.writeValueAsString(data));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     private void insertActive(String tenantId, String name, String integration) {
         insertWithStatus(tenantId, name, integration, "active");
     }

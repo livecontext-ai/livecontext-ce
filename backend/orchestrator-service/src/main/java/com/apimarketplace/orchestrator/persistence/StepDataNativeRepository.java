@@ -50,7 +50,7 @@ public class StepDataNativeRepository {
                 condition_result, selected_branch, loop_id, loop_iteration,
                 loop_exit_reason, merge_strategy, merge_received_branches,
                 merge_skipped_branches, item_id, trigger_id, skip_reason,
-                skip_source_node, normalized_key, item_number
+                skip_source_node, normalized_key, item_number, is_mocked
             ) VALUES (
                 ?, ?, ?, ?, ?::jsonb,
                 ?, ?, ?, ?, ?,
@@ -61,7 +61,7 @@ public class StepDataNativeRepository {
                 ?, ?, ?, ?,
                 ?, ?, ?::jsonb,
                 ?::jsonb, ?, ?, ?,
-                ?, ?, ?
+                ?, ?, ?, ?
             ) ON CONFLICT (workflow_run_id, step_alias, trigger_id, iteration, item_index, epoch, spawn, status)
               DO NOTHING
             """;
@@ -118,7 +118,8 @@ public class StepDataNativeRepository {
                 entity.getSkipReason(),
                 entity.getSkipSourceNode(),
                 entity.getNormalizedKey(),
-                entity.getItemNumber()
+                entity.getItemNumber(),
+                entity.isMocked()
         );
 
         if (rows == 0) {
@@ -203,6 +204,7 @@ public class StepDataNativeRepository {
                         ps.setString(p++, entity.getNormalizedKey());
                         if (entity.getItemNumber() == null) ps.setNull(p++, java.sql.Types.INTEGER);
                         else ps.setInt(p++, entity.getItemNumber());
+                        ps.setBoolean(p++, entity.isMocked());
                     }
 
                     @Override

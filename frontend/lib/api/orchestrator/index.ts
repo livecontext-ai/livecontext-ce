@@ -100,6 +100,22 @@ export type {
   GenerationPrice,
 } from './generation.service';
 export { customApiService } from './custom-api.service';
+export { chatChannelService } from './chat-channel.service';
+export { notificationPreferencesService } from './notification-preferences.service';
+export type {
+  NotificationTopic,
+  NotificationDelivery,
+  NotificationTopicPreference,
+  NotificationPreferences,
+} from './notification-preferences.service';
+export type {
+  ChatChannelSummary,
+  ChatChannelListResponse,
+  ChatCandidate,
+  ChatChannelDiscovery,
+  ChatChannelConnectRequest,
+  ChatChannelConnectResult,
+} from './chat-channel.service';
 export type {
   CustomApiSummary,
   CustomApiListResponse,

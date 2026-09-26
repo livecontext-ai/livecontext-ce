@@ -60,17 +60,28 @@ function renderIn(locale: string, onError: (error: unknown) => void) {
   );
 }
 
+/** The info panels currently open: the shared InfoPopover, portalled beside the dialog. */
+const openPanels = () =>
+  Array.from(document.body.querySelectorAll('[data-radix-popper-content-wrapper] [role="dialog"]'));
+
+/** Toggle an "i": it opens (and closes) on CLICK, never on hover or focus. */
+function toggle(trigger: HTMLElement) {
+  act(() => {
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+  });
+}
+
 /**
- * Open every info tooltip in the dialog and return what they say.
+ * Open every info "i" in the dialog and return what they say.
  *
- * <p>Radix mounts a tooltip's CONTENT only while it is open, so the text is not
- * in the document at rest - the first version of this file read `document.body`
- * without opening anything and swept over an empty set. Focus is what opens
- * them without a pointer.
+ * <p>The panel mounts its CONTENT only while it is open, so the text is not in the document
+ * at rest - the first version of this file read `document.body` without opening anything and
+ * swept over an empty set. Each "i" is clicked open, read, and clicked shut.
  *
- * <p>The formatting error is caught either way: `t(tip, values)` runs while the
- * ROW renders, so a missing value throws before any tooltip is opened. Opening
- * them is what makes the second half - the text a reader actually gets - real.
+ * <p>The formatting error is caught either way: `t(tip, values)` runs while the ROW renders,
+ * so a missing value throws before any panel is opened. Opening them is what makes the second
+ * half - the text a reader actually gets - real.
  */
 function openEveryTooltip(): string[] {
   const triggers = Array.from(document.body.querySelectorAll('button')).filter((button) =>
@@ -78,15 +89,11 @@ function openEveryTooltip(): string[] {
   );
   const texts: string[] = [];
   for (const trigger of triggers) {
-    act(() => {
-      fireEvent.focus(trigger);
-    });
-    for (const tip of Array.from(document.body.querySelectorAll('[role="tooltip"]'))) {
-      texts.push(tip.textContent ?? '');
+    toggle(trigger);
+    for (const panel of openPanels()) {
+      texts.push(panel.textContent ?? '');
     }
-    act(() => {
-      fireEvent.blur(trigger);
-    });
+    toggle(trigger);
   }
   return texts;
 }
@@ -94,7 +101,7 @@ function openEveryTooltip(): string[] {
 /**
  * What ONE named row's "i" says, scoped to that row.
  *
- * <p>The sweep above pools every tooltip in the dialog, which was fine while each row
+ * <p>The sweep above pools every panel in the dialog, which was fine while each row
  * priced a different unit. It is not any more: the credits row and the AI-allowance row
  * now quote the same figure, the same basis model and the same sentence, so an assertion
  * against the pooled text is satisfied by EITHER of them and would stay green with the
@@ -107,15 +114,9 @@ function tooltipOfRow(rowId: string): string {
   const trigger = row!.querySelector('button:has(svg.lucide-info)')
     ?? Array.from(row!.querySelectorAll('button')).find((b) => b.querySelector('svg.lucide-info'));
   expect(trigger, `the ${rowId} row carries no info button`).toBeTruthy();
-  act(() => {
-    fireEvent.focus(trigger as HTMLElement);
-  });
-  const text = Array.from(document.body.querySelectorAll('[role="tooltip"]'))
-    .map((tip) => tip.textContent ?? '')
-    .join(' ');
-  act(() => {
-    fireEvent.blur(trigger as HTMLElement);
-  });
+  toggle(trigger as HTMLElement);
+  const text = openPanels().map((panel) => panel.textContent ?? '').join(' ');
+  toggle(trigger as HTMLElement);
   return text;
 }
 

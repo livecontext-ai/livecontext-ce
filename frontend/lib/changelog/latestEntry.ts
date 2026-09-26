@@ -60,11 +60,11 @@ export interface ChangelogEntry {
 }
 
 export const LATEST_CHANGELOG_ENTRY: ChangelogEntry | null = {
-  key: '2026-09-classify-jev-own-key',
-  publishedAt: '2026-09-21',
+  key: '2026-09-chat-channels',
+  publishedAt: '2026-09-25',
   media: {
     type: 'image',
-    src: '/changelog/2026-09-classify-jev-own-key.svg',
+    src: '/changelog/2026-09-chat-channels.svg',
     width: 720,
     height: 260,
   },

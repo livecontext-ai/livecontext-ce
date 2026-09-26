@@ -56,12 +56,24 @@ public record Step(String id,
         List<RowData> rows,
         List<ColumnDefinition> columns,
         Integer limit,
-        Integer offset
+        Integer offset,
+        // limit / offset / similarity.topK / similarity.threshold written as {{...}} templates, by
+        // field name: an Integer cannot hold one, and the parser used to drop it for the default
+        // (500 rows) with no word. The node resolves them at run time. Never serialized.
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        Map<String, String> deferredScalars
     ) {
         public CrudConfig {
             set = set == null ? Map.of() : Map.copyOf(set);
             rows = rows == null ? List.of() : List.copyOf(rows);
             columns = columns == null ? List.of() : List.copyOf(columns);
+            deferredScalars = deferredScalars == null ? Map.of() : Map.copyOf(deferredScalars);
+        }
+
+        /** The constructor before {@link #deferredScalars}: no templated limit, offset or similarity bound. */
+        public CrudConfig(WhereCondition where, SimilarityConfig similarity, Map<String, Object> set,
+                          List<RowData> rows, List<ColumnDefinition> columns, Integer limit, Integer offset) {
+            this(where, similarity, set, rows, columns, limit, offset, Map.of());
         }
 
         /**

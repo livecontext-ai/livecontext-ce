@@ -37,7 +37,7 @@ public class InterfaceToolsProvider implements ToolsProvider {
     }
 
     private static final List<String> VALID_ACTIONS = List.of(
-        "create", "get", "list", "update", "patch", "delete",
+        "create", "get", "present", "list", "update", "patch", "delete",
         // Marketplace publication lifecycle
         "publish", "unpublish",
         "help"
@@ -98,11 +98,11 @@ public class InterfaceToolsProvider implements ToolsProvider {
             ToolParameter.builder()
                 .name("action")
                 .type("string")
-                .description("Action to perform: create, get, list, update, patch, delete, publish, unpublish, help")
+                .description("Action to perform: create, get, present, list, update, patch, delete, publish, unpublish, help")
                 .required(true)
                 .enumValues(VALID_ACTIONS)
                 .build(),
-            stringParam("interface_id", "Interface ID - UUID (for: get, update, patch, delete)", false),
+            stringParam("interface_id", "Interface ID - UUID (for: get, present, update, patch, delete)", false),
             stringParam("name", "Interface name (for: create, update)", false),
             stringParam("description", "Description (for: create, update)", false),
             stringParam("format", "Shape this interface is designed for (for: create, update). Drives the dimensions "
@@ -141,7 +141,7 @@ public class InterfaceToolsProvider implements ToolsProvider {
             // ==================== Marketplace publication (publish, unpublish) ====================
             // For INTERFACE publications, the resource itself IS the landing page -
             // pass interface_id (the interface to publish) and title only. No separate landing.
-            stringParam("title", "Marketplace listing title - REQUIRED for publish", false),
+            stringParam("title", "Marketplace listing title - REQUIRED for publish. For present: optional panel title (default: the resource name).", false),
             enumParam("visibility", "Marketplace visibility: 'PRIVATE' (default), 'PUBLIC', 'UNLISTED' (for: publish)", false,
                 List.of("PRIVATE", "PUBLIC", "UNLISTED")),
             intParam("credits_per_use", "Credits charged to acquirers per use. Default 0 (free). (for: publish)", false, 0)
@@ -155,8 +155,9 @@ public class InterfaceToolsProvider implements ToolsProvider {
                 Native output: the WORKFLOW node can render the page to a screenshot (PNG) or pdf FileRef output - set generateScreenshot / generatePdf on the node (no external tool/API needed).
                 MANDATORY: Call interface(action='help') before creating your first interface.
                 Editing: 'update' REPLACES a whole template; 'patch' does surgical search/replace edits (target + edits=[{old,new}]) - prefer patch to change a few lines without re-sending everything.
+                present: opens the interface in the user's side panel so they see it now (interface_id); changes nothing.
                 Marketplace: publish requires interface_id + title (the interface itself IS the landing page - no separate landing). unpublish marks the listing inactive - acquirers keep their copies.
-                Actions: create, get, list, update, patch, delete, publish, unpublish, help
+                Actions: create, get, present, list, update, patch, delete, publish, unpublish, help
                 """)
             .category(ToolCategory.INTERFACE)
             .parameters(params)

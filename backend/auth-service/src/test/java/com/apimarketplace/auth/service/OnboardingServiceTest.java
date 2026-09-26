@@ -544,6 +544,23 @@ class OnboardingServiceTest {
         }
 
         @Test
+        @DisplayName("lifecycle: completing onboarding syncs the Resend contact so the persona property follows")
+        void completionSyncsLifecycleContact() {
+            com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails =
+                    mock(com.apimarketplace.auth.lifecycle.LifecycleEmailService.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(onboardingService, "lifecycleEmails", lifecycleEmails);
+            UserOnboarding onboarding = new UserOnboarding(testUser, "TestDisplay");
+            when(userRepository.findByProviderId("f47ac10b-58cc-4372-a567-0e02b2c3d479")).thenReturn(Optional.of(testUser));
+            when(onboardingRepository.findByUserId(1L)).thenReturn(Optional.of(onboarding));
+            when(onboardingRepository.findByUserProviderId("f47ac10b-58cc-4372-a567-0e02b2c3d479")).thenReturn(Optional.of(onboarding));
+            when(onboardingRepository.save(any(UserOnboarding.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            onboardingService.completeOnboarding("f47ac10b-58cc-4372-a567-0e02b2c3d479", new OnboardingRequest("TestDisplay"));
+
+            verify(lifecycleEmails).syncContact(1L);
+        }
+
+        @Test
         @DisplayName("analytics: a retried completion emits onboarding_completed only once")
         void retriedCompletionEmitsOnce() {
             com.apimarketplace.auth.analytics.AuthAnalyticsEmitter analytics =

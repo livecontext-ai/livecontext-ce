@@ -63,6 +63,10 @@ public class JsonCompletionService {
     private final BridgeLoopDispatcher bridgeDispatcher;
     private final ExecutionLinkRouter executionLinkRouter;
 
+    /** Swaps a disabled model for its replacement (V515); null in positional unit tests = no swap. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.agent.service.ModelReplacementResolver modelReplacementResolver;
+
     /**
      * Pins whose API key the completion runs on (see {@link KeyRouteResolver}). Optional
      * like the other field-injected collaborators; absent, the invoker is called unpinned
@@ -111,6 +115,17 @@ public class JsonCompletionService {
      *         CLI it may not select (mapped to 403/429 by the controller advice)
      */
     public String complete(JsonCompletionRequestDto request, String userRoles) {
+        // A model an admin disabled runs on its replacement, which is then billed and is
+        // what the execution link below is looked up for (V515).
+        // null = the resolver is not wired: whether a swap happened is unknown.
+        java.util.Optional<com.apimarketplace.agent.service.ModelReplacementResolver.Substitution> replacement = null;
+        if (modelReplacementResolver != null) {
+            replacement = modelReplacementResolver.substituteIfDisabled(request.provider(), request.model());
+            var sub = replacement.orElse(null);
+            if (sub != null) {
+                request = request.withModel(sub.provider(), sub.model());
+            }
+        }
         String billedProvider = request.provider();
         String billedModel = request.model();
 
@@ -137,7 +152,8 @@ public class JsonCompletionService {
                     billedProvider, billedModel, execProvider, execModel);
             }
             Pinned direct = invokePinned(execProvider, execModel, request);
-            bill(request, billedProvider, billedModel, execProvider, direct.result().usage(), direct.keyRoute());
+            bill(request, billedProvider, billedModel, execProvider, direct.result().usage(), direct.keyRoute(),
+                replacement);
             return extract(direct.result().content());
         }
 
@@ -153,7 +169,7 @@ public class JsonCompletionService {
 
         if (result.success() && !isBlank(result.content())) {
             // A CLI bridge holds no API key: platform route.
-            bill(request, billedProvider, billedModel, execProvider, result.usage(), KeyRoute.PLATFORM);
+            bill(request, billedProvider, billedModel, execProvider, result.usage(), KeyRoute.PLATFORM, replacement);
             return extract(result.content());
         }
         String failure = result.success() ? "empty content" : result.error();
@@ -182,7 +198,8 @@ public class JsonCompletionService {
         Pinned fallback = invokePinned(billedProvider, billedModel, request);
         // The discarded bridge attempt is not billed: it produced nothing, and the tokens it
         // burned were the bridge's own. Only the run that answered is charged.
-        bill(request, billedProvider, billedModel, billedProvider, fallback.result().usage(), fallback.keyRoute());
+        bill(request, billedProvider, billedModel, billedProvider, fallback.result().usage(), fallback.keyRoute(),
+            replacement);
         return extract(fallback.result().content());
     }
 
@@ -219,7 +236,8 @@ public class JsonCompletionService {
      *                   so they are re-expressed here or the cache is charged twice.
      */
     private void bill(JsonCompletionRequestDto request, String billedProvider, String billedModel,
-                      String reportedBy, com.apimarketplace.agent.domain.UsageInfo usage, KeyRoute keyRoute) {
+                      String reportedBy, com.apimarketplace.agent.domain.UsageInfo usage, KeyRoute keyRoute,
+                      java.util.Optional<com.apimarketplace.agent.service.ModelReplacementResolver.Substitution> replacement) {
         if (observabilityService == null || usage == null || isBlank(request.tenantId())) {
             return;
         }
@@ -247,6 +265,7 @@ public class JsonCompletionService {
             req.setModel(billedModel);
             // Whose key served the call: an own-key turn is billed a flat fee, not tokens.
             req.setKeyRoute(keyRoute != null ? keyRoute.name() : null);
+            com.apimarketplace.agent.service.AgentObservabilityService.stampModelReplacement(req, replacement);
             req.setStatus("COMPLETED");
             req.setIterationCount(1);
             req.setPromptTokens(orZero(billed.promptTokens()));

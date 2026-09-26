@@ -298,8 +298,11 @@ public class ModelCatalogService {
                 String modelId = (String) model.get("id");
                 ModelConfigOverrideEntity override = overrideMap.get(providerName + ":" + modelId);
                 if (override != null) {
-                    // If explicitly disabled, remove from list
-                    if (Boolean.FALSE.equals(override.getEnabled())) {
+                    // Explicitly disabled (retired included, always disabled) or deprecated:
+                    // remove from list. Deprecated matters on CE, where a bundle deprecates
+                    // every model it stops carrying; without it a YAML-declared model the
+                    // cloud no longer ships stayed in the picker.
+                    if (Boolean.FALSE.equals(override.getEnabled()) || override.getDeprecatedAt() != null) {
                         it.remove();
                         continue;
                     }
@@ -1145,7 +1148,8 @@ public class ModelCatalogService {
 
         Map<String, List<ModelConfigOverrideEntity>> customByProvider = new HashMap<>();
         for (ModelConfigOverrideEntity o : overrides) {
-            if (o.getDeprecatedAt() != null) continue;
+            // Retired rows live in their own admin list (listRetiredModels), not here.
+            if (o.getDeprecatedAt() != null || o.isRetired()) continue;
             boolean notInYaml = !yamlKeys.contains(o.getProvider() + ":" + o.getModelId());
             if (o.isCustom() || notInYaml) {
                 customByProvider.computeIfAbsent(o.getProvider(), k -> new ArrayList<>()).add(o);
@@ -1173,6 +1177,9 @@ public class ModelCatalogService {
                 Map<String, Object> entry = new LinkedHashMap<>(model);
                 String modelId = (String) model.get("id");
                 ModelConfigOverrideEntity override = overrideMap.get(providerName + ":" + modelId);
+                if (override != null && override.isRetired()) {
+                    continue; // listed in the retired-models view instead
+                }
                 if (override != null) {
                     applyOverride(entry, override);
                     applyRateLimitFields(entry, override);
@@ -1341,6 +1348,15 @@ public class ModelCatalogService {
             entity.setProviderKind(inferProviderKind(input.getProvider(), input.getProviderKind()));
         }
 
+        if (entity.isRetired()
+                && (Boolean.TRUE.equals(input.getEnabled())
+                    || (input.isBundleEnabledExplicitlySet() && Boolean.TRUE.equals(input.getBundleEnabled()))
+                    || (input.isFreeTierEnabledExplicitlySet() && input.isFreeTierEnabled()))) {
+            // A DB trigger keeps a retired row disabled whatever is written, so accepting this
+            // would answer "saved" and change nothing. Say what to do instead.
+            throw new IllegalArgumentException("Model " + input.getProvider() + "/" + input.getModelId()
+                    + " is retired. Restore it from the retired models list before enabling it.");
+        }
         if (input.getEnabled() != null) { entity.setEnabled(input.getEnabled()); entity.addUserModifiedField("enabled"); }
         // Cloud-admin bundle override (V381). Not tracked in userModifiedFields:
         // it never travels in a payload, so no merge can clobber it. Same
@@ -1388,6 +1404,12 @@ public class ModelCatalogService {
             entity.addUserModifiedField("rateLimitTpmPerTenant");
             entity.setRateLimitRpmPerTenant(input.getRateLimitRpmPerTenant());
             entity.addUserModifiedField("rateLimitRpmPerTenant");
+        }
+        // V515: the model this one is replaced by at execution time while disabled. Explicit
+        // blank clears it (back to "use the platform default"); absent keys leave it alone.
+        // Not tracked in userModifiedFields: admin-local, no bundle payload ever carries it.
+        if (input.isReplacementExplicitlySet()) {
+            applyReplacement(entity, input.getReplacementProvider(), input.getReplacementModel());
         }
 
         // BOTH guards test what THIS REQUEST is doing, not what the row already was.
@@ -1592,6 +1614,12 @@ public class ModelCatalogService {
         // category tab could not disable exactly the models nobody had touched yet. That is
         // what the admin saw as "Failed to save changes" with no further explanation.
         ModelConfigOverrideEntity parent = findOrCreateOverrideRow(provider, modelId);
+        if (enabled && parent.isRetired()) {
+            // The overlay keeps a retired model out of every category, so this would answer
+            // "saved" and change nothing.
+            throw new IllegalArgumentException("Model " + provider + "/" + modelId
+                    + " is retired. Restore it from the retired models list before enabling it.");
+        }
         if (enabled) {
             // Same rule as the global enable - a category sidecar is the other
             // door into the picker, so an unpriced model must not slip through it.
@@ -1610,6 +1638,49 @@ public class ModelCatalogService {
         setting.setEnabled(enabled);
         categoryRepository.save(setting);
         invalidateModelCaches();
+    }
+
+    /**
+     * Set (or clear) the execution-time replacement of a model (V515).
+     *
+     * <p>Both blank clears it. Otherwise both halves are required, the pair must not name the
+     * model itself, and it must be a model this catalog knows (declared, or an override row):
+     * a typo would otherwise be accepted and then fall through to the platform default on
+     * every run, which is exactly the silent "I set it and nothing happened" this refuses.
+     * Whether the replacement is ENABLED is deliberately not checked here: it is resolved at
+     * run time, where a disabled replacement is followed to its own replacement.
+     *
+     * @throws IllegalArgumentException on a half-set, self-referencing or unknown pair (400)
+     */
+    private void applyReplacement(ModelConfigOverrideEntity entity, String provider, String model) {
+        boolean noProvider = provider == null || provider.isBlank();
+        boolean noModel = model == null || model.isBlank();
+        if (noProvider && noModel) {
+            entity.setReplacementProvider(null);
+            entity.setReplacementModel(null);
+            return;
+        }
+        if (noProvider || noModel) {
+            throw new IllegalArgumentException(
+                    "replacementProvider and replacementModel must be set together (or both cleared)");
+        }
+        String p = provider.trim();
+        String m = model.trim();
+        if (p.equalsIgnoreCase(entity.getProvider()) && m.equals(entity.getModelId())) {
+            throw new IllegalArgumentException("A model cannot be its own replacement: " + p + ":" + m);
+        }
+        if (isCloudEdition() && isBridgeProviderName(p)) {
+            // On cloud a CLI bridge is admin-only: every non-admin run swapped onto it would be
+            // refused by the bridge access check, the failure a replacement exists to remove.
+            // (The platform-default fallback excludes bridges on cloud for the same reason.)
+            throw new IllegalArgumentException("A CLI bridge model cannot be a replacement on the cloud edition: " + p + ":" + m);
+        }
+        if (!collectCatalogDisplayNames().containsKey(p + ":" + m)
+                && repository.findByProviderAndModelId(p, m).isEmpty()) {
+            throw new IllegalArgumentException("Unknown replacement model: " + p + ":" + m);
+        }
+        entity.setReplacementProvider(p);
+        entity.setReplacementModel(m);
     }
 
     /**
@@ -1716,7 +1787,7 @@ public class ModelCatalogService {
                         + " to the free tier - this model's OWN row carries no price. A price "
                         + "may still be showing in the panel: that one comes from the catalogue "
                         + "and is not what gets mirrored. Billing is written from this row, so "
-                        + "set priceInput and priceOutput here first - otherwise the allowance "
+                        + "set priceInput and priceOutput here first - otherwise Free-plan credits "
                         + "would be spent at the platform default rate rather than the "
                         + "provider's.");
     }
@@ -1817,19 +1888,146 @@ public class ModelCatalogService {
      */
     @Transactional
     public void deleteOverride(String provider, String modelId) {
-        closeFreeTierMirror(repository.findByProviderAndModelId(provider, modelId).orElse(null));
+        ModelConfigOverrideEntity row = repository.findByProviderAndModelId(provider, modelId).orElse(null);
+        if (row != null && row.isRetired()) {
+            // The row IS the retirement: deleting it would let the next sync or seed bring the
+            // model back. A DB trigger refuses the delete anyway, which JPA reports as an error.
+            throw new IllegalStateException("Model " + provider + "/" + modelId
+                    + " is retired. Restore it before deleting its override.");
+        }
+        closeFreeTierMirror(row);
         repository.deleteByProviderAndModelId(provider, modelId);
         invalidateModelCaches();
     }
 
-    /** Same contract as {@link #deleteOverride}, for every row at once. */
+    /**
+     * Same contract as {@link #deleteOverride}, for every row at once. Retired rows are kept:
+     * a reset returns the catalog to its defaults, it does not un-retire anything (V533).
+     */
     @Transactional
     public void resetAll() {
-        for (ModelConfigOverrideEntity row : repository.findAllByOrderByRankingAsc()) {
+        List<ModelConfigOverrideEntity> resettable = repository.findByRetiredAtIsNull();
+        for (ModelConfigOverrideEntity row : resettable) {
             closeFreeTierMirror(row);
         }
-        repository.deleteAll();
+        repository.deleteAll(resettable);
         invalidateModelCaches();
+    }
+
+    /** One model named by an admin retire/restore request. */
+    public record ModelRef(String provider, String modelId) {
+    }
+
+    /**
+     * Retire models for good (V533). A retired model leaves every picker, the admin model list,
+     * the CE bundle and seed, and the CE relay; no feed sync, seed, bundle or migration can bring
+     * it back (the merge skips it and DB triggers keep it disabled and undeletable). Runs that
+     * still reference it are swapped for its replacement like any disabled model. Only
+     * {@link #restoreModels} undoes it.
+     *
+     * <p>A model declared only in {@code application.yml} has no row yet: one is created, since
+     * the row is the tombstone. A model already retired is left as it was (its date is kept).
+     *
+     * @return how many models this call retired
+     */
+    @Transactional
+    public int retireModels(List<ModelRef> models, String retiredBy) {
+        java.time.Instant now = java.time.Instant.now();
+        // Resolve and validate EVERY entry before any side effect. Closing the free-tier mirror
+        // is an HTTP call a rollback cannot undo, so an unknown model at position N must be
+        // refused before entries 1..N-1 have been closed in billing.
+        Map<String, String> catalogNames = null;
+        List<ModelConfigOverrideEntity> toRetire = new ArrayList<>();
+        // Each model once: a pair named twice was saved and counted twice, and a new tombstone
+        // row twice is a unique violation at flush.
+        for (ModelRef ref : new java.util.LinkedHashSet<>(models)) {
+            ModelConfigOverrideEntity row = repository.findByProviderAndModelId(ref.provider(), ref.modelId())
+                    .orElse(null);
+            if (row != null && row.isRetired()) {
+                continue;
+            }
+            if (row == null) {
+                // Same guard as findOrCreateOverrideRow: a typo must not create a tombstone for a
+                // model that does not exist.
+                if (catalogNames == null) {
+                    catalogNames = collectCatalogDisplayNames();
+                }
+                String key = ref.provider() + ":" + ref.modelId();
+                if (!catalogNames.containsKey(key)) {
+                    throw new IllegalArgumentException("Unknown model: " + key);
+                }
+                row = new ModelConfigOverrideEntity();
+                row.setProvider(ref.provider());
+                row.setModelId(ref.modelId());
+                row.setDisplayName(catalogNames.get(key));
+                row.setProviderKind(inferProviderKind(ref.provider(), null));
+            }
+            toRetire.add(row);
+        }
+        int retired = 0;
+        for (ModelConfigOverrideEntity row : toRetire) {
+            // Free-plan credits must stop funding it: close the billing mirror first, while the
+            // row still says it was open.
+            closeFreeTierMirror(row);
+            row.setFreeTierEnabled(false);
+            row.setEnabled(false);
+            row.setBundleEnabled(false);
+            row.setRetiredAt(now);
+            row.setRetiredBy(retiredBy);
+            repository.save(row);
+            retired++;
+        }
+        invalidateModelCaches();
+        log.info("Retired {} model(s) (by {})", retired, retiredBy);
+        return retired;
+    }
+
+    /**
+     * Bring retired models back into the catalog. They come back DISABLED (and with the CE
+     * bundle flag back to inherit): restoring is not enabling, the admin enables each one as
+     * with any newly discovered model.
+     *
+     * @return how many models this call restored
+     */
+    @Transactional
+    public int restoreModels(List<ModelRef> models) {
+        int restored = 0;
+        for (ModelRef ref : new java.util.LinkedHashSet<>(models)) {
+            Optional<ModelConfigOverrideEntity> row =
+                    repository.findByProviderAndModelId(ref.provider(), ref.modelId());
+            if (row.isEmpty() || !row.get().isRetired()) {
+                continue;
+            }
+            ModelConfigOverrideEntity r = row.get();
+            r.setRetiredAt(null);
+            r.setRetiredBy(null);
+            r.setEnabled(false);
+            r.setBundleEnabled(null);
+            repository.save(r);
+            restored++;
+        }
+        invalidateModelCaches();
+        log.info("Restored {} retired model(s)", restored);
+        return restored;
+    }
+
+    /** The retired models, most recently retired first, for the admin "Retired" list. */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listRetiredModels() {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ModelConfigOverrideEntity r : repository.findByRetiredAtIsNotNullOrderByRetiredAtDesc()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("provider", r.getProvider());
+            m.put("modelId", r.getModelId());
+            m.put("displayName", r.getDisplayName());
+            m.put("providerKind", r.getProviderKind());
+            m.put("retiredAt", r.getRetiredAt() != null ? r.getRetiredAt().toString() : null);
+            m.put("retiredBy", r.getRetiredBy());
+            m.put("releaseDate", r.getReleaseDate() != null ? r.getReleaseDate().toString() : null);
+            m.put("deprecationDate", r.getDeprecationDate() != null ? r.getDeprecationDate().toString() : null);
+            out.add(m);
+        }
+        return out;
     }
 
     /** Push {@code free_tier = false} for a row that was open, so the gate stops funding it. */
@@ -1846,8 +2044,8 @@ public class ModelCatalogService {
                 row.getPriceInput(), row.getPriceOutput(), row.getProviderKind(),
                 row.getPriceCacheRead(), row.getPriceCacheWrite(), false);
         if (!mirrored) {
-            log.error("Deleted the override for {}:{} but could NOT close it in the billing mirror."
-                            + " The free-tier allowance may keep funding it until the row is"
+            log.error("Took {}:{} out of the catalog but could NOT close it in the billing mirror."
+                            + " Free-plan monthly credits may keep funding it until the row is"
                             + " re-created and closed, or the mirror is corrected directly.",
                     row.getProvider(), row.getModelId());
         }
@@ -1938,6 +2136,13 @@ public class ModelCatalogService {
         // reaches this helper at all and the key is genuinely absent - harmless, since
         // the client reads `=== true` and a model can only be opened by creating a row.
         model.put("freeTierEnabled", override.isFreeTierEnabled());
+        // V515: what replaces this model at execution time while it is disabled. Absent =
+        // no explicit choice (the platform default is used). Same helper, same reason as
+        // freeTierEnabled: both admin payload builders run through here.
+        if (override.getReplacementProvider() != null && override.getReplacementModel() != null) {
+            model.put("replacementProvider", override.getReplacementProvider());
+            model.put("replacementModel", override.getReplacementModel());
+        }
         if (override.getContextWindow() != null) {
             model.put("contextWindow", override.getContextWindow());
         }
@@ -2337,7 +2542,8 @@ public class ModelCatalogService {
      *   <li>sidecar.rank set → clone with {@code ranking = sidecar.rank}</li>
      *   <li>sidecar.enabled set → clone with {@code enabled = sidecar.enabled};
      *       false propagates to the standard remove-when-disabled path in
-     *       {@link #getModelsForCategory(String)}.</li>
+     *       {@link #getModelsForCategory(String)}. A RETIRED row stays disabled
+     *       whatever the sidecar says (V533).</li>
      * </ul>
      *
      * <p>The output list is re-sorted by overlaid ranking so callers that
@@ -2362,7 +2568,12 @@ public class ModelCatalogService {
             }
             ModelConfigOverrideEntity copy = cloneOverride(orig);
             if (setting.getRank() != null) copy.setRanking(setting.getRank());
-            copy.setEnabled(setting.getEnabled() == null ? Boolean.TRUE : setting.getEnabled());
+            // A category's own toggle is independent of the global (chat) flag, by design: a
+            // model can be off for chat and on for the browser agent. A RETIRED model is the
+            // exception: it is out of every category, whatever its sidecar row says.
+            copy.setEnabled(orig.isRetired()
+                    ? Boolean.FALSE
+                    : (setting.getEnabled() == null ? Boolean.TRUE : setting.getEnabled()));
             out.add(copy);
         }
         out.sort(Comparator.comparing(
@@ -2396,6 +2607,7 @@ public class ModelCatalogService {
         c.setSource(src.getSource());
         c.setProviderKind(src.getProviderKind());
         c.setDeprecatedAt(src.getDeprecatedAt());
+        c.setRetiredAt(src.getRetiredAt());
         c.setMode(src.getMode());
         c.setCustom(src.isCustom());
         // V493: freeTierEnabled is now read in a read-path (applyEnrichmentFields), so
@@ -2407,6 +2619,9 @@ public class ModelCatalogService {
         // Same omission, pre-existing: bundleEnabled is read by CatalogBundlePayload and
         // rendered by the admin panel, and was never copied here either.
         c.setBundleEnabled(src.getBundleEnabled());
+        // V515: read by applyEnrichmentFields too, same rule.
+        c.setReplacementProvider(src.getReplacementProvider());
+        c.setReplacementModel(src.getReplacementModel());
         return c;
     }
 

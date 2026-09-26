@@ -6,9 +6,9 @@ import type { Node } from 'reactflow';
 import { useTranslations } from 'next-intl';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
 import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { BuilderNodeData } from '../../../types';
 import type { ConnectionProps } from '../ExpressionField';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 interface RssParametersFormProps {
   node: Node<BuilderNodeData>;
@@ -71,22 +71,12 @@ export function RssParametersForm({
       {/* Info header */}
       <div className="flex items-center gap-1.5">
         <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('title')}</span>
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-            >
-              <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-            <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-              <p className="font-semibold text-slate-900 dark:text-slate-100">{t('infoTitle')}</p>
-              <p>{t('infoDescription')}</p>
-            </div>
-          </PopoverContent>
-        </Popover>
+        <InfoPopover label={t('title')} size="sm" side="right" align="start">
+          <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+            <p className="font-semibold text-slate-900 dark:text-slate-100">{t('infoTitle')}</p>
+            <p>{t('infoDescription')}</p>
+          </div>
+        </InfoPopover>
       </div>
 
       {/* Feed URL */}

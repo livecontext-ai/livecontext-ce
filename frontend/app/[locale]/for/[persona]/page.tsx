@@ -6,7 +6,7 @@ import { isPersonaKey, PERSONA_KEYS, personaAlternates, personaHref } from '@/co
 import JsonLd from '@/components/seo/JsonLd';
 import { locales } from '@/i18n/routing';
 import { IS_CE } from '@/lib/edition';
-import { SITE_URL } from '@/lib/seo/siteUrl';
+import { landingOgImage, SITE_URL } from '@/lib/seo/siteUrl';
 
 type PageProps = { params: Promise<{ locale: string; persona: string }> };
 
@@ -28,9 +28,9 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     alternates: { canonical: url, languages: personaAlternates(persona, SITE_URL) },
     openGraph: {
       title, description, url, siteName: 'LiveContext', type: 'website',
-      images: [{ url: '/og-image.jpg', width: 1200, height: 630, alt: title }],
+      images: [{ url: landingOgImage(locale), width: 1200, height: 630, alt: title }],
     },
-    twitter: { card: 'summary_large_image', title, description, images: ['/og-image.jpg'] },
+    twitter: { card: 'summary_large_image', title, description, images: [landingOgImage(locale)] },
     robots: IS_CE ? { index: false, follow: false } : { index: true, follow: true },
   };
 }

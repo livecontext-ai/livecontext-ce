@@ -30,6 +30,13 @@ export type AnalyticsEvent =
   // onboarding_step_completed is emitted by the backend ONLY (single producer)
   | 'onboarding_completed'
   | 'onboarding_skipped'
+  // Left onboarding by signing out, from a state that offers no other way out.
+  // `signed_out_from`: 'email_verification' (the email-code step), 'form_error'
+  // (a save or skip that keeps failing on steps 1 to 3), 'error' (the error card).
+  // Emitted BEFORE logout(), which resets analytics, so it counts the attempt:
+  // a redirect the identity provider refuses still counts, and that user may go
+  // on to finish onboarding. Overcounts only while an IdP is failing.
+  | 'onboarding_signed_out'
   // - App navigation
   | 'nav_item_clicked'
   // - Marketplace / discovery
@@ -94,7 +101,50 @@ export type AnalyticsEvent =
   | 'file_uploaded'
   | 'file_downloaded'
   // - Friction
-  | 'api_request_failed';
+  | 'api_request_failed'
+  // - Setup checklist (first-run guidance)
+  | 'setup_checklist_opened'
+  | 'setup_checklist_task_clicked'
+  | 'setup_checklist_completed'
+  // - Notification bell (inbox / triggers / activity)
+  | 'notification_bell_opened'
+  | 'notification_tab_changed'
+  | 'notification_row_clicked'
+  // - Announcements (welcome plan gift, "What's new")
+  | 'welcome_plan_shown'
+  | 'welcome_plan_dismissed'
+  | 'changelog_shown'
+  | 'changelog_closed'
+  | 'mfa_nudge_shown'
+  | 'mfa_nudge_clicked'
+  | 'mfa_nudge_dismissed'
+  // - Human-in-the-loop (ask_user cards, run blockers)
+  | 'ask_user_answered'
+  | 'ask_user_dismissed'
+  | 'run_blocker_resolved'
+  // - Chat channels (Telegram / Slack / ...). connect / disconnect / default are
+  // emitted by the backend ONLY (single producer).
+  | 'channel_discovery_run'
+  | 'channel_assistant_help_clicked'
+  | 'agent_channel_configured'
+  | 'approval_channel_configured'
+  // - Trophies (badge_unlocked is backend-only)
+  | 'trophy_viewed'
+  // - BYOK (own OAuth clients / keys)
+  | 'byok_upgrade_clicked'
+  | 'oauth_scopes_chosen'
+  // - Studio (generations)
+  | 'studio_model_selected'
+  | 'studio_generation_submitted'
+  // - Agenda
+  | 'agenda_slot_opened'
+  | 'agenda_schedule_paused'
+  | 'agenda_run_now'
+  | 'agenda_schedule_moved'
+  // - Chat model defaults
+  | 'chat_model_auto_switched'
+  // - Enterprise SSO
+  | 'sso_lookup_submitted';
 
 /**
  * Event properties. UUIDs / enums / counts only - NEVER PII (email, name) or

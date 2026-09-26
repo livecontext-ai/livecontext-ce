@@ -1,5 +1,7 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
+
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.services.TemplateEngine;
@@ -1100,5 +1102,102 @@ class SwitchNodeTest {
             com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
         when(adapter.resolveTemplates(any(), any())).thenReturn(Map.of("__v__", value));
         return adapter;
+    }
+
+    @Nested
+    @DisplayName("Case values that are references")
+    class CaseValueResolution {
+
+        @Test
+        @DisplayName("a {{...}} case value is resolved in the subject's context and can match")
+        @SuppressWarnings("unchecked")
+        void caseValueReferenceIsResolvedAndMatches() {
+            when(mockTemplateEngine.resolveWithMap(eq("{{trigger:start.status}}"), any()))
+                .thenReturn("gold");
+            when(mockTemplateEngine.resolveWithMap(eq("{{core:tiers.output.top}}"), any()))
+                .thenReturn("gold");
+
+            List<SwitchNode.SwitchCase> cases = new ArrayList<>();
+            cases.add(new SwitchNode.SwitchCase("case", "{{core:tiers.output.top}}", "Gold"));
+            cases.add(new SwitchNode.SwitchCase("default", null, "Default"));
+            SwitchNode node = new SwitchNode("core:switch", "{{trigger:start.status}}", cases, mockTemplateEngine);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals("case_0", result.output().get("selected_case"),
+                "the case compared as its literal template text could never match");
+            assertEquals("{{core:tiers.output.top}}", result.output().get("matched_value"),
+                "matched_value stays the configured case: it is an output contract");
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("gold", params.get("Gold"), "Params shows the value the case was compared on");
+        }
+
+        @Test
+        @DisplayName("a case written {{$vars.x}} matches on the variable but never prints it")
+        @SuppressWarnings("unchecked")
+        void workspaceVariableCaseIsWithheld() {
+            when(mockTemplateEngine.resolveWithMap(eq("{{trigger:start.status}}"), any()))
+                .thenReturn("s3cr3t-tier");
+            when(mockTemplateEngine.resolveWithMap(eq("{{$vars.gold_tier}}"), any()))
+                .thenReturn("s3cr3t-tier");
+
+            List<SwitchNode.SwitchCase> cases = new ArrayList<>();
+            cases.add(new SwitchNode.SwitchCase("case", "{{$vars.gold_tier}}", "Gold"));
+            cases.add(new SwitchNode.SwitchCase("default", null, "Default"));
+            SwitchNode node = new SwitchNode("core:switch", "{{trigger:start.status}}", cases, mockTemplateEngine);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals("case_0", result.output().get("selected_case"));
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(ReportedParams.WITHHELD_WORKSPACE_VARIABLE, params.get("Gold"));
+            assertTrue(String.valueOf(result.output().get("evaluations"))
+                    .contains(ReportedParams.WITHHELD_WORKSPACE_VARIABLE),
+                "the evaluation row shows the case withheld too: " + result.output().get("evaluations"));
+        }
+
+        @Test
+        @DisplayName("a case with text around a reference to nothing never matches its literal remainder")
+        void partlyUnresolvedCaseDoesNotMatchItsRemainder() {
+            // `gold_{{x}}` with x missing reads "gold_", a value the author never wrote.
+            when(mockTemplateEngine.resolveWithMap(eq("{{trigger:start.status}}"), any()))
+                .thenReturn("gold_");
+            when(mockTemplateEngine.resolveWithMap(eq("gold_{{core:skipped.output.tier}}"), any()))
+                .thenReturn("gold_");
+            when(mockTemplateEngine.resolveWithMap(eq("{{core:skipped.output.tier}}"), any()))
+                .thenReturn("");
+
+            List<SwitchNode.SwitchCase> cases = new ArrayList<>();
+            cases.add(new SwitchNode.SwitchCase("case", "gold_{{core:skipped.output.tier}}", "Tier"));
+            cases.add(new SwitchNode.SwitchCase("default", null, "Default"));
+            SwitchNode node = new SwitchNode("core:switch", "{{trigger:start.status}}", cases, mockTemplateEngine);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals("default", result.output().get("selected_case"));
+        }
+
+        @Test
+        @DisplayName("a case referencing nothing never matches, even against an empty subject")
+        @SuppressWarnings("unchecked")
+        void unresolvedCaseDoesNotBeatDefault() {
+            // resolveWithMap reads a reference to nothing as "". Against an empty subject that
+            // compared equal, so a case pointing at a skipped node took the branch from default.
+            when(mockTemplateEngine.resolveWithMap(eq("{{trigger:start.status}}"), any()))
+                .thenReturn("");
+            when(mockTemplateEngine.resolveWithMap(eq("{{core:skipped.output.tier}}"), any()))
+                .thenReturn("");
+
+            List<SwitchNode.SwitchCase> cases = new ArrayList<>();
+            cases.add(new SwitchNode.SwitchCase("case", "{{core:skipped.output.tier}}", "Tier"));
+            cases.add(new SwitchNode.SwitchCase("default", null, "Default"));
+            SwitchNode node = new SwitchNode("core:switch", "{{trigger:start.status}}", cases, mockTemplateEngine);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals("default", result.output().get("selected_case"));
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("(resolved to nothing)", params.get("Tier"));
+        }
     }
 }

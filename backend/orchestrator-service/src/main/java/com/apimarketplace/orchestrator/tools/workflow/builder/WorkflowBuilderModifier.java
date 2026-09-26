@@ -2091,11 +2091,11 @@ public class WorkflowBuilderModifier {
             }
             return parsed;
         } catch (NumberFormatException e) {
-            // Not a number at all (a template, a typo). Left untouched rather than invented:
-            // the parser will drop it and the field keeps its default, which is the same outcome
-            // as before this rewrite existed. There is no validation on the modify path to catch
-            // it, so refusing the patch outright would be the stricter answer; that is a new
-            // failure mode on a call that used to succeed, so it is not taken here.
+            // Not a number: stored exactly as sent. A {{...}} reference is set aside by the plan
+            // parser and resolved by the node at run time, which fails naming the field when it
+            // resolves to nothing or to a non-number. A typo reaches the same run-time failure
+            // only when it is a reference; a plain non-numeric string is still ignored by the
+            // parser, as before this rewrite existed.
             return value;
         }
     }

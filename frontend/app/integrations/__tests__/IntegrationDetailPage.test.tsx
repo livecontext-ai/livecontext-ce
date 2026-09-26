@@ -200,6 +200,18 @@ describe('integration detail metadata', () => {
     expect(metadata.twitter?.title).toBe('Slack integration - LiveContext');
   });
 
+  it('leaves the share image to the per-integration opengraph-image route', async () => {
+    // Config-based `images` win over the file-based `opengraph-image.tsx` next to the
+    // page, so setting them here would silently put the generic site-wide card back on
+    // every shared integration, with no error anywhere.
+    fetchIntegration.mockResolvedValue(detail());
+
+    const metadata = await generateMetadata({ params: Promise.resolve({ slug: 'slack' }) });
+
+    expect(metadata.openGraph).not.toHaveProperty('images');
+    expect(metadata.twitter).not.toHaveProperty('images');
+  });
+
   it('indexes a page with real content', async () => {
     fetchIntegration.mockResolvedValue(detail());
 

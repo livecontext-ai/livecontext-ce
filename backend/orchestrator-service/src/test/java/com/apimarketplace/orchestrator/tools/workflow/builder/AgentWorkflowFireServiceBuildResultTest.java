@@ -177,6 +177,22 @@ class AgentWorkflowFireServiceBuildResultTest {
     class StatusTests {
 
         @Test
+        @DisplayName("run still executing when the wait ended: status=RUNNING, no fake epoch in the result or the hints")
+        void stillRunning_reportsRunningWithoutEpoch() {
+            WorkflowRunEntity run = runWith(RunStatus.RUNNING);
+            when(runRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
+
+            Map<String, Object> result = service.buildResult(run,
+                    TriggerExecutionResult.stillRunning(RUN_ID, "trigger:start", TriggerType.MANUAL),
+                    workflow(null), emptyPlan());
+
+            assertThat(result.get("status")).isEqualTo("RUNNING");
+            assertThat(result).doesNotContainKeys("epoch", "fire_count");
+            assertThat((String) result.get("NEXT")).contains("get_run").doesNotContain("epoch=-1");
+            assertThat(result.get("message")).isEqualTo(TriggerExecutionResult.STILL_RUNNING_MESSAGE);
+        }
+
+        @Test
         @DisplayName("TriggerResult failure → status=FAILED regardless of run status")
         void triggerFailure_statusFailed() {
             WorkflowRunEntity run = runWith(RunStatus.RUNNING);

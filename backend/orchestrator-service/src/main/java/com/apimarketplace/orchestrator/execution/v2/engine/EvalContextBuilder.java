@@ -108,6 +108,7 @@ public final class EvalContextBuilder {
         context.getGlobalData("item").ifPresent(item -> evalContext.put("item", item));
         context.getGlobalData("index").ifPresent(idx -> evalContext.put("index", idx));
         context.getGlobalData("items").ifPresent(items -> evalContext.put("items", items));
+        addAdapterParityKeys(context, evalContext);
 
         // 6. Workflow-variable bundle for {{$vars.name}} / {{vars:name}} conditions
         // (both normalized to vars.name by VarsSyntaxNormalizer before evaluation).
@@ -171,11 +172,54 @@ public final class EvalContextBuilder {
         context.getGlobalData("item").ifPresent(item -> evalContext.put("item", item));
         context.getGlobalData("index").ifPresent(idx -> evalContext.put("index", idx));
         context.getGlobalData("items").ifPresent(items -> evalContext.put("items", items));
+        addAdapterParityKeys(context, evalContext);
 
         // 6. Workflow-variable bundle for {{$vars.name}} / {{vars:name}} expressions
         context.getGlobalData("vars").ifPresent(vars -> evalContext.put("vars", vars));
 
         return evalContext;
+    }
+
+    /**
+     * The names every other node resolves through the template adapter and a condition used to
+     * miss here, so {@code {{current_item.name}}} decided nothing in a decision while the node
+     * beside it read the item:
+     * <ul>
+     *   <li>{@code current_item} / {@code current_index}: the split item and its index inside a
+     *       split body, otherwise the trigger payload in its legacy {@code {data: ...}} shape
+     *       ({@link #legacyCurrentItem}), exactly as the adapter derives them;</li>
+     *   <li>{@code iterations} / {@code loop_results}: the loop globals.</li>
+     * </ul>
+     * Never overwrites a key already present (a trigger field or a step alias of that name).
+     */
+    private static void addAdapterParityKeys(ExecutionContext context, Map<String, Object> evalContext) {
+        Object splitItem = context.getGlobalData("item").orElse(null);
+        Object currentItem = splitItem != null ? splitItem : legacyCurrentItem(context.triggerData());
+        if (currentItem != null) {
+            evalContext.putIfAbsent("current_item", currentItem);
+        }
+        context.getGlobalData("index").ifPresent(idx -> evalContext.putIfAbsent("current_index", idx));
+        context.getGlobalData("iterations").ifPresent(it -> evalContext.putIfAbsent("iterations", it));
+        context.getGlobalData("loop_results").ifPresent(r -> evalContext.putIfAbsent("loop_results", r));
+    }
+
+    /**
+     * The trigger payload as the legacy {@code current_item}: {@code {data: payload, ...payload}},
+     * or the payload itself when it already carries a {@code data} key. Null for no payload.
+     * Shared with {@code V2TemplateAdapter} so both resolution paths build the same item.
+     */
+    public static Map<String, Object> legacyCurrentItem(Map<String, Object> triggerData) {
+        if (triggerData == null || triggerData.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> currentItem = new HashMap<>(triggerData);
+        if (!currentItem.containsKey("data")) {
+            Map<String, Object> wrappedItem = new HashMap<>();
+            wrappedItem.put("data", currentItem);
+            wrappedItem.putAll(currentItem);
+            currentItem = wrappedItem;
+        }
+        return currentItem;
     }
 
     /**

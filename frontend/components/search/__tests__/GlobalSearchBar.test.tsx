@@ -190,7 +190,7 @@ describe('GlobalSearchBar searching', () => {
 
   it('ArrowDown/ArrowUp move and wrap the active option, Enter picks it', async () => {
     // The query must match NO settings section, or the list this walks is not the list it
-    // describes. It was 'chat', which matches the "Agents & Chat" settings label: settings
+    // describes. It was 'chat', which matched a settings label at the time: settings
     // sections are matched client-side and listed before the conversations that come from the
     // network, so the first option was a settings row and every assertion below was off by one.
     //

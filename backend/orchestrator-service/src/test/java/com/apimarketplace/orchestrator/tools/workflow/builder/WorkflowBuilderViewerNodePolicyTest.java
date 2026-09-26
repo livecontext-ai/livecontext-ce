@@ -32,6 +32,7 @@ class WorkflowBuilderViewerNodePolicyTest {
                 .when(descriptionBuilder.buildDescription(
                         org.mockito.ArgumentMatchers.anyString(),
                         org.mockito.ArgumentMatchers.anyMap(),
+                        org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any()))
                 .thenReturn(NodeDescriptionBuilder.DescriptionResult.empty());
         return new WorkflowBuilderViewer(

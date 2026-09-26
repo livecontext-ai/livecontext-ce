@@ -1127,4 +1127,144 @@ class CryptoJwtNodeTest {
             }
         };
     }
+
+    @Nested
+    @DisplayName("JWT payload resolution")
+    class JwtPayloadResolution {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> decodedPayload(String token) {
+            Core.CryptoJwtConfig decodeConfig = new Core.CryptoJwtConfig(
+                "jwtDecode", null, null, null, null, token, null, null);
+            NodeExecutionResult decoded = new CryptoJwtNode("core:crypto", decodeConfig).execute(context);
+            return (Map<String, Object>) ((Map<String, Object>) decoded.output().get("result")).get("payload");
+        }
+
+        @Test
+        @DisplayName("a {{...}} claim is resolved before signing, not signed as its template text")
+        void templatedClaimIsResolvedBeforeSigning() {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("sub", "{{trigger:in.output.user_id}}");
+            payload.put("role", "admin");
+            Core.CryptoJwtConfig config = new Core.CryptoJwtConfig(
+                "jwtCreate", "HS256", null, null, "secret", null, payload, null);
+            CryptoJwtNode node = new CryptoJwtNode("core:crypto", config);
+            node.acceptServices(ServiceRegistry.builder().templateAdapter(mockTemplateAdapter).build());
+            when(mockTemplateAdapter.resolveTemplates(any(), any())).thenAnswer(
+                TemplateResolutionStubs.resolving(Map.of("{{trigger:in.output.user_id}}", "user-42")));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            Map<String, Object> claims = decodedPayload((String) result.output().get("result"));
+            assertEquals("user-42", claims.get("sub"));
+            assertEquals("admin", claims.get("role"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("user-42", ((Map<String, Object>) params.get("payload")).get("sub"),
+                "Params reports the payload that was signed");
+        }
+
+        @Test
+        @DisplayName("a payload saved by the builder form as JSON TEXT is read as a JSON object")
+        void payloadTypedAsJsonTextIsParsed() {
+            Core.CryptoJwtConfig config = new Core.CryptoJwtConfig(
+                "jwtCreate", "HS256", null, null, "secret", null, "{\"sub\": \"user123\"}", null);
+
+            NodeExecutionResult result = new CryptoJwtNode("core:crypto", config).execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            assertEquals("user123", decodedPayload((String) result.output().get("result")).get("sub"));
+        }
+
+        @Test
+        @DisplayName("regression: upstream data in a claim cannot add claims to the signed token")
+        void claimValueCannotInjectClaims() {
+            // The JSON text used to be resolved BEFORE it was parsed, so a webhook body holding
+            // `","admin":true,"x":"` spliced a new claim into the token the node then signed.
+            V2TemplateAdapter adapter = org.mockito.Mockito.mock(V2TemplateAdapter.class);
+            org.mockito.Mockito.when(adapter.resolveTemplates(org.mockito.ArgumentMatchers.anyMap(),
+                    org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo("bob\",\"admin\":true,\"x\":\""));
+            Core.CryptoJwtConfig config = new Core.CryptoJwtConfig(
+                "jwtCreate", "HS256", null, null, "secret", null,
+                "{\"sub\": \"{{trigger:hook.output.user}}\"}", null);
+            CryptoJwtNode node = new CryptoJwtNode("core:crypto", config);
+            node.setTemplateAdapter(adapter);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            Map<String, Object> claims = decodedPayload((String) result.output().get("result"));
+            assertFalse(claims.containsKey("admin"), "no claim may be injected: " + claims);
+            assertEquals("bob\",\"admin\":true,\"x\":\"", claims.get("sub"),
+                "the upstream text stays the VALUE of the claim it was written into");
+        }
+
+        @Test
+        @DisplayName("an UNQUOTED reference in a JSON payload is refused, never spliced in before parsing")
+        void unquotedReferencePayloadIsRefused() {
+            // `{"n": {{x}} }` only parses once upstream text is spliced in, so `1,"admin":true`
+            // would add a claim. It is refused, and the resolver is never asked.
+            V2TemplateAdapter adapter = org.mockito.Mockito.mock(V2TemplateAdapter.class);
+            Core.CryptoJwtConfig config = new Core.CryptoJwtConfig(
+                "jwtCreate", "HS256", null, null, "secret", null,
+                "{\"n\": {{trigger:hook.output.n}} }", null);
+            CryptoJwtNode node = new CryptoJwtNode("core:crypto", config);
+            node.setTemplateAdapter(adapter);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.isSuccess());
+            assertTrue(result.errorMessage().orElse("").contains("before its references are resolved"),
+                result.errorMessage().orElse(""));
+        }
+
+        @Test
+        @DisplayName("a claim pulled from a workspace variable is signed but the payload is withheld in Params")
+        @SuppressWarnings("unchecked")
+        void workspaceVariableClaimIsWithheld() {
+            V2TemplateAdapter adapter = org.mockito.Mockito.mock(V2TemplateAdapter.class);
+            org.mockito.Mockito.when(adapter.resolveTemplates(org.mockito.ArgumentMatchers.anyMap(),
+                    org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{$vars.tenant}}", "s3cr3t-tenant")));
+            Core.CryptoJwtConfig config = new Core.CryptoJwtConfig(
+                "jwtCreate", "HS256", null, null, "secret", null,
+                "{\"tid\": \"{{$vars.tenant}}\"}", null);
+            CryptoJwtNode node = new CryptoJwtNode("core:crypto", config);
+            node.setTemplateAdapter(adapter);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            assertEquals("s3cr3t-tenant", decodedPayload((String) result.output().get("result")).get("tid"));
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertFalse(String.valueOf(params.get("payload")).contains("s3cr3t-tenant"),
+                "reported payload: " + params.get("payload"));
+        }
+
+        @Test
+        @DisplayName("a stale payload left on a non-JWT operation is ignored, never validated")
+        void payloadIsIgnoredByOperationsThatDoNotSign() {
+            Core.CryptoJwtConfig config = new Core.CryptoJwtConfig(
+                "hash", "SHA-256", "abc", null, null, null, "not json", null);
+
+            NodeExecutionResult result = new CryptoJwtNode("core:crypto", config).execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+        }
+
+        @Test
+        @DisplayName("a payload that is not a JSON object fails the node with a clear message")
+        void payloadThatIsNotAnObjectFails() {
+            Core.CryptoJwtConfig config = new Core.CryptoJwtConfig(
+                "jwtCreate", "HS256", null, null, "secret", null, "not json", null);
+
+            NodeExecutionResult result = new CryptoJwtNode("core:crypto", config).execute(context);
+
+            assertFalse(result.isSuccess());
+            assertTrue(result.errorMessage().orElse("").contains("JWT payload must be a JSON object"),
+                result.errorMessage().orElse(""));
+        }
+    }
 }

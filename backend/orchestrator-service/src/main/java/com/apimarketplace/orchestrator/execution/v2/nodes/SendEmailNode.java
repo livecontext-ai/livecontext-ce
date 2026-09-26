@@ -1,5 +1,7 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
+
 import com.apimarketplace.credential.client.CredentialClient;
 import com.apimarketplace.credential.client.dto.CredentialSummaryDto;
 import com.apimarketplace.orchestrator.domain.workflow.Core;
@@ -56,6 +58,11 @@ public class SendEmailNode extends BaseNode {
         Map<String, Object> resolvedParams = new LinkedHashMap<>();
 
         try {
+            // The config this execution runs with: isHtml / credentialId written as {{...}} are
+            // resolved here. A local, never the field: nodes are shared by concurrent items.
+            Core.SendEmailConfig sendEmailConfig =
+                withDeferredScalars("sendEmail", this.sendEmailConfig, Core.SendEmailConfig.class, context);
+
             // 1. Load SMTP credentials from credential system
             if (credentialClient == null) {
                 throw new IllegalStateException("CredentialClient is not available");
@@ -67,7 +74,11 @@ public class SendEmailNode extends BaseNode {
             if (credentialId != null) {
                 smtpCred = credentialClient.getCredentialById(context.tenantId(), credentialId);
                 if (smtpCred.isEmpty()) {
-                    throw new IllegalStateException("Selected SMTP credential is unavailable. "
+                    String credentialTemplate = deferredScalar("sendEmail", "credentialId");
+                    throw new IllegalStateException(credentialTemplate != null
+                        ? "sendEmail.credentialId '" + credentialTemplate + "' resolved to credential " + credentialId
+                            + ", which is not available. No other sender was used."
+                        : "Selected SMTP credential is unavailable. "
                             + "Reconnect or select that account before running; no other sender was used.");
                 }
             } else {
@@ -93,11 +104,11 @@ public class SendEmailNode extends BaseNode {
             resolvedParams.put("smtpUseTls", smtpUseTls);
 
             // 2. Resolve per-email fields from node config via SpEL
-            String toEmail = resolveExpression(
+            String toEmail = resolveRecipients(
                     sendEmailConfig != null ? sendEmailConfig.toEmail() : null, context);
-            String ccEmail = resolveExpression(
+            String ccEmail = resolveRecipients(
                     sendEmailConfig != null ? sendEmailConfig.ccEmail() : null, context);
-            String bccEmail = resolveExpression(
+            String bccEmail = resolveRecipients(
                     sendEmailConfig != null ? sendEmailConfig.bccEmail() : null, context);
             String subject = resolveExpression(
                     sendEmailConfig != null ? sendEmailConfig.subject() : null, context);
@@ -107,7 +118,8 @@ public class SendEmailNode extends BaseNode {
 
             resolvedParams.put("toEmail", toEmail);
             resolvedParams.put("subject", subject);
-            resolvedParams.put("isHtml", isHtml);
+            String isHtmlTemplate = deferredScalar("sendEmail", "isHtml");
+            resolvedParams.put("isHtml", isHtmlTemplate != null ? ReportedParams.valueFrom(isHtmlTemplate, isHtml) : isHtml);
 
             // Override fromName / fromEmail from node config if provided. fromEmail was declared
             // and documented as the sender address but never read, so a node that set it silently
@@ -357,20 +369,35 @@ public class SendEmailNode extends BaseNode {
         return props;
     }
 
-    private String resolveExpression(String expression, ExecutionContext context) {
-        if (expression == null || expression.isBlank()) return null;
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object result = resolved.get("__expr__");
-                return result != null ? String.valueOf(result) : expression;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression '{}': {}", expression, e.getMessage());
-                return expression;
-            }
+    /**
+     * A recipient field, resolved. A reference to a LIST of addresses (a table column, a split
+     * of contacts) is joined with ", ", the separator InternetAddress.parse reads; as text it was
+     * the JSON array (and before that Java's "[a@x, b@y]"), which no mail server accepts.
+     */
+    private String resolveRecipients(String expression, ExecutionContext context) {
+        if (expression == null || expression.isBlank()) {
+            return null;
         }
-        return expression;
+        Object resolved = resolveTemplateValue(expression, context);
+        if (resolved instanceof java.util.Collection<?> list) {
+            return list.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(com.apimarketplace.orchestrator.services.TemplateEngine::asText)
+                .map(String::trim)
+                .filter(a -> !a.isEmpty())
+                .collect(java.util.stream.Collectors.joining(", "));
+        }
+        String text = com.apimarketplace.orchestrator.services.TemplateEngine.asText(resolved);
+        return text;
+    }
+
+    private String resolveExpression(String expression, ExecutionContext context) {
+        if (expression == null || expression.isBlank()) {
+            return null;
+        }
+        // One resolver for every field of every node: typed, JSON for a structure, never the
+        // configured template in place of a value (BaseNode#resolveTemplateValue).
+        return resolveTemplateString(expression, context);
     }
 
     private static String getString(Map<String, Object> map, String key) {

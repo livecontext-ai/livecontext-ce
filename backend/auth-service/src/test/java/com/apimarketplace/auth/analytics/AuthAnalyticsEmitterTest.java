@@ -272,4 +272,113 @@ class AuthAnalyticsEmitterTest {
         inactive.loginSucceeded(1L, "local");
         verify(client, never()).capture(anyString(), anyString(), any());
     }
+
+    @Test
+    @DisplayName("isActive mirrors whether an event would be captured")
+    void isActiveMirrorsGating() {
+        assertFalse(new AuthAnalyticsEmitter().isActive());
+        PostHogAnalyticsClient client = mock(PostHogAnalyticsClient.class);
+        when(client.isActive()).thenReturn(false);
+        AuthAnalyticsEmitter emitter = new AuthAnalyticsEmitter();
+        ReflectionTestUtils.setField(emitter, "postHog", client);
+        assertFalse(emitter.isActive());
+        when(client.isActive()).thenReturn(true);
+        assertTrue(emitter.isActive());
+    }
+
+    @Nested
+    @DisplayName("credit_alert_sent / lifecycle_event_sent / marketing_consent_changed / sso_member_joined")
+    class NotificationsAndSso {
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> captured(PostHogAnalyticsClient client, String distinctId, String event) {
+            ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+            verify(client).capture(eq(distinctId), eq(event), captor.capture());
+            return captor.getValue();
+        }
+
+        @Test
+        @DisplayName("credit_alert_sent: the level is lowercased and the payer's workspace is the group")
+        void creditAlert() {
+            Map<String, Object> p = AuthAnalyticsEmitter.buildCreditAlertSentProps("EXHAUSTED", "org-3");
+            assertEquals("exhausted", p.get("level"));
+            assertEquals("backend", p.get("surface"));
+            assertEquals("org-3", p.get("organization_id"));
+            assertEquals(Map.of("organization", "org-3"), p.get("$groups"));
+            assertEquals("low", AuthAnalyticsEmitter.buildCreditAlertSentProps("LOW", null).get("level"));
+            assertFalse(AuthAnalyticsEmitter.buildCreditAlertSentProps("LOW", null).containsKey("$groups"));
+
+            PostHogAnalyticsClient client = mock(PostHogAnalyticsClient.class);
+            active(client).creditAlertSent(12L, "org-3", "LOW");
+            assertEquals("low", captured(client, "12", "credit_alert_sent").get("level"));
+        }
+
+        @Test
+        @DisplayName("lifecycle_event_sent: only the event name and the outcome, never the payload")
+        void lifecycleEvent() {
+            Map<String, Object> p = AuthAnalyticsEmitter.buildLifecycleEventSentProps("user.signed_up", false);
+            assertEquals("user.signed_up", p.get("lifecycle_event"));
+            assertEquals(false, p.get("delivered"));
+            assertEquals("backend", p.get("surface"));
+            assertEquals(3, p.size(), "surface, lifecycle_event, delivered and nothing else");
+
+            PostHogAnalyticsClient client = mock(PostHogAnalyticsClient.class);
+            AuthAnalyticsEmitter emitter = active(client);
+            emitter.lifecycleEventSent(7L, null, true);
+            verify(client, never()).capture(anyString(), anyString(), any());
+            emitter.lifecycleEventSent(7L, "recap.monthly", true);
+            assertEquals(true, captured(client, "7", "lifecycle_event_sent").get("delivered"));
+        }
+
+        @Test
+        @DisplayName("marketing_consent_changed carries the new value and no source (the backend cannot tell the pages apart)")
+        void consent() {
+            Map<String, Object> p = AuthAnalyticsEmitter.buildMarketingConsentChangedProps(true);
+            assertEquals(true, p.get("consent"));
+            assertFalse(p.containsKey("source"));
+
+            PostHogAnalyticsClient client = mock(PostHogAnalyticsClient.class);
+            active(client).marketingConsentChanged(9L, false);
+            assertEquals(false, captured(client, "9", "marketing_consent_changed").get("consent"));
+        }
+
+        @Test
+        @DisplayName("sso_member_joined: role only on joined, reason only on rejected, org as group")
+        void sso() {
+            Map<String, Object> joined = AuthAnalyticsEmitter.buildSsoMemberJoinedProps(
+                    "org-1", "joined", "domain_not_verified", OrganizationRole.MEMBER);
+            assertEquals("joined", joined.get("outcome"));
+            assertEquals("member", joined.get("role"));
+            assertFalse(joined.containsKey("reason"), "a reason on a join is noise");
+            assertEquals(Map.of("organization", "org-1"), joined.get("$groups"));
+
+            Map<String, Object> rejected = AuthAnalyticsEmitter.buildSsoMemberJoinedProps(
+                    "org-1", "rejected", "member_limit", OrganizationRole.MEMBER);
+            assertEquals("member_limit", rejected.get("reason"));
+            assertFalse(rejected.containsKey("role"), "nobody was granted a role");
+
+            PostHogAnalyticsClient client = mock(PostHogAnalyticsClient.class);
+            active(client).ssoMemberJoined(42L, "org-1", "joined", null, OrganizationRole.MEMBER);
+            assertEquals("member", captured(client, "42", "sso_member_joined").get("role"));
+        }
+
+        @Test
+        @DisplayName("none of the new events is captured without an active client")
+        void gatedAndNoUser() {
+            PostHogAnalyticsClient client = mock(PostHogAnalyticsClient.class);
+            when(client.isActive()).thenReturn(false);
+            AuthAnalyticsEmitter inactive = new AuthAnalyticsEmitter();
+            ReflectionTestUtils.setField(inactive, "postHog", client);
+            inactive.creditAlertSent(1L, "o", "LOW");
+            inactive.lifecycleEventSent(1L, "user.signed_up", true);
+            inactive.marketingConsentChanged(1L, true);
+            inactive.ssoMemberJoined(1L, "o", "joined", null, OrganizationRole.MEMBER);
+            verify(client, never()).capture(anyString(), anyString(), any());
+
+            PostHogAnalyticsClient on = mock(PostHogAnalyticsClient.class);
+            AuthAnalyticsEmitter emitter = active(on);
+            emitter.creditAlertSent(null, "o", "LOW");
+            emitter.ssoMemberJoined(null, "o", "rejected", "plan_not_team", null);
+            verify(on, never()).capture(anyString(), anyString(), any());
+        }
+    }
 }

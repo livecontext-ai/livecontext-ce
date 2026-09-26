@@ -510,6 +510,14 @@ public class WorkflowEpochService {
     }
 
     /**
+     * Number of epochs (EPOCH_HEADER rows) per run, in one query. A run with no epoch yet is
+     * absent from the map: treat absence as zero.
+     */
+    public Map<String, Long> countEpochsByRunIds(List<String> runIds) {
+        return repository.getEpochCountByRunIds(runIds);
+    }
+
+    /**
      * Get the epoch header for a specific run and epoch (any trigger).
      */
     public EpochHeaderRow getEpochHeader(String runId, int epoch) {

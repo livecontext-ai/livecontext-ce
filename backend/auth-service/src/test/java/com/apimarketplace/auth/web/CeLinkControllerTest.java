@@ -10,6 +10,8 @@ import com.apimarketplace.auth.service.CeLinkHeartbeatService;
 import com.apimarketplace.auth.service.CeLinkService;
 import com.apimarketplace.auth.service.IpHashService;
 import com.apimarketplace.auth.service.RequestAuditContext;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
+import com.apimarketplace.common.plan.CeLinkRefusal;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -26,6 +28,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -88,7 +91,7 @@ class CeLinkControllerTest {
         when(service.register(eq(CALLER_ID), eq(INSTALL), eq("1.4.0"), eq("Laptop"),
                 any(RequestAuditContext.class))).thenReturn(ok);
 
-        ResponseEntity<CeLinkRegisterResponse> response = controller.register(CALLER_ID, body, httpRequest);
+        ResponseEntity<?> response = controller.register(CALLER_ID, body, httpRequest);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(response.getBody()).isEqualTo(ok);
@@ -126,12 +129,12 @@ class CeLinkControllerTest {
         when(service.register(eq(CALLER_ID), eq(INSTALL), eq("1.4.0"), eq(null),
                 any(RequestAuditContext.class))).thenReturn(alreadyBound);
 
-        ResponseEntity<CeLinkRegisterResponse> response = controller.register(CALLER_ID, body, httpRequest);
+        ResponseEntity<?> response = controller.register(CALLER_ID, body, httpRequest);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(response.getBody()).isEqualTo(alreadyBound);
-        assertThat(response.getBody().error()).isEqualTo("ALREADY_BOUND");
-        assertThat(response.getBody().boundToEmail()).isEqualTo("lu***@gmail.com");
+        assertThat(((CeLinkRegisterResponse) response.getBody()).error()).isEqualTo("ALREADY_BOUND");
+        assertThat(((CeLinkRegisterResponse) response.getBody()).boundToEmail()).isEqualTo("lu***@gmail.com");
     }
 
     @Test
@@ -200,9 +203,9 @@ class CeLinkControllerTest {
     void heartbeat_returns_204_when_ok() {
         when(httpRequest.getHeader("X-Forwarded-For")).thenReturn("203.0.113.5");
         when(heartbeatService.heartbeat(CALLER_ID, INSTALL, "1.4.0", "203.0.113.5"))
-                .thenReturn(CeLinkHeartbeatService.Outcome.OK);
+                .thenReturn(new CeLinkHeartbeatService.Result(CeLinkHeartbeatService.Outcome.OK, null));
 
-        ResponseEntity<Void> response = controller.heartbeat(
+        ResponseEntity<?> response = controller.heartbeat(
                 CALLER_ID, INSTALL, new CeLinkHeartbeatRequest("1.4.0"), httpRequest);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
@@ -213,9 +216,9 @@ class CeLinkControllerTest {
     void heartbeat_returns_404_when_not_found() {
         when(httpRequest.getHeader("X-Forwarded-For")).thenReturn("203.0.113.5");
         when(heartbeatService.heartbeat(CALLER_ID, INSTALL, "1.4.0", "203.0.113.5"))
-                .thenReturn(CeLinkHeartbeatService.Outcome.NOT_FOUND);
+                .thenReturn(new CeLinkHeartbeatService.Result(CeLinkHeartbeatService.Outcome.NOT_FOUND, null));
 
-        ResponseEntity<Void> response = controller.heartbeat(
+        ResponseEntity<?> response = controller.heartbeat(
                 CALLER_ID, INSTALL, new CeLinkHeartbeatRequest("1.4.0"), httpRequest);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
@@ -226,11 +229,69 @@ class CeLinkControllerTest {
     void heartbeatReturns410WhenRevoked() {
         when(httpRequest.getHeader("X-Forwarded-For")).thenReturn("203.0.113.5");
         when(heartbeatService.heartbeat(CALLER_ID, INSTALL, "1.4.0", "203.0.113.5"))
-                .thenReturn(CeLinkHeartbeatService.Outcome.REVOKED);
+                .thenReturn(new CeLinkHeartbeatService.Result(CeLinkHeartbeatService.Outcome.REVOKED, null));
 
-        ResponseEntity<Void> response = controller.heartbeat(
+        ResponseEntity<?> response = controller.heartbeat(
                 CALLER_ID, INSTALL, new CeLinkHeartbeatRequest("1.4.0"), httpRequest);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.GONE);
+    }
+
+    @Test
+    @DisplayName("POST /register answers 403 with the shared CLOUD_LINK_PLAN_REQUIRED body when the plan is not paid")
+    void register_returns_403_plan_required() {
+        CeLinkRegisterRequest body = new CeLinkRegisterRequest(INSTALL, "1.4.0", "Laptop");
+        when(ipHashService.hashWithCurrent(INSTALL, "203.0.113.5"))
+                .thenReturn(new IpHashService.HashResult("hash-v1", 1));
+        when(httpRequest.getHeader("X-Forwarded-For")).thenReturn("203.0.113.5");
+        when(service.register(eq(CALLER_ID), eq(INSTALL), eq("1.4.0"), eq("Laptop"),
+                any(RequestAuditContext.class))).thenReturn(CeLinkRegisterResponse.planRequired("FREE"));
+
+        ResponseEntity<?> response = controller.register(CALLER_ID, body, httpRequest);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
+    }
+
+    @Test
+    @DisplayName("POST /heartbeat answers 403 CLOUD_LINK_PLAN_REQUIRED (never 410) for a suspended link")
+    void heartbeat_returns_403_plan_required() {
+        when(httpRequest.getHeader("X-Forwarded-For")).thenReturn("203.0.113.5");
+        when(heartbeatService.heartbeat(CALLER_ID, INSTALL, "1.4.0", "203.0.113.5"))
+                .thenReturn(new CeLinkHeartbeatService.Result(CeLinkHeartbeatService.Outcome.PLAN_REQUIRED, "FREE"));
+
+        ResponseEntity<?> response = controller.heartbeat(
+                CALLER_ID, INSTALL, new CeLinkHeartbeatRequest("1.4.0"), httpRequest);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
+    }
+
+    @Test
+    @DisplayName("GET /eligibility: a paid plan is eligible with no reason")
+    void eligibility_paid() {
+        when(service.planAccess(CALLER_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
+
+        ResponseEntity<Map<String, Object>> response = controller.eligibility(CALLER_ID);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody())
+                .containsEntry("eligible", true)
+                .containsEntry("planCode", "PRO")
+                .containsEntry("reason", null);
+    }
+
+    @Test
+    @DisplayName("GET /eligibility: FREE is not eligible, reason PLAN_REQUIRED")
+    void eligibility_free() {
+        when(service.planAccess(CALLER_ID)).thenReturn(CeLinkAccessResult.planRequired("FREE"));
+
+        ResponseEntity<Map<String, Object>> response = controller.eligibility(CALLER_ID);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody())
+                .containsEntry("eligible", false)
+                .containsEntry("planCode", "FREE")
+                .containsEntry("reason", "PLAN_REQUIRED");
     }
 }

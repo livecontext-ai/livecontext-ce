@@ -170,6 +170,34 @@ class CreditAttributionServiceTest {
         }
 
         @Test
+        @DisplayName("cycleGrantCredits (the credit alerts' LOW base) equals what attribution really grants, per plan shape")
+        void cycleGrantCreditsMatchesAttribution() {
+            Object[][] shapes = {
+                    {createPlan("FREE", 5000L, 1000L), 0, "internal"},
+                    {createPlan("STARTER", 25000L), 0, "stripe"},
+                    {createPlan("STARTER", 25000L), 10, "stripe"},
+                    {createPlan("PRO", 0L, null), 0, "internal"},
+                    {createPlan("CREDIT_PACK", 0L, null), 0, "internal"},
+            };
+            for (Object[] shape : shapes) {
+                org.mockito.Mockito.clearInvocations(creditService);
+                Plan plan = (Plan) shape[0];
+                int qty = (Integer) shape[1];
+                Subscription sub = createSubscription(plan, qty, BigDecimal.ZERO, (String) shape[2]);
+
+                attributionService.attributeOnSubscription(USER_ID, sub, qty);
+
+                org.mockito.ArgumentCaptor<BigDecimal> granted = org.mockito.ArgumentCaptor.forClass(BigDecimal.class);
+                verify(creditService, org.mockito.Mockito.atMost(1)).grantCredits(anyLong(), granted.capture(),
+                        anyString(), anyString(), anyString());
+                long actual = granted.getAllValues().isEmpty() ? 0L : granted.getValue().longValueExact();
+                assertThat(CreditAttributionService.cycleGrantCredits((String) shape[2], plan.getCode(), qty,
+                        plan.getIncludedLlmTokens()))
+                        .as("plan %s qty %s provider %s", plan.getCode(), qty, shape[2]).isEqualTo(actual);
+            }
+        }
+
+        @Test
         @DisplayName("STARTER with no pack - grants tier 0 credits (5K at $0)")
         void starterNoPack_grantsTier0Credits() {
             Plan starter = createPlan("STARTER", 25000L);

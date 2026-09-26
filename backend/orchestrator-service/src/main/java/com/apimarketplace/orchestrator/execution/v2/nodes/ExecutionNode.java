@@ -459,6 +459,15 @@ public interface ExecutionNode {
     }
 
     /**
+     * {@link #getSplitMaxItems()} for one execution: a split whose plan wrote {@code maxItems} as a
+     * {@code {{...}}} template resolves it against {@code context}. Callers that execute a split
+     * use this one; the no-argument form only knows the configured (or default) number.
+     */
+    default int getSplitMaxItems(ExecutionContext context) {
+        return getSplitMaxItems();
+    }
+
+    /**
      * Returns the failure strategy for split nodes ("stop-on-error" or
      * "continue-anyway").
      *

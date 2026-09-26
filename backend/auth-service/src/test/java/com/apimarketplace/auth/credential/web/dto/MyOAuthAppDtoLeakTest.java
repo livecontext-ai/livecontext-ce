@@ -76,13 +76,16 @@ class MyOAuthAppDtoLeakTest {
         // organizationId (V362) is the workspace scope - an org UUID the caller
         // is already a member of, never a secret. Deliberately allowlisted so the
         // frontend can render the workspace a connection belongs to.
+        // selectedScopes (V513) is the list of catalog scope NAMES the connection
+        // chose to request, public catalog data, never a secret. Allowlisted so
+        // the wizard can re-open the connection with its boxes ticked as saved.
         assertThat(actualFields).isEqualTo(Set.of(
                 "id", "integrationName", "displayName", "iconSlug", "authType",
                 "clientIdMasked", "hasClientSecret", "hasApiKey", "isEnabled",
-                "createdAt", "updatedAt", "createdBy", "organizationId"));
+                "createdAt", "updatedAt", "createdBy", "organizationId", "selectedScopes"));
 
-        // 2. Record component count = 13 (fail-loud on future field addition).
-        assertThat(MyOAuthAppDto.class.getRecordComponents()).hasSize(13);
+        // 2. Record component count = 14 (fail-loud on future field addition).
+        assertThat(MyOAuthAppDto.class.getRecordComponents()).hasSize(14);
 
         // 3. No secret value byte-sequence appears anywhere in the JSON output.
         String json = objectMapper.writeValueAsString(dto);

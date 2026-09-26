@@ -1,14 +1,13 @@
 'use client';
 
 import * as React from 'react';
-import { Info, Loader2, Sparkles } from 'lucide-react';
+import { Loader2, Sparkles } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { orchestratorApi, type GenerationModel } from '@/lib/api/orchestrator';
 import { FORMAT_ICONS, FORMAT_ORDER, ProviderIcon } from '@/lib/generation/formats';
 import { describeQuotedPrice, withQuotedPriceReason } from '@/lib/generation/price';
@@ -35,6 +34,7 @@ import {
   isCredentialSource,
   DEFAULT_CREDENTIAL_SOURCE,
 } from '../../../utils/generateParams';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 interface GenerateParametersFormProps {
   node: Node<BuilderNodeData>;
@@ -85,19 +85,9 @@ function Section({
         </span>
         <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{title}</span>
         {hint && (
-          <Popover>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className="inline-flex items-center justify-center rounded-full p-0.5 hover:bg-slate-200 dark:hover:bg-slate-700"
-              >
-                <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-              <p className="text-sm text-slate-600 dark:text-slate-300">{hint}</p>
-            </PopoverContent>
-          </Popover>
+          <InfoPopover label={title} size="sm" side="right" align="start">
+            <p className="text-sm text-slate-600 dark:text-slate-300">{hint}</p>
+          </InfoPopover>
         )}
       </div>
       {children}

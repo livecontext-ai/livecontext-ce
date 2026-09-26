@@ -22,8 +22,6 @@ export interface BillingPlan {
   includedStorageBytes?: number | null;
   includedToolCredits?: number | null;
   includedLlmTokens?: number | null;
-  /** V494: the plan's monthly AI allowance. null = this plan has none (every paid plan). */
-  includedAiCredits?: number | null;
   maxMembers?: number | null;
   [key: string]: unknown;
 }

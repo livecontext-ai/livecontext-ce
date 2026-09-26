@@ -246,7 +246,7 @@ class CreditServiceConsumptionAuditTest {
         @Test
         @DisplayName("first call with sourceId: deducts 1 credit")
         void firstCallDeductsCredit() {
-            when(ledgerRepository.existsBySourceId("run:node:0:0:0:0")).thenReturn(false);
+            when(ledgerRepository.existsNonRejectionBySourceId("run:node:0:0:0:0")).thenReturn(false);
             mockActiveSubscription(INITIAL_BALANCE);
 
             CreditConsumeResult result = service.consumeForWorkflowNode(USER_ID, "run:node:0:0:0:0");
@@ -259,7 +259,7 @@ class CreditServiceConsumptionAuditTest {
         @Test
         @DisplayName("duplicate call with same sourceId: returns success with ZERO credits used (no double charge)")
         void duplicateCallSkipsDeduction() {
-            when(ledgerRepository.existsBySourceId("run:node:0:0:0:0")).thenReturn(true);
+            when(ledgerRepository.existsNonRejectionBySourceId("run:node:0:0:0:0")).thenReturn(true);
             mockActiveSubscription(INITIAL_BALANCE);
 
             CreditConsumeResult result = service.consumeForWorkflowNode(USER_ID, "run:node:0:0:0:0");
@@ -282,15 +282,15 @@ class CreditServiceConsumptionAuditTest {
 
             assertThat(result.success()).isTrue();
             assertThat(result.creditsUsed()).isEqualByComparingTo(BigDecimal.ONE);
-            verify(ledgerRepository, never()).existsBySourceId(any());
+            verify(ledgerRepository, never()).existsNonRejectionBySourceId(any());
             verify(ledgerRepository).save(any());
         }
 
         @Test
         @DisplayName("different sourceIds for same node at different epochs: both charged")
         void differentEpochsDifferentSourceIds() {
-            when(ledgerRepository.existsBySourceId("run:node:0:0:0:0")).thenReturn(false);
-            when(ledgerRepository.existsBySourceId("run:node:1:0:0:0")).thenReturn(false);
+            when(ledgerRepository.existsNonRejectionBySourceId("run:node:0:0:0:0")).thenReturn(false);
+            when(ledgerRepository.existsNonRejectionBySourceId("run:node:1:0:0:0")).thenReturn(false);
             mockActiveSubscription(INITIAL_BALANCE);
 
             CreditConsumeResult r1 = service.consumeForWorkflowNode(USER_ID, "run:node:0:0:0:0");
@@ -308,7 +308,7 @@ class CreditServiceConsumptionAuditTest {
             // Step nodes use format: runId:nodeId:epoch:spawn:iteration:itemIndex
             // If they happen to match (unlikely), the duplicate guard catches it
             String signalSourceId = "run-1:core:approval:3:2";
-            when(ledgerRepository.existsBySourceId(signalSourceId)).thenReturn(true);
+            when(ledgerRepository.existsNonRejectionBySourceId(signalSourceId)).thenReturn(true);
             mockActiveSubscription(INITIAL_BALANCE);
 
             CreditConsumeResult result = service.consumeForWorkflowNode(USER_ID, signalSourceId);
@@ -593,7 +593,7 @@ class CreditServiceConsumptionAuditTest {
         @Test
         @DisplayName("V363: a non-LLM debit (workflow node) leaves cachedTokens null")
         void nonLlmDebitLeavesCachedTokensNull() {
-            when(ledgerRepository.existsBySourceId("run:node:0:0:0:0")).thenReturn(false);
+            when(ledgerRepository.existsNonRejectionBySourceId("run:node:0:0:0:0")).thenReturn(false);
 
             service.consumeForWorkflowNode(USER_ID, "run:node:0:0:0:0");
 
@@ -725,7 +725,7 @@ class CreditServiceConsumptionAuditTest {
         @Test
         @DisplayName("WORKFLOW_NODE via consumeForWorkflowNode")
         void workflowNode() {
-            when(ledgerRepository.existsBySourceId("run:node:0:0:0:0")).thenReturn(false);
+            when(ledgerRepository.existsNonRejectionBySourceId("run:node:0:0:0:0")).thenReturn(false);
             service.consumeForWorkflowNode(USER_ID, "run:node:0:0:0:0");
             verify(ledgerRepository).save(ledgerCaptor.capture());
             assertThat(ledgerCaptor.getValue().getSourceType()).isEqualTo("WORKFLOW_NODE");
@@ -805,7 +805,7 @@ class CreditServiceConsumptionAuditTest {
                     .thenReturn(Optional.of(sub));
 
             // 1. Workflow node: -1 credit → balance = 19
-            when(ledgerRepository.existsBySourceId("run:node:0:0:0:0")).thenReturn(false);
+            when(ledgerRepository.existsNonRejectionBySourceId("run:node:0:0:0:0")).thenReturn(false);
             CreditConsumeResult r1 = service.consumeForWorkflowNode(USER_ID, "run:node:0:0:0:0");
             assertThat(r1.success()).isTrue();
             assertThat(sub.getRemainingCredits()).isEqualByComparingTo(new BigDecimal("19.0000"));

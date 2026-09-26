@@ -14,11 +14,11 @@ export function DocsPrevNext() {
   if (!prev && !next) return null;
 
   return (
-    <nav className="docs-prevnext" aria-label="Pagination">
+    <nav className="docs-prevnext" aria-label="Previous and next page">
       {prev ? (
         <Link href={prev.href} className="docs-prevnext-link">
           <span className="docs-prevnext-dir">
-            <ArrowLeft className="w-3 h-3 inline -mt-0.5 mr-1" />
+            <ArrowLeft className="w-3 h-3 inline -mt-0.5 mr-1" aria-hidden="true" />
             Previous
           </span>
           <span className="docs-prevnext-title">{prev.title}</span>
@@ -30,7 +30,7 @@ export function DocsPrevNext() {
         <Link href={next.href} className="docs-prevnext-link is-next">
           <span className="docs-prevnext-dir">
             Next
-            <ArrowRight className="w-3 h-3 inline -mt-0.5 ml-1" />
+            <ArrowRight className="w-3 h-3 inline -mt-0.5 ml-1" aria-hidden="true" />
           </span>
           <span className="docs-prevnext-title">{next.title}</span>
         </Link>

@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.tools.agent;
 
+import com.apimarketplace.common.web.LogSafePath;
 import com.apimarketplace.agent.config.AgentModuleResolver;
 import com.apimarketplace.agent.tools.authz.ToolAuthorizationPolicy;
 import com.apimarketplace.agent.config.AgentDefaultsConfig;
@@ -31,6 +32,7 @@ import java.util.*;
 
 import static com.apimarketplace.agent.tools.common.ToolParamUtils.*;
 import com.apimarketplace.agent.tools.ToolErrorCode;
+import com.apimarketplace.agent.tools.common.PresentedView;
 
 /**
  * CRUD module for the agent tool - agent-service native version.
@@ -160,7 +162,7 @@ public class AgentCrudModule implements ToolModule {
 
     private final ToolRateLimiter createLimiter = new ToolRateLimiter(CREATE_LIMITER_TTL_MINUTES);
 
-    private static final Set<String> HANDLED_ACTIONS = Set.of("create", "get", "list", "update", "delete", "budgets");
+    private static final Set<String> HANDLED_ACTIONS = Set.of("create", "get", "present", "list", "update", "delete", "budgets");
 
     @Override
     public List<AgentToolDefinition> getToolDefinitions() {
@@ -185,6 +187,7 @@ public class AgentCrudModule implements ToolModule {
         return Optional.of(switch (action) {
             case "create" -> executeCreate(parameters, tenantId, context);
             case "get" -> executeGet(parameters, tenantId, context);
+            case "present" -> executePresent(parameters, tenantId, context);
             case "list" -> executeList(parameters, tenantId, context);
             case "update" -> executeUpdate(parameters, tenantId, context);
             case "delete" -> executeDelete(parameters, tenantId, context);
@@ -344,6 +347,38 @@ public class AgentCrudModule implements ToolModule {
      * leave an orphaned agent). A present, non-null value must coerce to an integer
      * {@code >= 1}; an absent key or an explicit null (clear → inherit) pass.
      */
+    /**
+     * V523 - chat_channel_link_id is a destination id from channel(action='list') (its linkId), or
+     * blank for the workspace default. Anything else is refused before any write, so a typo is never
+     * stored and the agent is never left half-created.
+     */
+    static Optional<ToolExecutionResult> validateChatChannelLink(Map<String, Object> p, String nothingDone) {
+        if (!p.containsKey("chat_channel_link_id")) {
+            return Optional.empty();
+        }
+        Object raw = p.get("chat_channel_link_id");
+        if (raw == null || raw.toString().isBlank() || chatChannelLinkOf(p) != null) {
+            return Optional.empty();
+        }
+        return Optional.of(ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+            "'chat_channel_link_id' must be the linkId of one of this workspace's destinations, as "
+                + "channel(action='list') returns it, or empty for the workspace default (got '" + raw + "'). "
+                + nothingDone));
+    }
+
+    /** The chosen destination, or null for the workspace default (absent, null or blank). */
+    static java.util.UUID chatChannelLinkOf(Map<String, Object> p) {
+        Object raw = p.get("chat_channel_link_id");
+        if (raw == null || raw.toString().isBlank()) {
+            return null;
+        }
+        try {
+            return java.util.UUID.fromString(raw.toString().trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
     private Optional<ToolExecutionResult> validateCompactionCadence(Map<String, Object> p) {
         if (p.containsKey("compaction_after_turns")) {
             Object raw = p.get("compaction_after_turns");
@@ -521,6 +556,34 @@ public class AgentCrudModule implements ToolModule {
             null);
         if (bridgeErr.isPresent()) return bridgeErr.get();
 
+        // Same rule as the bridge check above, for the same reason: these two read the request
+        // parameters ONLY, so they can be judged before the cap, and judging them after it spends
+        // a create slot on a call that creates nothing. The retry the refusal invites then comes
+        // back "LIMIT REACHED: you have already created N agents", which is false.
+        //
+        // V350 - an invalid compaction cadence. A post-create throw in setCompactionOverrides
+        // would orphan the agent, so this has always been refused before the write; it just was
+        // not refused before the count.
+        Optional<ToolExecutionResult> compactionErr = validateCompactionCadence(p);
+        if (compactionErr.isPresent()) return compactionErr.get();
+        Optional<ToolExecutionResult> channelErr = validateChatChannelLink(p, "Nothing was created.");
+        if (channelErr.isPresent()) return channelErr.get();
+
+        // Same for the chat-channel switch (V524): only update applies it.
+        if (p.containsKey("chat_channel_enabled")) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "'chat_channel_enabled' is set on an existing agent (a new agent starts with it on): "
+                    + "create it first, then call action='update' with it. Nothing was created.");
+        }
+
+        // create does not apply this flag (the patch that does lives in update), so accepting it
+        // here would report success on an agent that is NOT armed.
+        if (p.containsKey("require_tool_authorization")) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "'require_tool_authorization' is set on an existing agent: create it first, "
+                    + "then call action='update' with it. Nothing was created.");
+        }
+
         // 5-minute fixed-window creation cap keyed on turnId (unique per user message).
         // See CREATE_LIMITER_TTL_MINUTES - caveats (per-pod, per-restart) documented there.
         String turnId = context != null ? getTurnId(context.credentials()) : null;
@@ -548,13 +611,12 @@ public class AgentCrudModule implements ToolModule {
             Map<String, Object> config = buildConfig(maxIterations);
             String orgId = context != null ? context.orgId() : null;
 
-            // V350 - reject an invalid compaction cadence before creating the agent
-            // (a post-create throw in setCompactionOverrides would orphan the agent).
-            Optional<ToolExecutionResult> compactionErr = validateCompactionCadence(p);
-            if (compactionErr.isPresent()) return compactionErr.get();
+            // The compaction cadence and the require_tool_authorization flag are judged above,
+            // before the creation cap, because both read only the request parameters.
 
             // Direct service call - no HTTP hop
             avatar = validateAvatarParam(avatar); // throws IllegalArgumentException -> clean tool error (caught below)
+
             AgentEntity result = agentService.createAgent(
                 tenantId, name, description, systemPrompt,
                 modelProvider != null ? modelProvider : resolveDefaultProvider(),
@@ -594,6 +656,11 @@ public class AgentCrudModule implements ToolModule {
                 result = agentService.setInactivityTimeout(result.getId(), tenantId, orgId, inactivityTimeout);
             }
 
+            // V523 - where its permission requests and questions go (validated above).
+            if (p.containsKey("chat_channel_link_id")) {
+                result = agentService.setChatChannelLinkId(result.getId(), tenantId, orgId, chatChannelLinkOf(p));
+            }
+
             // Auto-grant: agent gets access to the sub-agent it just created
             if (context != null) {
                 ToolAccessControl.grantCreatedResource(context.credentials(), "agent", result.getId().toString());
@@ -614,7 +681,8 @@ public class AgentCrudModule implements ToolModule {
                     webhookCurl = "curl -X POST " + webhookUrl
                             + " -H \"Content-Type: application/json\""
                             + " -d '{\"message\": \"Hello\"}'";
-                    log.info("[AGENT_CREATE] Webhook created for agent {}: {}", result.getId(), webhookUrl);
+                    log.info("[AGENT_CREATE] Webhook created for agent {}: {}/webhook/agent/{}", result.getId(),
+                            webhookBaseUrl, LogSafePath.tokenPreview(wh.getToken()));
                 } catch (Exception e) {
                     log.warn("[AGENT_CREATE] Failed to create webhook for agent {}: {}", result.getId(), e.getMessage());
                 }
@@ -733,14 +801,6 @@ public class AgentCrudModule implements ToolModule {
             if (!warnings.isEmpty()) msg.append(" (").append(warnings.size()).append(" warning(s) - see 'warnings'.)");
             resultMap.put("message", msg.toString());
 
-            // Add creation limit info
-            if (turnId != null) {
-                String createKey = tenantId + ":" + turnId;
-                int createCount = createLimiter.getCount(createKey);
-                resultMap.put("creates_in_window", createCount + "/" + resolveMaxPerResourcePerTurn(context)
-                        + " (window=" + CREATE_LIMITER_TTL_MINUTES + "min)");
-            }
-
             resultMap.put("marker", "[visualize:agent:" + result.getId() + "]");
 
             Map<String, Object> metadata = Map.of("visualization",
@@ -828,6 +888,25 @@ public class AgentCrudModule implements ToolModule {
         """;
 
     private ToolExecutionResult executeGet(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
+        return withReadableAgent(parameters, tenantId, context, "get", this::describeAgent);
+    }
+
+    // ==================== Present ====================
+
+    /** Opens the agent in the user's side panel. Same checks as get: it can show nothing get could not read. */
+    private ToolExecutionResult executePresent(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
+        return withReadableAgent(parameters, tenantId, context, "present", entity -> PresentedView.result(
+            "agent", "agent_id", entity.getId().toString(),
+            PresentedView.requestedTitleOr(mergeParams(parameters), PresentedView.titleOf(entity.getName(), "Agent"))));
+    }
+
+    /**
+     * The one read path of a single agent: id, the caller's agent allow-list, then the
+     * workspace-scoped lookup (out of scope = not found). get and present both use it.
+     */
+    private ToolExecutionResult withReadableAgent(Map<String, Object> parameters, String tenantId,
+                                                  ToolExecutionContext context, String action,
+                                                  java.util.function.Function<AgentEntity, ToolExecutionResult> onReadable) {
         Map<String, Object> p = mergeParams(parameters);
         UUID id = getUuidParam(p, "agent_id");
         if (id == null) return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, AGENT_ID_ERROR);
@@ -856,47 +935,49 @@ public class AgentCrudModule implements ToolModule {
                 ? agentService.getAgent(id, tenantId, context.orgId(), context.orgRole())
                 : agentService.getAgent(id, tenantId);
             if (opt.isEmpty()) return ToolExecutionResult.failure(ToolErrorCode.AGENT_NOT_FOUND, "Agent not found: " + id);
-            AgentEntity entity = opt.get();
-
-            Map<String, Object> agentMap = new LinkedHashMap<>();
-            agentMap.put("id", entity.getId().toString());
-            agentMap.put("name", entity.getName());
-            agentMap.put("description", entity.getDescription() != null ? entity.getDescription() : "");
-            agentMap.put("system_prompt", entity.getSystemPrompt() != null ? entity.getSystemPrompt() : "");
-            agentMap.put("model_provider", entity.getModelProvider() != null ? entity.getModelProvider() : resolveDefaultProvider());
-            agentMap.put("model_name", entity.getModelName() != null ? entity.getModelName() : resolveDefaultModel());
-            agentMap.put("temperature", entity.getTemperature() != null ? entity.getTemperature() : agentDefaults.getTemperature());
-            agentMap.put("max_tokens", entity.getMaxTokens() != null ? entity.getMaxTokens() : agentDefaults.getMaxTokens());
-            agentMap.put("max_iterations", entity.getMaxIterations() != null ? entity.getMaxIterations() : agentDefaults.getMaxIterations());
-            agentMap.put("execution_timeout", entity.getExecutionTimeout() != null ? entity.getExecutionTimeout() : agentDefaults.getExecutionTimeout());
-            agentMap.put("is_public", entity.getIsPublic() != null ? entity.getIsPublic() : false);
-            agentMap.put("is_active", entity.getIsActive() != null ? entity.getIsActive() : true);
-
-            if (entity.getToolsConfig() != null) {
-                agentMap.put("tools_config", entity.getToolsConfig());
-            }
-            if (entity.getConfig() != null) {
-                agentMap.put("config", entity.getConfig());
-            }
-            if (entity.getWorkflowId() != null) {
-                agentMap.put("workflow_id", entity.getWorkflowId().toString());
-            }
-            if (entity.getDataSourceId() != null) {
-                agentMap.put("datasource_id", entity.getDataSourceId());
-            }
-            if (entity.getConversationId() != null) {
-                agentMap.put("conversation_id", entity.getConversationId().toString());
-            }
-            agentMap.put("budget", buildBudgetResponse(entity));
-            agentMap.put("resources", resolveResources(entity.getToolsConfig()));
-
-            Map<String, Object> metadata = Map.of(
-                "label", entity.getName(),
-                "visualization", Map.of("type", "agent", "id", entity.getId().toString(), "title", entity.getName()));
-            return ToolExecutionResult.success(agentMap, metadata);
+            return onReadable.apply(opt.get());
         } catch (Exception e) {
-            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to get agent: " + e.getMessage());
+            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to " + action + " agent: " + e.getMessage());
         }
+    }
+
+    private ToolExecutionResult describeAgent(AgentEntity entity) {
+        Map<String, Object> agentMap = new LinkedHashMap<>();
+        agentMap.put("id", entity.getId().toString());
+        agentMap.put("name", entity.getName());
+        agentMap.put("description", entity.getDescription() != null ? entity.getDescription() : "");
+        agentMap.put("system_prompt", entity.getSystemPrompt() != null ? entity.getSystemPrompt() : "");
+        agentMap.put("model_provider", entity.getModelProvider() != null ? entity.getModelProvider() : resolveDefaultProvider());
+        agentMap.put("model_name", entity.getModelName() != null ? entity.getModelName() : resolveDefaultModel());
+        agentMap.put("temperature", entity.getTemperature() != null ? entity.getTemperature() : agentDefaults.getTemperature());
+        agentMap.put("max_tokens", entity.getMaxTokens() != null ? entity.getMaxTokens() : agentDefaults.getMaxTokens());
+        agentMap.put("max_iterations", entity.getMaxIterations() != null ? entity.getMaxIterations() : agentDefaults.getMaxIterations());
+        agentMap.put("execution_timeout", entity.getExecutionTimeout() != null ? entity.getExecutionTimeout() : agentDefaults.getExecutionTimeout());
+        agentMap.put("is_public", entity.getIsPublic() != null ? entity.getIsPublic() : false);
+        agentMap.put("is_active", entity.getIsActive() != null ? entity.getIsActive() : true);
+
+        if (entity.getToolsConfig() != null) {
+            agentMap.put("tools_config", entity.getToolsConfig());
+        }
+        if (entity.getConfig() != null) {
+            agentMap.put("config", entity.getConfig());
+        }
+        if (entity.getWorkflowId() != null) {
+            agentMap.put("workflow_id", entity.getWorkflowId().toString());
+        }
+        if (entity.getDataSourceId() != null) {
+            agentMap.put("datasource_id", entity.getDataSourceId());
+        }
+        if (entity.getConversationId() != null) {
+            agentMap.put("conversation_id", entity.getConversationId().toString());
+        }
+        agentMap.put("budget", buildBudgetResponse(entity));
+        agentMap.put("resources", resolveResources(entity.getToolsConfig()));
+
+        Map<String, Object> metadata = Map.of(
+            "label", entity.getName(),
+            "visualization", Map.of("type", "agent", "id", entity.getId().toString(), "title", entity.getName()));
+        return ToolExecutionResult.success(agentMap, metadata);
     }
 
     // ==================== List ====================
@@ -975,6 +1056,52 @@ public class AgentCrudModule implements ToolModule {
             return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, "This agent is not in your approved agent list.");
         }
 
+        // Both refusals below read the request parameters ONLY, so they are judged BEFORE the
+        // consecutive-update cap, the same way create judges its bridge check before the creation
+        // cap and for the same reason: after the cap, a refusal still spends an update, and three
+        // malformed calls then make the next VALID one answer "STOP: you have updated this agent
+        // 3 times already. The agent configuration is COMPLETE", which is false. The refusals
+        // still say "Nothing was changed", and that stays true here: nothing below has run.
+        //
+        // A value nobody can interpret is not "not stated": on create it would land on a default
+        // the caller did not ask for (web_search grants itself), and on update it would be a no-op
+        // the caller reads as a change. Both are worse than being told, so say so and change nothing.
+        String unusableGrant = firstUnusableBooleanGrant(p, "web_search", "generation", "mailbox");
+        if (unusableGrant != null) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "'" + unusableGrant + "' must be true or false (got '" + p.get(unusableGrant)
+                    + "'). Nothing was changed.");
+        }
+        // It must also be in THIS method and not its twin in create: the patch that applies
+        // the flag lives below, and an unvalidated value reaching it reads as false through
+        // Boolean.TRUE.equals, which DISARMS an armed agent and answers success - while the
+        // authorization card stays silent, because the disarm rule matches the literal
+        // 'false' and not 'maybe'. That is the one-call bypass the rule exists to close.
+        if (p.containsKey("require_tool_authorization") && coerceBool(p.get("require_tool_authorization")) == null) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "'require_tool_authorization' must be true or false (got '"
+                    + p.get("require_tool_authorization") + "'). Nothing was changed.");
+        }
+        // V350 - an invalid compaction cadence. Same shape as the two above and moved with
+        // them: it reads only the parameters, and a post-cap refusal here spent an update on a
+        // call that changed nothing.
+        Optional<ToolExecutionResult> compactionErr = validateCompactionCadence(p);
+        if (compactionErr.isPresent()) return compactionErr.get();
+        Optional<ToolExecutionResult> channelErr = validateChatChannelLink(p, "Nothing was changed.");
+        if (channelErr.isPresent()) return channelErr.get();
+        if (p.containsKey("chat_channel_enabled") && coerceBool(p.get("chat_channel_enabled")) == null) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "'chat_channel_enabled' must be true or false (got '" + p.get("chat_channel_enabled")
+                    + "'). Nothing was changed.");
+        }
+        if (Boolean.FALSE.equals(coerceBool(p.get("chat_channel_enabled")))
+                && Boolean.TRUE.equals(coerceBool(p.get("require_tool_authorization")))) {
+            // Checked up front: applied in order, the switch would be saved and the arming refused.
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "'require_tool_authorization' cannot be turned on while 'chat_channel_enabled' is turned off: "
+                    + "the agent would have nowhere to ask. Nothing was changed.");
+        }
+
         String updateKey = tenantId + ":" + id;
         var limitResult = updateLimiter.checkLimit(updateKey, MAX_CONSECUTIVE_UPDATES,
             "STOP: You have updated this agent " + MAX_CONSECUTIVE_UPDATES + " times already. " +
@@ -982,8 +1109,6 @@ public class AgentCrudModule implements ToolModule {
             "DO NOT call agent(action='update') again. " +
             "Instead, ask the user: 'The agent is configured. Would you like any changes?'");
         if (limitResult.isPresent()) return limitResult.get();
-
-        int currentCount = updateLimiter.getCount(updateKey);
 
         String name = getStringParam(p, "name");
         String description = getStringParam(p, "description");
@@ -1006,22 +1131,13 @@ public class AgentCrudModule implements ToolModule {
         Boolean webSearch = getBooleanParam(p, "web_search");
         Boolean generation = getBooleanParam(p, "generation");
         Boolean mailbox = getBooleanParam(p, "mailbox");
-        // A value nobody can interpret is not "not stated": on create it would
-        // land on a default the caller did not ask for (web_search grants
-        // itself), and on update it would be a no-op the caller reads as a
-        // change. Both are worse than being told, so say so and change nothing.
-        // Both refusals below hand the slot BACK, as the bridge refusal further down already
-        // did. The rule is the same for all three and worth stating once: a refusal that
-        // changed nothing must not spend one of the three consecutive updates, or three
-        // rejected calls make the fourth answer "the configuration is COMPLETE" to an agent
-        // that has not succeeded once.
-        String unusableGrant = firstUnusableBooleanGrant(p, "web_search", "generation", "mailbox");
-        if (unusableGrant != null) {
-            updateLimiter.decrement(updateKey);
-            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
-                "'" + unusableGrant + "' must be true or false (got '" + p.get(unusableGrant)
-                    + "'). Nothing was changed.");
-        }
+        // web_search / generation / mailbox and require_tool_authorization are validated above,
+        // before the consecutive-update cap, because they read only the request parameters. Their
+        // refusals still say "Nothing was changed" and that is still true: nothing below has run.
+        //
+        // The escalation check stays HERE, where dev put it: unlike the three above it reads the
+        // caller's own grants out of the context, not just the request, so it is not the same
+        // kind of parameter-only judgement and moving it is a separate decision.
         String escalated = firstEscalatedGrant(p, context);
         if (escalated != null) {
             updateLimiter.decrement(updateKey);
@@ -1142,9 +1258,8 @@ public class AgentCrudModule implements ToolModule {
             // Direct service call - no HTTP hop. callerOrgId already resolved above
             // for the existing-agent fetch (L662), reuse the same value here so the
             // pre-mutation read and the write are guaranteed to target the same scope.
-            // V350 - reject an invalid compaction cadence before the update.
-            Optional<ToolExecutionResult> compactionErr = validateCompactionCadence(p);
-            if (compactionErr.isPresent()) return compactionErr.get();
+            // The compaction cadence is validated above, before the cap, with the other
+            // parameter-only checks.
 
             // Audit 2026-05-16 round-2 originally added this for org-teammate updates.
             avatar = validateAvatarParam(avatar); // throws IllegalArgumentException -> clean tool error (caught below)
@@ -1183,6 +1298,25 @@ public class AgentCrudModule implements ToolModule {
             // Patch the per-agent inactivity watchdog window when sent (present => set, absent => unchanged).
             if (p.containsKey("inactivity_timeout")) {
                 result = agentService.setInactivityTimeout(id, tenantId, callerOrgId, inactivityTimeout);
+            }
+
+            // V523 - chat destination (present => set; blank => back to the workspace default).
+            if (p.containsKey("chat_channel_link_id")) {
+                result = agentService.setChatChannelLinkId(id, tenantId, callerOrgId, chatChannelLinkOf(p));
+            }
+
+            // V524 - the on/off switch, applied before require_tool_authorization below, which needs it on.
+            if (p.containsKey("chat_channel_enabled")) {
+                result = agentService.setChatChannelEnabled(id, tenantId, callerOrgId,
+                    Boolean.TRUE.equals(coerceBool(p.get("chat_channel_enabled"))));
+            }
+
+            // V299 - arm or disarm the tool-authorization requirement when sent. Its own
+            // patch rather than a parameter on the update above, for the same reason as
+            // the three siblings: an update that does not mention it must never change it.
+            if (p.containsKey("require_tool_authorization")) {
+                result = agentService.setRequireToolAuthorization(id, tenantId, callerOrgId,
+                    Boolean.TRUE.equals(coerceBool(p.get("require_tool_authorization"))));
             }
 
             // Assign skills if provided
@@ -1279,8 +1413,6 @@ public class AgentCrudModule implements ToolModule {
             if (scheduleCron != null && !scheduleCron.isBlank()) {
                 responseMap.put("schedule_cron", scheduleCron);
             }
-            responseMap.put("updateCount", currentCount);
-            responseMap.put("maxUpdates", MAX_CONSECUTIVE_UPDATES);
 
             // DOC-5: warn when credit_budget is physically unreachable given max_iterations.
             Integer effectiveMaxIter = result.getMaxIterations() != null
@@ -1298,7 +1430,7 @@ public class AgentCrudModule implements ToolModule {
             if (!warnings.isEmpty()) responseMap.put("warnings", warnings);
 
             StringBuilder updateMsg = new StringBuilder();
-            updateMsg.append("Agent '").append(result.getName()).append("' updated successfully (update ").append(currentCount).append("/").append(MAX_CONSECUTIVE_UPDATES).append(").");
+            updateMsg.append("Agent '").append(result.getName()).append("' updated successfully.");
             if (webhookUrl != null) updateMsg.append(" Webhook: ").append(webhookUrl);
             if (scheduleCron != null) updateMsg.append(" Schedule: ").append(scheduleCron);
             if (!warnings.isEmpty()) updateMsg.append(" (").append(warnings.size()).append(" warning(s) - see 'warnings'.)");

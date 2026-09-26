@@ -1,6 +1,7 @@
 package com.apimarketplace.agent.service.execution;
 
 import com.apimarketplace.agent.domain.ToolCall;
+import com.apimarketplace.agent.tools.authz.AuthorizationAsk;
 import com.apimarketplace.agent.domain.ToolResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -81,6 +82,41 @@ class RemoteToolExecutionAuthorizationTest {
                 creds, System.currentTimeMillis());
 
         assertThat(result).isNull();
+    }
+
+    @Test
+    @DisplayName("A grant scoped to one ask lets THAT call through")
+    void askScopedGrantCoversItsOwnCall() {
+        Map<String, Object> args = Map.of("action", "execute", "id", "wf-1");
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__approvedToolActions__", List.of(AuthorizationAsk.scopedGrant("workflow:execute",
+                AuthorizationAsk.fingerprintOfCall("workflow:execute", "workflow", args))));
+
+        ToolResult result = service.checkToolAuthorization(
+                new ToolCall("call-scoped", "workflow", args, null), creds, System.currentTimeMillis());
+
+        // Somebody answered this exact question in a chat. The call they were shown runs.
+        assertThat(result).isNull();
+    }
+
+    @Test
+    @DisplayName("A grant scoped to one ask does NOT let a different call of the same rule through")
+    void askScopedGrantDoesNotCoverAnotherCall() {
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__approvedToolActions__", List.of(AuthorizationAsk.scopedGrant("workflow:execute",
+                AuthorizationAsk.fingerprintOfCall("workflow:execute", "workflow",
+                        Map.of("action", "execute", "id", "wf-1")))));
+
+        ToolResult result = service.checkToolAuthorization(
+                new ToolCall("call-other", "workflow", Map.of("action", "execute", "id", "wf-2"), null),
+                creds, System.currentTimeMillis());
+
+        // The hole this closes. The person approved running wf-1 from their phone; the turn
+        // that spends the grant is a scheduled one they are not watching, and wf-2 is a
+        // different decision. It asks again instead of running.
+        assertThat(result).isNotNull();
+        assertThat(result.metadata()).containsEntry("toolAuthorizationRequired", true);
+        assertThat(result.metadata()).containsEntry("rule", "workflow:execute");
     }
 
     @Test

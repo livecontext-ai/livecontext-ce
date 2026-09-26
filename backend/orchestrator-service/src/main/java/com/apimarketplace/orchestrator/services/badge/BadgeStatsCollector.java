@@ -24,7 +24,7 @@ import java.util.UUID;
 
 /**
  * Reads {@link BadgeMetric} values for one user, in as few round-trips as the
- * data ownership allows: three grouped SQL statements against the orchestrator
+ * data ownership allows: four grouped SQL statements against the orchestrator
  * schema, one call to publication-service, one to auth-service.
  *
  * <p><b>Only what is still needed.</b> {@link #collect(String, Set)} takes the
@@ -118,7 +118,66 @@ public class BadgeStatsCollector {
         if (needsAny(needed, BadgeMetric.DAYS_UNTIL_JOIN_CUTOFF, BadgeMetric.MEMBER_DAYS)) {
             collectIdentity(tenantId, stats);
         }
+        if (needsAny(needed, BadgeMetric.CHANNELS_CONNECTED, BadgeMetric.CHANNEL_SERVICES,
+                BadgeMetric.REMOTE_DECISIONS)) {
+            collectChannels(tenantId, stats);
+        }
         return stats.build();
+    }
+
+    /**
+     * Chat channels, all in this schema, in one statement.
+     *
+     * <p><b>Connected</b> means a destination whose test message arrived ({@code verified_at}),
+     * not a row somebody tried to create: that is the moment the product can actually reach the
+     * person. <b>Remote decisions</b> are counted from what records WHO decided, never from a
+     * status alone: an agent request is only ever resolved from its chat ({@code decided_by} is
+     * "&lt;service&gt;:&lt;presser&gt;"), while a workflow approval can also be decided in the app, so
+     * only the ones whose signal was resolved by the delivery's own service count.
+     *
+     * <p>Keyed on the user as everywhere else: the links they connected, the requests their agents
+     * sent, the approvals of their runs. So a teammate pressing in a group chat credits the owner of
+     * the request, which is why the requirement reads "requests answered from a chat": the presser
+     * is only known as a service handle, never as an account. One {@code ask_user} call with several
+     * questions counts once per question, each being its own answer.
+     *
+     * <p><b>Not monotonic, knowingly.</b> Unlike the authored counts above, these rows are deleted
+     * rather than soft-deleted: disconnecting a destination removes it and, by cascade, the requests
+     * it resolved; re-running a node removes its stale signal wait and its deliveries. So the
+     * progress bar toward the next tier can move back. No trophy is lost (unlocks are permanent),
+     * and keeping these counts monotonic would need a ledger of their own, which the progress bar
+     * alone does not justify.
+     *
+     * <p>Indexed for this read by V522 (partial tenant indexes), since it runs for nearly every user.
+     */
+    private void collectChannels(String tenantId, BadgeStats.Builder stats) {
+        try {
+            Object[] row = (Object[]) entityManager.createNativeQuery("""
+                    SELECT (SELECT COUNT(*)
+                              FROM orchestrator.chat_channel_links
+                             WHERE tenant_id = :tenantId AND verified_at IS NOT NULL) AS connected,
+                           (SELECT COUNT(DISTINCT b.channel)
+                              FROM orchestrator.chat_channel_links l
+                              JOIN orchestrator.chat_channel_bots b ON b.id = l.bot_id
+                             WHERE l.tenant_id = :tenantId AND l.verified_at IS NOT NULL) AS services,
+                           (SELECT COUNT(*)
+                              FROM orchestrator.chat_authorization_requests
+                             WHERE tenant_id = :tenantId AND status = 'RESOLVED'
+                               AND decided_by IS NOT NULL)
+                         + (SELECT COUNT(*)
+                              FROM orchestrator.approval_channel_deliveries d
+                              JOIN orchestrator.workflow_signal_waits s ON s.id = d.signal_wait_id
+                             WHERE d.tenant_id = :tenantId
+                               AND s.resolved_by LIKE d.channel || ':%') AS remote
+                    """)
+                    .setParameter("tenantId", tenantId)
+                    .getSingleResult();
+            stats.put(BadgeMetric.CHANNELS_CONNECTED, toLong(row[0]));
+            stats.put(BadgeMetric.CHANNEL_SERVICES, toLong(row[1]));
+            stats.put(BadgeMetric.REMOTE_DECISIONS, toLong(row[2]));
+        } catch (RuntimeException ex) {
+            log.warn("[badges] channel metrics failed for tenant {}: {}", tenantId, ex.getMessage());
+        }
     }
 
     private static boolean needsAny(Set<BadgeMetric> needed, BadgeMetric... candidates) {
@@ -183,6 +242,30 @@ public class BadgeStatsCollector {
         }
     }
 
+    /**
+     * "This epoch succeeded", on an {@code EPOCH_HEADER} row aliased {@code e}: closed, no
+     * failed node, and something other than the trigger ran (see {@link #collectExecutions}
+     * for why each clause). Shared with the monthly recap, which counts the same successes
+     * over one month, so the trophy page and the recap email can never disagree on what a
+     * successful run is.
+     */
+    public static final String SUCCESSFUL_EPOCH_CONDITION = """
+            e.is_active = FALSE
+              AND COALESCE(jsonb_array_length(
+                      CASE WHEN jsonb_typeof(e.epoch_state -> 'failedNodeIds') = 'array'
+                           THEN e.epoch_state -> 'failedNodeIds' END), 0) = 0
+              AND (
+                  COALESCE(jsonb_array_length(
+                      CASE WHEN jsonb_typeof(e.epoch_state -> 'skippedNodeIds') = 'array'
+                           THEN e.epoch_state -> 'skippedNodeIds' END), 0) > 0
+                  OR EXISTS (
+                      SELECT 1 FROM jsonb_array_elements_text(
+                          CASE WHEN jsonb_typeof(e.epoch_state -> 'completedNodeIds') = 'array'
+                               THEN e.epoch_state -> 'completedNodeIds'
+                               ELSE '[]'::jsonb END) AS completed_node_id
+                       WHERE completed_node_id NOT LIKE 'trigger:%')
+              )""";
+
     /** Run-row counts, which floor the two execution metrics. */
     private record RunRowCounts(long total, long completed) {
         static final RunRowCounts NONE = new RunRowCounts(0L, 0L);
@@ -241,28 +324,12 @@ public class BadgeStatsCollector {
                            COUNT(*) FILTER (
                                WHERE EXTRACT(HOUR FROM (e.started_at AT TIME ZONE 'UTC')) < 5
                            ) AS night_launches,
-                           COUNT(*) FILTER (
-                               WHERE e.is_active = FALSE
-                                 AND COALESCE(jsonb_array_length(
-                                         CASE WHEN jsonb_typeof(e.epoch_state -> 'failedNodeIds') = 'array'
-                                              THEN e.epoch_state -> 'failedNodeIds' END), 0) = 0
-                                 AND (
-                                     COALESCE(jsonb_array_length(
-                                         CASE WHEN jsonb_typeof(e.epoch_state -> 'skippedNodeIds') = 'array'
-                                              THEN e.epoch_state -> 'skippedNodeIds' END), 0) > 0
-                                     OR EXISTS (
-                                         SELECT 1 FROM jsonb_array_elements_text(
-                                             CASE WHEN jsonb_typeof(e.epoch_state -> 'completedNodeIds') = 'array'
-                                                  THEN e.epoch_state -> 'completedNodeIds'
-                                                  ELSE '[]'::jsonb END) AS completed_node_id
-                                          WHERE completed_node_id NOT LIKE 'trigger:%')
-                                 )
-                           ) AS successful
+                           COUNT(*) FILTER (WHERE %s) AS successful
                       FROM orchestrator.workflow_epochs e
                       JOIN orchestrator.workflow_runs r ON r.run_id_public = e.run_id
                      WHERE r.tenant_id = :tenantId
                        AND e.entry_type = 'EPOCH_HEADER'
-                    """)
+                    """.formatted(SUCCESSFUL_EPOCH_CONDITION))
                     .setParameter("tenantId", tenantId)
                     .getSingleResult();
             epochs = toLong(row[0]);

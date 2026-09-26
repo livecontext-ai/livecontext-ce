@@ -263,6 +263,30 @@ class CeConversationStubControllerTest {
     }
 
     @Test
+    @DisplayName("CE ERROR finalize records the producer's errorMessage, the key ConversationClient sends")
+    void ceErrorFinalizeRecordsProducerErrorMessage() {
+        // Regression: the stub read body.get("error"), a key no producer sends, so every CE
+        // stream error was stored as "Unknown error" while the cause lived only in the log.
+        when(streamStateService.error(org.mockito.Mockito.any(), org.mockito.Mockito.any())).thenReturn(Mono.just(true));
+
+        controller.finalizeInternalStream("stream-1",
+            Map.of("state", "ERROR", "errorMessage", "LLM provider timeout"));
+
+        verify(streamStateService).error("stream-1", "LLM provider timeout");
+    }
+
+    @Test
+    @DisplayName("CE ERROR finalize without a reason records the same placeholder as the cloud endpoint")
+    void ceErrorFinalizeWithoutReasonUsesPlaceholder() {
+        when(streamStateService.error(org.mockito.Mockito.any(), org.mockito.Mockito.any())).thenReturn(Mono.just(true));
+
+        controller.finalizeInternalStream("stream-1", Map.of("state", "ERROR"));
+
+        verify(streamStateService).error("stream-1",
+            com.apimarketplace.conversation.controller.internal.InternalAccessController.DEFAULT_STREAM_ERROR);
+    }
+
+    @Test
     @DisplayName("CE stream registration attributes the stream to the conversation OWNER (feeds /streams/active)")
     void ceStreamRegistrationAttributesOwner() {
         when(streamStateService.registerExternalStream(

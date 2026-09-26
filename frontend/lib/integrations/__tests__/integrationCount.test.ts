@@ -308,8 +308,9 @@ describe('the advertised catalogue size', () => {
     expect(llms).toContain(`${CATALOG_INTEGRATIONS_CLAIM} API integrations`);
     expect(llms).toContain(`${CATALOG_OPERATIONS_CLAIM} operations`);
 
+    // The hero lead no longer states the integration count (the integrations strip below it
+    // does), so hero-flow is only pinned on the operations figure and scanned for stale ones.
     const heroFlow = readFileSync(join(FRONTEND_ROOT, 'public', 'hero-flow.html'), 'utf8');
-    expect(heroFlow).toContain(`${CATALOG_INTEGRATIONS_CLAIM} integrations`);
     // hero-flow writes it as "+ 30,000 tools", so the trailing plus is dropped, not the comma.
     expect(heroFlow).toContain(CATALOG_OPERATIONS_CLAIM.replace(/\+$/, ''));
 

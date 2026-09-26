@@ -1126,6 +1126,79 @@ class OAuth2ServiceTest {
     @DisplayName("handleCallback - PKCE wiring")
     class HandleCallbackPkceTests {
 
+        private String primeCallbackState(String state) throws Exception {
+            var stateRecord = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2State(
+                    USER_ID, "template-airtable", "Airtable Credential", "client-id", "client-secret",
+                    "https://airtable.com/oauth2/v1/authorize", "https://airtable.com/oauth2/v1/token",
+                    "data.records:read", "Production", "airtable", "/icons/services/airtable.svg",
+                    "/app/settings/credentials", Instant.parse("2026-04-09T10:00:00Z"), null);
+            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            when(valueOperations.get("oauth2:state:" + state)).thenReturn(objectMapper.writeValueAsString(stateRecord));
+            return state;
+        }
+
+        private org.springframework.web.client.RestTemplate mockRest() {
+            org.springframework.web.client.RestTemplate mockRest = mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "restTemplate", mockRest);
+            return mockRest;
+        }
+
+        private ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> capture() {
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            logs.start();
+            ((ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(OAuth2Service.class)).addAppender(logs);
+            return logs;
+        }
+
+        private void release(ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs) {
+            ((ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(OAuth2Service.class)).detachAppender(logs);
+        }
+
+        @Test
+        @DisplayName("Regression 2026-09-25: a 5xx from the token endpoint is logged scrubbed, never the echoed token")
+        void serverErrorBodyScrubbed() throws Exception {
+            String state = primeCallbackState("state-5xx");
+            String echoed = "{\"error\":\"server_error\",\"refresh_token\":\"rt-FAKE-echoed-secret-123\"}";
+            when(mockRest().postForEntity(anyString(), any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenThrow(org.springframework.web.client.HttpServerErrorException.create(
+                            org.springframework.http.HttpStatus.BAD_GATEWAY, "Bad Gateway", null,
+                            echoed.getBytes(java.nio.charset.StandardCharsets.UTF_8), null));
+            var logs = capture();
+            try {
+                String redirect = oAuth2Service.handleCallback("code-1", state);
+
+                assertThat(redirect).contains("token_exchange_failed");
+                assertThat(logs.list).anySatisfy(e -> assertThat(e.getFormattedMessage()).contains("Token exchange HTTP error"));
+                logs.list.forEach(e -> assertThat(e.getFormattedMessage()).doesNotContain("rt-FAKE-echoed-secret-123"));
+                logs.list.forEach(e -> assertThat(e.getThrowableProxy()).isNull());
+            } finally {
+                release(logs);
+            }
+        }
+
+        @Test
+        @DisplayName("A non-HTTP failure keeps its message and stack trace (the diagnosis must not be lost)")
+        void nonHttpFailureKeepsDiagnosis() throws Exception {
+            String state = primeCallbackState("state-npe");
+            when(mockRest().postForEntity(anyString(), any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenThrow(new IllegalStateException("connection pool exhausted"));
+            var logs = capture();
+            try {
+                String redirect = oAuth2Service.handleCallback("code-2", state);
+
+                assertThat(redirect).contains("token_exchange_failed");
+                assertThat(logs.list).anySatisfy(e -> {
+                    assertThat(e.getFormattedMessage()).contains("connection pool exhausted");
+                    assertThat(e.getThrowableProxy()).isNotNull();
+                });
+            } finally {
+                release(logs);
+            }
+        }
+
         @Test
         @DisplayName("PKCE codeVerifier from state is propagated to the token exchange body")
         void pkceVerifierReachesTokenExchange() throws Exception {
@@ -2861,6 +2934,147 @@ class OAuth2ServiceTest {
                     .as("the workspace captured at initiate must survive the redirect via the Redis state")
                     .isEqualTo("org-acme-99");
             assertThat(persisted.userId()).isEqualTo(USER_ID);
+        }
+
+        // ===== V513 own-client scope selection: TikTok, Figma and LinkedIn refuse the WHOLE
+        // authorization over one scope the app was not given, so an own client narrows what it
+        // requests. The selection only ever narrows the catalog set; it never adds to it. =====
+
+        private com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential gmailRow(
+                String tenantId, String selectedScopes) {
+            return new com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential(
+                    7L, "gmail", "Gmail",
+                    com.apimarketplace.auth.credential.domain.PlatformCredentialModels.AuthType.OAUTH2,
+                    "own-cid", "own-csec", null, null, null,
+                    "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token", null,
+                    "gmail", "Communication", "desc",
+                    true, true, Map.of(), java.math.BigDecimal.ZERO, 0,
+                    Instant.now(), Instant.now(), null, tenantId, "primary", null, selectedScopes);
+        }
+
+        private String requestedScopes(String tenantId, String selectedScopes) throws Exception {
+            stubCatalogTemplateJson(GMAIL_TEMPLATE_JSON);
+            when(platformCredentialService.getRawOAuth2Credential("gmail", USER_ID, null))
+                    .thenReturn(Optional.of(gmailRow(tenantId, selectedScopes)));
+            var request = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest(
+                    "template-gmail", "My Gmail", null, null, "Production", null, "/app/settings/credentials");
+            return queryParam(oAuth2Service.initiate(request, USER_ID).authorizationUrl(), "scope");
+        }
+
+        @Test
+        @DisplayName("BYOK row with a selection requests only the selected catalog scopes (the TikTok 'scope' refusal)")
+        void byokSelectionDropsUnselectedByokOnlyScope() throws Exception {
+            String scope = requestedScopes(USER_ID,
+                    "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.labels "
+                            + "https://www.googleapis.com/auth/gmail.readonly");
+
+            assertThat(scope)
+                    .as("an unselected byok-only scope is the one the provider refuses the whole connect over")
+                    .doesNotContain("gmail.modify");
+            assertThat(scope).contains("gmail.readonly").contains("gmail.send").contains("gmail.labels");
+        }
+
+        @Test
+        @DisplayName("BYOK row may also drop a platform scope its app does not have")
+        void byokSelectionCanDropAPlatformScope() throws Exception {
+            String scope = requestedScopes(USER_ID,
+                    "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly");
+
+            assertThat(scope).doesNotContain("gmail.labels").doesNotContain("gmail.modify");
+            assertThat(scope).contains("gmail.send").contains("gmail.readonly");
+        }
+
+        @Test
+        @DisplayName("BYOK row with no selection keeps requesting every catalog scope (every pre-V513 row)")
+        void byokWithoutSelectionKeepsTheFullUnion() throws Exception {
+            String scope = requestedScopes(USER_ID, null);
+
+            assertThat(scope).contains("gmail.send").contains("gmail.labels")
+                    .contains("gmail.readonly").contains("gmail.modify");
+        }
+
+        @Test
+        @DisplayName("a selected scope the catalog does not declare is never requested: selection narrows, never adds")
+        void selectionCannotInjectAScopeTheCatalogDoesNotDeclare() throws Exception {
+            String scope = requestedScopes(USER_ID,
+                    "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.metadata");
+
+            assertThat(scope)
+                    .as("gmail.metadata is not in the catalog (it was dropped for breaking search), so it must not come back")
+                    .doesNotContain("gmail.metadata");
+            assertThat(scope).isEqualTo("https://www.googleapis.com/auth/gmail.send");
+        }
+
+        @Test
+        @DisplayName("a selection matching no catalog scope falls back to the full set rather than an empty request")
+        void selectionMatchingNothingFallsBackToTheFullSet() throws Exception {
+            String scope = requestedScopes(USER_ID, "https://www.googleapis.com/auth/gmail.metadata");
+
+            assertThat(scope).contains("gmail.send").contains("gmail.labels")
+                    .contains("gmail.readonly").contains("gmail.modify");
+        }
+
+        @Test
+        @DisplayName("Cloud platform-wide row ignores a selection: the shared client keeps the catalog platform scopes")
+        void cloudPlatformRowIgnoresASelection() throws Exception {
+            String scope = requestedScopes(null, "https://www.googleapis.com/auth/gmail.send");
+
+            assertThat(scope)
+                    .as("the shared client's scope set is catalog-owned; nothing a row stores may narrow it")
+                    .contains("gmail.send").contains("gmail.labels");
+            assertThat(scope).doesNotContain("gmail.readonly");
+        }
+
+        @Test
+        @DisplayName("CE install-wide row applies its selection after the CE widening")
+        void ceInstallRowSelectionNarrowsTheWidenedSet() throws Exception {
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "authMode", "embedded");
+
+            String scope = requestedScopes(null,
+                    "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.labels");
+
+            assertThat(scope)
+                    .as("CE would otherwise add every byok-only scope, which is how every CE Figma connect failed")
+                    .doesNotContain("gmail.readonly").doesNotContain("gmail.modify");
+            assertThat(scope).contains("gmail.send").contains("gmail.labels");
+        }
+
+        @Test
+        @DisplayName("a selection naming every catalog scope returns the config untouched (no narrowing, no reordering)")
+        void selectionOfEveryScopeLeavesTheConfigUntouched() {
+            var config = new com.apimarketplace.auth.credential.domain.OAuth2ProviderConfig(
+                    "https://auth", "https://token", null, List.of("a", "b"), " ",
+                    com.apimarketplace.auth.credential.domain.OAuth2ProviderConfig.AuthMethod.POST, false, Map.of(),
+                    com.apimarketplace.auth.credential.domain.OAuth2ProviderConfig.RefreshConfig.STANDARD);
+
+            var result = oAuth2Service.applySelectedScopes(gmailRow(USER_ID, "b a"), config, "gmail");
+
+            assertThat(result).isSameAs(config);
+        }
+
+        @Test
+        @DisplayName("Slack: an unselected user-only scope leaves user_scope too, the selected one still routes there")
+        void slackSelectionNarrowsTheUserScopeFamily() throws Exception {
+            stubCatalogTemplateJson(SLACK_TEMPLATE_JSON);
+            var byokRow = new com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential(
+                    4L, "slack", "Slack",
+                    com.apimarketplace.auth.credential.domain.PlatformCredentialModels.AuthType.OAUTH2,
+                    "slack-own-cid", "slack-csec", null, null, null,
+                    "https://slack.com/oauth/v2/authorize", "https://slack.com/api/oauth.v2.access", null,
+                    "slack", "Communication", "desc",
+                    true, true, Map.of(), java.math.BigDecimal.ZERO, 0,
+                    Instant.now(), Instant.now(), null, USER_ID, "primary", null,
+                    "chat:write channels:read search:read");
+            when(platformCredentialService.getRawOAuth2Credential("slack", USER_ID, null))
+                    .thenReturn(Optional.of(byokRow));
+            var request = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest(
+                    "template-slack", "My Slack", null, null, "Production", null, "/app/settings/credentials");
+
+            String url = oAuth2Service.initiate(request, USER_ID).authorizationUrl();
+
+            assertThat(queryParam(url, "user_scope")).isEqualTo("search:read");
+            assertThat(queryParam(url, "scope")).contains("chat:write").contains("channels:read")
+                    .doesNotContain("search:read").doesNotContain("dnd:write");
         }
 
         /** Stub the catalog WebClient GET so fetchCredentialTemplate(id) returns the given JSON. */

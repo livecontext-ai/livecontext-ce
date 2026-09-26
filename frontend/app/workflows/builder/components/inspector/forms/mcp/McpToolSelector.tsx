@@ -31,6 +31,7 @@ import {
   toggleCredentialMode,
   type CredentialToolData,
 } from './credentialSelectorMode';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 interface McpToolSelectorProps {
   node: Node<BuilderNodeData>;
@@ -189,7 +190,7 @@ export function McpToolSelector({
                     >
                       <div className="flex-shrink-0 w-11 h-11 flex items-center justify-center">
                         {api.iconSlug ? (
-                          <Image
+                          <ServiceLogo as={Image}
                             src={`/icons/services/${api.iconSlug}.svg`}
                             alt={api.apiName}
                             width={28}
@@ -197,13 +198,13 @@ export function McpToolSelector({
                             className="w-7 h-7"
                             onError={(e) => {
                               const target = e.target as HTMLImageElement;
-                              target.src = isDark ? "/mcp.png" : "/mcp_black.png";
+                              target.src = isDark ? "/icons/integration.svg" : "/icons/integration_black.svg";
                               target.className = "w-7 h-7";
                             }}
                           />
                         ) : (
                           <Image
-                            src={isDark ? "/mcp.png" : "/mcp_black.png"}
+                            src={isDark ? "/icons/integration.svg" : "/icons/integration_black.svg"}
                             alt="API"
                             width={28}
                             height={28}
@@ -272,7 +273,7 @@ export function McpToolSelector({
                     >
                       <div className="flex-shrink-0 w-11 h-11 flex items-center justify-center">
                         {iconSlug ? (
-                          <Image
+                          <ServiceLogo as={Image}
                             src={`/icons/services/${iconSlug}.svg`}
                             alt="Tool"
                             width={28}
@@ -280,13 +281,13 @@ export function McpToolSelector({
                             className="w-7 h-7"
                             onError={(e) => {
                               const target = e.target as HTMLImageElement;
-                              target.src = isDark ? "/mcp.png" : "/mcp_black.png";
+                              target.src = isDark ? "/icons/integration.svg" : "/icons/integration_black.svg";
                               target.className = "w-7 h-7";
                             }}
                           />
                         ) : (
                           <Image
-                            src={isDark ? "/mcp.png" : "/mcp_black.png"}
+                            src={isDark ? "/icons/integration.svg" : "/icons/integration_black.svg"}
                             alt="Tool"
                             width={28}
                             height={28}

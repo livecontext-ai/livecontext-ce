@@ -7,6 +7,7 @@ import com.apimarketplace.agent.registry.ToolCategory;
 import com.apimarketplace.agent.tools.ToolErrorCode;
 import com.apimarketplace.agent.tools.ToolsProvider;
 import com.apimarketplace.agent.tools.common.AgentListEnvelope;
+import com.apimarketplace.agent.tools.common.PresentedView;
 import com.apimarketplace.agent.tools.common.ToolMediaMetadata;
 import com.apimarketplace.agent.tools.common.ToolParamUtils;
 import com.apimarketplace.agent.tools.common.ToolResultSizeCap;
@@ -83,7 +84,7 @@ public class FilesToolsProvider implements ToolsProvider {
     private static final String TOOL_NAME = "files";
 
     private static final List<String> VALID_ACTIONS =
-            List.of("list", "get", "view", "visualize", "create_folder", "move_to_folder", "help");
+            List.of("list", "get", "view", "visualize", "present", "create_folder", "move_to_folder", "help");
 
     /** Default text/JSON window for {@code view}; also the hard ceiling (aligned with
      *  {@link ToolResultSizeCap#MAX_STRING_BYTES} so the agent sees one cap everywhere). */
@@ -220,6 +221,7 @@ public class FilesToolsProvider implements ToolsProvider {
                 case "get"  -> executeGet(params, tenantId, orgId, orgRole, allowedFiles);
                 case "view" -> executeView(params, tenantId, orgId, orgRole, allowedFiles);
                 case "visualize" -> executeVisualize(params, tenantId, orgId, orgRole, allowedFiles);
+                case "present" -> executePresent(params, tenantId, orgId, orgRole, allowedFiles);
                 case "create_folder" -> executeCreateFolder(params, tenantId, orgId);
                 case "move_to_folder" -> executeMoveToFolder(params, tenantId, orgId, orgRole, allowedFiles);
                 default -> ToolExecutionResult.failure(ToolErrorCode.VALIDATION_ERROR,
@@ -688,28 +690,54 @@ public class FilesToolsProvider implements ToolsProvider {
         return out;
     }
 
+    // ==================== present (open in the user's side panel) ====================
+
+    /**
+     * Opens the file in the user's side panel now, where {@code visualize} only leaves a card
+     * the user may click. Same lookup as get: it can show nothing get could not read.
+     */
+    private ToolExecutionResult executePresent(Map<String, Object> params, String tenantId, String orgId, String orgRole,
+                                               Set<String> allowedFiles) {
+        FileLookup found = lookupBrowsableFile(params, tenantId, orgId, orgRole, allowedFiles);
+        if (found.failure() != null) return found.failure();
+        StorageEntity e = found.file();
+        return PresentedView.result("file", "file_id", e.getId().toString(), PresentedView.requestedTitleOr(params, e.getFileName()));
+    }
+
+    /** A browsable file the caller may read, or the failure to answer instead. */
+    private record FileLookup(StorageEntity file, ToolExecutionResult failure) {}
+
+    /**
+     * The one read path of a single file (get, view, visualize, present): the member rules and
+     * the agent's allow-list, then the workspace-scoped lookup. Every refusal is a not-found,
+     * never a forbidden, so nothing outside the workspace can be probed. A row without a file
+     * name is a step-output blob, not a browsable file (same boundary as list's filesOnly).
+     */
+    private FileLookup lookupBrowsableFile(Map<String, Object> params, String tenantId, String orgId, String orgRole,
+                                           Set<String> allowedFiles) {
+        UUID fileId = ToolParamUtils.getUuidParam(params, "file_id");
+        if (fileId == null) {
+            return new FileLookup(null, ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER,
+                "file_id is required (the UUID from files(action='list'))."));
+        }
+        ToolExecutionResult notFound = ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "File not found: " + fileId);
+        if (!canAccessFile(orgId, tenantId, orgRole, fileId) || !withinAllowList(allowedFiles, fileId)) {
+            return new FileLookup(null, notFound);
+        }
+        StorageEntity e = storageService.getEntityByIdForScope(fileId, tenantId, orgId).orElse(null);
+        if (e == null || e.getFileName() == null) {
+            return new FileLookup(null, notFound);
+        }
+        return new FileLookup(e, null);
+    }
+
     // ==================== get (cheap peek) ====================
 
     private ToolExecutionResult executeGet(Map<String, Object> params, String tenantId, String orgId, String orgRole,
                                            Set<String> allowedFiles) {
-        UUID fileId = ToolParamUtils.getUuidParam(params, "file_id");
-        if (fileId == null) {
-            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER,
-                "file_id is required (the UUID from files(action='list')).");
-        }
-        if (!canAccessFile(orgId, tenantId, orgRole, fileId) || !withinAllowList(allowedFiles, fileId)) {
-            return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "File not found: " + fileId);
-        }
-        Optional<StorageEntity> opt = storageService.getEntityByIdForScope(fileId, tenantId, orgId);
-        if (opt.isEmpty()) {
-            // 404, never 403 - do not leak existence of files in another workspace.
-            return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "File not found: " + fileId);
-        }
-        StorageEntity e = opt.get();
-        if (e.getFileName() == null) {
-            // Not a browsable file (e.g. a step-output JSON blob) - same boundary as list's filesOnly.
-            return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "File not found: " + fileId);
-        }
+        FileLookup found = lookupBrowsableFile(params, tenantId, orgId, orgRole, allowedFiles);
+        if (found.failure() != null) return found.failure();
+        StorageEntity e = found.file();
 
         Map<String, Object> out = baseMeta(e);
         String st = e.getStorageType();
@@ -754,23 +782,9 @@ public class FilesToolsProvider implements ToolsProvider {
 
     private ToolExecutionResult executeView(Map<String, Object> params, String tenantId, String orgId, String orgRole,
                                             Set<String> allowedFiles) {
-        UUID fileId = ToolParamUtils.getUuidParam(params, "file_id");
-        if (fileId == null) {
-            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER,
-                "file_id is required (the UUID from files(action='list')).");
-        }
-        if (!canAccessFile(orgId, tenantId, orgRole, fileId) || !withinAllowList(allowedFiles, fileId)) {
-            return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "File not found: " + fileId);
-        }
-        Optional<StorageEntity> opt = storageService.getEntityByIdForScope(fileId, tenantId, orgId);
-        if (opt.isEmpty()) {
-            return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "File not found: " + fileId);
-        }
-        StorageEntity e = opt.get();
-        if (e.getFileName() == null) {
-            // Not a browsable file (e.g. a step-output JSON blob) - same boundary as list's filesOnly.
-            return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "File not found: " + fileId);
-        }
+        FileLookup found = lookupBrowsableFile(params, tenantId, orgId, orgRole, allowedFiles);
+        if (found.failure() != null) return found.failure();
+        StorageEntity e = found.file();
 
         int offset = Math.max(0, ToolParamUtils.getIntParam(params, "offset", 0));
         int maxBytes = ToolParamUtils.getIntParam(params, "max_bytes", VIEW_MAX_BYTES);
@@ -1002,24 +1016,9 @@ public class FilesToolsProvider implements ToolsProvider {
      */
     private ToolExecutionResult executeVisualize(Map<String, Object> params, String tenantId, String orgId, String orgRole,
                                                  Set<String> allowedFiles) {
-        UUID fileId = ToolParamUtils.getUuidParam(params, "file_id");
-        if (fileId == null) {
-            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER,
-                "file_id is required (the UUID from files(action='list')).");
-        }
-        if (!canAccessFile(orgId, tenantId, orgRole, fileId) || !withinAllowList(allowedFiles, fileId)) {
-            return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "File not found: " + fileId);
-        }
-        Optional<StorageEntity> opt = storageService.getEntityByIdForScope(fileId, tenantId, orgId);
-        if (opt.isEmpty()) {
-            // 404, never 403 - do not leak existence of files in another workspace.
-            return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "File not found: " + fileId);
-        }
-        StorageEntity e = opt.get();
-        if (e.getFileName() == null) {
-            // Not a browsable file (e.g. a step-output JSON blob) - same boundary as list's filesOnly.
-            return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "File not found: " + fileId);
-        }
+        FileLookup found = lookupBrowsableFile(params, tenantId, orgId, orgRole, allowedFiles);
+        if (found.failure() != null) return found.failure();
+        StorageEntity e = found.file();
 
         Map<String, Object> out = baseMeta(e);
         out.put("marker", "[visualize:file:" + e.getId() + "]");
@@ -1217,12 +1216,13 @@ public class FilesToolsProvider implements ToolsProvider {
             ToolParameter.builder()
                 .name("action")
                 .type("string")
-                .description("list | get | view | visualize | create_folder | move_to_folder | help")
+                .description("list | get | view | visualize | present | create_folder | move_to_folder | help")
                 .required(true)
                 .enumValues(VALID_ACTIONS)
                 .build(),
-            stringParam("file_id", "File UUID from list - required for get/view", false),
+            stringParam("file_id", "File UUID from list - required for get/view/visualize/present", false),
             stringParam("query", "Filter by file name (list)", false),
+            stringParam("title", "Optional panel title for present (default: the file name)", false),
             stringParam("run_id", "Only files produced by this run (list)", false),
             stringParam("workflow_id", "Only files produced by this workflow (list)", false),
             stringParam("date_from", "ISO-8601 date/instant lower bound on created_at (list)", false),
@@ -1254,6 +1254,8 @@ public class FilesToolsProvider implements ToolsProvider {
             + "- visualize: show a file to the user as a clickable card in the chat; they click it to open the "
             + "file (preview + download). Use when the user wants to SEE a file you did NOT view - after a view, "
             + "echoing its 'marker' already shows the same card, no visualize needed.\n"
+            + "- present: open the file in the user's side panel NOW (no click needed), for the file that IS the result "
+            + "they asked for. Changes nothing. Use it once, not for every file you touch.\n"
             + "- create_folder: make a manual folder (params: name, optional folder=parent). Returns folder_id.\n"
             + "- move_to_folder: move files/folders into a manual folder or to the root (params: file_ids, optional folder=target). "
             + "Returns moved_count + failed[].\n"
@@ -1362,9 +1364,17 @@ public class FilesToolsProvider implements ToolsProvider {
         ));
         actions.put("visualize", Map.of(
             "summary", "Show a file to the user as a clickable card in the chat. They click the card to open the file "
-                + "(image preview + download) - you cannot open it for them. Use when the user wants to SEE a file you found.",
+                + "(image preview + download). Use when the user wants to SEE a file you found; to open it for them "
+                + "without a click, use present.",
             "params", Map.of("file_id", "required - UUID from list"),
             "returns", "{file_id, name, mime_type, marker, message} - include the marker line verbatim in your reply so the card renders"
+        ));
+        actions.put("present", Map.of(
+            "summary", "Open the file in the user's side panel now, without a click. Changes nothing. Use it for the file "
+                + "that IS the result the user asked for, once, not for every file you touch.",
+            "params", Map.of("file_id", "required - UUID from list",
+                "title", "optional - the panel title, default the file name"),
+            "returns", "{presented:'file', file_id, message}"
         ));
         actions.put("create_folder", Map.of(
             "summary", "Create a MANUAL folder. Manual folders are the only folders you can create - workflow folders (wf:...) "

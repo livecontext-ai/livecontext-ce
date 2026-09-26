@@ -17,7 +17,7 @@
  */
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 
 const dataTableProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
 
@@ -58,6 +58,17 @@ describe('NodeResultDataTable - identity lane', () => {
     // assertion; `false` is the bug, and it is what suppressed the fixed lane.
     render(<NodeResultDataTable node={node} runId="run-1" workflowId="wf-1" />);
 
+    expect(dataTableProps.current?.showIdColumn).toBe(true);
+  });
+
+  it('keeps the id lane after drilling into output', () => {
+    // Regression: the wrapper's default was `!jsonPath`, so the lane vanished as soon as the user
+    // opened `input` or `output`, the case the root-only assertion above could never catch.
+    render(<NodeResultDataTable node={node} runId="run-1" workflowId="wf-1" />);
+    const onNavigate = dataTableProps.current?.onNavigate as (path: string) => void;
+    act(() => onNavigate('output'));
+
+    expect(dataTableProps.current?.jsonPath).toBe('output');
     expect(dataTableProps.current?.showIdColumn).toBe(true);
   });
 });

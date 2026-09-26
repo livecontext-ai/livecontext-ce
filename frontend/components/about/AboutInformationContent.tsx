@@ -34,7 +34,7 @@ const faqCategories: FaqCategory[] = [
       {
         question: 'What is LiveContext?',
         answer:
-          'LiveContext is an AI-powered platform that lets you chat with intelligent agents, build automated workflows, connect hundreds of MCP tools, and create interactive web applications - all from one place.',
+          'LiveContext is an AI-powered platform that lets you chat with intelligent agents, build automated workflows, connect hundreds of integrations, and create interactive web applications - all from one place.',
       },
       {
         question: 'How do I get started?',
@@ -44,7 +44,7 @@ const faqCategories: FaqCategory[] = [
       {
         question: 'Can I try LiveContext for free?',
         answer:
-          'Yes! We offer a free plan with access to core features including chat, basic workflows, and a selection of MCP tools. You can start immediately without a credit card.',
+          'Yes! We offer a free plan with access to core features including chat, basic workflows, and a selection of integrations. You can start immediately without a credit card.',
       },
     ],
   },
@@ -56,7 +56,7 @@ const faqCategories: FaqCategory[] = [
       {
         question: 'What are workflows?',
         answer:
-          'Workflows let you automate multi-step tasks by chaining together AI agents, MCP tools, API calls, and decision logic in a visual builder. They can be triggered manually, by webhooks, on a schedule, or from chat.',
+          'Workflows let you automate multi-step tasks by chaining together AI agents, integrations, API calls, and decision logic in a visual builder. They can be triggered manually, by webhooks, on a schedule, or from chat.',
       },
       {
         question: 'What are agents?',
@@ -86,9 +86,9 @@ const faqCategories: FaqCategory[] = [
           'Send us an email at contact@livecontext.ai with a description of the issue or your feature idea. We actively review all feedback.',
       },
       {
-        question: 'What MCP tools are available?',
+        question: 'What integrations are available?',
         answer:
-          'Browse the Marketplace to see all available MCP servers and tools. You can also connect your own MCP servers from Settings > MCPs.',
+          'Browse the Marketplace to see all available integrations and their tools. You can also add your own APIs from Settings > Custom APIs.',
       },
     ],
   },

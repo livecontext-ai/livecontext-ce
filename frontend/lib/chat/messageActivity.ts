@@ -22,6 +22,14 @@ import { scrollToAndFlash } from '@/lib/utils/flashHighlight';
 export const OPENABLE_VISUALIZATION_TYPES: readonly string[] = [
   'workflow',
   'workflow_run',
+  // action='present' (workflow, table, interface, agent, files): clicking the tool row re-presents the same view.
+  'present_application',
+  'present_run',
+  'present_table',
+  'present_workflow',
+  'present_interface',
+  'present_agent',
+  'present_file',
   'table',
   'datasource',
   'interface',
@@ -45,7 +53,7 @@ export interface AutoOpenDetail {
  */
 export function isOpenableVisualization(v?: ToolVisualization | null): v is ToolVisualization {
   if (!v || !v.id || !OPENABLE_VISUALIZATION_TYPES.includes(v.type)) return false;
-  if (v.type === 'workflow_run') return !!v.runId;
+  if (v.type === 'workflow_run' || v.type === 'present_application' || v.type === 'present_run') return !!v.runId;
   return true;
 }
 

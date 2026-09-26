@@ -22,6 +22,12 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The destination picker reads the workspace's destinations; that is covered in its own test.
+vi.mock('@/components/app/ChannelDestinationPicker', () => ({
+  ChannelDestinationPicker: () => null,
+  isWorking: () => true,
+  useChatDestinations: () => ({ destinations: [], workspaceDefault: null, isLoading: false, isError: false }),
+}));
 vi.mock('next-intl', () => ({
   useTranslations: (ns?: string) => (key: string) => `${ns}.${key}`,
 }));
@@ -265,6 +271,19 @@ describe('CreateAgentModal - which model a new agent opens on', () => {
     // can land on another provider serving the same model id.
     verdict.prefersFreeTierModels = true;
     catalog.defaultModel = 'claude-haiku-4-5';
+
+    renderModal();
+
+    await waitFor(() => expect(chosen()).toEqual({ provider: 'anthropic', id: 'claude-haiku-4-5' }));
+  });
+
+  it('moves a covered but lower-ranked catalogue default to the free #1', async () => {
+    // The rule is "Free opens on the free tier's best-ranked model", not "any covered
+    // model will do": Mistral is covered but ranked below Haiku, so Haiku wins.
+    verdict.prefersFreeTierModels = true;
+    catalog.models = [OPUS, HAIKU, { ...MISTRAL, freeTierEnabled: true }];
+    catalog.defaultModel = 'mistral-small';
+    catalog.defaultProvider = 'mistral';
 
     renderModal();
 

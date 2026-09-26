@@ -38,8 +38,6 @@ export interface ParameterListTabProps extends ToolComponentProps {
   parameterType: 'pathParameters' | 'queryParameters' | 'headers' | 'bodyParams';
   title: string;
   infoText?: React.ReactNode;
-  showTabInfo: boolean;
-  onToggleTabInfo: () => void;
 }
 
 export interface ResponseTabProps extends ToolComponentProps {

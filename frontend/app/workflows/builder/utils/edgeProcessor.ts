@@ -330,7 +330,7 @@ function registerUserApprovalNode(
       ? data.approvalContinuationMode
       : undefined;
 
-  // Optional external-channel delegation (v1: telegram). Emitted only when the
+  // Optional external-channel delegation (any chat channel). Emitted only when the
   // author actually selected a channel; a toggled-off section leaves node data
   // without approvalDelegation and the plan without approval.delegation.
   const rawDelegation = data.approvalDelegation;
@@ -338,6 +338,10 @@ function registerUserApprovalNode(
   if (rawDelegation && typeof rawDelegation === 'object'
     && typeof rawDelegation.channel === 'string' && rawDelegation.channel.trim() !== '') {
     delegation = { channel: rawDelegation.channel };
+    // A picked destination (an id, or 'default'): it decides account and chat at send time.
+    if (typeof rawDelegation.linkId === 'string' && rawDelegation.linkId.trim() !== '') {
+      delegation.linkId = rawDelegation.linkId.trim();
+    }
     // Tolerate a numeric-string credentialId ("40") in node data: emit a NUMBER
     // (the plan contract), drop only true non-numerics. Mirrors the importer.
     const rawCredentialId = rawDelegation.credentialId;

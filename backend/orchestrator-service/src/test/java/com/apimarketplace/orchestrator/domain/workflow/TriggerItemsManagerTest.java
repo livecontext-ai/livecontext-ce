@@ -340,4 +340,26 @@ class TriggerItemsManagerTest {
             assertTrue(state.items().isEmpty());
         }
     }
+
+    @Test
+    @DisplayName("Regression 2026-09-25: webhook payloads and chat input are logged as keys, never values")
+    void payloadValuesNeverLogged() {
+        ch.qos.logback.classic.Logger log = (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(TriggerItemsManager.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs =
+            new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        log.addAppender(logs);
+        try {
+            manager.setWebhookTriggerPayload("s1", Map.of("code", "oauth-code-FAKE-123", "user", "x"));
+            manager.setChatTriggerInput("s2", Map.of("message", "my password is FAKE-pw-456"));
+
+            String all = logs.list.stream().map(e -> e.getFormattedMessage()).reduce("", String::concat);
+            assertFalse(all.contains("oauth-code-FAKE-123"), all);
+            assertFalse(all.contains("FAKE-pw-456"), all);
+            assertTrue(all.contains("code"), "keys stay visible: " + all);
+        } finally {
+            log.detachAppender(logs);
+        }
+    }
 }

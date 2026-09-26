@@ -58,7 +58,11 @@ export const useInterfaceById = (interfaceId: string | null) => {
     queryKey: ['interface', interfaceId],
     queryFn: () => fetchInterfaceById(interfaceId!),
     enabled: !!interfaceId && !authLoading && isAuthenticated && !isPublicPreview,
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    // Short, and refreshed on focus: an interface edited in another tab or on its own
+    // page reaches the canvas node on return (useInterfaceTemplateSync adopts it). Five
+    // minutes with no focus refetch left the builder showing the old page until a reload.
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: true,
     gcTime: 10 * 60 * 1000, // 10 minutes
   });
 };

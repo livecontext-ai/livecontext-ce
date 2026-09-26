@@ -29,6 +29,21 @@ class CliSessionStartRequestWireTest {
     }
 
     @Test
+    @DisplayName("the run markers are read under the names agent-cli-server sends")
+    void readsTheRunMarkers() throws Exception {
+        String body = "{\"conversationId\":\"conv-1\",\"taskId\":\"task-9\",\"unattendedRun\":true,"
+                + "\"requireToolAuthorization\":true,\"agentDepth\":2,\"workflowRunId\":\"run-4\"}";
+
+        CliSessionStartRequest request = mapper.readValue(body, CliSessionStartRequest.class);
+
+        assertThat(request.taskId()).isEqualTo("task-9");
+        assertThat(request.unattendedRun()).isTrue();
+        assertThat(request.requireToolAuthorization()).isTrue();
+        assertThat(request.agentDepth()).isEqualTo(2);
+        assertThat(request.workflowRunId()).isEqualTo("run-4");
+    }
+
+    @Test
     @DisplayName("a body from an older bridge, without the field, still parses and reads null")
     void olderBridgeBodyStillParses() throws Exception {
         String body = "{\"conversationId\":\"conv-1\",\"streamId\":\"s-1\",\"inactivityTimeoutSeconds\":300}";
@@ -37,5 +52,9 @@ class CliSessionStartRequestWireTest {
 
         assertThat(request.maxToolHoldSeconds()).isNull();
         assertThat(request.inactivityTimeoutSeconds()).isEqualTo(300);
+        assertThat(request.taskId()).isNull();
+        assertThat(request.unattendedRun()).isNull();
+        assertThat(request.agentDepth()).isNull();
+        assertThat(request.workflowRunId()).isNull();
     }
 }

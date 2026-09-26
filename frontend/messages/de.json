@@ -280,6 +280,7 @@
     "description": "Entdecken und nutzen Sie leistungsstarke MCP (Model Context Protocol) Tools für Ihre Entwicklungs- und Automatisierungsprojekte."
   },
   "common": {
+    "infoAbout": "Info zu {label}",
     "addToFavorites": "Zu Favoriten hinzufügen",
     "removeFromFavorites": "Aus Favoriten entfernen",
     "favoriteErrorTitle": "Favoriten konnten nicht aktualisiert werden",
@@ -463,7 +464,16 @@
     "sso": {
       "redirecting": "Weiterleitung zu Ihrem SSO-Anbieter...",
       "invalid": "Dieser SSO-Link ist ungültig.",
-      "failed": "SSO-Anmeldung konnte nicht gestartet werden."
+      "failed": "SSO-Anmeldung konnte nicht gestartet werden.",
+      "title": "Mit SSO anmelden",
+      "subtitle": "Geben Sie Ihre geschäftliche E-Mail-Adresse ein, und wir leiten Sie zur Anmeldeseite Ihres Unternehmens weiter.",
+      "emailLabel": "Geschäftliche E-Mail",
+      "emailPlaceholder": "sie@unternehmen.de",
+      "continue": "Weiter",
+      "looking": "Ihr Unternehmen wird gesucht...",
+      "notFound": "Für diese E-Mail-Domain ist kein SSO eingerichtet. Melden Sie sich anders an oder wenden Sie sich an den Workspace-Admin.",
+      "lookupFailed": "SSO kann gerade nicht geprüft werden. Versuchen Sie es gleich noch einmal.",
+      "ceUnavailable": "Die SSO-Anmeldung ist nur in LiveContext Cloud verfügbar."
     },
     "login": {
       "createAccount": "Konto erstellen",
@@ -848,10 +858,14 @@
           "CRED_EXPIRED": "{count, plural, one {# abgelaufene Anmeldedaten} other {# abgelaufene Anmeldedaten}}",
           "ORG_INVITATION_PENDING": "{count, plural, one {# Organisationseinladung} other {# Organisationseinladungen}}",
           "AGENT_TASK_ASSIGNED": "{count, plural, one {# zugewiesene Aufgabe} other {# zugewiesene Aufgaben}}",
+          "AGENT_AUTHORIZATION_UNREACHABLE": "{count, plural, one {# Agent ohne Ansprechpartner} other {# Agenten ohne Ansprechpartner}}",
           "AGENT_TASK_AWAITING_REVIEW": "{count, plural, one {# Aufgabe wartet auf deine Prüfung} other {# Aufgaben warten auf deine Prüfung}}",
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# Bridge mit wenig Guthaben} other {# Bridges mit wenig Guthaben}}",
           "BADGE_UNLOCKED": "{count, plural, one {# neue Trophäe} other {# neue Trophäen}}",
-          "BUDGET_REACHED": "{count, plural, one {# Workflow durch sein Ausgabenlimit gestoppt} other {# Workflows durch ihr Ausgabenlimit gestoppt}}"
+          "BUDGET_REACHED": "{count, plural, one {# Workflow durch sein Ausgabenlimit gestoppt} other {# Workflows durch ihr Ausgabenlimit gestoppt}}",
+          "CREDIT_LOW": "{count, plural, one {Credits werden knapp} other {Credits werden knapp (#)}}",
+          "CREDIT_EXHAUSTED": "{count, plural, one {Keine Credits mehr} other {Keine Credits mehr (#)}}",
+          "AGENT_TASK_MENTION": "{count, plural, one {# Erwähnung in einer Aufgabe} other {# Erwähnungen in Aufgaben}}"
         },
         "approvalOpen": "Öffnen",
         "approvalReview": "Prüfen",
@@ -906,13 +920,15 @@
         "weeklyReport": "Einen wöchentlichen KPI-Bericht erstellen",
         "weeklyReportPrompt": "Ziehe jeden Freitag um 17 Uhr MRR, Anmeldungen, Abwanderung und aktive Nutzer aus unserer Datenbank, erstelle einen wöchentlichen KPI-Bericht mit Woche-zu-Woche-Veränderungen und sende ihn als PDF per E-Mail an das Führungsteam."
       },
-      "title1": "Wie kann ich Ihnen helfen?",
-      "title2": "Was sollen wir heute automatisieren?",
-      "title3": "Eine Idee? Lass sie uns umsetzen.",
-      "title4": "Brauchen Sie einen Workflow, der einfach funktioniert?",
-      "title5": "Was kostet Sie Zeit? Lassen Sie es uns beheben."
+      "title1": "Hallo, ich bin Orbi. Wie kann ich Ihnen helfen?",
+      "title2": "Was soll Orbi heute für Sie automatisieren?",
+      "title3": "Eine Idee? Orbi setzt sie mit Ihnen um.",
+      "title4": "Brauchen Sie einen Workflow, der einfach funktioniert? Fragen Sie Orbi.",
+      "title5": "Was kostet Sie Zeit? Orbi kümmert sich darum."
     },
     "placeholder": "Nachricht eingeben...",
+    "placeholderOrbi": "Nachricht an Orbi...",
+    "orbiPoke": "Orbi anstupsen",
     "send": "Senden",
     "stop": "Stoppen",
     "stopGenerating": "Generierung stoppen",
@@ -960,7 +976,7 @@
       "close": "Close"
     },
     "toolSelector": {
-      "title": "MCP-Tools auswählen",
+      "title": "Integrations-Tools auswählen",
       "smartModeHint": "Smart-Modus: Tools werden automatisch anhand Ihrer Anfrage ausgewählt",
       "manualModeHint": "Manueller Modus: Wählen Sie die Tools aus, die Sie verwenden möchten",
       "display": "Display:",
@@ -1140,8 +1156,6 @@
       "passageNumber": "Durchlauf {number}",
       "inputData": "Eingabedaten",
       "outputData": "Ausgabedaten",
-      "readOnly": "Schreibgeschützt",
-      "loadedPassages": "{loaded} / {total} Durchläufe geladen",
       "loadMore": "Weitere Durchläufe laden",
       "loading": "Protokolle werden geladen…",
       "emptyEpoch": "In dieser Epoche wurden noch keine Knoten ausgeführt.",
@@ -2215,7 +2229,7 @@
     "insufficientCredits": {
       "title": "Ihre Credits sind aufgebraucht",
       "description": "Ihr Guthaben reicht nicht aus, um diese Aktion auszuführen. Upgraden Sie Ihren Plan, um fortzufahren.",
-      "freeScopeNote": "Im Gratis-Tarif finanzieren Ihre monatlichen Credits die Workflow-Läufe. Chat und Agenten ziehen vom separaten monatlichen KI-Kontingent ab, auf den für den Gratis-Tarif freigegebenen Modellen; ist es aufgebraucht, braucht es eine Aufladung oder einen bezahlten Tarif.",
+      "freeScopeNote": "Im Gratis-Tarif finanzieren Ihre monatlichen Credits die Workflow-Läufe sowie Chat- und Agenten-Runden auf den als Gratis markierten Modellen. Andere Modelle, Websuche und Bildgenerierung brauchen eine Aufladung oder einen bezahlten Tarif.",
       "recommended": "Empfohlen",
       "currentPlan": "Aktueller Plan",
       "upgrade": "Upgraden",
@@ -2229,7 +2243,6 @@
       },
       "features": {
         "freeCredits": "1.000 Credits/Monat",
-        "freeAiCredits": "{credits} KI-Credits/Monat",
         "freeConcurrent": "1 gleichzeitige Ausführung",
         "freeStorage": "100 MB Speicher",
         "creditsPerMonth": "Credits/Monat",
@@ -2259,7 +2272,6 @@
       "features": {
         "freeStorage": "100 MB Speicher",
         "freeCredits": "1.000 Credits/Monat",
-        "freeAiCredits": "{credits} KI-Credits/Monat",
         "starterStorage": "1 GB Speicher",
         "starterCredits": "5.000 Credits/Monat",
         "proStorage": "10 GB Speicher",
@@ -2531,7 +2543,7 @@
       "resetCredits": "Credits zurücksetzen",
       "resetCreditsConfirm": "Möchten Sie die verbrauchten Credits für diesen Agenten wirklich zurücksetzen?",
       "systemPromptInfo": "Anweisungen, die das Verhalten, die Persönlichkeit und die Fähigkeiten des Agenten definieren.",
-      "toolsLabel": "Verfügbare Tools",
+      "toolsLabel": "Verfügbare Integrations-Tools",
       "selectAll": "Alle auswählen",
       "deselectAll": "Alle abwählen",
       "grant_none": "Keine",
@@ -2544,8 +2556,8 @@
       "noToolsAvailable": "Keine Tools verfügbar",
       "searchApis": "APIs suchen...",
       "noSearchResults": "Keine Ergebnisse gefunden",
-      "allTools": "Alle Tools",
-      "noTools": "Keine Tools",
+      "allTools": "Alle Integrations-Tools",
+      "noTools": "Keine Integrations-Tools",
       "offTools": "Gar keine Tools",
       "customToolsOption": "Benutzerdefinierte Auswahl (max. {max})",
       "customTools": "Benutzerdefiniert ({count}/{max})",
@@ -2663,9 +2675,19 @@
       "noResourcesAvailable": "Keine Ressourcen verfügbar",
       "resourcesSelected": "{count} von {total} Ressourcen",
       "advancedModeLabel": "Erweiterter Modus",
-      "sensitiveActionsLabel": "Sensible Aktionen",
-      "sensitiveActionsAlwaysOn": "Immer erlaubt",
-      "sensitiveActionsLockedInfo": "Agenten führen sensible Aktionen (Installieren, Ausführen, Unter-Agenten, Katalogaufrufe) ohne Genehmigung aus. Für Agenten ist dies immer aktiv und kann nicht deaktiviert werden.",
+      "sensitiveActionsAskHint": "Installationen, Ausführungen, Sub-Agenten und Katalogaufrufe: Die Anfrage erreicht Sie über dieses Ziel. Ohne Antwort wird die Aktion nicht ausgeführt.",
+      "sensitiveActionsSaveFailed": "Der Agent wurde gespeichert, seine Einstellung für sensible Aktionen jedoch nicht.",
+      "channelCardTitle": "Mich außerhalb der App erreichen",
+      "channelCardDescription": "Seine Berechtigungsanfragen und Fragen erreichen Sie in einem Chat, wenn er ohne Sie läuft",
+      "channelCardUnavailable": "Verbinden Sie zuerst einen Kanal (Telegram, Slack, WhatsApp, Discord oder Teams)",
+      "channelCardConnect": "Kanal verbinden",
+      "channelCardLoading": "Ihre Kanäle werden geladen...",
+      "channelCardError": "Ihre Kanäle konnten nicht geladen werden. Versuchen Sie es gleich noch einmal.",
+      "armedWithoutChannel": "Dieser Agent bittet vor sensiblen Aktionen um Erlaubnis, hat aber keinen Kanal dafür: Diese Aktionen werden nicht ausgeführt.",
+      "armedWithoutChannelDisarm": "Nicht mehr fragen",
+      "sensitiveActionsAskLabel": "Vor einer sensiblen Aktion um meine Erlaubnis bitten",
+      "channelDestinationLabel": "Ziel",
+      "channelDestinationHint": "Wenn er ohne Sie läuft (per Zeitplan oder Webhook), werden seine Anfragen und Fragen hierhin gesendet.",
       "reasoningEffortInherit": "Erben (Modellstandard)",
       "reasoningEffortLabel": "Denkaufwand",
       "scheduleCreateFailed": "Zeitplan konnte nicht gespeichert werden",
@@ -3032,13 +3054,10 @@
       "title": "Willkommensgeschenk",
       "subtitle": "Sie sind im Free-Tarif. Das erhalten Sie jeden Monat.",
       "features": {
-        "freeCredits": "Workflow-Credits",
-        "freeCreditsDetail": "Damit laufen Ihre Workflows.",
-        "freeAiCredits": "KI-Credits",
-        "freeAiCreditsDetail": "Damit werden Chat- und Agent-Durchgänge bezahlt, auf den für den Free-Tarif freigegebenen Modellen."
+        "freeCredits": "Monatliche Credits",
+        "freeCreditsDetail": "Sie betreiben Ihre Workflows sowie Chat- und Agenten-Runden auf den als Gratis markierten Modellen."
       },
-      "renewal": "Beide füllen sich zu Beginn jedes Monats automatisch wieder auf. Ohne Kreditkarte.",
-      "renewalSingle": "Sie füllen sich zu Beginn jedes Monats automatisch wieder auf. Ohne Kreditkarte.",
+      "renewal": "Sie füllen sich zu Beginn jedes Monats automatisch wieder auf. Ohne Kreditkarte.",
       "cta": "Jetzt entdecken"
     },
     "suggestedApps": {
@@ -3117,6 +3136,10 @@
       "vectorSearch": {
         "label": "Vektorspalten und Ähnlichkeitssuche",
         "description": "Embedding-Spalten, Ähnlichkeitsabfragen (RAG) und die Installation von Marketplace-Apps, die sie nutzen. Embeddings teilen sich die verwaltete Datenbank, daher ein kostenpflichtiger Tarif statt freier Nutzung."
+      },
+      "notificationEmail": {
+        "label": "E-Mail-Warnungen",
+        "description": "Workflow-Fehler, Kontoprobleme und Aufgaben per E-Mail. Credit-Warnungen gehen in jedem Plan immer per E-Mail raus, denn ein Free-Konto ohne Credits muss es erfahren. Kanal-Warnungen und die Glocke in der App sind nie eingeschränkt."
       }
     }
   },
@@ -3389,7 +3412,8 @@
       "hideKey": "Schlüssel ausblenden",
       "useMyKey": "Meinen Schlüssel verwenden",
       "noProviders": "In diesem Arbeitsbereich nimmt derzeit kein Anbieter Ihren eigenen Schlüssel an.",
-      "requiresPlan": "Eigene Schlüssel gibt es ab dem Tarif {plan}.",
+      "requiresPlan": "Eigene Schlüssel gibt es ab dem Tarif {plan}",
+      "requiresPlanDescription": "Bis dahin bleiben gespeicherte Schlüssel schreibgeschützt, und Ihre Agenten laufen weiter mit dem LiveContext-Schlüssel. Upgraden Sie auf {plan}, damit sie mit Ihrem eigenen Schlüssel laufen.",
       "upgrade": "Auf {plan} upgraden",
       "fees": {
         "open": "Preis pro Zug ansehen",
@@ -3515,7 +3539,10 @@
       "bundleShipOff": "CE: aus",
       "bundleShipTooltip": "Was das CE-Bundle für dieses Modell ausliefert, unabhängig vom Aktiviert-Schalter: auto folgt ihm, an liefert das Modell aktiviert an selbst gehostete Installationen, auch wenn es hier deaktiviert ist, aus liefert es deaktiviert.",
       "freeTierChip": "Gratis",
-      "freeTierTooltip": "Ob ein Konto im Gratis-Tarif sein monatliches KI-Kontingent für dieses Modell ausgeben darf. Dieses Kontingent ist ein eigener Topf, getrennt von den monatlichen Credits, die Workflows finanzieren. Standardmäßig aus: ein Gratis-Konto muss dann aufladen, um dieses Modell zu nutzen.",
+      "freeTierTooltip": "Ob ein Konto im Gratis-Tarif seine monatlichen Credits für Chat- und Agenten-Runden mit diesem Modell ausgeben darf. Standardmäßig aus: Ein Gratis-Konto braucht dann eine Aufladung, um dieses Modell zu nutzen.",
+      "replacedBy": "Ersetzt durch",
+      "replacementDefault": "Plattform-Standardmodell",
+      "replacementTooltip": "Solange dieses Modell deaktiviert ist, laufen die Agenten, Workflow-Knoten und Chats, die es noch verwenden, stattdessen auf diesem Modell (und werden dafür abgerechnet). Plattform-Standard = das Modell, das die Plattform verwendet, wenn keines gewählt ist.",
       "notConfigured": "Nicht konfiguriert",
       "notConfiguredTooltip": "Aufgeführt, damit Sie es einordnen und bepreisen können, aber noch nicht nutzbar: kein API-Schlüssel für diesen Anbieter (oder das Cloud-Relay kann es nicht ausführen). Fügen Sie einen Schlüssel hinzu, um es zu nutzen.",
       "custom": "benutzerdefiniert",
@@ -3555,12 +3582,45 @@
       "filterByProvider": "Nach Anbieter filtern",
       "selectAll": "Alle angezeigten Modelle auswählen",
       "selectRow": "Auswählen",
+      "rankEdit": "Position ändern",
       "bulkSelected": "{count} ausgewählt",
       "bulkEnable": "Aktivieren",
       "bulkDisable": "Deaktivieren",
       "bulkTier": "Stufe setzen",
       "bulkClear": "Auswahl aufheben",
       "bulkPartial": "{action}: {failed} von {total} fehlgeschlagen. {reason}",
+      "releasedOn": "Veröffentlicht am {date}",
+      "releaseUnknown": "Veröffentlichungsdatum unbekannt",
+      "sort": {
+        "label": "Sortierung",
+        "rank": "Nach Rang",
+        "oldest": "Älteste zuerst",
+        "newest": "Neueste zuerst"
+      },
+      "retire": {
+        "action": "Ausmustern",
+        "bulk": "Auswahl ausmustern ({count})",
+        "confirmOne": "\"{name}\" ausmustern? Das Modell verschwindet aus allen Modelllisten und Auswahlmenüs, wird nicht mehr an selbst gehostete Installationen gesendet, und keine Katalogaktualisierung kann es zurückbringen. Sie können es später unter Ausgemusterte Modelle wiederherstellen.",
+        "confirmMany": "{count} Modelle ausmustern? Sie verschwinden aus allen Modelllisten und Auswahlmenüs, werden nicht mehr an selbst gehostete Installationen gesendet, und keine Katalogaktualisierung kann sie zurückbringen. Sie können sie später unter Ausgemusterte Modelle wiederherstellen.",
+        "doneTitle": "Ausgemusterte Modelle: {count}",
+        "doneMessage": "Sie sind aus allen Modelllisten verschwunden. Stellen Sie sie unter Ausgemusterte Modelle wieder her, falls Sie sie erneut brauchen.",
+        "error": "Die Modelle konnten nicht ausgemustert werden"
+      },
+      "retired": {
+        "title": "Ausgemusterte Modelle",
+        "titleWithCount": "Ausgemusterte Modelle ({count})",
+        "hint": "Ausgemusterte Modelle sind überall ausgeblendet und kommen durch eine Katalogaktualisierung nie zurück. Ein wiederhergestelltes Modell ist zunächst deaktiviert.",
+        "empty": "Keine ausgemusterten Modelle.",
+        "loadError": "Die ausgemusterten Modelle konnten nicht geladen werden.",
+        "restore": "Wiederherstellen",
+        "restoreSelected": "Auswahl wiederherstellen ({count})",
+        "selectAll": "Alle ausgemusterten Modelle auswählen",
+        "selectRow": "Auswählen",
+        "retiredOn": "Ausgemustert am {date}",
+        "restoredTitle": "Wiederhergestellte Modelle: {count}",
+        "restoredMessage": "Ein wiederhergestelltes Modell ist deaktiviert. Aktivieren Sie es in der Modellliste, damit es genutzt werden kann.",
+        "restoreError": "Die Modelle konnten nicht wiederhergestellt werden"
+      },
       "searchPlaceholder": "Modell suchen",
       "filterByTier": "Stufe",
       "allTiers": "Alle Stufen",
@@ -3581,7 +3641,7 @@
         "tpmGlobal": "TPM global",
         "tpmTenant": "TPM pro Tenant"
       },
-      "freeTierNoneOpen": "Kein Modell in diesem Tab ist für den Gratis-Tarif freigegeben, daher kann das auf der Preisseite angekündigte monatliche KI-Kontingent diese Art von Lauf nicht bezahlen: ein Gratis-Konto wird abgelehnt. Geben Sie oben mindestens ein Modell mit dem Gratis-Chip frei."
+      "freeTierNoneOpen": "Kein Modell in diesem Tab ist für den Gratis-Tarif freigegeben, daher können die auf der Preisseite für Chat und Agenten angekündigten monatlichen Credits diese Art von Lauf nicht bezahlen: ein Gratis-Konto wird abgelehnt. Geben Sie oben mindestens ein Modell mit dem Gratis-Chip frei."
     },
     "adminOnlyBadge": "Nur Admin",
     "modelBundle": {
@@ -3716,7 +3776,7 @@
       "sameAsBilled": "Wie das abgerechnete Modell",
       "appliesTo": "Gilt für",
       "scopeAll": "Alle Bereiche",
-      "scopeChat": "Allgemeiner Chat",
+      "scopeChat": "Orbi",
       "scopeWorkflow": "Workflow-Knoten",
       "scopeWebhook": "Webhook",
       "scopeWidget": "Widget",
@@ -4053,7 +4113,8 @@
         "customFieldRequired": "{field} ist erforderlich",
         "saveFailed": "Anmeldedaten konnten nicht gespeichert werden",
         "oauthConfigFailed": "OAuth-Konfiguration konnte nicht gespeichert werden",
-        "oauthUrlsRequired": "Autorisierungs-URL und Token-URL sind erforderlich"
+        "oauthUrlsRequired": "Autorisierungs-URL und Token-URL sind erforderlich",
+        "byokScopesRequired": "Wählen Sie mindestens einen Scope aus."
       },
       "oauthConfig": {
         "authUrl": "Autorisierungs-URL",
@@ -4067,7 +4128,9 @@
         "scopes": "Scopes",
         "scopesPlaceholder": "z. B. read write (durch Leerzeichen getrennt)",
         "tokenUrl": "Token-URL",
-        "tokenUrlPlaceholder": "https://provider.com/oauth/token"
+        "tokenUrlPlaceholder": "https://provider.com/oauth/token",
+        "scopePickerTitle": "Anzufordernde Scopes",
+        "scopePickerHint": "Entfernen Sie das Häkchen bei jedem Scope, den Ihre OAuth-App nicht erhalten hat. TikTok, Figma und LinkedIn lehnen die gesamte Verbindung wegen eines einzigen Scopes ab, den die App nicht besitzt. Ein Tool, das einen abgewählten Scope benötigt, nennt den fehlenden Scope: Wählen Sie ihn hier aus, speichern Sie und verbinden Sie sich erneut."
       },
       "platformKey": {
         "title": "Sie müssen keinen Schlüssel hinterlegen",
@@ -5134,11 +5197,8 @@
         "processing": "Wird verarbeitet…"
       },
       "features": {
-        "creditsFree": "1.000 Workflow-Credits pro Monat",
-        "creditsFreeTooltip": "Diese Credits betreiben Ihre Workflows, und sonst nichts: **{nodeCredits} Credit** pro Node, den ein Lauf ausführt. Chat und Agenten rühren sie nie an, sie ziehen das eigene monatliche KI-Kontingent aus der Zeile darunter, und Zusatzleistungen wie Websuche oder Bildgenerierung brauchen eine Aufladung.",
-        "aiCreditsFree": "{credits} KI-Credits pro Monat",
-        "aiCreditsFreeUnknown": "Monatliche KI-Credits",
-        "aiCreditsFreeTooltip": "Ein eigenes monatliches Kontingent für Chat- und Agenten-Runden, auf den für den Gratis-Tarif freigegebenen Modellen: etwa **{exchangeCredits} Credits** für einen kurzen Austausch mit einem konfigurierten Agenten, samt dessen gesamtem Kontext, auf einem leichten Modell wie {basisModel}. Eine Schätzung aus realer Nutzung, keine Obergrenze. Es füllt sich jeden Monat wieder auf und rührt Ihre Workflow-Credits nie an.",
+        "creditsFree": "1.000 Credits pro Monat",
+        "creditsFreeTooltip": "Ein einziges monatliches Kontingent für Ihre Workflows und Ihre Agenten: **{nodeCredits} Credit** pro Node, den ein Lauf ausführt, und etwa **{exchangeCredits} Credits** für einen kurzen Austausch mit einem konfigurierten Agenten auf einem leichten Modell wie {basisModel} (eine Schätzung aus realer Nutzung, keine Obergrenze). Chat und Agenten sind auf den als Gratis markierten Modellen abgedeckt; andere Modelle und Zusatzleistungen wie Websuche oder Bildgenerierung bleiben mit einer Aufladung verfügbar. Wird jeden Monat erneuert.",
         "creditsPerMonth": "{credits} Credits pro Monat",
         "creditsCustom": "Individuelle Credits",
         "users1": "1 Benutzer",
@@ -5173,6 +5233,8 @@
         "cePlatformCredsTooltip": "Eine mit der Cloud verknüpfte Self-Hosted-Installation kann Drittanbieter-Integrationen mit LiveContext-Plattform-Zugangsdaten ausführen, ohne eigene API-Schlüssel. Pro Aufruf fällt ein kleiner Aufschlag in Credits an.",
         "vectorSearch": "Vektorsuche und RAG in der Cloud",
         "vectorSearchTooltip": "Embedding-Spalten und Ähnlichkeitssuche auf Ihren Tabellen, für Retrieval-Augmented Generation. Embeddings teilen sich die verwaltete Datenbank, in der Cloud beginnen sie deshalb ab Pro. Eine selbst gehostete Installation hat sie in jedem Tarif, da sie ihre eigene Datenbank besitzt.",
+        "emailAlerts": "E-Mail-Warnungen",
+        "emailAlertsTooltip": "Fehlgeschlagene Workflows, Kontoprobleme und zugewiesene Aufgaben landen in deinem Postfach, ohne Flut: eine E-Mail, wenn ein Workflow ausfällt, höchstens eine Erinnerung pro Tag, eine, wenn er wieder läuft. Jeder Plan erhält diese Warnungen in der App und in einem verbundenen Chat-Kanal, und Credit-Warnungen per E-Mail.",
         "browserAgent": "Browser-Agent-Node",
         "browserAgentTooltip": "Ein LLM, das einen echten Browser steuert: navigieren, Formulare ausfüllen, strukturierte Daten von Seiten ohne API extrahieren. Es belegt für die Dauer der Aufgabe eine Browser-Sitzung, eine knappe Ressource auf geteilter Infrastruktur, und beginnt deshalb ab Pro.",
         "priorityExecution": "Priorisierte Ausführung",
@@ -5223,8 +5285,6 @@
       },
       "dimensions": {
         "credits": "Credits pro Monat",
-        "aiCredits": "KI-Credits",
-        "aiCreditsTooltip": "Ein eigenes monatliches Kontingent für Chat- und Agenten-Runden, auf den für den Gratis-Tarif freigegebenen Modellen: etwa **{exchangeCredits} Credits** für einen kurzen Austausch mit einem konfigurierten Agenten, samt dessen gesamtem Kontext, auf einem leichten Modell wie {basisModel}. Eine Schätzung aus realer Nutzung, keine Obergrenze. Kostenpflichtige Tarife brauchen keines: ihre Credits finanzieren Agenten bereits, während die des Gratis-Tarifs nur Workflows betreiben.",
         "nodes": "Nodes und Integrationen",
         "nodesTooltip": "Zurückgehalten wird nur das Veröffentlichen: Posten auf YouTube, Instagram, TikTok, X, LinkedIn und 13 weiteren Plattformen erfordert einen kostenpflichtigen Tarif. Das Lesen von dort und jeder andere Node sind in jedem Tarif enthalten.",
         "concurrent": "Parallele Ausführungen",
@@ -5238,9 +5298,7 @@
         "creditsTooltip": "Etwa **{exchangeCredits} Credits** für einen kurzen Austausch mit einem konfigurierten Agenten, samt dessen gesamtem Kontext, auf einem leichten Modell wie {basisModel}. Eine Schätzung aus realer Nutzung, keine Obergrenze; ein Spitzenmodell kostet mehr."
       },
       "values": {
-        "creditsFree": "1.000 / Monat (Workflows)",
-        "aiCreditsFree": "{credits} / Monat",
-        "aiCreditsIncluded": "In den Credits enthalten",
+        "creditsFree": "1.000 / Monat",
         "creditsDynamic": "Ab {credits} / Monat",
         "creditsCustom": "Individuell",
         "nodesCore": "Alles außer Publishing",
@@ -5479,7 +5537,9 @@
       "title": "Speichernutzung",
       "usedOf": "{used} von {total} verwendet",
       "thisWorkspace": "{used} in diesem Arbeitsbereich belegt",
-      "accountPool": "Konto: {used} von {total}, geteilt über alle Arbeitsbereiche"
+      "accountPool": "Konto: {used} von {total}, geteilt über alle Arbeitsbereiche",
+      "available": "{free} verfügbar",
+      "softLimitMarker": "Warnung ab 80 %"
     },
     "breakdown": {
       "title": "Speicheraufschlüsselung",
@@ -5487,7 +5547,8 @@
       "workflows": "Workflows",
       "tables": "Tabellen",
       "files": "Dateien",
-      "noData": "Noch keine Aufschlüsselungsdaten. Klicken Sie auf 'Neu berechnen', um sie zu generieren."
+      "noData": "Noch keine Aufschlüsselungsdaten. Klicken Sie auf 'Neu berechnen', um sie zu generieren.",
+      "itemsAvg": "{count, plural, one {# Element} other {# Elemente}}, durchschnittlich {avg}"
     },
     "trends": {
       "title": "Nutzungstrends",
@@ -5496,7 +5557,16 @@
       "period30d": "30T",
       "period90d": "90T",
       "noHistory": "Trenddaten werden nach dem ersten täglichen Snapshot angezeigt.",
-      "totalItems": "{count} Elemente"
+      "totalItems": "{count} Elemente",
+      "growth": "Veränderung im Zeitraum",
+      "growthRange": "Von {from} auf {to}",
+      "perDay": "Durchschnitt pro Tag",
+      "fullIn": "Voll in",
+      "days": "~{count, plural, one {# Tag} other {# Tagen}}",
+      "overYear": "Über ein Jahr",
+      "notFilling": "Füllt sich nicht",
+      "alreadyFull": "Bereits voll",
+      "atThisPace": "Beim Tempo dieses Zeitraums"
     },
     "categories": {
       "STEP_OUTPUTS": "Schrittausgaben",
@@ -5530,6 +5600,12 @@
       "title": "Mehr Speicher benötigt?",
       "description": "Wechseln Sie auf einen höheren Tarif, um mehr Speicher zu erhalten.",
       "button": "Tarif wechseln"
+    },
+    "largest": {
+      "title": "Größte Elemente",
+      "subtitle": "Was in diesem Workspace am meisten Platz belegt",
+      "openFiles": "Dateien öffnen",
+      "unnamed": "Ohne Namen"
     }
   },
   "runMode": {
@@ -5731,8 +5807,12 @@
       "noHistory": "Noch kein Nutzungsverlauf vorhanden",
       "filterAll": "Alle Typen",
       "page": "Seite {current} von {total}",
+      "previousPage": "Vorherige Seite",
+      "nextPage": "Nächste Seite",
       "cost": "Kosten ($)",
-      "ownKeyBadge": "Ihr Schlüssel"
+      "ownKeyBadge": "Ihr Schlüssel",
+      "fullscreen": "Vollbild",
+      "exitFullscreen": "Vollbild beenden"
     },
     "error": {
       "loadFailed": "Kontingentdaten konnten nicht geladen werden"
@@ -5759,7 +5839,26 @@
       "mostActive": "Am aktivsten",
       "noData": "Keine Nutzungsdaten für diesen Zeitraum",
       "credits": "Credits",
-      "totalCost": "Gesamtkosten"
+      "totalCost": "Gesamtkosten",
+      "chartMetric": "Diagrammwert",
+      "metricCredits": "Credits",
+      "metricCost": "Kosten",
+      "metricCalls": "Aufrufe",
+      "metricTokens": "Tokens",
+      "calls": "Aufrufe",
+      "tokens": "Tokens",
+      "avgPerCall": "Ø pro Aufruf",
+      "vsPrevious": "ggü. Vorperiode",
+      "peakOn": "Spitze {amount} am {date}",
+      "runway": "Guthaben reicht für",
+      "runwayDays": "~{count, plural, one {# Tag} other {# Tage}}",
+      "runwayOverYear": "Über ein Jahr",
+      "runwayHint": "Beim durchschnittlichen Tagesverbrauch des Zeitraums",
+      "byType": "Nach Typ",
+      "byModel": "Nach Modell",
+      "filterOn": "Diagramm nach dieser Zeile filtern",
+      "noModel": "Ohne Modell (API-Aufrufe und Tools)",
+      "otherModels": "{count, plural, one {# weiteres Modell} other {# weitere Modelle}}"
     },
     "upgrade": {
       "title": "Nutzungsanalyse",
@@ -5787,7 +5886,41 @@
     "capExceededTokens": "Mitglieder-Quota uberschritten: {consumed} von {cap} LLM-Tokens in diesem Zyklus verwendet. Bitten Sie Ihren Organisations-Admin, dieses Limit zu erhohen.",
     "capExceededGeneric": "Mitglieder-Quota uberschritten ({dimension}): {consumed} von {cap}. Bitten Sie Ihren Organisations-Admin, dieses Limit zu erhohen."
   },
+  "twoFactorNudge": {
+    "title": "Schützen Sie Ihr Team mit Zwei-Faktor-Authentifizierung",
+    "body": "Sie sind Eigentümer dieses Team-Workspaces: seiner verbundenen Apps, Zugangsdaten und Abrechnung. Aktivieren Sie die Zwei-Faktor-Authentifizierung, damit ein gestohlenes Passwort nicht für den Zugang reicht.",
+    "cta": "Zwei-Faktor aktivieren",
+    "dismiss": "Schließen"
+  },
   "settings": {
+    "twoFactor": {
+      "title": "Zwei-Faktor-Authentifizierung",
+      "description": "Bei jeder Anmeldung zusätzlich zu Ihrem Passwort oder Ihrer Google- oder GitHub-Anmeldung einen Code aus einer Authenticator-App abfragen.",
+      "stateOn": "Aktiv",
+      "stateOff": "Inaktiv",
+      "loading": "Status der Zwei-Faktor-Authentifizierung wird geladen...",
+      "error": "Der Status Ihrer Zwei-Faktor-Authentifizierung konnte nicht geladen werden. Bitte versuchen Sie es erneut.",
+      "requiredForAdmins": "Für Administratorkonten ist die Zwei-Faktor-Authentifizierung Pflicht, daher kann Ihre letzte Authenticator-App nicht entfernt werden.",
+      "requiredForAdminsPending": "Für Administratorkonten ist die Zwei-Faktor-Authentifizierung Pflicht. Aktivieren Sie sie jetzt, sonst werden Sie bei Ihrer nächsten Anmeldung dazu aufgefordert.",
+      "unnamedDevice": "Authenticator-App",
+      "addedOn": "Hinzugefügt am {date}",
+      "remove": "Entfernen",
+      "turnOn": "Aktivieren",
+      "unavailable": "Die Zwei-Faktor-Authentifizierung ist für dieses Konto nicht verfügbar.",
+      "recoveryTitle": "Wiederherstellungscodes",
+      "recoveryNone": "Noch keine. Wenn Sie Ihr Telefon verlieren, können Sie sich nicht mehr anmelden.",
+      "recoveryLeft": "Noch {remaining} von {total} Codes. Jeder funktioniert einmal, falls Sie Ihr Telefon verlieren.",
+      "recoveryLow": "Nur noch {remaining}. Erzeugen Sie neue Codes, bevor sie ausgehen.",
+      "recoverySet": "Eingerichtet. Jeder Code funktioniert einmal, falls Sie Ihr Telefon verlieren.",
+      "recoveryCreate": "Wiederherstellungscodes erstellen",
+      "recoveryRegenerate": "Neue Codes erzeugen"
+    },
+    "emailUpdates": {
+      "title": "E-Mail-Updates",
+      "description": "Gelegentliche Neuigkeiten und Angebote von LiveContext. E-Mails zu Ihrem Konto, etwa zum Einstieg oder wenn Ihre Credits aufgebraucht sind, erhalten Sie in jedem Fall.",
+      "label": "Senden Sie mir Neuigkeiten und Angebote von LiveContext per E-Mail. Abmelden ist mit einem Klick möglich.",
+      "error": "Ihre E-Mail-Einstellung konnte nicht geladen oder gespeichert werden. Bitte versuchen Sie es erneut."
+    },
     "nav": {
       "scrollLeft": "Nach links scrollen",
       "scrollRight": "Nach rechts scrollen"
@@ -5796,8 +5929,8 @@
     "mustBeLoggedIn": "Sie müssen angemeldet sein, um auf Einstellungen zuzugreifen.",
     "signIn": "Anmelden",
     "agentDefaults": {
-      "title": "Standardeinstellungen für Agenten und Chat",
-      "subtitle": "Optionen, die standardmäßig für jede Agenten-Unterhaltung und jeden neuen allgemeinen Chat in diesem Workspace gelten."
+      "title": "Standardeinstellungen für Agenten und Orbi",
+      "subtitle": "Optionen, die standardmäßig für jede Agenten-Unterhaltung und jede neue Unterhaltung mit Orbi in diesem Workspace gelten."
     },
     "bundles": {
       "title": "Katalog-Bundles",
@@ -5805,7 +5938,7 @@
       "adminOnly": "Nur der Plattform-Administrator kann Katalog-Bundles verwalten.",
       "adminOnlyBadge": "Nur Admin",
       "tabModels": "Modellkatalog",
-      "tabApis": "MCP-Katalog",
+      "tabApis": "Integrationskatalog",
       "tabSkills": "Skills",
       "skills": {
         "loading": "Skill-Bundles werden geladen...",
@@ -5990,6 +6123,7 @@
       "email": "E-Mail",
       "accountType": "Kontotyp",
       "localAccount": "E-Mail/Passwort",
+      "ssoAccount": "Single Sign-On (SAML)",
       "plan": "Plan",
       "editBio": "Biografie bearbeiten",
       "editBioDesc": "Erzählen Sie uns etwas über sich",
@@ -6058,7 +6192,7 @@
       "chatDefaultsLink": "Agenten- und Chat-Einstellungen öffnen",
       "savePreferences": "Einstellungen speichern",
       "workflowLayoutDirection": "Workflow-Anordnung",
-      "workflowLayoutDirectionDescription": "Leserichtung des Workflow-Editors: von links nach rechts oder von oben nach unten. Legt fest, wo Verbindungen und Schaltflächen der Knoten sitzen und wie das automatische Layout den Graphen anordnet.",
+      "workflowLayoutDirectionDescription": "Richtung, in der ein neuer Workflow beginnt: von links nach rechts oder von oben nach unten. Ein gespeicherter Workflow behält seine eigene Richtung, die Sie in den Einstellungen seiner Arbeitsfläche ändern, und der Marketplace zeigt jeden Workflow so, wie sein Autor ihn angeordnet hat.",
       "workflowLayoutDirectionHorizontal": "Von links nach rechts",
       "workflowLayoutDirectionVertical": "Von oben nach unten",
       "inspectorDock": "Knoten-Inspektor",
@@ -6071,15 +6205,60 @@
       "inspectorOpenModeAdvanced": "Einstellungen, Eingabe und Ausgabe"
     },
     "notifications": {
-      "title": "Benachrichtigungseinstellungen",
-      "description": "Verwalten Sie, wie wir Sie kontaktieren",
-      "email": "E-Mail-Benachrichtigungen",
-      "emailDescription": "Wichtige Benachrichtigungen per E-Mail erhalten",
-      "comingSoon": "Demnächst",
-      "push": "Push-Benachrichtigungen",
-      "pushDescription": "Push-Benachrichtigungen im Browser erhalten",
-      "marketing": "Marketing-E-Mails",
-      "marketingDescription": "Informationen über neue Tools und Funktionen erhalten"
+      "title": "Benachrichtigungen",
+      "description": "Wähle, wo dich jede Art von Warnung in diesem Workspace erreicht. Die Glocke in der App erhält immer alles.",
+      "antiSpamInfo": "Wie Benachrichtigungen begrenzt werden",
+      "antiSpamTitle": "Keine Nachrichtenflut",
+      "antiSpamBreaks": "Eine Nachricht, wenn ein Workflow fehlschlägt.",
+      "antiSpamReminder": "Höchstens eine Erinnerung pro Tag, solange er fehlerhaft bleibt.",
+      "antiSpamRecovered": "Eine Nachricht, wenn er wieder funktioniert.",
+      "antiSpamDigest": "Konto- und Aufgabenmeldungen kommen gemeinsam in einer täglichen Zusammenfassung.",
+      "antiSpamCap": "Ein Posteingang erhält nie mehr als 10 Benachrichtigungen pro Tag.",
+      "loading": "Deine Benachrichtigungseinstellungen werden geladen...",
+      "loadFailed": "Deine Benachrichtigungseinstellungen konnten nicht geladen werden.",
+      "retry": "Erneut versuchen",
+      "saveFailed": "Diese Änderung wurde nicht gespeichert. Versuche es erneut.",
+      "channelTitle": "Wohin Kanal-Benachrichtigungen gehen",
+      "channelIntro": "Kanal-Benachrichtigungen werden an den Standard-Chat dieses Arbeitsbereichs gesendet.",
+      "channelPrivacy": "Alle Mitglieder dieses Chats können diese Benachrichtigungen lesen.",
+      "channelLoading": "Verbundene Chats werden geladen...",
+      "channelLoadFailed": "Die verbundenen Chats konnten nicht geladen werden.",
+      "noDefault": "Mit diesem Arbeitsbereich sind Chats verbunden, aber keiner ist der Standard, daher werden keine Kanal-Benachrichtigungen gesendet.",
+      "defaultOff": "Der Standard-Chat dieses Arbeitsbereichs ist deaktiviert, daher werden keine Kanal-Benachrichtigungen gesendet.",
+      "changeLabel": "Benachrichtigungen an einen anderen Chat senden",
+      "changeHint": "Der gewählte Chat wird zum Standard dieses Arbeitsbereichs: Freigaben und Agentenfragen, die dem Standard folgen, gehen ebenfalls dorthin.",
+      "changeFailed": "Der Standard-Chat wurde nicht geändert. Versuchen Sie es erneut.",
+      "changeReadOnly": "Ihre Rolle in diesem Arbeitsbereich ist schreibgeschützt: Nur ein Mitglied mit Bearbeitungsrechten kann einen anderen Chat wählen.",
+      "manageChannels": "Kanäle verwalten",
+      "noChannel": "Mit diesem Workspace ist kein Chat-Kanal verbunden, daher sind die Kanal-Optionen noch nicht verfügbar.",
+      "connectChannel": "Kanal verbinden",
+      "emailNeedsPlan": "E-Mail-Warnungen sind ab dem Plan {plan} enthalten.",
+      "personScoped": "Gilt in all deinen Workspaces. Kanal-Warnungen gehen an den Kanal deines persönlichen Workspace.",
+      "deliversNothing": "Mit dieser Wahl verlässt nichts die App: Die Glocke zeigt es weiterhin an.",
+      "topics": {
+        "failures": {
+          "title": "Workflow-Fehler",
+          "description": "Ein Produktions-Workflow, der dir gehört, ist fehlgeschlagen oder wurde an seinem Ausgabenlimit gestoppt."
+        },
+        "credits": {
+          "title": "Credits",
+          "description": "Deine Credits werden knapp oder sind aufgebraucht."
+        },
+        "account": {
+          "title": "Kontoprobleme",
+          "description": "Ein Zugang ist abgelaufen oder ein Trigger wurde abgeschaltet. Kommt in der täglichen Zusammenfassung."
+        },
+        "tasks": {
+          "title": "Aufgaben",
+          "description": "Dir wurde eine Aufgabe zugewiesen, sie erwähnt dich oder wartet auf deine Prüfung. Kommt in der täglichen Zusammenfassung."
+        }
+      },
+      "delivery": {
+        "both": "E-Mail und Kanal",
+        "email": "E-Mail",
+        "channel": "Kanal",
+        "off": "Nur Glocke"
+      }
     },
     "advanced": {
       "deleteTitle": "Konto löschen",
@@ -6225,7 +6404,28 @@
           "ERROR": "Error",
           "DISABLED": "Disabled"
         },
-        "loading": "Wird geladen"
+        "loading": "Wird geladen",
+        "domains": {
+          "title": "Verifizierte E-Mail-Domains",
+          "description": "Die SSO-Anmeldung funktioniert nur für Adressen einer Domain, deren Besitz dieser Workspace nachgewiesen hat. \"Mit SSO anmelden\" leitet diese Adressen zu Ihrem Identitätsanbieter.",
+          "noneVerified": "Noch keine verifizierte Domain: Niemand kann sich per SSO anmelden, bis eine verifiziert ist.",
+          "verified": "Verifiziert",
+          "pending": "Ausstehend",
+          "verify": "Jetzt prüfen",
+          "remove": "{domain} entfernen",
+          "verifiedAt": "Verifiziert am {date}",
+          "instructions": "Legen Sie diesen TXT-Eintrag bei Ihrem DNS-Anbieter an und klicken Sie dann auf Jetzt prüfen. DNS-Änderungen können einige Minuten dauern.",
+          "recordName": "Name",
+          "recordValue": "Wert",
+          "copy": "Kopieren",
+          "copied": "Kopiert",
+          "lastChecked": "Zuletzt geprüft am {date}",
+          "placeholder": "unternehmen.de",
+          "add": "Domain hinzufügen",
+          "verifiedNotice": "{domain} ist verifiziert.",
+          "notFoundYet": "Der TXT-Eintrag für {domain} wurde noch nicht gefunden. Prüfen Sie ihn und versuchen Sie es in einigen Minuten erneut.",
+          "error": "Etwas ist schiefgelaufen. Bitte erneut versuchen."
+        }
       },
       "cancel": "Abbrechen",
       "save": "Speichern",
@@ -6682,7 +6882,6 @@
       "loopOutput": "Schleifenausgabe",
       "previousIterationExplanation": "This output comes from the previous loop iteration. You can use it to build logic that accumulates or depends on results from earlier iterations.",
       "loopOutputExplanation": "This output comes from this node in the loop. After the loop completes, it contains the result from the last iteration.",
-      "clickForInfo": "Für weitere Informationen klicken",
       "goToNode": "Zu {label} gehen",
       "downloadFile": "Datei herunterladen",
       "clickToExpand": "Zum Erweitern klicken",
@@ -6729,7 +6928,7 @@
         "signalBrowserTakeover": "Browser-Übernahme",
         "signalExpiresAt": "läuft {date} ab",
         "noResolvedParams": "Keine aufgelösten Parameter",
-        "configuredParamsTitle": "Gestartet mit"
+        "configuredParamsTitle": "Konfigurierte Werte (nicht aufgelöst)"
       },
       "fileTypeAudio": "Audio",
       "fileTypeDocument": "Dokument",
@@ -7391,6 +7590,7 @@
       "scopeLatestEpoch": "Neueste Epoche dieses Schritts"
     },
     "canvas": {
+      "validationSummary": "{errors, plural, one {# Fehler} other {# Fehler}}, {warnings, plural, one {# Warnung} other {# Warnungen}}",
       "portSingleTargetHint": "Dieser Ausgang ist bereits verbunden. Ein Port führt zu genau einem Knoten - füge einen Fork-Knoten hinzu, um mehrere parallel auszuführen.",
       "loadErrorTitle": "Dieser Workflow konnte nicht geladen werden",
       "loadErrorMessage": "Der Workflow konnte nicht geladen werden. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
@@ -7425,9 +7625,12 @@
       "mockRun": "Mock-Lauf",
       "followRunningNode": "Laufendem Schritt folgen",
       "stopFollowingRunningNode": "Laufendem Schritt nicht mehr folgen",
+      "followAgentBuild": "Den vom Agenten hinzugefügten Knoten folgen",
+      "stopFollowingAgentBuild": "Den vom Agenten hinzugefügten Knoten nicht mehr folgen",
       "runsHistory": "Ausführungsverlauf",
       "backToHome": "Zurück zur Startseite",
       "searchPlaceholder": "{context} suchen...",
+      "searchIntegrations": "Integrationen suchen...",
       "frequentlyUsed": "Häufig verwendet",
       "coreTriggers": "Kern-Trigger",
       "appTriggerShortcuts": "App-Trigger",
@@ -7444,7 +7647,7 @@
       "paletteCategories": "Kategorien",
       "paletteNodes": "Knoten",
       "paletteIntegrations": "Integrationen",
-      "mcp": "MCP",
+      "mcp": "Integrationen",
       "noApiFound": "Keine API gefunden",
       "noToolFound": "Kein Tool gefunden",
       "createTable": "Tabelle erstellen",
@@ -8006,7 +8209,6 @@
       },
       "manual": {
         "configuration": "Manuelle Konfiguration",
-        "moreInfo": "Für weitere Informationen klicken",
         "title": "Manueller Trigger",
         "description": "Lösen Sie den Workflow manuell aus, indem Sie auf die Wiedergabe-Schaltfläche klicken.",
         "availableOutputs": "Verfügbare Ausgaben:",
@@ -8015,7 +8217,6 @@
       },
       "workflowTrigger": {
         "configuration": "Workflow-Konfiguration",
-        "moreInfo": "Für weitere Informationen klicken",
         "title": "Workflow-Trigger",
         "description": "Dieser Workflow wird ausgelöst, wenn ein anderer Workflow abgeschlossen ist und ihn aufruft.",
         "availableOutputs": "Verfügbare Ausgaben:",
@@ -8025,7 +8226,6 @@
       },
       "chat": {
         "configuration": "Chat-Konfiguration",
-        "moreInfo": "Für weitere Informationen klicken",
         "title": "Chat-Trigger",
         "description": "Lösen Sie den Workflow durch eine Konversationseingabe im Chat-Panel aus.",
         "availableOutputs": "Verfügbare Ausgaben:",
@@ -8082,7 +8282,7 @@
         "promptPlaceholder": "Was soll der Agent tun?",
         "tools": "Tools",
         "allTools": "Alle Tools",
-        "connectToolsHint": "Verbinden Sie MCP-Tools, um einzuschränken, welche Tools der Agent verwenden kann",
+        "connectToolsHint": "Verbinden Sie Integrations-Tools, um einzuschränken, welche Tools der Agent verwenden kann",
         "systemPrompt": "System-Prompt",
         "systemPromptPlaceholder": "Sie sind ein hilfreicher Assistent...",
         "systemPromptInfo": "Anweisungen, die das Verhalten und die Persönlichkeit des Agenten definieren.",
@@ -8097,9 +8297,32 @@
         "addRule": "Add rule",
         "inputToValidate": "Zu validierende Eingabe",
         "validationRules": "Validierungsregeln",
-        "rulesDescription": "Definieren Sie Validierungsregeln für das Guardrail.",
+        "rulesDescription": "Schlüsselwort-, Regex-, Längen-, PII- (außer Adressen), Wettbewerber- und benutzerdefinierte Regeln werden exakt geprüft, ohne KI-Aufruf. Die übrigen Regeln bewertet das KI-Modell.",
         "temperatureDescription": "Steuert die Zufälligkeit bei der Validierung. Niedrigere Werte machen die Validierung strenger.",
-        "maxTokensDescription": "Maximale Anzahl an Tokens für die KI-Validierungsantwort."
+        "maxTokensDescription": "Maximale Anzahl an Tokens für die KI-Validierungsantwort.",
+        "mode": "Modus",
+        "keywordModeBlock": "Diese Schlüsselwörter blockieren",
+        "keywordModeAllow": "Nur zulassen, wenn eines dieser Schlüsselwörter vorkommt",
+        "regexModeRequire": "Der Inhalt muss übereinstimmen",
+        "regexModeBlock": "Der Inhalt darf keine Übereinstimmung enthalten",
+        "engineDeterministic": "Exakt geprüft, ohne KI-Aufruf",
+        "engineModel": "Vom KI-Modell bewertet",
+        "typeDescriptions": {
+          "pii_detection": "Erkennt E-Mails, Telefonnummern, Sozialversicherungs- und Kartennummern exakt; Adressen bewertet die KI",
+          "toxic_language": "Von der KI bewertet: beleidigende oder schädliche Inhalte",
+          "prompt_injection": "Von der KI bewertet: Versuche, Anweisungen zu umgehen",
+          "keyword_filter": "Blockiert oder verlangt ganze Schlüsselwörter",
+          "regex_pattern": "Der Inhalt muss einer Regex entsprechen oder darf keinen Treffer enthalten",
+          "length_check": "Minimale und maximale Länge in Zeichen",
+          "topic_restriction": "Von der KI bewertet: Themen, die der Inhalt nicht behandeln darf",
+          "competitor_mention": "Blockiert die aufgeführten Namen (ganze Wörter)",
+          "custom": "Boolescher Ausdruck: #input ist der Inhalt, true bedeutet gültig"
+        },
+        "actionDescriptions": {
+          "block": "Prüfung fehlschlagen lassen und an den Fail-Ausgang leiten",
+          "sanitize": "Prüfung fehlschlagen lassen und gefundenen Text in der bereinigten Ausgabe durch [REDACTED] ersetzen",
+          "flag": "Prüfung fehlschlagen lassen und den Verstoß auflisten, ohne zu schwärzen"
+        }
       },
       "addField": "Feld hinzufügen",
       "browserAgent": {
@@ -8149,7 +8372,6 @@
         "bootstrapTitle": "Bootstrap erforderlich",
         "configuration": "Fehler-Trigger-Konfiguration",
         "description": "Wird ausgelöst, wenn die überwachte Workflow-Ausführung mit FAILED oder PARTIAL_SUCCESS endet. Das deckt jede Art von Fehler ab: eine unbehandelte Knoten-Ausnahme (HTTP-Fehler, Code-Absturz, Tool-Throw), einen stop_on_error-Knoten, eine Zeitüberschreitung oder Teilerfolg, wenn einige Branches fehlgeschlagen sind, andere aber erfolgreich waren. Verwenden Sie ihn, um Ops zu alarmieren, Fehler zu protokollieren, erneut zu versuchen oder auszuweichen. Anti-Schleife: Wenn dieser Handler selbst fehlschlägt, wird kein weiterer Fehler-Handler ausgelöst.",
-        "moreInfo": "Für weitere Infos klicken",
         "title": "Fehler-Trigger",
         "watchedWorkflow": "Überwachter Workflow",
         "watchedWorkflowHint": "Dieser Handler wird ausgelöst, wann immer der obige Workflow fehlschlägt - jede Knoten-Ausnahme, stop_on_error, Zeitüberschreitung oder Teilerfolg endet in FAILED/PARTIAL_SUCCESS und wird hierhin weitergeleitet."
@@ -8177,24 +8399,31 @@
         "delegation": {
           "title": "Über externen Kanal delegieren",
           "infoTitle": "Delegation über externen Kanal",
-          "infoBody": "Sendet die ausstehende Genehmigung als Nachricht mit Genehmigen- und Ablehnen-Schaltflächen in einen Telegram-Chat. Ein Tippen auf eine Schaltfläche löst die Genehmigung auf, zusätzlich zur Entscheidung in der App.",
+          "infoBody": "Sendet die ausstehende Genehmigung als Nachricht mit Schaltflächen zum Genehmigen und Ablehnen an Telegram, Slack, Discord, WhatsApp oder Microsoft Teams. Ein Klick auf eine Schaltfläche entscheidet die Genehmigung, zusätzlich zur Entscheidung in der App.",
           "infoOptional": "Optional. Die Genehmigung bleibt auch in der App verfügbar.",
           "enableAria": "Delegation über externen Kanal aktivieren",
           "channelLabel": "Kanal",
-          "credentialHint": "Optional. Leer lassen, um mit Ihren Standard-Telegram-Anmeldedaten zu senden, oder wählen Sie welche aus, um einen bestimmten Bot zu verwenden.",
-          "chatIdLabel": "Chat-ID",
-          "chatIdHint": "ID des Ziel-Chats oder der Zielgruppe. Unterstützt '{{...}}'-Ausdrücke.",
+          "credentialHint": "Optional. Leer lassen, um das in Einstellungen > Kanäle verbundene {channel}-Konto zu verwenden, oder eines auswählen, um ein bestimmtes Konto zu nutzen.",
+          "chatIdLabel": "Ziel",
+          "chatIdHint": "Optional. Leer lassen, um an das in Einstellungen > Kanäle verbundene {channel}-Ziel zu senden. Unterstützt Ausdrücke.",
           "messageLabel": "Nachrichtenvorlage",
           "messagePlaceholder": "Standardmäßig der Genehmigungskontext",
           "imageLabel": "Bild",
           "imageHint": "Optional. Eine Dateiausgabe eines anderen Knotens (zum Beispiel ein Interface-Screenshot) oder eine Bild-URL. Wenn gesetzt, wird die Nachricht als Foto mit dem Text als Bildunterschrift gesendet. Unterstützt '{{...}}'-Ausdrücke.",
           "allowedUserIdsLabel": "Erlaubte Benutzer-IDs",
-          "allowedUserIdsHint": "Kommagetrennte Telegram-Benutzer-IDs. Leer lassen, damit jeder im Chat entscheiden darf.",
+          "allowedUserIdsHint": "Durch Kommas getrennte {channel}-Benutzer-IDs. Leer lassen, damit jeder im Chat entscheiden kann.",
           "approveLabelLabel": "Schaltfläche Genehmigen",
           "approveLabelPlaceholder": "✅ Genehmigen",
           "rejectLabelLabel": "Schaltfläche Ablehnen",
           "rejectLabelPlaceholder": "❌ Ablehnen",
-          "buttonLabelsHint": "Optional. Eigener Text für die Schaltflächen Genehmigen und Ablehnen. Leer lassen, um die Standardwerte beizubehalten. Nur der Schaltflächentext ändert sich. Unterstützt '{{...}}'-Ausdrücke."
+          "buttonLabelsHint": "Optional. Eigener Text für die Schaltflächen Genehmigen und Ablehnen. Leer lassen, um die Standardwerte beizubehalten. Nur der Schaltflächentext ändert sich. Unterstützt '{{...}}'-Ausdrücke.",
+          "channelHint": "Verbinden Sie einen Dienst einmal, dann erreichen ihn Genehmigungen ohne weitere Einstellung.",
+          "manageChannels": "Kanäle verwalten",
+          "destinationLabel": "Ziel",
+          "destinationHint": "Wie eine Anmeldeinformation gewählt: der Standard des Arbeitsbereichs, ein verbundenes Ziel oder ein anderer, von Hand angegebener Chat.",
+          "customDestination": "Anderer Chat (erweitert)",
+          "credentialDescription": "{channel}-Konto, mit dem die Genehmigungsnachricht gesendet wird",
+          "anonymousPressNote": "Bei {channel} sind die Schaltflächen Links zu einer Bestätigungsseite, die nicht erkennen kann, wer sie geöffnet hat. Daher kann jeder im Chat entscheiden."
         }
       }
     },
@@ -8422,7 +8651,6 @@
     },
     "availableOutputs": "Verfügbare Ausgaben:",
     "manageInSettings": "In Einstellungen verwalten",
-    "moreInfo": "Mehr Infos",
     "loadingEndpoint": "Endpunkt wird geladen...",
     "formUrl": "Formular-URL",
     "copyUrl": "URL kopieren",
@@ -8553,18 +8781,19 @@
       "description": "Erstellen Sie Ihre erste Tabelle, um loszulegen, oder schauen Sie sich unsere geführten Tutorials unten an"
     },
     "mcp": {
-      "title": "MCPs",
-      "searchPlaceholder": "MCPs nach Name, Beschreibung suchen...",
-      "addButton": "MCP hinzufügen",
-      "noMCPsFound": "Keine MCPs gefunden",
-      "addFirstMCP": "Fügen Sie Ihr erstes MCP aus dem Marktplatz hinzu",
-      "noMatchingMCPs": "Keine MCPs entsprechen Ihren Suchkriterien",
+      "title": "Integrationen",
+      "count": "{count, plural, one {# Integration} other {# Integrationen}}",
+      "searchPlaceholder": "Integrationen nach Name, Beschreibung suchen...",
+      "addButton": "Integration hinzufügen",
+      "noMCPsFound": "Keine Integrationen gefunden",
+      "addFirstMCP": "Fügen Sie Ihre erste Integration aus dem Marketplace hinzu",
+      "noMatchingMCPs": "Keine Integrationen entsprechen Ihren Suchkriterien",
       "deleteCount": "Löschen ({count})",
-      "deleteTitle": "MCPs löschen",
-      "deleteConfirmation": "Sind Sie sicher, dass Sie {count} MCP(s) löschen möchten? Diese Aktion kann nicht rückgängig gemacht werden.",
+      "deleteTitle": "Integrationen löschen",
+      "deleteConfirmation": "Möchten Sie {count} Integration(en) wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
       "tools": "Tools",
       "added": "Hinzugefügt",
-      "deleteFailed": "Die ausgewählten MCPs konnten nicht gelöscht werden."
+      "deleteFailed": "Die ausgewählten Integrationen konnten nicht gelöscht werden."
     }
   },
   "fleetInspector": {
@@ -8747,9 +8976,9 @@
     "error": "Fehler",
     "repeat": "Wiederholung",
     "overview": "Übersicht",
-    "overviewDesc": "Kombinierte Metriken über alle Agenten und den allgemeinen Chat",
-    "generalChat": "Allgemeiner Chat",
-    "generalChatDesc": "Metriken für Unterhaltungen ohne ausgewählten Agenten",
+    "overviewDesc": "Kombinierte Metriken über alle Agenten und Orbi",
+    "generalChat": "Orbi",
+    "generalChatDesc": "Unterhaltungen mit Orbi, ohne ausgewählten Agenten",
     "classify": "Classify",
     "guardrail": "Guardrail",
     "agentPerformanceDesc": "Ausführungsstatistiken pro Agent",
@@ -8818,6 +9047,7 @@
     "deniedMessage": "Verbindungsanfrage wurde abgebrochen"
   },
   "onboarding": {
+    "marketingConsent": "Senden Sie mir Neuigkeiten und Angebote von LiveContext per E-Mail. Abmelden ist mit einem Klick möglich.",
     "emailVerification": {
       "title": "E-Mail-Adresse bestätigen",
       "description": "Wir haben einen 6-stelligen Code an {email} gesendet",
@@ -8830,7 +9060,8 @@
       "tooManyAttempts": "Zu viele Versuche, bitte einen neuen Code anfordern",
       "rateLimited": "Zu viele Anfragen, bitte warten",
       "codeSent": "Code gesendet!",
-      "verified": "E-Mail-Adresse bestätigt!"
+      "verified": "E-Mail-Adresse bestätigt!",
+      "wrongEmail": "Nicht Ihre Adresse? Abmelden"
     },
     "step": "Schritt",
     "of": "von",
@@ -8846,7 +9077,7 @@
     "displayNameHint": "Nur Buchstaben, Zahlen, Leerzeichen und Bindestriche. Für andere Benutzer sichtbar.",
     "displayNameRequired": "Anzeigename ist erforderlich",
     "displayNameTaken": "Dieser Anzeigename ist bereits vergeben",
-    "displayNameCheckError": "Anzeigenamen-Verfügbarkeit konnte nicht überprüft werden",
+    "displayNameCheckError": "Anzeigenamen-Verfügbarkeit konnte nicht überprüft werden. Sie können trotzdem fortfahren.",
     "role": "Was ist Ihre Rolle?",
     "customRolePlaceholder": "Geben Sie Ihre Rolle ein...",
     "companySize": "Unternehmensgröße",
@@ -8859,10 +9090,13 @@
     "step3Required": "Beantworten Sie beide Fragen, um abzuschließen",
     "loginRequired": "Anmeldung erforderlich",
     "loginRequiredDescription": "Bitte melden Sie sich an, um Ihre Profileinrichtung abzuschließen",
+    "ceLinkLoginRequiredDescription": "Melden Sie sich an oder erstellen Sie ein LiveContext Cloud-Konto, um Ihre selbst gehostete Installation zu verbinden.",
     "signIn": "Anmelden",
     "errorTitle": "Etwas ist schiefgelaufen",
     "errorDescription": "Die Onboarding-Seite konnte nicht geladen werden. Bitte versuchen Sie es erneut.",
     "retry": "Erneut versuchen",
+    "signOut": "Abmelden",
+    "signOutFailed": "Abmeldung fehlgeschlagen. Bitte erneut versuchen.",
     "step1": {
       "title": "Lernen wir Sie kennen",
       "description": "Erzählen Sie uns ein wenig über sich, um Ihre Erfahrung zu personalisieren"
@@ -9307,8 +9541,6 @@
       },
       "breakdown": {
         "payg": "PAYG-Aufladung",
-        "ai": "KI-Kontingent",
-        "aiHint": "Für Agenten und Chat, auf den für den Gratis-Tarif freigegebenen Modellen. Wird monatlich erneuert.",
         "paygHintPersists": "Bleibt über Verlängerungszyklen hinweg erhalten.",
         "sub": "Abonnement"
       },
@@ -9347,8 +9579,7 @@
     "freeTier": {
       "label": "Gratis",
       "srLabel": "in Ihrem Tarif enthalten",
-      "tooltip": "In Ihrem Free-Tarif enthalten: Ihr monatliches KI-Guthaben bezahlt Chat- und Agenten-Durchläufe mit diesem Modell.",
-      "tooltipWithCredits": "In Ihrem Free-Tarif enthalten: {credits} KI-Credits pro Monat, die Chat- und Agenten-Durchläufe mit diesem Modell bezahlen."
+      "tooltip": "In Ihrem Free-Tarif enthalten: Ihre monatlichen Credits bezahlen Chat- und Agenten-Durchläufe mit diesem Modell."
     },
     "upgradeRequired": {
       "label": "Bezahlte Credits nötig",
@@ -9357,6 +9588,7 @@
       "cta": "Pläne ansehen oder aufladen"
     },
     "planLocked": {
+      "infoLabel": "Warum dieser Knoten den Plan {plan} erfordert",
       "nodeNotice": "Dieser Knoten ist ab dem Tarif {plan} verfügbar. Bis zum Upgrade schlägt er bei der Ausführung fehl."
     }
   },
@@ -10704,9 +10936,9 @@
     "dismiss": "Verstanden",
     "learnMore": "Alle Updates ansehen",
     "latest": {
-      "title": "Ein typisierter Klassifikator und Ihre eigenen Modellschlüssel",
-      "body": "Der Classify-Knoten läuft jetzt auf einem Entscheidungsmodell: TypeSafe Jev wählt eine Ihrer Kategorien und gibt jeder eine Wahrscheinlichkeit, statt ein Chatmodell den Namen einer Kategorie schreiben zu lassen. Gleiche Kategorien, gleiche Verzweigungen, nur ein Anbieterwechsel. Und Ihre eigenen Anbieterschlüssel treiben alles an, Agenten, Chats und Knoten: Jeder Lauf ist an den tatsächlich benutzten Schlüssel gebunden, und wenn ein Anbieter Ihren Schlüssel mitten im Lauf ablehnt, lesen Sie seine eigenen Worte, nicht unsere.",
-      "mediaAlt": "Zwei Symbole nebeneinander: die TypeSafe-Marke mit der Bildunterschrift typisierte Engine für Classify, und ein Schlüssel mit der Bildunterschrift Ihre eigenen Schlüssel für Agenten, Chats und Knoten"
+      "title": "Ihre Agenten erreichen Sie in Ihrer Chat-App",
+      "body": "Agenten, Freigabeschritte und unbeaufsichtigte Läufe warten nicht mehr auf einer Karte, die niemand sieht. Verbinden Sie Telegram, Slack, Discord, WhatsApp oder Microsoft Teams auf der Seite Channels in Ihren Einstellungen: Eine Frage oder eine Freigabe kommt in dem Chat an, den Sie ohnehin lesen, Sie antworten von dort aus und der Lauf geht weiter. Benachrichtigungen können die App ebenfalls verlassen, über einen Kanal oder per E-Mail, in Ihrer Sprache (in der Cloud gibt es E-Mail-Benachrichtigungen ab dem Starter-Tarif). Ein Kanal lässt sich auch von Hand verbinden, ohne den Assistenten und ohne Credits zu verbrauchen.",
+      "mediaAlt": "Zwei Symbole nebeneinander: eine Sprechblase, beschriftet als Chat-Kanäle für Telegram, Slack, Discord, WhatsApp und Teams, und eine Glocke, beschriftet als Benachrichtigungen per E-Mail oder über einen Kanal"
     }
   },
   "optionalComponents": {
@@ -11444,7 +11676,10 @@
       "NIGHT_OWL": "Nachtschicht",
       "PUBLISHER": "Veröffentlichung",
       "SHARER": "Teilen",
-      "POPULARITY": "Reichweite"
+      "POPULARITY": "Reichweite",
+      "REACHABLE": "Erreichbar",
+      "MULTICHANNEL": "Mehrkanal",
+      "REMOTE_CONTROL": "Fernsteuerung"
     },
     "tier": {
       "BRONZE": "Bronze",
@@ -11465,7 +11700,10 @@
       "PUBLICATIONS_PUBLISHED": "{count} Elemente im Marktplatz veröffentlichen",
       "PUBLICATIONS_PUBLIC": "{count} Veröffentlichungen öffentlich machen",
       "PUBLICATION_USES": "Ihre Veröffentlichungen {count} Mal installieren lassen",
-      "DAYS_UNTIL_JOIN_CUTOFF": "Früh zu LiveContext stoßen"
+      "DAYS_UNTIL_JOIN_CUTOFF": "Früh zu LiveContext stoßen",
+      "CHANNELS_CONNECTED": "{count} Chat-Ziele verbinden, die Ihre Nachrichten erhalten",
+      "CHANNEL_SERVICES": "Über {count} verschiedene Chat-Dienste erreichbar sein",
+      "REMOTE_DECISIONS": "{count} Ihrer Anfragen im Chat statt in der App beantworten lassen"
     },
     "item": {
       "founder_2026": {
@@ -11615,6 +11853,30 @@
       },
       "popularity_50000": {
         "name": "In aller Munde"
+      },
+      "reachable_1": {
+        "name": "In Reichweite"
+      },
+      "reachable_5": {
+        "name": "Überall zugleich"
+      },
+      "multichannel_2": {
+        "name": "Zwei Leitungen offen"
+      },
+      "multichannel_4": {
+        "name": "Telefonzentrale"
+      },
+      "remote_1": {
+        "name": "Erster Anruf"
+      },
+      "remote_25": {
+        "name": "Pilot in der Tasche"
+      },
+      "remote_250": {
+        "name": "Kontrollraum"
+      },
+      "remote_2500": {
+        "name": "Kommandozentrale"
       }
     }
   },
@@ -11720,10 +11982,6 @@
       "clear": "Leeren"
     },
     "untitled": "Kreation ohne Titel",
-    "look": {
-      "toDarkroom": "Zur Dunkelkammer-Ansicht wechseln",
-      "toApp": "Zurück zur App-Ansicht"
-    },
     "thread": {
       "loading": "Dieser Studio-Verlauf wird geladen"
     },
@@ -12002,9 +12260,9 @@
       },
       "hero": {
         "eyebrow": "Die KI-Automatisierungsplattform",
-        "titleLineOne": "Eine Nachricht <u>rein</u>.",
-        "titleLineTwo": "Eine laufende Automatisierung <u>raus</u>.",
-        "lead": "{integrations} Integrationen und alle großen LLMs, in der Cloud oder selbst gehostet. Bauen, veröffentlichen und betreiben Sie Ihre Agenten visuell, im Chat oder mit Code, und schalten Sie an jeder Stelle einen Menschen dazwischen.",
+        "titleLineOne": "Sagen Sie es <u>einmal</u>.",
+        "titleLineTwo": "Machen Sie es <u>nie wieder</u>.",
+        "lead": "Eine Nachricht baut Ihre Automatisierung, und Sie behalten die Kontrolle: jeder Schritt protokolliert und prüfbar, Ihre Secrets verschlüsselt, eine menschliche Freigabe, wo Sie wollen. KI läuft nur dort, wo sie sich lohnt, also zahlen Sie weniger als für einen Agenten, der sich durch jeden Schritt tastet.",
         "startFree": "Kostenlos starten"
       },
       "integrations": {
@@ -12049,8 +12307,8 @@
         "lead": "Wählen Sie einen Tarif, wählen Sie Ihre Kreditstufe und setzen Sie pro Agent ein Budget, das er nicht überschreiten kann. Sie zahlen nur, was Sie ausführen, ohne versteckte Gebühren und ohne überraschende Mehrkosten."
       },
       "finalCta": {
-        "titleLineOne": "Schluss mit dem Tool-Jonglieren.",
-        "titleLineTwo": "Fangen Sie mit einem an.",
+        "titleLineOne": "Build prod.",
+        "titleLineTwo": "Not god.",
         "lead": "Chatten Sie damit. Bauen Sie damit. Liefern Sie damit. Schicken Sie es los, die Arbeit für Sie zu erledigen."
       }
     },
@@ -15023,6 +15281,254 @@
       "running": "Läuft",
       "waiting": "Wartet",
       "completed": "Abgeschlossen"
+    }
+  },
+  "channelsSettings": {
+    "title": "Kanäle",
+    "subtitle": "Wo Ihre Genehmigungen und die Fragen Ihrer Agenten Sie erreichen, wenn Sie nicht in der App sind.",
+    "loading": "Wird geladen...",
+    "error": "Etwas ist schiefgelaufen",
+    "connectedTitle": "Verbundene Ziele",
+    "emptyTitle": "Noch kein Kanal verbunden",
+    "emptyHint": "Wählen Sie unten einen Dienst, und der Assistent führt Sie durch die Einrichtung.",
+    "defaultBadge": "Standard",
+    "statusWorking": "Funktioniert: Hierher wurde eine Nachricht zugestellt.",
+    "statusNotDelivered": "Funktioniert noch nicht: Hierher wurde nichts zugestellt.",
+    "sentByBot": "Gesendet vom Bot @{bot}",
+    "restricted": "{count, plural, one {# Person darf entscheiden} other {# Personen dürfen entscheiden}}",
+    "troubleshoot": "Mit dem Assistenten beheben",
+    "makeDefault": "Als Standard festlegen",
+    "disconnect": "Trennen",
+    "disconnectTitle": "Dieses Ziel trennen?",
+    "disconnectMessage": "Genehmigungen und Fragen kommen nicht mehr in {chat} an. Ist es das Standardziel, geht der Standard auf ein anderes funktionierendes Ziel über.",
+    "servicesTitle": "Kanal hinzufügen",
+    "servicesHint": "Jeder Dienst erfordert ein paar Schritte in seiner eigenen Konsole. Der Assistent führt Sie einzeln durch sie, und Sie können ihn unterwegs alles fragen.",
+    "setUpWithAssistant": "Mit dem Assistenten einrichten",
+    "setUpManually": "Manuell einrichten",
+    "readOnly": "Ihre Rolle in diesem Arbeitsbereich ist schreibgeschützt: Sie sehen, wo er erreicht wird, können es aber nicht ändern.",
+    "manual": {
+      "title": "{channel} verbinden",
+      "intro": "Dieselben Schritte wie beim Assistenten, als Formular. Es werden keine Credits verbraucht.",
+      "stepAccount": "Ihr {channel}-Konto",
+      "stepHello": "Sagen Sie Ihrem Bot Hallo",
+      "stepDestination": "Wohin die Nachrichten gehen",
+      "accountSetting": {
+        "publicKey": {
+          "label": "Öffentlicher Schlüssel der Anwendung",
+          "placeholder": "64 Hexadezimalzeichen",
+          "hint": "Developer Portal, Ihre Anwendung, General Information, Public Key."
+        },
+        "phoneNumberId": {
+          "label": "Telefonnummer-ID",
+          "placeholder": "106540352242922",
+          "hint": "Meta-App, WhatsApp, API Setup, Phone number ID (nicht die Telefonnummer selbst)."
+        }
+      },
+      "findChats": "Meine Chats finden",
+      "findChatsHint": {
+        "telegram": "Listet die Chats auf, die Ihrem Bot kürzlich geschrieben haben. Funktioniert nur, bevor der Bot verbunden ist: danach geben Sie die ID unten ein.",
+        "slack": "Listet die Kanäle, in die die App eingeladen wurde, und Ihre Direktnachrichten auf.",
+        "discord": "Listet die Kanäle der Server auf, denen Ihr Bot hinzugefügt wurde.",
+        "teams": "Listet Ihre Teams-Chats auf."
+      },
+      "chatIdLabel": "Chat-ID",
+      "noChats": {
+        "telegram": "Noch kein Chat: Senden Sie Ihrem Bot eine Nachricht (oder fügen Sie ihn der Gruppe hinzu) und suchen Sie erneut.",
+        "slack": "Kein Kanal gefunden: Laden Sie die App mit /invite in einen Kanal ein und suchen Sie erneut.",
+        "discord": "Kein Kanal gefunden: Fügen Sie den Bot Ihrem Server hinzu und suchen Sie erneut.",
+        "teams": "Kein Chat gefunden: Starten Sie einen Chat in Teams und suchen Sie erneut."
+      },
+      "phoneLabel": "Telefonnummer",
+      "phoneHint": "Im internationalen Format. Die Person muss Ihrer WhatsApp-Nummer in den letzten 24 Stunden geschrieben haben.",
+      "connect": "Verbinden und Testnachricht senden",
+      "close": "Schließen",
+      "delivered": "Verbunden: Die Testnachricht ist angekommen.",
+      "notDelivered": "Gespeichert, aber die Testnachricht ist nicht angekommen.",
+      "remaining": "Noch ein Schritt im Dienst",
+      "typeChatLabel": "Oder die Chat-ID eingeben",
+      "typeChatHint": {
+        "telegram": "Für eine Gruppe: ihre ID, die mit -100 beginnt. Für einen öffentlichen Kanal: @name. Niemals der @name Ihres eigenen Bots.",
+        "slack": "Für einen nicht aufgeführten Kanal: seine ID (Rechtsklick auf den Kanal, Kanaldetails anzeigen, ganz unten).",
+        "discord": "Für einen nicht aufgeführten Kanal: seine ID (Entwicklermodus an, Rechtsklick auf den Kanal, Kanal-ID kopieren).",
+        "teams": "Für einen nicht aufgeführten Chat: seine Unterhaltungs-ID."
+      },
+      "chatIdPlaceholder": {
+        "telegram": "123456789, -1001234567890 oder @meinkanal",
+        "slack": "C0123456789",
+        "discord": "123456789012345678",
+        "whatsapp": "+49151234567",
+        "teams": "19:abc123@thread.v2"
+      },
+      "accountSettingKept": "Dieses Konto ist bereits verbunden: leer lassen, um den gespeicherten Wert zu behalten.",
+      "details": "Details:",
+      "copy": "Kopieren",
+      "copied": "Kopiert",
+      "tryAgain": "Erneut versuchen",
+      "listUnavailable": {
+        "telegram": "Telegram kann die Chats eines bereits verbundenen Bots nicht auflisten. Geben Sie das Ziel unten ein: für Sie selbst die Zahl, die @userinfobot Ihnen schickt, wenn Sie ihm schreiben."
+      },
+      "botItself": "Das ist Ihr Bot (@{bot}): Ein Bot kann sich selbst keine Nachrichten senden. Geben Sie den Chat an, der sie erhalten soll, zum Beispiel Ihre numerische ID von @userinfobot.",
+      "guide": {
+        "openBot": "@{bot} in Telegram öffnen",
+        "askAssistant": "Orbi soll mich führen",
+        "links": {
+          "botFather": "@BotFather öffnen",
+          "userInfoBot": "Meine ID abrufen (@userinfobot)",
+          "discordPortal": "Discord Developer Portal",
+          "metaApps": "Meta for Developers"
+        },
+        "telegram": {
+          "1": "Öffnen Sie in Telegram @BotFather, senden Sie /newbot und kopieren Sie das Token, das Sie erhalten.",
+          "2": "Verbinden Sie dieses Token dann unten.",
+          "3": "Öffnen Sie Ihren Bot und tippen Sie auf Starten (für eine Gruppe: fügen Sie den Bot hinzu und senden Sie dort eine Nachricht). Ein Bot kann niemandem schreiben, der ihm nie geschrieben hat.",
+          "4": "Geben Sie den Chat an, in den geschrieben wird: für Sie selbst Ihre numerische ID, die @userinfobot Ihnen schickt, wenn Sie ihm schreiben."
+        },
+        "slack": {
+          "1": "Verbinden Sie Slack unten und genehmigen Sie die App in Ihrem Workspace.",
+          "2": "Für einen Kanal geben Sie darin /invite gefolgt vom App-Namen ein. Eine Direktnachricht braucht nichts.",
+          "3": "Wählen Sie den Kanal oder die Unterhaltung über Meine Chats finden."
+        },
+        "discord": {
+          "1": "Erstellen Sie im Discord Developer Portal eine Anwendung, öffnen Sie Bot und kopieren Sie das Token.",
+          "2": "In OAuth2, URL Generator: bot und Send Messages ankreuzen, den Link öffnen und den Bot zu Ihrem Server hinzufügen.",
+          "3": "Fügen Sie das Token unten ein und den Public Key (Seite General Information) in das Feld darunter.",
+          "4": "Wählen Sie den Kanal und fügen Sie danach die nach dem Verbinden angezeigte Interactions Endpoint URL auf der Seite General Information ein."
+        },
+        "whatsapp": {
+          "1": "In Ihrer Meta-App mit WhatsApp, API Setup: notieren Sie die Phone number ID und erstellen Sie ein dauerhaftes System-User-Token.",
+          "2": "Fügen Sie das Token unten ein und die Phone number ID in das Feld darunter.",
+          "3": "Senden Sie vom Telefon, das antworten wird, eine Nachricht an Ihre Geschäftsnummer (WhatsApp erlaubt eine Antwort nur innerhalb von 24 Stunden).",
+          "4": "Geben Sie diese Telefonnummer ein und richten Sie dann die nach dem Verbinden angezeigte Callback-URL und das Verify-Token ein."
+        },
+        "teams": {
+          "1": "Melden Sie sich unten mit Microsoft an.",
+          "2": "Wählen Sie den Chat über Meine Chats finden.",
+          "3": "Nachrichten werden in Ihrem Namen gepostet, und Teams benachrichtigt Sie nicht über Ihre eigenen Nachrichten: Wählen Sie einen Chat, den andere lesen, oder einen anderen Dienst, um selbst benachrichtigt zu werden."
+        }
+      }
+    },
+    "assistantUnavailable": "Der Assistent kann hier nicht geöffnet werden. Öffnen Sie den Chat und bitten Sie ihn, den Kanal einzurichten.",
+    "setupPrompt": "Ich möchte, dass meine Genehmigungen und die Fragen meiner Agenten mich über {channel} erreichen. Führe mich Schritt für Schritt durch die Einrichtung (Kanal: {id}) und prüfe nach jedem Schritt mit mir.",
+    "troubleshootPrompt": "Mein {channel}-Kanal \"{chat}\" funktioniert nicht. Letzter Fehler: {error}. Hilf mir herauszufinden, warum, und es zu beheben.",
+    "services": {
+      "telegram": {
+        "needs": "Ein eigener Bot, in zwei Minuten mit BotFather erstellt.",
+        "time": "Etwa 3 Minuten"
+      },
+      "slack": {
+        "needs": "Nichts zu erstellen: Genehmigen Sie die App in Ihrem Workspace und wählen Sie einen Kanal.",
+        "time": "Etwa 1 Minute"
+      },
+      "discord": {
+        "needs": "Eine eigene Discord-Anwendung mit Bot sowie eine URL, die im Portal eingefügt wird.",
+        "time": "Etwa 5 Minuten"
+      },
+      "whatsapp": {
+        "needs": "Eine Meta-Business-App mit WhatsApp, deren Telefonnummer-ID und ein Zugriffstoken.",
+        "time": "Etwa 10 Minuten"
+      },
+      "teams": {
+        "needs": "Nichts zu erstellen: Melden Sie sich mit Microsoft an und wählen Sie einen Chat. Nachrichten werden in Ihrem Namen gesendet und benachrichtigen die anderen Personen im Chat, nicht Sie.",
+        "time": "Etwa 1 Minute"
+      }
+    }
+  },
+  "channelPicker": {
+    "loading": "Ziele werden geladen...",
+    "error": "Die Ziele konnten nicht geladen werden.",
+    "empty": "Noch kein Kanal verbunden.",
+    "connect": "Kanal verbinden",
+    "defaultOf": "Standard des Arbeitsbereichs ({destination})",
+    "defaultNone": "Standard des Arbeitsbereichs (noch keiner)",
+    "defaultNoneHint": "Dieser Arbeitsbereich hat noch kein Standardziel: Es wird nichts gesendet, bis eines verbunden ist.",
+    "notWorking": "{destination} (noch keine Nachricht erhalten)",
+    "gone": "Getrenntes Ziel",
+    "goneHint": "Das hier gewählte Ziel ist nicht mehr verbunden: Es wird nichts gesendet, bis ein anderes gewählt ist.",
+    "manage": "Kanäle verwalten"
+  },
+  "setupChecklist": {
+    "pill": "{done}/{total}",
+    "pillAria": "{done}/{total} Einrichtungsschritte erledigt",
+    "title": "Erste Schritte",
+    "subtitle": "{done} von {total} erledigt. Jeder Schritt hakt sich selbst ab, sobald er erledigt ist.",
+    "statusDone": "erledigt",
+    "statusTodo": "offen",
+    "tasks": {
+      "integration": {
+        "title": "Eine App verbinden",
+        "why": "Ihre Agenten können dann darin lesen und handeln (Gmail, Notion, Slack...)."
+      },
+      "chat": {
+        "title": "Mit Orbi sprechen",
+        "why": "Fragen Sie nach allem: Er erstellt Agenten, Workflows und Apps für Sie."
+      },
+      "build": {
+        "title": "Einen Agenten oder Workflow erstellen",
+        "why": "Etwas, das für Sie arbeitet, auch wenn Sie nicht da sind."
+      },
+      "channel": {
+        "title": "Außerhalb der App erreichbar sein",
+        "why": "Genehmigungen und Fragen kommen über Telegram, Slack, WhatsApp, Discord oder Teams."
+      }
+    }
+  },
+  "toolHealth": {
+    "title": "Tool-Zustand",
+    "subtitle": "Tools, die plattformweit fehlgeschlagen sind. Die Verteilung über Mandanten trennt einen defekten Katalogeintrag von einem einzelnen Kunden-Credential.",
+    "loading": "Wird geladen...",
+    "window": "Zeitraum",
+    "windowAll": "Gesamte Historie",
+    "windowDays": "Letzte {days} Tage",
+    "minCalls": "Min. Aufrufe",
+    "refresh": "Aktualisieren",
+    "summary": "{tools} Tools mit Fehlern, {suspects} vermutete Katalogfehler",
+    "errorTitle": "Tool-Zustand konnte nicht geladen werden",
+    "empty": "Kein Tool ist in diesem Zeitraum oft genug fehlgeschlagen.",
+    "tenantsOf": "{affected} von {calling}",
+    "scopeNote": "Die Zähler erfassen Tool-Aufrufe durch Agenten. Aufrufe aus einem Workflow-Knoten werden nicht pro Tool erfasst und erscheinen hier nicht.",
+    "col": {
+      "tool": "Tool",
+      "failures": "Fehler",
+      "rate": "Quote",
+      "tenants": "Betroffene Mandanten",
+      "lastUsed": "Letzter Aufruf",
+      "error": "Letzter Fehler"
+    },
+    "verdict": {
+      "ALL_TENANTS": "Alle Mandanten",
+      "WIDESPREAD": "Weit verbreitet",
+      "ISOLATED": "Vereinzelt",
+      "SINGLE_TENANT": "Ein Mandant"
+    },
+    "verdictHint": {
+      "ALL_TENANTS": "schlägt bei jedem aufrufenden Mandanten fehl, zuerst den Katalogeintrag prüfen",
+      "WIDESPREAD": "schlägt bei mindestens der Hälfte der aufrufenden Mandanten fehl",
+      "ISOLATED": "eine Minderheit der Mandanten, höchstwahrscheinlich deren Credentials",
+      "SINGLE_TENANT": "nur ein Mandant ruft es auf, über den Katalog lässt sich nichts schließen"
+    }
+  },
+  "ceCloudLink": {
+    "expired": "Die Verbindung ist abgelaufen, klicken Sie erneut auf Verbinden.",
+    "planRequired": {
+      "title": "Ihre LiveContext Cloud-Verknüpfung benötigt einen kostenpflichtigen Tarif",
+      "body": "Für die Verknüpfung einer selbst gehosteten Installation mit LiveContext Cloud ist ein kostenpflichtiger Tarif im Cloud-Konto erforderlich. Wählen Sie einen Tarif, und diese Installation verbindet sich automatisch wieder, ohne erneute Verknüpfung.",
+      "cta": "Cloud-Tarife ansehen",
+      "sidebarBadge": "Bezahltarif erforderlich"
+    },
+    "planRequiredModal": {
+      "title": "Kostenpflichtiger Tarif erforderlich",
+      "description": "Diese Installation ist mit einem LiveContext Cloud-Konto ohne kostenpflichtigen Tarif verknüpft, daher hat die Cloud die Anfrage abgelehnt. Wählen Sie einen Tarif in LiveContext Cloud, und diese Installation verbindet sich automatisch wieder.",
+      "cta": "Cloud-Tarife ansehen",
+      "close": "Schließen"
+    },
+    "cloud": {
+      "returning": "Zurück zu Ihrer selbst gehosteten Installation.",
+      "pricingBannerTitle": "Die Verknüpfung Ihrer selbst gehosteten Installation erfordert einen kostenpflichtigen Tarif",
+      "pricingBannerBody": "Wählen Sie unten einen Tarif. Sobald Ihr Abonnement aktiv ist, werden Sie zu Ihrer Installation zurückgeleitet, um die Verbindung abzuschließen.",
+      "pricingBannerContinue": "Ich habe einen Bezahltarif, weiter",
+      "pricingBannerStillRequired": "Ihr aktueller Tarif ist noch kein kostenpflichtiger Tarif. Wählen Sie einen Tarif, um fortzufahren.",
+      "pricingBannerNoPending": "Diese Verbindungsanfrage ist nicht mehr verfügbar. Klicken Sie in Ihrer selbst gehosteten Installation erneut auf Verbinden.",
+      "pricingBannerError": "Ihr Tarif konnte nicht überprüft werden. Bitte versuchen Sie es erneut."
     }
   }
 }

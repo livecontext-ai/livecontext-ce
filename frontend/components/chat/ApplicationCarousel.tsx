@@ -55,6 +55,8 @@ interface ApplicationCarouselProps {
    * carries the speaker button. Omit it wherever nobody owns the volume.
    */
   onToggleMediaMuted?: () => void;
+  /** Settings entry for the controls toolbar. Forwarded verbatim to {@link ApplicationTabContent}. */
+  settingsControl?: React.ReactNode;
 }
 
 export function ApplicationCarousel({
@@ -70,6 +72,7 @@ export function ApplicationCarousel({
   templateSource,
   mediaMuted,
   onToggleMediaMuted,
+  settingsControl,
 }: ApplicationCarouselProps) {
   const t = useTranslations('chat.carousel');
   const { isRunMode } = useWorkflowMode();
@@ -296,6 +299,7 @@ export function ApplicationCarousel({
             templateSource={templateSource}
             mediaMuted={mediaMuted}
             onToggleMediaMuted={onToggleMediaMuted}
+            settingsControl={settingsControl}
           />
         </div>
       )}

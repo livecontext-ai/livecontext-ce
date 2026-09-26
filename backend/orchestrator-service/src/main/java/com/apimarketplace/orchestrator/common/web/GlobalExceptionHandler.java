@@ -8,6 +8,8 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.ErrorResponse;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
@@ -18,6 +20,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -221,6 +224,17 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Client disconnected before the response was written ("ServletOutputStream failed to
+     * write", "disconnected client"). Nothing can be sent on a closed connection, so no
+     * body is returned; WARN and not the catch-all's ERROR, because the caller hanging up
+     * is not a server fault. Same handling as agent-service.
+     */
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void handleClientDisconnect(AsyncRequestNotUsableException ex) {
+        logger.warn("Client disconnected before response could be written: {}", ex.getMessage());
+    }
+
+    /**
      * Handle optimistic locking failures (concurrent modifications).
      * Returns 409 Conflict instead of 500 Internal Server Error.
      */
@@ -262,11 +276,34 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Handle all other unexpected errors.
-     * Logs full stack trace for debugging but returns generic message to client.
+     * Everything no specific handler above claims.
+     *
+     * <p>A Spring MVC exception that implements {@link ErrorResponse} already carries the
+     * status the framework would have answered (404 unmapped route, 405 wrong method, 415
+     * content type, 400 unreadable body / missing parameter / missing header, a
+     * {@code ResponseStatusException}'s own status, ...). Without this branch the catch-all
+     * turned every one of them into a 500 and an ERROR with a stack trace: a caller's
+     * mistake filed as a server incident. Answering the carried status closes the whole
+     * family in one place instead of one handler per exception type. A 5xx carried that
+     * way is still ours and keeps ERROR; anything else keeps 500 + ERROR.
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGeneric(Exception ex) {
+        if (ex instanceof ErrorResponse er) {
+            HttpStatusCode status = er.getStatusCode();
+            if (status.is5xxServerError()) {
+                logger.error("Unhandled exception ({}): {}", status.value(), ex.getMessage(), ex);
+            } else {
+                logger.info("Request refused with {}: {}", status.value(), ex.getMessage());
+            }
+            HttpStatus resolved = HttpStatus.resolve(status.value());
+            String code = resolved != null ? resolved.name() : "HTTP_" + status.value();
+            String detail = er.getBody().getDetail();
+            String message = detail != null && !detail.isBlank() ? detail
+                    : (resolved != null ? resolved.getReasonPhrase() : "Request refused");
+            return ResponseEntity.status(status).headers(er.getHeaders())
+                    .body(errorResponse(code, message));
+        }
         logger.error("Unhandled exception: {}", ex.getMessage(), ex);
         return ResponseEntity.internalServerError()
                 .body(errorResponse("INTERNAL_ERROR", "An unexpected error occurred"));

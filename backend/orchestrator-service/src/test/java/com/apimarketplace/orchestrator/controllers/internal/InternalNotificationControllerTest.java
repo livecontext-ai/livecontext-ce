@@ -113,6 +113,56 @@ class InternalNotificationControllerTest {
     }
 
     @Test
+    @DisplayName("V528: an inserted BILLING row (a credit alert) is handed to delivery with its id, workspace and subject")
+    void insertedRowIsHandedToDelivery() {
+        org.springframework.context.ApplicationEventPublisher publisher =
+                org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class);
+        controller.setEventPublisher(publisher);
+        when(nativeQuery.getResultList()).thenReturn(List.of(77L));
+        NotificationEmitRequest r = validRequest();
+        r.setCategory("CREDIT_EXHAUSTED");
+        r.setSubjectType("BILLING");
+        r.setOrganizationId("personal-org");
+
+        ResponseEntity<?> resp = controller.emit(r);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        org.mockito.ArgumentCaptor<com.apimarketplace.orchestrator.services.notification.delivery.NotificationCreatedEvent> captor =
+                org.mockito.ArgumentCaptor.forClass(
+                        com.apimarketplace.orchestrator.services.notification.delivery.NotificationCreatedEvent.class);
+        verify(publisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().notificationId()).isEqualTo(77L);
+        assertThat(captor.getValue().organizationId()).isEqualTo("personal-org");
+        assertThat(captor.getValue().category()).isEqualTo("CREDIT_EXHAUSTED");
+        assertThat(captor.getValue().subjectType()).isEqualTo("BILLING");
+        assertThat(captor.getValue().subjectId()).isEqualTo(r.getSubjectId());
+        assertThat(captor.getValue().payload()).containsEntry("status", "expired");
+    }
+
+    @Test
+    @DisplayName("V528 regression (double send): a duplicate emit (ON CONFLICT) is NOT handed to delivery")
+    void conflictIsNotHandedToDelivery() {
+        org.springframework.context.ApplicationEventPublisher publisher =
+                org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class);
+        controller.setEventPublisher(publisher);
+        when(nativeQuery.getResultList()).thenReturn(List.of());
+
+        controller.emit(validRequest());
+
+        verifyNoInteractions(publisher);
+    }
+
+    @Test
+    @DisplayName("V528: BILLING is an accepted subject type (mirrors the widened DB check)")
+    void billingSubjectTypeAccepted() {
+        when(nativeQuery.getResultList()).thenReturn(List.of(1L));
+        NotificationEmitRequest r = validRequest();
+        r.setSubjectType("BILLING");
+
+        assertThat(controller.emit(r).getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
     @DisplayName("Null tenantId → 400")
     void nullTenantIdReturns400() {
         NotificationEmitRequest r = validRequest();

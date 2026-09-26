@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 260" width="720" height="260" role="img">
+  <style>
+    /* The values below ARE the app theme tokens (globals.css), not a palette of their
+       own: --page/--line/--ink/--muted mirror bg-secondary/border-color/text-primary/
+       text-secondary. The app is a WARM neutral in dark (#171614), so a cold blue-grey
+       artwork reads as foreign on it. */
+    :root {
+      --page: #f5f6f8;
+      --line: #d5dbe4;
+      --ink: #111827;
+      --muted: #4b5563;
+      --mark: #111827;
+    }
+    /* An img cannot see the app's .dark class, only the OS PREFERENCE, so one viewer in
+       the wild has a theme this file cannot follow: app forced dark, OS set light.
+       The artwork therefore paints its OWN background and is a self-contained card. That
+       is deliberate, and it was measured: dropping the background so the panel shows
+       through looks tidier in the three matching cases and makes the crossed one
+       UNREADABLE - light-mode ink (#111827) on a #171614 dialog. A light card inside a
+       dark dialog reads as foreign; invisible ink reads as nothing. Legibility wins. */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page: #1f1e1b;
+        --line: #5e5a54;
+        --ink: #edecea;
+        --muted: #a39f97;
+        --mark: #edecea;
+      }
+    }
+    /* DO NOT draw product UI here. An earlier version of this illustration mimicked a node
+       card with category rows and masked key rows; it read as a SCREENSHOT of the app and
+       told people the interface looks like that, which it does not. Two icons and a line of
+       text each: the icons say what is new, the panel's own body text explains it.
+
+       Type is sized for the SMALLEST box this gets, not the canvas. The panel caps at
+       max-w-lg, so the media is 464 CSS px wide on desktop and about 310 on a phone: this
+       720-wide canvas is displayed at 0.64x and 0.43x. A 24px line survives both. */
+    text {
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      text-anchor: middle;
+    }
+    .t-title { font-size: 32px; font-weight: 600; fill: var(--ink); }
+    .t-sub   { font-size: 24px; fill: var(--muted); }
+  </style>
+
+  <rect width="720" height="260" fill="var(--page)"/>
+
+  <!-- ── Left: a chat bubble, the new chat channels ──────────────────────────── -->
+  <g transform="translate(144,40)" stroke="var(--mark)" stroke-width="5" fill="none"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 8 H64 A8 8 0 0 1 72 16 V50 A8 8 0 0 1 64 58 H30 L14 72 V58 H8 A8 8 0 0 1 0 50 V16 A8 8 0 0 1 8 8 Z"/>
+    <path d="M18 26 H54"/>
+    <path d="M18 40 H44"/>
+  </g>
+
+  <text class="t-title" x="180" y="172">Chat channels</text>
+  <text class="t-sub" x="180" y="208">where you already chat</text>
+
+  <!-- ── Divider ─────────────────────────────────────────────────────────────── -->
+  <line x1="360" y1="52" x2="360" y2="208" stroke="var(--line)" stroke-width="2"/>
+
+  <!-- ── Right: a bell, alerts that leave the app ───────────────────────────── -->
+  <g transform="translate(504,40)" stroke="var(--mark)" stroke-width="5" fill="none"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M36 6 V10"/>
+    <path d="M12 56 V36 A24 24 0 0 1 60 36 V56 L68 64 H4 Z"/>
+    <path d="M28 70 A8 8 0 0 0 44 70"/>
+  </g>
+
+  <text class="t-title" x="540" y="172">Alerts that find you</text>
+  <text class="t-sub" x="540" y="208">by email or on a channel</text>
+</svg>

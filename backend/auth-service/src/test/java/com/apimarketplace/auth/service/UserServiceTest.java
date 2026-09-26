@@ -265,25 +265,97 @@ class UserServiceTest {
         }
 
         @Test
-        @DisplayName("should update Keycloak data")
+        @DisplayName("should update Keycloak profile data (picture, given and family name)")
         void shouldUpdateKeycloakData() {
             User user = createUser(1L, "user");
             UserProfileUpdateRequest request = new UserProfileUpdateRequest();
-            request.setEmail("new@email.com");
             request.setPicture("https://new-picture.com/img.jpg");
             request.setGivenName("OidcFirst");
             request.setFamilyName("OidcLast");
-            request.setEmailVerified(true);
 
             when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
             User result = userService.updateProfile(user, request);
 
-            assertThat(result.getEmail()).isEqualTo("new@email.com");
             assertThat(result.getAvatarUrl()).isEqualTo("https://new-picture.com/img.jpg");
             assertThat(result.getFirstName()).isEqualTo("OidcFirst");
             assertThat(result.getLastName()).isEqualTo("OidcLast");
+        }
+
+        @Test
+        @DisplayName("refuses to change the email address, so a user cannot take an address they do not own")
+        void refusesEmailChangeThroughProfile() {
+            User user = createUser(1L, "user");
+            user.setEmail("owner@example.com");
+            UserProfileUpdateRequest request = new UserProfileUpdateRequest();
+            request.setEmail("victim@example.com");
+
+            assertThatThrownBy(() -> userService.updateProfile(user, request))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("email address cannot be changed");
+            assertThat(user.getEmail()).isEqualTo("owner@example.com");
+            verify(userRepository, never()).save(any(User.class));
+        }
+
+        @Test
+        @DisplayName("refuses to self-mark the email as verified, so the verification flow cannot be bypassed")
+        void refusesSelfVerificationThroughProfile() {
+            User user = createUser(1L, "user");
+            user.setEmailVerified(false);
+            UserProfileUpdateRequest request = new UserProfileUpdateRequest();
+            request.setEmailVerified(true);
+
+            assertThatThrownBy(() -> userService.updateProfile(user, request))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("verification status cannot be changed");
+            assertThat(user.isEmailVerified()).isFalse();
+            verify(userRepository, never()).save(any(User.class));
+        }
+
+        @Test
+        @DisplayName("refuses to clear the verified flag too, the flag is owned by the verification flow")
+        void refusesUnverifyingThroughProfile() {
+            User user = createUser(1L, "user");
+            user.setEmailVerified(true);
+            UserProfileUpdateRequest request = new UserProfileUpdateRequest();
+            request.setEmailVerified(false);
+
+            assertThatThrownBy(() -> userService.updateProfile(user, request))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(user.isEmailVerified()).isTrue();
+        }
+
+        @Test
+        @DisplayName("refuses to set an email on an account that has none, since the address is unproven")
+        void refusesAddingEmailWhenNoneStored() {
+            User user = createUser(1L, "user");
+            user.setEmail(null);
+            UserProfileUpdateRequest request = new UserProfileUpdateRequest();
+            request.setEmail("claimed@example.com");
+
+            assertThatThrownBy(() -> userService.updateProfile(user, request))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(user.getEmail()).isNull();
+        }
+
+        @Test
+        @DisplayName("accepts a request that repeats the current email and verified flag unchanged")
+        void acceptsUnchangedIdentityValues() {
+            User user = createUser(1L, "user");
+            user.setEmail("owner@example.com");
+            user.setEmailVerified(true);
+            UserProfileUpdateRequest request = new UserProfileUpdateRequest();
+            request.setEmail("Owner@Example.com");
+            request.setEmailVerified(true);
+            request.setGivenName("Luc");
+
+            when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            User result = userService.updateProfile(user, request);
+
+            assertThat(result.getEmail()).isEqualTo("owner@example.com");
             assertThat(result.isEmailVerified()).isTrue();
+            assertThat(result.getFirstName()).isEqualTo("Luc");
         }
 
         @Test
@@ -335,6 +407,65 @@ class UserServiceTest {
             userService.deactivateUser(user);
 
             assertThat(user.getDeactivatedAt()).isNotNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("lifecycle emails on deactivate / restore")
+    class LifecycleContactTests {
+
+        @Mock
+        private com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails;
+
+        @Test
+        @DisplayName("deactivating deletes the Resend contact right away, not only at purge")
+        void deactivateDeletesTheContactAtOnce() {
+            userService.setLifecycleEmails(lifecycleEmails);
+            User user = createUser(1L, "leaving");
+            user.setEnabled(true);
+            when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            userService.deactivateUser(user);
+
+            verify(lifecycleEmails).deleteContact(user.getEmail());
+            verify(lifecycleEmails, never()).syncContact(any());
+        }
+
+        @Test
+        @DisplayName("restoring a scheduled deletion re-syncs the Resend contact")
+        void restoreResyncsTheContact() {
+            userService.setLifecycleEmails(lifecycleEmails);
+            User user = createUser(1L, "returning");
+            user.setEnabled(false);
+            user.setDeactivatedAt(java.time.LocalDateTime.now().minusDays(2));
+            when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            assertThat(userService.restoreUser(user)).isTrue();
+
+            verify(lifecycleEmails).syncContact(1L);
+            verify(lifecycleEmails, never()).deleteContact(any());
+        }
+
+        @Test
+        @DisplayName("a no-op restore touches no contact")
+        void noOpRestoreTouchesNoContact() {
+            userService.setLifecycleEmails(lifecycleEmails);
+            User user = createUser(1L, "healthy");
+            user.setEnabled(true);
+
+            assertThat(userService.restoreUser(user)).isFalse();
+
+            verifyNoInteractions(lifecycleEmails);
+        }
+
+        @Test
+        @DisplayName("without the lifecycle bean (CE) deactivation still works")
+        void worksWithoutLifecycleBean() {
+            User user = createUser(1L, "ce-user");
+            user.setEnabled(true);
+            when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            assertThat(userService.deactivateUser(user).isEnabled()).isFalse();
         }
     }
 

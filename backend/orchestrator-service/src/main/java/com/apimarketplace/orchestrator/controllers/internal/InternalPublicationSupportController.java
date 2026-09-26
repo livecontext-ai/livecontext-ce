@@ -50,6 +50,10 @@ public class InternalPublicationSupportController {
 
     private static final Logger log = LoggerFactory.getLogger(InternalPublicationSupportController.class);
 
+    /** Lifecycle emails: installing a marketplace app is an activation. Optional, best-effort. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.lifecycle.WorkflowActivationReporter activationReporter;
+
     private final WorkflowRepository workflowRepository;
     private final WorkflowRunRepository workflowRunRepository;
     private final WorkflowPlanVersionRepository planVersionRepository;
@@ -344,6 +348,9 @@ public class InternalPublicationSupportController {
             WorkflowEntity saved = workflowRepository.save(app);
             if (plan != null) {
                 planVersionService.createVersion(saved.getId(), saved.getPlan(), tenantId, "Application acquisition");
+            }
+            if (activationReporter != null) {
+                activationReporter.workflowCreated(tenantId);
             }
 
             Map<String, Object> result = new HashMap<>();

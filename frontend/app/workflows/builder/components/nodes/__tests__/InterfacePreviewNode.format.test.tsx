@@ -231,7 +231,14 @@ describe('InterfacePreviewNode format snap (the node box IS the format)', () => 
     const data = baseData();
     data.interfaceData = { ...data.interfaceData, previewWidth: 225, previewHeight: 400 };
     renderNode(data);
-    expect(data.onNodeUpdate).not.toHaveBeenCalled();
+    // The only write allowed is the one-time record of which stored page the node's copy
+    // is (useInterfaceTemplateSync); it must leave the box alone.
+    for (const [written] of (data.onNodeUpdate as any).mock.calls) {
+      expect(written.interfaceData).toMatchObject({ previewWidth: 225, previewHeight: 400 });
+      const { storedSignature, storedSignatureFor, ...rest } = written.interfaceData;
+      expect(rest).toEqual(data.interfaceData);
+    }
+    expect((data.onNodeUpdate as any).mock.calls.length).toBeLessThanOrEqual(1);
   });
 
   it('yields to the template load: no snap while the DB template has not landed locally', () => {

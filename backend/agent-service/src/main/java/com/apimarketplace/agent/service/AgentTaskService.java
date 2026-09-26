@@ -2356,10 +2356,11 @@ public class AgentTaskService {
 
             String prompt = buildReviewPrompt(lockedTask);
 
+            // The lock id is also the run's id, so the task points at a run that exists.
             var result = conversationClient.sendChatSync(
                     tenantId, conversationId, prompt,
                     reviewerAgentId.toString(), model, provider, "TASK_REVIEW", taskId.toString(),
-                    lockedTask.getOrganizationId(), executionId.toString());
+                    lockedTask.getOrganizationId(), executionId.toString(), executionId.toString());
 
             boolean success = Boolean.TRUE.equals(result.get("success"));
             if (success) {
@@ -2731,9 +2732,13 @@ public class AgentTaskService {
 
             String prompt = buildTaskPrompt(task);
 
+            // The lock id is also the run's id. Recorded under a second id, the task pointed at a
+            // run that did not exist: task_get_execution with the id the task showed found nothing
+            // (prod 2026-09-23, lock 6f7ccab2, run recorded as 4f833101).
             var result = conversationClient.sendChatSync(
                     tenantId, conversationId, prompt,
-                    assigneeId.toString(), model, provider, "TASK", taskId.toString(), task.getOrganizationId());
+                    assigneeId.toString(), model, provider, "TASK", taskId.toString(), task.getOrganizationId(),
+                    null, executionId.toString());
 
             boolean success = Boolean.TRUE.equals(result.get("success"));
             if (success) {

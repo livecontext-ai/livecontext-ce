@@ -5,6 +5,7 @@ import com.apimarketplace.agent.service.ModelCatalogService;
 import com.apimarketplace.common.web.AdminRoleGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -160,6 +161,13 @@ public class ModelConfigController {
                 // Empty string is allowed through (saveOverride normalizes blank -> clear).
                 entity.setDefaultReasoningEffort(effort);
             }
+            if (body.containsKey("replacementProvider") || body.containsKey("replacementModel")) {
+                // V515: the model this one is replaced by at execution time while disabled.
+                // Blank/null on both clears it; the service validates the pair.
+                entity.setReplacementExplicitlySet(true);
+                entity.setReplacementProvider(optionalString(body, "replacementProvider"));
+                entity.setReplacementModel(optionalString(body, "replacementModel"));
+            }
             if (body.containsKey("rateLimitTpm") || body.containsKey("rateLimitRpm")
                     || body.containsKey("rateLimitTpmPerTenant") || body.containsKey("rateLimitRpmPerTenant")) {
                 entity.setRateLimitsExplicitlySet(true);
@@ -263,9 +271,101 @@ public class ModelConfigController {
         var denied = AdminRoleGuard.denyIfNotAdmin(roles);
         if (denied != null) return denied;
 
-        service.deleteOverride(provider, modelId);
+        try {
+            service.deleteOverride(provider, modelId);
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
+        }
         log.info("Deleted model config override: provider={}, modelId={}", provider, modelId);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * The retired models (V533), most recently retired first.
+     */
+    @GetMapping("/retired")
+    public ResponseEntity<?> listRetired(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles) {
+        var denied = AdminRoleGuard.denyIfNotAdmin(roles);
+        if (denied != null) return denied;
+        return ResponseEntity.ok(service.listRetiredModels());
+    }
+
+    /**
+     * Retire models for good. Body: {@code {"models": [{"provider": "...", "modelId": "..."}]}}.
+     * Returns {@code {"retired": <count>}}; a model already retired is not counted.
+     */
+    @PostMapping("/retired")
+    public ResponseEntity<?> retire(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles,
+            @RequestHeader(value = "X-User-ID", required = false) String userId,
+            @RequestBody Map<String, Object> body) {
+        var denied = AdminRoleGuard.denyIfNotAdmin(roles);
+        if (denied != null) return denied;
+        List<ModelCatalogService.ModelRef> models;
+        try {
+            models = parseModelRefs(body);
+        } catch (IllegalArgumentException e) {
+            return badRequest(e.getMessage());
+        }
+        int retired;
+        try {
+            retired = service.retireModels(models, userId);
+        } catch (IllegalArgumentException e) {
+            return badRequest(e.getMessage());
+        }
+        return ResponseEntity.ok(Map.of("retired", retired));
+    }
+
+    /**
+     * Bring retired models back into the catalog, disabled. Same body as {@link #retire}.
+     * Returns {@code {"restored": <count>}}; a model that is not retired is not counted.
+     */
+    @PostMapping("/retired/restore")
+    public ResponseEntity<?> restore(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles,
+            @RequestBody Map<String, Object> body) {
+        var denied = AdminRoleGuard.denyIfNotAdmin(roles);
+        if (denied != null) return denied;
+        List<ModelCatalogService.ModelRef> models;
+        try {
+            models = parseModelRefs(body);
+        } catch (IllegalArgumentException e) {
+            return badRequest(e.getMessage());
+        }
+        int restored = service.restoreModels(models);
+        return ResponseEntity.ok(Map.of("restored", restored));
+    }
+
+    /** Upper bound on one retire/restore request: the whole catalog is under a thousand rows. */
+    static final int MAX_MODELS_PER_REQUEST = 2_000;
+
+    private static List<ModelCatalogService.ModelRef> parseModelRefs(Map<String, Object> body) {
+        Object raw = body == null ? null : body.get("models");
+        if (!(raw instanceof List<?> list) || list.isEmpty()) {
+            throw new IllegalArgumentException("models must be a non-empty list of {provider, modelId}");
+        }
+        if (list.size() > MAX_MODELS_PER_REQUEST) {
+            throw new IllegalArgumentException("at most " + MAX_MODELS_PER_REQUEST + " models per request");
+        }
+        List<ModelCatalogService.ModelRef> refs = new java.util.ArrayList<>(list.size());
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> m)) {
+                throw new IllegalArgumentException("each model must be an object {provider, modelId}");
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> entry = (Map<String, Object>) m;
+            String provider = requireNonBlankString(entry, "provider");
+            String modelId = requireNonBlankString(entry, "modelId");
+            // The column widths: an over-long id cannot name a model, and would be a 500 on insert.
+            if (provider.length() > 50 || modelId.length() > 150) {
+                throw new IllegalArgumentException("provider is at most 50 characters and modelId at most 150");
+            }
+            refs.add(new ModelCatalogService.ModelRef(provider, modelId));
+        }
+        // A pair named twice would create the same new tombstone row twice (unique violation at
+        // flush, a 500): the request means each model once.
+        return refs.stream().distinct().toList();
     }
 
     /**

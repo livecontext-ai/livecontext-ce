@@ -4,7 +4,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { getClientLocale } from '@/lib/utils/locale';
 import { parseUtcAware } from '@/lib/utils/dateFormatters';
 import { useTranslations } from 'next-intl';
-import { Check, Info, Loader2, Pencil, User } from 'lucide-react';
+import { Check, Loader2, Pencil, User } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { Link } from '@/i18n/navigation';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { unifiedApiService } from '@/lib/api/unified-api-service';
@@ -19,12 +20,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 
 /** Debounce window before an edit is auto-persisted (no manual Save button). */
 const AUTOSAVE_DEBOUNCE_MS = 600;
@@ -245,20 +240,11 @@ export function PublicProfileSettingsCard() {
         <div className="space-y-2">
           <div className="flex items-center gap-1.5">
             <Label htmlFor="profile-handle">{t('handle')}</Label>
-            <TooltipProvider delayDuration={0}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" data-testid="profile-handle-info" />
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-xs">
-                  <p className="text-xs">
-                    {!canChangeHandle && nextChangeLabel
-                      ? t('handleCooldownHint', { date: nextChangeLabel })
-                      : t('handleHint')}
-                  </p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <InfoPopover label={t('handle')} data-testid="profile-handle-info">
+              {!canChangeHandle && nextChangeLabel
+                ? t('handleCooldownHint', { date: nextChangeLabel })
+                : t('handleHint')}
+            </InfoPopover>
           </div>
           {handleEditing ? (
             <div className="space-y-2">

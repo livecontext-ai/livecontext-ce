@@ -24,6 +24,7 @@ import com.apimarketplace.orchestrator.services.agent.ClassifyResult;
 import com.apimarketplace.orchestrator.services.agent.GuardrailRequest;
 import com.apimarketplace.orchestrator.services.agent.GuardrailResult;
 import com.apimarketplace.orchestrator.services.agent.GuardrailRule;
+import com.apimarketplace.orchestrator.services.agent.GuardrailRuleEvaluator;
 import com.apimarketplace.orchestrator.services.streaming.bus.WorkflowEventPublisher;
 import com.apimarketplace.agent.client.dto.execution.*;
 import org.slf4j.Logger;
@@ -114,6 +115,79 @@ public class AgentNode extends BaseNode {
 
     public AgentNode(String nodeId, Agent agentConfig) {
         this(nodeId, agentConfig, List.of());
+    }
+
+    // On a per-execution copy: the templates its numbers were resolved from, so the report can
+    // withhold one that pulled a workspace variable. Empty on the node the plan built.
+    private Map<String, String> resolvedNumberTemplates = Map.of();
+
+    /** The node to run for {@code context}: resolved numbers, and the templates they came from. */
+    AgentNode copyForExecution(ExecutionContext context) {
+        AgentNode copy = copyFor(resolveDeferredNumbers(context));
+        copy.resolvedNumberTemplates = agentConfig.deferredScalars();
+        return copy;
+    }
+
+    Object reportedNumber(String field, Object value) {
+        String template = resolvedNumberTemplates.get(field);
+        return template == null ? value
+            : com.apimarketplace.orchestrator.services.template.ReportedParams.valueFrom(template, value);
+    }
+
+    /** This agent's numeric settings with every {@code {{...}}} one resolved against the run. */
+    Agent resolveDeferredNumbers(ExecutionContext context) {
+        Map<String, String> templates = agentConfig.deferredScalars();
+        Double temperature = agentConfig.temperature();
+        String t = templates.get("temperature");
+        if (t != null) {
+            Object value = resolveDeferredScalar("agent", "temperature", t, context);
+            try {
+                temperature = value instanceof Number n ? n.doubleValue() : Double.parseDouble(String.valueOf(value));
+            } catch (NumberFormatException e) {
+                throw new IllegalStateException("agent.temperature '" + t + "' must resolve to a number, got '" + value + "'");
+            }
+            if (temperature < 0) {
+                throw new IllegalStateException("agent.temperature '" + t + "' must not be negative, got " + temperature);
+            }
+        }
+        return agentConfig.withNumbers(temperature,
+            positiveInt(templates, "maxTokens", agentConfig.maxTokens(), context),
+            positiveInt(templates, "maxIterations", agentConfig.maxIterations(), context),
+            positiveInt(templates, "maxTools", agentConfig.maxTools(), context));
+    }
+
+    private Integer positiveInt(Map<String, String> templates, String field, Integer configured, ExecutionContext context) {
+        String template = templates.get(field);
+        if (template == null) {
+            return configured;
+        }
+        long value = resolveDeferredLong("agent", field, template, context);
+        if (value <= 0 || value > Integer.MAX_VALUE) {
+            throw new IllegalStateException("agent." + field + " '" + template + "' must be a positive whole number, got " + value);
+        }
+        return (int) value;
+    }
+
+    /**
+     * A copy of this node running {@code effective}: every instance field (services, targets,
+     * overrides, successors) carried over by reflection, so a field added later is carried too.
+     */
+    AgentNode copyFor(Agent effective) {
+        AgentNode copy = new AgentNode(nodeId, effective, dependencies);
+        for (Class<?> c = AgentNode.class; c != null && c != Object.class; c = c.getSuperclass()) {
+            for (java.lang.reflect.Field field : c.getDeclaredFields()) {
+                if (java.lang.reflect.Modifier.isStatic(field.getModifiers()) || field.getName().equals("agentConfig")) {
+                    continue;
+                }
+                try {
+                    field.setAccessible(true);
+                    field.set(copy, field.get(this));
+                } catch (IllegalAccessException e) {
+                    throw new IllegalStateException("Cannot copy agent node field " + field.getName(), e);
+                }
+            }
+        }
+        return copy;
     }
 
     /**
@@ -559,6 +633,18 @@ public class AgentNode extends BaseNode {
 
     @Override
     public NodeExecutionResult execute(ExecutionContext context) {
+        // temperature / maxTokens / maxIterations / maxTools written as {{...}}: resolve them for
+        // THIS execution and run a copy of the node on the resolved config. The node itself is
+        // shared by concurrent items, so its config is never mutated.
+        if (!agentConfig.deferredScalars().isEmpty()) {
+            AgentNode copy;
+            try {
+                copy = copyForExecution(context);
+            } catch (IllegalStateException e) {
+                return NodeExecutionResult.failure(nodeId, e.getMessage(), 0);
+            }
+            return copy.execute(context);
+        }
         long startTime = System.currentTimeMillis();
         String agentType = agentConfig.type() != null ? agentConfig.type().toLowerCase() : "agent";
         // Captured outside the try so failure paths (budget exhausted, thrown exceptions)
@@ -622,7 +708,7 @@ public class AgentNode extends BaseNode {
                             + " period, so agent '" + agentConfig.label() + "' was not started";
                     logger.warn("💸 [AgentNode] {} (nodeId={}, runId={})", budgetError, nodeId, context.runId());
                     Map<String, Object> budgetOutput = new HashMap<>();
-                    budgetOutput.put("resolved_params", buildResolvedInputForInspector(context, Map.of()));
+                    budgetOutput.put("resolved_params", buildResolvedInputForFailure(context, Map.of()));
                     budgetOutput.put("error", budgetError);
                     return NodeExecutionResult.failureWithOutput(nodeId, budgetError, budgetOutput, duration);
                 }
@@ -660,7 +746,7 @@ public class AgentNode extends BaseNode {
                                         agentDto.getCreditBudget(), committed,
                                         agentDto.getBudgetBlockedUntil());
                         Map<String, Object> budgetOutput = new HashMap<>();
-                        budgetOutput.put("resolved_params", buildResolvedInputForInspector(context, Map.of()));
+                        budgetOutput.put("resolved_params", buildResolvedInputForFailure(context, Map.of()));
                         budgetOutput.put("error", budgetError);
                         return NodeExecutionResult.failureWithOutput(nodeId, budgetError, budgetOutput, duration);
                     }
@@ -678,18 +764,26 @@ public class AgentNode extends BaseNode {
             logger.debug("Agent input prepared: nodeId={}, inputKeys={}",
                 nodeId, inputData.keySet());
 
+            // Guardrail rules that need no model (keywords, regex, length, PII patterns,
+            // custom expression, competitor names) are decided here, before any LLM call and
+            // on both paths. An invalid rule config throws and fails the node.
+            GuardrailRuleEvaluator.Outcome guardrailOutcome = "guardrail".equals(agentType)
+                ? evaluateGuardrailRules(context, inputData) : null;
+
             // Async queue path: offload to worker pool and yield with asyncRunning
             // (visible status stays RUNNING). The completion is delivered later via
             // AgentAsyncCompletionService, which calls back into the same sync
-            // persistence pipeline as inline execution.
-            if (asyncQueueEnabled && pendingAgentRegistry != null) {
-                return executeAgentAsyncQueue(context, inputData, agentType);
+            // persistence pipeline as inline execution. A guardrail whose every rule was
+            // decided above has nothing to offload and completes inline.
+            if (asyncQueueEnabled && pendingAgentRegistry != null
+                    && (guardrailOutcome == null || guardrailOutcome.needsLlm())) {
+                return executeAgentAsyncQueue(context, inputData, agentType, guardrailOutcome);
             }
 
             // Route to appropriate service based on agent type
             NodeExecutionResult result = switch (agentType) {
                 case "classify" -> executeClassify(context, inputData, startTime);
-                case "guardrail" -> executeGuardrail(context, inputData, startTime);
+                case "guardrail" -> executeGuardrail(context, inputData, startTime, guardrailOutcome);
                 default -> executeAgent(context, inputData, startTime);
             };
 
@@ -711,7 +805,7 @@ public class AgentNode extends BaseNode {
             // Preserve resolved inputs so the inspector can show the prompt/model/etc.
             // that the agent tried to run with when it blew up.
             Map<String, Object> failOutput = new HashMap<>();
-            failOutput.put("resolved_params", buildResolvedInputForInspector(context, inputData));
+            failOutput.put("resolved_params", buildResolvedInputForFailure(context, inputData));
             failOutput.put("error", e.getMessage() != null ? e.getMessage() : "");
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failOutput, duration);
         }
@@ -733,6 +827,11 @@ public class AgentNode extends BaseNode {
      * enrichment in one place rather than duplicating it on the async path.</p>
      */
     private NodeExecutionResult executeAgentAsyncQueue(ExecutionContext context, Map<String, Object> inputData, String agentType) {
+        return executeAgentAsyncQueue(context, inputData, agentType, null);
+    }
+
+    private NodeExecutionResult executeAgentAsyncQueue(ExecutionContext context, Map<String, Object> inputData,
+                                                       String agentType, GuardrailRuleEvaluator.Outcome guardrailOutcome) {
         String correlationId = UUID.randomUUID().toString();
         String runId = context.runId();
         String itemId = context.itemId();
@@ -798,6 +897,12 @@ public class AgentNode extends BaseNode {
         // Without this, StepDataPersistenceService.extractInputData() finds nothing and
         // the inspector "Resolved parameters" panel stays empty for async agents.
         Map<String, Object> resolvedInputData = buildResolvedInputForInspector(context, inputData);
+        if (guardrailOutcome != null) {
+            // Carried to the completion, which merges it with the model's verdict and removes
+            // the key before the snapshot becomes the Params column.
+            resolvedInputData = new LinkedHashMap<>(resolvedInputData);
+            resolvedInputData.put(GuardrailRuleEvaluator.PRECOMPUTED_KEY, guardrailOutcome.toMap());
+        }
 
         // Conversation persistence parity with the inline executeAgent path (lines ~860-901).
         // Resolve the agent's conversation, save the user prompt, and start a stream BEFORE
@@ -1002,6 +1107,14 @@ public class AgentNode extends BaseNode {
             if (resolvedPrompt != null) {
                 requestPayload.put("prompt", resolvedPrompt);
             }
+            if ("classify".equals(agentType)) {
+                // Resolved ONCE and reused as the content when the prompt stands in for it, so
+                // the two fields are the same string and the worker sends it once, even for a
+                // template that would resolve differently twice (a clock, a random id).
+                requestPayload.put("content", classifyContent(inputData, context, resolvedPrompt));
+            } else if ("guardrail".equals(agentType)) {
+                requestPayload.put("content", resolveContent(inputData, context, resolvedPrompt));
+            }
             if (agentConfig.systemPrompt() != null) {
                 requestPayload.put("systemPrompt", resolvePromptTemplate(agentConfig.systemPrompt(), context));
             }
@@ -1014,7 +1127,6 @@ public class AgentNode extends BaseNode {
         //             envelope as the inline workflow path.
         switch (agentType) {
             case "classify" -> {
-                requestPayload.put("content", resolveContent(inputData));
                 List<Map<String, Object>> categories = agentConfig.classifyCategories();
                 if (categories != null && !categories.isEmpty()) {
                     List<Map<String, Object>> categoryDtos = new ArrayList<>(categories.size());
@@ -1023,7 +1135,7 @@ public class AgentNode extends BaseNode {
                         if (label == null) continue;
                         Map<String, Object> dto = new HashMap<>();
                         dto.put("label", label);
-                        Object description = cat.get("description");
+                        String description = resolveDescription(cat.get("description"), context);
                         if (description != null) dto.put("description", description);
                         categoryDtos.add(dto);
                     }
@@ -1031,38 +1143,18 @@ public class AgentNode extends BaseNode {
                 }
             }
             case "guardrail" -> {
-                requestPayload.put("content", resolveContent(inputData));
-                // Mirror the inline normalization in executeGuardrail (lines 942-962):
-                // use `type` as id when the id is generic "rule-N", and look up
-                // description in the nested `config` map if absent at top level.
-                List<Map<String, Object>> rules = agentConfig.guardrailRules();
-                if (rules != null && !rules.isEmpty()) {
-                    List<Map<String, Object>> ruleDtos = new ArrayList<>(rules.size());
-                    for (Map<String, Object> rule : rules) {
-                        String id = (String) rule.get("id");
-                        String type = (String) rule.get("type");
-                        if (type != null && !type.isBlank() && id != null && id.matches("rule-\\d+")) {
-                            id = type;
-                        }
-                        String description = (String) rule.get("description");
-                        if (description == null) {
-                            Object cfg = rule.get("config");
-                            if (cfg instanceof Map<?, ?> cfgMap) {
-                                description = (String) cfgMap.get("description");
-                            }
-                        }
-                        if (id == null) continue;
-                        Map<String, Object> dto = new HashMap<>();
-                        dto.put("id", id);
-                        if (description != null) dto.put("description", description);
-                        ruleDtos.add(dto);
-                    }
-                    requestPayload.put("rules", ruleDtos);
+                // Only the rules the model has to judge: the deterministic ones were decided
+                // before the enqueue (same split as the inline executeGuardrail).
+                GuardrailRuleEvaluator.Outcome outcome = guardrailOutcome != null
+                    ? guardrailOutcome : evaluateGuardrailRules(context, inputData);
+                List<Map<String, Object>> ruleDtos = new ArrayList<>();
+                for (GuardrailRuleEvaluator.LlmRule rule : outcome.llmRules()) {
+                    Map<String, Object> dto = new HashMap<>(rule.toMap());
+                    if ("sanitize".equalsIgnoreCase(rule.action())) dto.put("action", "redact");
+                    ruleDtos.add(dto);
                 }
-                // Action: from params, default "flag" - same as inline (line 936).
-                Map<String, Object> params = agentConfig.params();
-                String action = params != null ? (String) params.get("action") : null;
-                requestPayload.put("action", action != null && !action.isBlank() ? action : "flag");
+                requestPayload.put("rules", ruleDtos);
+                requestPayload.put("action", outcome.llmAction(guardrailNodeAction()));
             }
             default -> {
                 // Regular agent path - existing generic payload is left as-is.
@@ -1261,8 +1353,15 @@ public class AgentNode extends BaseNode {
             .tenantId(context.tenantId())
             .agentEntityId(agentConfig.agentConfigId());
 
+        // Get prompt. Resolved once, and reused as the content when it stands in for one.
+        String prompt = agentConfig.prompt();
+        if (prompt != null) {
+            prompt = resolvePromptTemplate(prompt, context);
+        }
+        requestBuilder.prompt(prompt);
+
         // Get content from params or input
-        String content = resolveContent(inputData);
+        String content = classifyContent(inputData, context, prompt);
         requestBuilder.content(content);
 
         // Log resolved content for debugging (truncate if too long)
@@ -1272,19 +1371,12 @@ public class AgentNode extends BaseNode {
         logger.info("🏷️ Classify content resolved: nodeId={}, contentLength={}, preview='{}'",
             nodeId, content != null ? content.length() : 0, contentPreview);
 
-        // Get prompt
-        String prompt = agentConfig.prompt();
-        if (prompt != null) {
-            prompt = resolvePromptTemplate(prompt, context);
-        }
-        requestBuilder.prompt(prompt);
-
         // Get categories from agent config
         List<Map<String, Object>> categories = agentConfig.classifyCategories();
         if (categories != null) {
             for (Map<String, Object> cat : categories) {
                 String label = (String) cat.get("label");
-                String description = (String) cat.get("description");
+                String description = resolveDescription(cat.get("description"), context);
                 if (label != null) {
                     requestBuilder.addCategory(label, description);
                 }
@@ -1382,10 +1474,21 @@ public class AgentNode extends BaseNode {
     }
 
     /**
-     * Execute guardrail agent for content validation.
+     * Execute guardrail agent for content validation: the deterministic rules are decided by
+     * {@link GuardrailRuleEvaluator}, only the rest goes to the model, and the two verdicts merge.
      */
-    @SuppressWarnings("unchecked")
-    private NodeExecutionResult executeGuardrail(ExecutionContext context, Map<String, Object> inputData, long startTime) {
+    private NodeExecutionResult executeGuardrail(ExecutionContext context, Map<String, Object> inputData, long startTime,
+                                                 GuardrailRuleEvaluator.Outcome precomputed) {
+        GuardrailRuleEvaluator.Outcome outcome = precomputed != null
+            ? precomputed : evaluateGuardrailRules(context, inputData);
+        if (!outcome.needsLlm()) {
+            // Every rule was decided without a model: no LLM call, no budget reservation,
+            // no tokens. The verdict is the deterministic one.
+            GuardrailRuleEvaluator.Merged merged = GuardrailRuleEvaluator.merge(outcome, null, null, null, null);
+            GuardrailResult local = GuardrailResult.success(merged.passed(), merged.violations(),
+                merged.details(), merged.sanitized(), 0, null, null, 0, 0, 0, null, null, null);
+            return createGuardrailSuccessResult(local, System.currentTimeMillis() - startTime, context);
+        }
         if (agentClient == null) {
             logger.error("❌ AgentClient not injected for guardrail: {}", nodeId);
             return NodeExecutionResult.failure(nodeId,
@@ -1408,52 +1511,25 @@ public class AgentNode extends BaseNode {
             .tenantId(context.tenantId())
             .agentEntityId(agentConfig.agentConfigId());
 
-        // Get content from params or input
-        String content = resolveContent(inputData);
-        requestBuilder.content(content);
-
-        // Get prompt
+        // Get prompt. Resolved once, and reused as the content when the node has none of its
+        // own, so the two are the same string and the model receives the text once.
         String prompt = agentConfig.prompt();
         if (prompt != null) {
             prompt = resolvePromptTemplate(prompt, context);
         }
         requestBuilder.prompt(prompt);
 
-        // Get action from params
-        Map<String, Object> params = agentConfig.params();
-        String action = params != null ? (String) params.get("action") : "flag";
-        requestBuilder.action(action != null ? action : "flag");
+        // Get content from params or input
+        String content = resolveContent(inputData, context, prompt);
+        requestBuilder.content(content);
 
-        // Get rules from agent config
-        // Frontend format: [{id, type, action, config: {description, ...}}]
-        // Backend/agent format: [{id, description}]
-        List<Map<String, Object>> rules = agentConfig.guardrailRules();
-        if (rules != null) {
-            for (Map<String, Object> rule : rules) {
-                String id = (String) rule.get("id");
-                // Use type as rule id when id is generic (e.g. "rule-0") - more meaningful for the LLM
-                String type = (String) rule.get("type");
-                if (type != null && !type.isBlank() && id != null && id.matches("rule-\\d+")) {
-                    id = type;
-                }
-                // Description can be top-level (backend format) or nested under config (frontend format)
-                String description = (String) rule.get("description");
-                if (description == null) {
-                    Object config = rule.get("config");
-                    if (config instanceof Map<?, ?> configMap) {
-                        description = (String) configMap.get("description");
-                    }
-                }
-                if (id != null) {
-                    requestBuilder.addRule(id, description);
-                }
-            }
-        } else if (params != null && params.get("rules") instanceof Map) {
-            // Also support rules as Map<ruleId, description>
-            Map<String, String> rulesMap = (Map<String, String>) params.get("rules");
-            for (Map.Entry<String, String> entry : rulesMap.entrySet()) {
-                requestBuilder.addRule(entry.getKey(), entry.getValue());
-            }
+        // Action for the model; "redact" when a model-judged rule asks to sanitize.
+        requestBuilder.action(outcome.llmAction(guardrailNodeAction()));
+
+        // Only the rules the model has to judge. The deterministic ones were decided above;
+        // their verdicts are merged with the model's below.
+        for (GuardrailRuleEvaluator.LlmRule rule : outcome.llmRules()) {
+            requestBuilder.addRule(rule.id(), rule.description(), rule.type(), rule.action());
         }
 
         GuardrailRequest request = requestBuilder.build();
@@ -1540,7 +1616,14 @@ public class AgentNode extends BaseNode {
         long duration = System.currentTimeMillis() - startTime;
 
         if (result.success()) {
-            return createGuardrailSuccessResult(result, duration, context);
+            GuardrailRuleEvaluator.Merged merged = GuardrailRuleEvaluator.merge(outcome,
+                result.passed(), result.violations(), result.details(), result.sanitized());
+            GuardrailResult combined = new GuardrailResult(true, merged.passed(), merged.violations(),
+                merged.details(), merged.sanitized(), null, result.durationMs(), result.provider(),
+                result.model(), result.tokensUsed(), result.promptTokens(), result.completionTokens(),
+                result.systemPrompt(), result.conversationMessages(), result.userPrompt(),
+                result.cacheUsage(), result.keyRoute());
+            return createGuardrailSuccessResult(combined, duration, context);
         } else {
             return NodeExecutionResult.failure(nodeId, result.error(), duration);
         }
@@ -1548,31 +1631,179 @@ public class AgentNode extends BaseNode {
 
     /**
      * Resolve content from input data or params.
+     *
+     * <p>{@code inputData} is the RESOLVED map ({@link #prepareInput}), so a content key that is
+     * configured but null there is a content that referenced nothing. That used to fall back to
+     * the configured text itself, then to the raw prompt, and the classifier was handed the
+     * literal {@code {{...}}}. It now fails with the expression named. Only when no content is
+     * configured at all does the (resolved) prompt stand in for it, as before.
      */
-    private String resolveContent(Map<String, Object> inputData) {
+    private String resolveContent(Map<String, Object> inputData, ExecutionContext context) {
+        return resolveContent(inputData, context, null);
+    }
+
+    /**
+     * {@link #resolveContent(Map, ExecutionContext)} for a caller that has ALREADY resolved the
+     * prompt: when no content is configured, that one resolution is the content, never a second
+     * one that a clock or a random id could make differ from it (which would put the text in
+     * front of the model twice).
+     */
+    private String resolveContent(Map<String, Object> inputData, ExecutionContext context, String resolvedPrompt) {
         // Try 'content' key first, then 'input' alias
         Object content = inputData.get("content");
         if (content == null) {
             content = inputData.get("input");
         }
         if (content != null) {
-            return content.toString();
+            return com.apimarketplace.orchestrator.services.TemplateEngine.asText(content);
         }
 
-        // Try from agent params (both keys)
+        String configured = configuredContent();
+        if (configured != null) {
+            throw new IllegalStateException(
+                "The content to " + (agentConfig.type() != null ? agentConfig.type().toLowerCase() : "evaluate")
+                    + " resolved to nothing: '" + configured
+                    + "'. Check that the referenced node ran and that the path exists.");
+        }
+
+        // No content configured: the prompt is the content.
+        String prompt = resolvedPrompt != null ? resolvedPrompt : resolvePromptTemplate(agentConfig.prompt(), context);
+        return prompt != null ? prompt : "";
+    }
+
+    /**
+     * A category or rule description, resolved. The inspector edits both with an expression
+     * editor, and they used to reach the model verbatim, so a {@code {{...}}} in one was sent to
+     * the classifier as text while the same reference in the content resolved.
+     */
+    private String resolveDescription(Object description, ExecutionContext context) {
+        if (description == null) {
+            return null;
+        }
+        return resolveTemplateString(String.valueOf(description), context);
+    }
+
+    /**
+     * The configured categories or rules as the Params column should show them: the same
+     * entries, with each description as the model received it rather than as configured.
+     */
+    private List<Map<String, Object>> withResolvedDescriptions(List<Map<String, Object>> entries, ExecutionContext context) {
+        List<Map<String, Object>> reported = new ArrayList<>(entries.size());
+        for (Map<String, Object> entry : entries) {
+            Map<String, Object> copy = new LinkedHashMap<>(entry);
+            if (copy.get("description") != null) {
+                copy.put("description", reportedDescription(copy.get("description"), context));
+            }
+            if (copy.get("config") instanceof Map<?, ?> config && config.get("description") != null) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> configCopy = new LinkedHashMap<>((Map<String, Object>) config);
+                configCopy.put("description", reportedDescription(config.get("description"), context));
+                copy.put("config", configCopy);
+            }
+            reported.add(copy);
+        }
+        return reported;
+    }
+
+    /**
+     * Decides the guardrail rules that need no model, with every configured value resolved
+     * through this node's resolver.
+     */
+    private GuardrailRuleEvaluator.Outcome evaluateGuardrailRules(ExecutionContext context, Map<String, Object> inputData) {
+        String content = resolveContent(inputData, context);
+        return GuardrailRuleEvaluator.evaluate(guardrailRulesForEvaluation(), content,
+            value -> resolveTemplateValue(value, context));
+    }
+
+    /** The rules as configured, whichever of their homes holds them. */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> guardrailRulesForEvaluation() {
+        List<Map<String, Object>> rules = agentConfig.guardrailRules();
+        if (rules != null && !rules.isEmpty()) {
+            return rules;
+        }
+        Map<String, Object> params = agentConfig.params();
+        if (params != null && params.get("rules") instanceof Map<?, ?> rulesMap) {
+            // {ruleId: description}: judged by the model, as before.
+            List<Map<String, Object>> converted = new ArrayList<>();
+            ((Map<String, Object>) rulesMap).forEach((id, description) -> {
+                Map<String, Object> rule = new HashMap<>();
+                rule.put("id", id);
+                rule.put("description", description);
+                converted.add(rule);
+            });
+            return converted;
+        }
+        return List.of();
+    }
+
+    /** The node-level action, default {@code flag}. */
+    private String guardrailNodeAction() {
+        Map<String, Object> params = agentConfig.params();
+        Object action = params != null ? params.get("action") : null;
+        return action instanceof String a && !a.isBlank() ? a : "flag";
+    }
+
+
+    /**
+     * The content a CLASSIFY node sends. When the prompt already embeds the configured content
+     * expression ({@code prompt: "Classify: {{trigger:mail.output.body}}"} with
+     * {@code content: "{{trigger:mail.output.body}}"}, which the node docs invited), the prompt
+     * is sent in its place: the model then receives the text once, inside the prompt, exactly
+     * as when no content is configured, and every downstream path treats a content equal to
+     * the prompt as one text. Sending both put the same email in front of the model twice.
+     *
+     * <p>Decided on the TEMPLATES, never on the resolved texts: a short content such as
+     * {@code billing} occurs in plenty of prompts by coincidence, and treating that as
+     * "already in the prompt" would classify without the content at all.
+     */
+    private String classifyContent(Map<String, Object> inputData, ExecutionContext context, String resolvedPrompt) {
+        if (configuredContent() == null) {
+            // The prompt is the content: the one resolution the caller already made, never a
+            // second one that could differ from it.
+            return resolvedPrompt != null ? resolvedPrompt : "";
+        }
+        String content = resolveContent(inputData, context, resolvedPrompt);
+        // resolveContent still runs for an embedded content: it is what fails the node when the
+        // expression resolves to nothing, instead of classifying a prompt with a hole in it.
+        return promptEmbedsConfiguredContent() && resolvedPrompt != null ? resolvedPrompt : content;
+    }
+
+    /** Whether the prompt template contains the configured content expression, verbatim. */
+    private boolean promptEmbedsConfiguredContent() {
+        String configured = configuredContent();
+        String prompt = agentConfig.prompt();
+        if (configured == null || prompt == null) {
+            return false;
+        }
+        String expression = compactReferences(configured.trim());
+        return expression.contains("{{") && compactReferences(prompt).contains(expression);
+    }
+
+    /** Spaces just inside {@code {{ }}} removed: {@code {{ a.b }}} and {@code {{a.b}}} are one reference. */
+    private static String compactReferences(String template) {
+        return template.replaceAll("\\{\\{\\s+", "{{").replaceAll("\\s+}}", "}}");
+    }
+
+    /** The content expression the author configured, whichever of its homes holds it. */
+    private String configuredContent() {
         Map<String, Object> params = agentConfig.params();
         if (params != null) {
-            content = params.get("content");
-            if (content == null) {
-                content = params.get("input");
+            Object value = params.get("content");
+            if (value == null) {
+                value = params.get("input");
             }
-            if (content != null) {
-                return content.toString();
+            if (value != null) {
+                return String.valueOf(value);
             }
         }
-
-        // Fallback to prompt
-        return agentConfig.prompt() != null ? agentConfig.prompt() : "";
+        if (agentConfig.classifyParams() != null && !agentConfig.classifyParams().isEmpty()) {
+            return agentConfig.classifyParams();
+        }
+        if (agentConfig.guardrailParams() != null && !agentConfig.guardrailParams().isEmpty()) {
+            return agentConfig.guardrailParams();
+        }
+        return null;
     }
 
     /**
@@ -1875,9 +2106,9 @@ public class AgentNode extends BaseNode {
         // LLM config
         snapshot.put("provider", agentConfig.provider());
         snapshot.put("model", agentConfig.model());
-        snapshot.put("temperature", agentConfig.temperature());
-        snapshot.put("maxTokens", agentConfig.maxTokens());
-        snapshot.put("maxIterations", agentConfig.maxIterations());
+        snapshot.put("temperature", reportedNumber("temperature", agentConfig.temperature()));
+        snapshot.put("maxTokens", reportedNumber("maxTokens", agentConfig.maxTokens()));
+        snapshot.put("maxIterations", reportedNumber("maxIterations", agentConfig.maxIterations()));
         snapshot.put("withMemory", agentConfig.withMemory());
 
         // System prompt hash (not the full prompt - too large)
@@ -2052,6 +2283,17 @@ public class AgentNode extends BaseNode {
         if (nodeId != null && !nodeId.isBlank()) {
             credentials.put("__workflowNodeId__", nodeId);
         }
+        // NOT armed here, deliberately, even when the agent carries
+        // require_tool_authorization. A workflow agent node executes with no stream id in
+        // its credentials (the stream channel rides on the request payload, not here), and
+        // the authorization park refuses to hold a call it cannot paint a card for, BEFORE
+        // it would reach the out-of-app delivery. Setting the marker would therefore refuse
+        // every sensitive action of this agent inside a workflow while asking nobody,
+        // anywhere - a run stopped by a question that was never put. That is the opposite
+        // of the scope resolver's documented posture ("an unrecognized headless context
+        // must NOT be gated, or it would pause an automated run that has no user to approve
+        // it"). Covering this context means giving the node a conversation and a stream to
+        // park on first; until then it stays exempt and AgentToolsProvider says so.
     }
 
     private Map<String, Object> buildAgentVariables(
@@ -2166,27 +2408,19 @@ public class AgentNode extends BaseNode {
 
     /**
      * Resolves template expressions in prompt using context data.
+     *
+     * <p>A prompt that is one whole reference to an object or a list is sent as its JSON, and one
+     * that references nothing is empty. Neither used to be: any non-String result, and any
+     * resolution error, sent the RAW prompt, so the model was literally asked about
+     * {@code {{core:x.output.y}}} and the Params column showed it unresolved. A resolution that
+     * fails now fails the node (BaseNode#resolveTemplateValue).
      */
     private String resolvePromptTemplate(String prompt, ExecutionContext context) {
         if (prompt == null || prompt.isBlank()) {
             return prompt;
         }
-
-        // If template adapter is available, use it for SpEL resolution
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(
-                    Map.of("prompt", prompt), context);
-                Object resolvedPrompt = resolved.get("prompt");
-                if (resolvedPrompt instanceof String) {
-                    return (String) resolvedPrompt;
-                }
-            } catch (Exception e) {
-                logger.warn("Failed to resolve prompt template for {}: {}", nodeId, e.getMessage());
-            }
-        }
-
-        return prompt;
+        String resolved = resolveTemplateString(prompt, context);
+        return resolved != null ? resolved : "";
     }
 
     /**
@@ -2262,17 +2496,20 @@ public class AgentNode extends BaseNode {
 
         // If template adapter is available, resolve templates
         if (templateAdapter != null && !rawInput.isEmpty()) {
+            Map<String, Object> resolved;
             try {
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(rawInput, context);
-                logger.info("🤖 Agent template resolution: nodeId={}, rawKeys={}, resolvedKeys={}, contentBefore='{}', contentAfter='{}'",
-                    nodeId, rawInput.keySet(), resolved.keySet(),
-                    truncate(String.valueOf(rawInput.get("content")), 100),
-                    truncate(String.valueOf(resolved.get("content")), 100));
-                return resolved;
-            } catch (Exception e) {
-                logger.error("Template resolution failed for agent {}: {}", nodeId, e.getMessage());
-                // Fall back to raw input + context
+                resolved = templateAdapter.resolveTemplates(rawInput, context);
+            } catch (RuntimeException e) {
+                // Fail the node. Falling back to the RAW params ran the agent on the literal
+                // {{...}} text and reported it as what the node ran with.
+                throw new IllegalStateException(
+                    "Could not resolve the agent's parameters: " + e.getMessage(), e);
             }
+            logger.info("🤖 Agent template resolution: nodeId={}, rawKeys={}, resolvedKeys={}, contentBefore='{}', contentAfter='{}'",
+                nodeId, rawInput.keySet(), resolved.keySet(),
+                truncate(String.valueOf(rawInput.get("content")), 100),
+                truncate(String.valueOf(resolved.get("content")), 100));
+            return resolved;
         }
 
         // Fallback: add trigger data (lightweight). Step outputs are NOT included
@@ -2288,12 +2525,31 @@ public class AgentNode extends BaseNode {
      *
      * <p>Everything leaves through {@link ReportedParams#forReport}: the default branch
      * below copies the author's own template params, and a `credentials` entry among them
-     * went into the persisted row verbatim. The prompts are the other half - a system
-     * prompt has no size limit and is copied onto the row of every item of every split -
-     * so an oversized one is described rather than reproduced.
+     * went into the persisted row verbatim. The prompts are the other half: what the MODEL
+     * received (prompt, system prompt, content, categories, rules) is wrapped in
+     * {@link ReportedParams.ModelInput} and reported whole up to its own ceiling, with every
+     * workspace-variable reference withheld (see {@code reportedText}), because it is what the
+     * panel is opened to read.
      */
     private Map<String, Object> buildResolvedInputForInspector(ExecutionContext context, Map<String, Object> inputData) {
         return ReportedParams.forReport(collectResolvedInputForInspector(context, inputData));
+    }
+
+    /**
+     * The Params report for a node that FAILED. The failure may be the resolution itself (a
+     * prompt or content that could not be resolved, or {@code inputData} never built), and the
+     * report re-resolves the same fields, so it must not throw a second time. When it cannot be
+     * built, it keeps only what needs no resolution; the error message says what went wrong.
+     */
+    private Map<String, Object> buildResolvedInputForFailure(ExecutionContext context, Map<String, Object> inputData) {
+        try {
+            return buildResolvedInputForInspector(context, inputData != null ? inputData : Map.of());
+        } catch (RuntimeException reportFailure) {
+            Map<String, Object> minimal = new LinkedHashMap<>();
+            minimal.put("model", agentConfig.model());
+            minimal.put("provider", agentConfig.provider());
+            return ReportedParams.forReport(minimal);
+        }
     }
 
     /**
@@ -2304,55 +2560,139 @@ public class AgentNode extends BaseNode {
     private Map<String, Object> collectResolvedInputForInspector(ExecutionContext context, Map<String, Object> inputData) {
         Map<String, Object> resolved = new LinkedHashMap<>();
 
-        // Common params for all agent types
-        if (agentConfig.prompt() != null) {
-            resolved.put("prompt", resolvePromptTemplate(agentConfig.prompt(), context));
+        // Common params for all agent types. Everything the MODEL receives is wrapped in
+        // ModelInput and reported whole: it is what the panel is opened to read, and the
+        // generic 2,000-character budget turned a classified email into its first 120 characters.
+        // Whole does not mean unmasked: see reportedText.
+        String reportedPrompt = reportedText(agentConfig.prompt(), context);
+        if (reportedPrompt != null) {
+            resolved.put("prompt", new ReportedParams.ModelInput(reportedPrompt));
         }
         resolved.put("model", agentConfig.model());
         resolved.put("provider", agentConfig.provider());
         if (agentConfig.temperature() != null) {
-            resolved.put("temperature", agentConfig.temperature());
+            resolved.put("temperature", reportedNumber("temperature", agentConfig.temperature()));
         }
         if (agentConfig.maxTokens() != null) {
-            resolved.put("maxTokens", agentConfig.maxTokens());
+            resolved.put("maxTokens", reportedNumber("maxTokens", agentConfig.maxTokens()));
         }
         if (agentConfig.maxIterations() != null) {
-            resolved.put("maxIterations", agentConfig.maxIterations());
+            resolved.put("maxIterations", reportedNumber("maxIterations", agentConfig.maxIterations()));
         }
 
         String type = agentConfig.type() != null ? agentConfig.type().toLowerCase() : "agent";
         switch (type) {
             case "classify" -> {
-                resolved.put("content", resolveContent(inputData));
+                // No input prepared yet (a budget refusal): there is no content to report, and
+                // resolveContent would read the absence as "configured content resolved to nothing".
+                if (!inputData.isEmpty()) putReportedContent(resolved, inputData, context, reportedPrompt);
                 if (agentConfig.classifyCategories() != null && !agentConfig.classifyCategories().isEmpty()) {
-                    resolved.put("categories", agentConfig.classifyCategories());
+                    resolved.put("categories", new ReportedParams.ModelInput(
+                        withResolvedDescriptions(agentConfig.classifyCategories(), context)));
                 }
             }
             case "guardrail" -> {
-                resolved.put("content", resolveContent(inputData));
+                if (!inputData.isEmpty()) putReportedContent(resolved, inputData, context, reportedPrompt);
                 Map<String, Object> params = agentConfig.params();
                 resolved.put("action", params != null ? params.getOrDefault("action", "flag") : "flag");
                 if (agentConfig.guardrailRules() != null && !agentConfig.guardrailRules().isEmpty()) {
-                    resolved.put("rules", agentConfig.guardrailRules());
+                    resolved.put("rules", new ReportedParams.ModelInput(
+                        withResolvedDescriptions(agentConfig.guardrailRules(), context)));
                 }
             }
             default -> {
                 // Agent type: include systemPrompt and user-configured content if present
                 if (agentConfig.systemPrompt() != null) {
-                    resolved.put("systemPrompt", resolvePromptTemplate(agentConfig.systemPrompt(), context));
+                    resolved.put("systemPrompt", new ReportedParams.ModelInput(
+                        reportedText(agentConfig.systemPrompt(), context)));
                 }
                 // Include resolved params from inputData (user-configured template params)
                 // but exclude raw context dumps (trigger/steps)
                 for (Map.Entry<String, Object> entry : inputData.entrySet()) {
                     String key = entry.getKey();
                     if (!"trigger".equals(key) && !"steps".equals(key) && !resolved.containsKey(key)) {
-                        resolved.put(key, entry.getValue());
+                        resolved.put(key, reportedTemplateParam(key, entry.getValue(), context));
                     }
                 }
             }
         }
 
         return resolved;
+    }
+
+    /**
+     * The content, whole and masked. {@code resolved_params} is also what
+     * {@code {{core:<label>.input.content}}} reads, and existing workflows read it, so it keeps
+     * meaning what it always meant: the content configured, resolved (for a classify prompt that
+     * embeds it too, the model received that text inside the prompt). With no content
+     * configured it is the prompt, and then the MASKED prompt, because the content resolution
+     * ran without the mask and would publish a withheld variable in clear.
+     */
+    private void putReportedContent(Map<String, Object> resolved, Map<String, Object> inputData,
+                                    ExecutionContext context, String reportedPrompt) {
+        String configured = configuredContent();
+        boolean promptIsTheContent = configured == null;
+        String content;
+        if (promptIsTheContent) {
+            content = reportedPrompt != null ? reportedPrompt : "";
+        } else if (ReportedParams.referencesAnyWorkspaceVariable(configured)) {
+            content = reportedText(configured, context);
+        } else {
+            content = resolveContent(inputData, context);
+        }
+        resolved.put("content", new ReportedParams.ModelInput(content));
+    }
+
+    /**
+     * One of the agent's own template params as reported: the resolved value, except that a
+     * param whose configured template pulls a workspace variable is masked like the prompt (a
+     * text) or withheld (any other value). These reach the agent as variables and were
+     * reported resolved, so a {@code {{$vars.x}}} param was published in clear.
+     */
+    private Object reportedTemplateParam(String key, Object value, ExecutionContext context) {
+        Object configured = agentConfig.params() != null ? agentConfig.params().get(key) : null;
+        if (!(configured instanceof String template)) {
+            // A structured param (a map, a list): withheld or described by shape when any leaf
+            // pulls a workspace variable, the rule every other node applies to such a value.
+            return configured == null ? value : ReportedParams.valueFromConfigured(configured, value);
+        }
+        if (!ReportedParams.referencesAnyWorkspaceVariable(template)) {
+            return value;
+        }
+        if (value instanceof String) {
+            try {
+                return reportedText(template, context);
+            } catch (RuntimeException e) {
+                return ReportedParams.WITHHELD_WORKSPACE_VARIABLE;
+            }
+        }
+        return value == null ? null : ReportedParams.WITHHELD_WORKSPACE_VARIABLE;
+    }
+
+    /**
+     * A category or rule description as reported: masked like {@link #reportedText}, and null
+     * when it resolves to nothing, because that is what {@link #resolveDescription} sends.
+     */
+    private String reportedDescription(Object description, ExecutionContext context) {
+        if (description == null) {
+            return null;
+        }
+        return resolveTemplateString(ReportedParams.maskWorkspaceReferences(String.valueOf(description)), context);
+    }
+
+    /**
+     * A text the model received, as the Params column reports it: resolved exactly as it was
+     * sent, except that every {@code {{...}}} pulling a WORKSPACE variable reads
+     * {@code <withheld: workspace variable>}. A workspace variable can be declared secret, and
+     * this column is published to everyone who can read the run; the numeric settings of this
+     * node already withhold one (see {@link #reportedNumber}). Masking the reference rather than
+     * the field keeps the rest of the prompt readable, which is what the panel is opened for.
+     */
+    private String reportedText(String template, ExecutionContext context) {
+        if (template == null) {
+            return null;
+        }
+        return resolvePromptTemplate(ReportedParams.maskWorkspaceReferences(template), context);
     }
 
     @Override
@@ -2489,6 +2829,26 @@ public class AgentNode extends BaseNode {
         return route instanceof String s && !s.isBlank() ? s : null;
     }
 
+    /**
+     * Copies the model-replacement outcome agent-service wrote on the response metrics
+     * ({@code modelReplaced}, {@code replacedModel}) onto the observability request, for
+     * {@code agent_run_stopped.model_replaced}. Analytics only, never billing. Absent metric
+     * (older agent-service, resolver not wired) stamps nothing, so no false is guessed.
+     * Shared by the inline path and the queued path ({@code AgentAsyncCompletionService}).
+     */
+    public static void stampModelReplacement(
+            com.apimarketplace.agent.client.dto.AgentObservabilityRequest req, Map<String, Object> metrics) {
+        if (req == null || metrics == null) {
+            return;
+        }
+        if (metrics.get("modelReplaced") instanceof Boolean replaced) {
+            req.setModelReplaced(replaced);
+            if (replaced && metrics.get("replacedModel") instanceof String model && !model.isBlank()) {
+                req.setReplacedModel(model);
+            }
+        }
+    }
+
     private com.apimarketplace.agent.client.dto.AgentObservabilityRequest buildObservabilityRequest(
             AgentExecutionResult agentResult, Agent agentConfig, ExecutionContext context,
             String nodeId, String agentType,
@@ -2503,6 +2863,7 @@ public class AgentNode extends BaseNode {
         // Whose key the execution ran on, decided by agent-service and carried on the
         // response metrics: the debit this report triggers bills an OWN_KEY turn a flat fee.
         req.setKeyRoute(keyRouteOf(agentResult));
+        stampModelReplacement(req, agentResult != null ? agentResult.getMetrics() : null);
 
         // Agent entity reference
         if (agentConfig.agentConfigId() != null) {
@@ -3166,7 +3527,8 @@ public class AgentNode extends BaseNode {
         try {
             List<GuardrailRequestDto.RuleDto> ruleDtos = request.rules() != null
                 ? request.rules().stream()
-                    .map(r -> new GuardrailRequestDto.RuleDto(r.id(), r.description()))
+                    .map(r -> new GuardrailRequestDto.RuleDto(r.id(), r.description(), r.type(),
+                        "sanitize".equalsIgnoreCase(r.action()) ? "redact" : r.action()))
                     .toList()
                 : List.of();
 

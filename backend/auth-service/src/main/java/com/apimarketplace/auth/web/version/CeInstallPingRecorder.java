@@ -86,14 +86,23 @@ public class CeInstallPingRecorder {
     static final Duration FULL_WARNING_INTERVAL = Duration.ofHours(1);
 
     /**
-     * A published version: digits and dots, optionally with a pre-release or build suffix.
+     * A published version: digits and dots, optionally with a pre-release or build suffix, and
+     * optionally led by the {@code v} of its release tag.
      *
-     * <p>Anything else is stored as {@code "dev"}. A from-source build reports
-     * {@code dev-<short sha>} (see {@code VersionInfo.resolveVersion}), and a fork's commit sha is a
+     * <p>The leading {@code v} is accepted because every released CE image reports its tag
+     * verbatim ({@code APP_VERSION=v0.3.1}). Rejecting it recorded the ENTIRE released fleet as
+     * {@code "dev"} from v0.2.14 to v0.3.1, while from-source builds reporting the bare Maven
+     * version passed as if they were releases: the breakdown read exactly backwards. The
+     * {@code v} is dropped before storing, so {@code v0.3.1} and {@code 0.3.1} share one bucket,
+     * the same form the release feed advertises.
+     *
+     * <p>Anything else is stored as {@code "dev"}. A from-source build now reports {@code dev}
+     * ({@code VersionInfo.reportedVersion}), but installs already in the field report
+     * {@code dev-<short sha>}, and a fork's commit sha is a
      * near-unique string: keeping it would attach an identifying value to a stable install id for
      * the life of the row, and would scatter the version breakdown across one bucket per fork.
      */
-    private static final Pattern PUBLISHED_VERSION = Pattern.compile("^\\d+(\\.\\d+)*([-+][0-9A-Za-z.-]+)?$");
+    private static final Pattern PUBLISHED_VERSION = Pattern.compile("^[vV]?\\d+(\\.\\d+)*([-+][0-9A-Za-z.-]+)?$");
     static final String UNPUBLISHED_VERSION = "dev";
 
     private final CeInstallPingRepository repository;
@@ -301,6 +310,10 @@ public class CeInstallPingRecorder {
         String candidate = version.strip();
         boolean publishable = candidate.length() <= MAX_VERSION_LENGTH
                 && PUBLISHED_VERSION.matcher(candidate).matches();
-        return publishable ? candidate : UNPUBLISHED_VERSION;
+        if (!publishable) {
+            return UNPUBLISHED_VERSION;
+        }
+        char first = candidate.charAt(0);
+        return first == 'v' || first == 'V' ? candidate.substring(1) : candidate;
     }
 }

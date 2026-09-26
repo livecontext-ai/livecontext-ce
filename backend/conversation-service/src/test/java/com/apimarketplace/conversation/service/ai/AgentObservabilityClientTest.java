@@ -95,6 +95,28 @@ class AgentObservabilityClientTest {
         void blankRouteStaysAbsent() {
             assertThat(postedBody(responseWithMetrics(Map.of("keyRoute", " ")))).doesNotContainKey("keyRoute");
         }
+
+        @Test
+        @DisplayName("a turn agent-service ran on a replacement model forwards model_replaced and the disabled model")
+        void forwardsModelReplacement() {
+            Map<String, Object> body = postedBody(responseWithMetrics(Map.of("modelReplaced", true, "replacedModel", "old-model")));
+
+            assertThat(body).containsEntry("modelReplaced", true).containsEntry("replacedModel", "old-model");
+        }
+
+        @Test
+        @DisplayName("a resolver that ran and swapped nothing forwards false, without a replaced model")
+        void forwardsNoReplacement() {
+            Map<String, Object> body = postedBody(responseWithMetrics(Map.of("modelReplaced", false, "replacedModel", "ignored")));
+
+            assertThat(body).containsEntry("modelReplaced", false).doesNotContainKey("replacedModel");
+        }
+
+        @Test
+        @DisplayName("no replacement metric (resolver not wired) forwards nothing, so analytics never guesses false")
+        void absentReplacementStaysAbsent() {
+            assertThat(postedBody(responseWithMetrics(Map.of("keyRoute", "PLATFORM")))).doesNotContainKey("modelReplaced");
+        }
     }
 
     // ==========================================================================
@@ -693,16 +715,72 @@ class AgentObservabilityClientTest {
 
             client.recordAsync("tenant-42", null, "agent-1", response, "prompt", null, "conv-99", null, null, null, null);
 
-            // Fallback: consumeCreditsAsync called with correct token counts
+            // Fallback: consumeCreditsAsync called with correct token counts, keyed per charge
+            // (a fresh UUID here: no execution id), never on the conversation id.
             verify(creditClient).consumeCreditsAsync(
                     eq("tenant-42"),
                     eq("CHAT_CONVERSATION"),
-                    eq("conv-99"),
+                    argThat(key -> !"conv-99".equals(key) && java.util.UUID.fromString(key) != null),
                     eq("anthropic"),
                     eq("claude-3-sonnet"),
                     eq(800),
                     eq(400)
             );
+        }
+
+        @Test
+        @DisplayName("regression: two fallback turns of ONE conversation are billed under two different keys, not the conversation id")
+        void fallbackTurnsOfOneConversationGetDistinctKeys() {
+            // auth answers a debit whose key already holds the same payer's charge of the same type
+            // as "already paid": keyed on the conversation id, every later fallback turn was free.
+            var response = new AgentExecutionResponseDto(
+                true, "ok", null, null, 1,
+                Map.of("promptTokens", 800, "completionTokens", 400, "totalTokens", 1200),
+                null, 2000L, "anthropic", "claude-3-sonnet",
+                null, "end_turn", null, null, null, null, null, null
+            , null);
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                    .thenThrow(new org.springframework.web.client.ResourceAccessException("Connection refused"));
+
+            client.recordAsync("tenant-42", null, "agent-1", response, "prompt", null, "conv-99", null, null, null, null);
+            client.recordAsync("tenant-42", null, "agent-1", response, "prompt", null, "conv-99", null, null, null, null);
+
+            org.mockito.ArgumentCaptor<String> key = org.mockito.ArgumentCaptor.forClass(String.class);
+            verify(creditClient, times(2)).consumeCreditsAsync(
+                    eq("tenant-42"), eq("CHAT_CONVERSATION"), key.capture(), any(), any(), anyInt(), anyInt());
+            assertThat(key.getAllValues()).doesNotContain("conv-99");
+            assertThat(key.getAllValues().get(0)).isNotEqualTo(key.getAllValues().get(1));
+        }
+
+        @Test
+        @DisplayName("regression: the fallback is keyed on the dispatcher execution id, the key agent-service bills a late success under, so the two deduplicate")
+        void fallbackIsKeyedOnTheExecutionId() {
+            var response = new AgentExecutionResponseDto(
+                true, "ok", null, null, 1,
+                Map.of("promptTokens", 800, "completionTokens", 400, "totalTokens", 1200),
+                null, 2000L, "anthropic", "claude-3-sonnet",
+                null, "end_turn", null, null, null, null, null, null
+            , null);
+            String executionId = java.util.UUID.randomUUID().toString();
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                    .thenThrow(new org.springframework.web.client.ResourceAccessException("Read timed out"));
+
+            client.recordAsync("tenant-42", null, "agent-1", response, "prompt", null, "conv-99", null, null, null, executionId);
+
+            verify(creditClient).consumeCreditsAsync(
+                    eq("tenant-42"), eq("CHAT_CONVERSATION"), eq(executionId), any(), any(), anyInt(), anyInt());
+        }
+
+        @Test
+        @DisplayName("fallbackBillingKey: a well-formed execution id as-is, else a fresh UUID (malformed ids are never keys)")
+        void fallbackBillingKeyOrder() {
+            String id = java.util.UUID.randomUUID().toString();
+            assertThat(AgentObservabilityClient.fallbackBillingKey(id)).isEqualTo(id);
+            String minted = AgentObservabilityClient.fallbackBillingKey("not-a-uuid");
+            assertThat(minted).isNotEqualTo("not-a-uuid");
+            assertThat(java.util.UUID.fromString(minted)).isNotNull();
+            assertThat(AgentObservabilityClient.fallbackBillingKey(null))
+                    .isNotEqualTo(AgentObservabilityClient.fallbackBillingKey(null));
         }
 
         @Test
@@ -723,7 +801,7 @@ class AgentObservabilityClientTest {
             }).when(creditClient).consumeCreditsAsync(
                     eq("tenant-42"),
                     eq("CHAT_CONVERSATION"),
-                    eq("conv-99"),
+                    anyString(),
                     eq("anthropic"),
                     eq("claude-3-sonnet"),
                     eq(800),
@@ -757,8 +835,8 @@ class AgentObservabilityClientTest {
         }
 
         @Test
-        @DisplayName("fallback uses agentId when conversationId is null")
-        void fallbackUsesAgentIdWhenConvIdNull() {
+        @DisplayName("fallback never keys on the agent id either (it repeats on every turn of that agent)")
+        void fallbackNeverKeysOnTheAgentId() {
             var response = new AgentExecutionResponseDto(
                 true, "ok", null, null, 1,
                 Map.of("promptTokens", 100, "completionTokens", 50, "totalTokens", 150),
@@ -774,7 +852,7 @@ class AgentObservabilityClientTest {
             verify(creditClient).consumeCreditsAsync(
                     eq("tenant-42"),
                     eq("CHAT_CONVERSATION"),
-                    eq("agent-id-7"),  // falls back to agentId
+                    argThat(key -> !"agent-id-7".equals(key) && !"unknown".equals(key)),
                     any(), any(), anyInt(), anyInt()
             );
         }
@@ -941,6 +1019,26 @@ class AgentObservabilityClientTest {
     @Nested
     @DisplayName("recordFailureAsync - failure-only execution row")
     class RecordFailureAsync {
+
+        @Test
+        @DisplayName("a failure recorded for a run that already has an id carries it, so the task points at a real run")
+        @SuppressWarnings("unchecked")
+        void recordFailureCarriesTheRunId() {
+            ReflectionTestUtils.setField(client, "orchestratorUrl", "http://localhost:8099");
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of()));
+
+            client.recordFailureAsync("tenant-1", "org-1", "agent-1", "TASK", "conv-1", "FAILED", "boom",
+                    "prompt", "[Error] boom", "claude-code", "claude-opus-4-7", "6f7ccab2-d30e-42b7-a0e6-ff314726967a");
+            client.recordFailureAsync("tenant-1", "org-1", "agent-1", "TASK", "conv-1", "FAILED", "boom",
+                    "prompt", "[Error] boom", "claude-code", "claude-opus-4-7");
+
+            org.mockito.ArgumentCaptor<HttpEntity<?>> captor = org.mockito.ArgumentCaptor.forClass(HttpEntity.class);
+            verify(restTemplate, org.mockito.Mockito.times(2)).exchange(anyString(), eq(HttpMethod.POST), captor.capture(), eq(Map.class));
+            assertThat((Map<String, Object>) captor.getAllValues().get(0).getBody())
+                    .containsEntry("executionId", "6f7ccab2-d30e-42b7-a0e6-ff314726967a");
+            assertThat((Map<String, Object>) captor.getAllValues().get(1).getBody()).doesNotContainKey("executionId");
+        }
 
         @Test
         @DisplayName("POSTs minimal failure body with success=false, 0 counters, BUDGET_EXHAUSTED on 402 path")

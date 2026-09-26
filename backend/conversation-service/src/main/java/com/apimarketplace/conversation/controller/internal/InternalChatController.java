@@ -56,16 +56,17 @@ public class InternalChatController {
         log.info("Internal chat (async) - User: {} (org: {}), Conversation: {}, Source: {}",
                 userId, organizationId, request.getConversationId(), request.getSource());
 
-        // Source-type-scoped gate: on the FREE plan chat/agent turns draw the
-        // PAYG bucket alone, so the check must not pass on monthly workflow-only
-        // credits (pre-fix, an unscoped total-balance check let the LLM run and
-        // pushed the PAYG bucket negative post-flight).
+        // Source-type-scoped gate: on the FREE plan a chat/agent turn draws the
+        // monthly credits only on a free-tier model and the PAYG bucket alone
+        // otherwise, so the check must not pass on monthly credits for another model
+        // (pre-fix, an unscoped total-balance check let the LLM run and pushed the
+        // PAYG bucket negative post-flight).
         //
         // The model here is the REQUEST's, which is not always the one the turn runs on:
         // an agent row can pin its own, and that resolution happens downstream in
-        // ConversationAgentService. Since V494 the model decides whether the AI allowance
-        // counts, so the two can disagree - stricter when the request names none (the
-        // allowance is simply not counted, and a turn it would have paid for is refused),
+        // ConversationAgentService. Since V494 the model decides whether the Free monthly
+        // credits count (V512), so the two can disagree - stricter when the request names
+        // none (they are simply not counted, and a turn they would have paid for is refused),
         // looser when the request names an open model and the agent pins a closed one.
         // The DEBIT is authoritative either way; it re-resolves and draws the buckets the
         // real model allows. Resolving the agent's model here would mean a second lookup
@@ -145,7 +146,9 @@ public class InternalChatController {
                     request.getAgentId(), request.getSource(), conversationId,
                     "BUDGET_EXHAUSTED", ChatCreditRefusal.MESSAGE,
                     request.getMessage(), errorContent,
-                    request.getProvider(), request.getModel());
+                    request.getProvider(), request.getModel(),
+                    // A refused task run is still the run its task points at.
+                    com.apimarketplace.conversation.service.ai.ConversationAgentService.callerExecutionIdOrNew(request));
             // Publish synthetic execution_started + completed(FAILED) so the
             // Fleet view flashes the agent with a fast pulse and refetches
             // metrics (the new BUDGET_EXHAUSTED chip appears within the same

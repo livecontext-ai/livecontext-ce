@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Info, Globe, Shield, Eye, AlertCircle } from 'lucide-react';
+import { Globe, Shield, Eye, AlertCircle } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { Step2Props } from '../types';
 import { useTranslations } from 'next-intl';
 import {
@@ -8,8 +9,7 @@ import {
   FormInput,
   FormSelect,
   FormTextarea,
-  FormGrid,
-  InfoBox
+  FormGrid
 } from './common';
 
 const Step2: React.FC<Step2Props> = ({ apiConfig, setApiConfig, apiName }) => {
@@ -24,7 +24,6 @@ const Step2: React.FC<Step2Props> = ({ apiConfig, setApiConfig, apiName }) => {
 
 
   // State to show/hide authorization information
-  const [showAuthorizationInfo, setShowAuthorizationInfo] = useState(false);
 
   // Generate a random default header value and set the default name
   React.useEffect(() => {
@@ -162,25 +161,13 @@ const Step2: React.FC<Step2Props> = ({ apiConfig, setApiConfig, apiName }) => {
         onToggle={() => toggleSection('authorization')}
       >
         <div className="flex items-center justify-between mb-4">
-          <button
-            type="button"
-            onClick={() => setShowAuthorizationInfo(!showAuthorizationInfo)}
-            className="text-theme-muted hover:text-theme-primary transition-colors"
-          >
-            <Info className="w-5 h-5" />
-          </button>
-        </div>
-
-        {showAuthorizationInfo && (
-          <InfoBox
-            type="info"
-            title={t('auth.infoTitle')}
-          >
+          <InfoPopover label={t('auth.infoTitle')} size="lg" side="bottom" align="start" contentClassName="w-96">
+            <p className="mb-2 font-medium text-theme-primary">{t('auth.infoTitle')}</p>
             <p>
               {t('auth.infoText')}
             </p>
-          </InfoBox>
-        )}
+          </InfoPopover>
+        </div>
 
         <div className="space-y-4 mt-4">
           <FormField

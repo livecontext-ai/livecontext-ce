@@ -73,6 +73,9 @@ public class DataSourceSchemaModule implements ToolModule {
         // approved list (add_columns mutates structure) - mirror the table CRUD module's gate.
         var notAllowed = TableToolAccess.denyIfNotAllowed(context, getTableId(parameters));
         if (notAllowed.isPresent()) return notAllowed;
+        var restricted = TableToolAccess.denyIfMemberRestricted(dataSourceService, context, tenantId,
+                getTableId(parameters), true);
+        if (restricted.isPresent()) return restricted;
 
         // Thread the caller's org workspace through to the CRUD executor so the
         // strict-scope check matches the org id executeCreate stored on the

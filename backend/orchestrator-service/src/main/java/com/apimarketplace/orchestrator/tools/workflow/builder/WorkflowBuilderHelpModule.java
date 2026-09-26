@@ -187,6 +187,16 @@ public class WorkflowBuilderHelpModule implements ToolModule {
             "authorization first, like execute: the ask happens inside your call, so it may take longer to answer - do " +
             "not stop, do not announce that you are waiting, do not re-call. Read the response: an outcome means it " +
             "replayed, executed:false means nothing did.");
+        runInspection.put("present", "Choose what the user is looking at, like moving to the next slide (the action is " +
+            "'present', not 'show': 'show' means describe). Changes nothing; it opens the view in the user's side panel. " +
+            "Views: 'application' + run_id (the run's interfaces filled with its data; refused when the workflow has no " +
+            "interface node), 'run' + run_id (the run's steps), 'workflow' + workflow_id. Optional title. " +
+            "Response: presented, plus the ids. A table, an interface, an agent or a file is presented by its own tool: " +
+            "table(action='present', table_id), interface(action='present', interface_id), agent(action='present', " +
+            "agent_id), files(action='present', file_id). WHAT TO SHOW: the result the user asked for, not the machinery. " +
+            "In order: the application when the workflow has an interface, else the table it fills, else the file it " +
+            "produced, else the run. Present once per new result, after it exists (after execute or wait_run): moving " +
+            "the screen on every step makes it jump.");
         actions.put("run_inspection", runInspection);
 
         actions.put("node_operations", Map.of(
@@ -295,7 +305,7 @@ public class WorkflowBuilderHelpModule implements ToolModule {
         // AI nodes
         stepTypes.put("agent", "AI agent - requires agent entity (agent_id from agent(action='create')). In set_plan JSON: use agentConfigId instead of agent_id.");
         stepTypes.put("classify", "AI classification - routes input to categories (agent-based)");
-        stepTypes.put("guardrail", "AI safety check - flag/block/redact content based on rules");
+        stepTypes.put("guardrail", "Content check: keyword, regex, length, PII, custom and competitor rules checked exactly; toxicity, injection and topics judged by AI. Any violation routes to fail; per rule block, flag or sanitize (sanitize also redacts)");
         // Control flow
         stepTypes.put("decision", "If/else branching based on conditions");
         stepTypes.put("switch", "Multi-case branching (like switch/case)");

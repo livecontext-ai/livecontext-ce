@@ -193,6 +193,86 @@ class TaskNodeTest {
         }
 
         @Test
+        @DisplayName("resolves taskContext templates at every depth and keeps the type of a whole-value reference (was: top-level strings only, objects sent as {a=1})")
+        void resolvesNestedTaskContextAndKeepsTypes() {
+            // Arrange: an adapter that, like the real one, walks maps and lists. A whole-value
+            // reference resolves to a Map; an embedded one to text.
+            V2TemplateAdapter templateAdapter = mock(V2TemplateAdapter.class);
+            when(mockRegistry.getTemplateAdapter()).thenReturn(templateAdapter);
+            when(templateAdapter.resolveTemplates(anyMap(), any()))
+                .thenAnswer(inv -> resolveDeep(inv.getArgument(0)));
+
+            Map<String, Object> taskContext = new HashMap<>();
+            taskContext.put("order", Map.of("id", "{{core:load.output.id}}"));
+            taskContext.put("tags", List.of("{{core:load.output.id}}", "static"));
+            taskContext.put("customer", "{{core:load.output.customer}}");
+            Core.TaskConfig config = new Core.TaskConfig(
+                "create_task", null, "Research", null, null, null, null, null, null, null, taskContext);
+            TaskNode node = buildNode(config);
+            when(mockAgentClient.createTaskForWorkflow(eq("tenant-1"), anyMap()))
+                .thenReturn(Map.of("id", UUID.randomUUID().toString()));
+
+            // Act
+            NodeExecutionResult result = node.execute(context);
+
+            // Assert
+            assertTrue(result.isSuccess());
+            verify(mockAgentClient).createTaskForWorkflow(eq("tenant-1"), argThat(request -> {
+                if (!(request.get("taskContext") instanceof Map<?, ?> sent)) return false;
+                return Map.of("id", "42").equals(sent.get("order"))
+                    && List.of("42", "static").equals(sent.get("tags"))
+                    && Map.of("name", "Ada").equals(sent.get("customer"));
+            }));
+        }
+
+        @Test
+        @DisplayName("a {{$vars.x}} taskContext entry is sent to the task but withheld in Params")
+        @SuppressWarnings("unchecked")
+        void workspaceVariableTaskContextEntryIsWithheld() {
+            V2TemplateAdapter templateAdapter = mock(V2TemplateAdapter.class);
+            when(mockRegistry.getTemplateAdapter()).thenReturn(templateAdapter);
+            when(templateAdapter.resolveTemplates(anyMap(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{$vars.x}}", "s3cr3t")));
+
+            Map<String, Object> taskContext = new HashMap<>();
+            taskContext.put("apiHint", "{{$vars.x}}");
+            Core.TaskConfig config = new Core.TaskConfig(
+                "create_task", null, "Research", null, null, null, null, null, null, null, taskContext);
+            TaskNode node = buildNode(config);
+            when(mockAgentClient.createTaskForWorkflow(eq("tenant-1"), anyMap()))
+                .thenReturn(Map.of("id", UUID.randomUUID().toString()));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isSuccess());
+            verify(mockAgentClient).createTaskForWorkflow(eq("tenant-1"), argThat(request ->
+                request.get("taskContext") instanceof Map<?, ?> sent && "s3cr3t".equals(sent.get("apiHint"))));
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            Map<String, Object> reportedCtx = (Map<String, Object>) params.get("taskContext");
+            assertEquals(com.apimarketplace.orchestrator.services.template.ReportedParams.WITHHELD_WORKSPACE_VARIABLE,
+                reportedCtx.get("apiHint"));
+        }
+
+        @SuppressWarnings("unchecked")
+        private Object resolveDeep(Object value) {
+            if (value instanceof Map<?, ?> map) {
+                Map<String, Object> out = new HashMap<>();
+                map.forEach((k, v) -> out.put((String) k, resolveDeep(v)));
+                return out;
+            }
+            if (value instanceof List<?> list) {
+                return list.stream().map(this::resolveDeep).toList();
+            }
+            if ("{{core:load.output.customer}}".equals(value)) {
+                return Map.of("name", "Ada");
+            }
+            if (value instanceof String s) {
+                return s.replace("{{core:load.output.id}}", "42");
+            }
+            return value;
+        }
+
+        @Test
         @DisplayName("omits taskContext from the request when config has none")
         void omitsEmptyTaskContext() {
             Core.TaskConfig config = new Core.TaskConfig(
@@ -380,6 +460,29 @@ class TaskNodeTest {
             Map<String, Object> output = (Map<String, Object>) result.output();
             assertEquals("list_tasks", output.get("operation"));
             assertEquals(1, output.get("count"));
+        }
+
+        @Test
+        @DisplayName("a {{...}} limit lists with the resolved value, not the default 50")
+        @SuppressWarnings("unchecked")
+        void templatedLimitIsResolved() {
+            Core.TaskConfig config = new Core.TaskConfig(
+                "list_tasks", null, null, null, null, null, null, null, null, null, null);
+            TaskNode node = buildNode(config);
+            node.setDeferredScalars(Map.of("task", Map.of("limit", "{{core:x.output.n}}")));
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            org.mockito.Mockito.lenient().when(adapter.resolveTemplates(anyMap(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:x.output.n}}", 7)));
+            node.setTemplateAdapter(adapter);
+            org.mockito.ArgumentCaptor<Map<String, String>> filters = org.mockito.ArgumentCaptor.forClass(Map.class);
+            when(mockAgentClient.listTasksForWorkflow(eq("tenant-1"), filters.capture()))
+                .thenReturn(Map.of("tasks", List.of(), "count", 0, "total", 0));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            assertEquals("7", filters.getValue().get("size"));
         }
 
         @Test
@@ -574,6 +677,94 @@ class TaskNodeTest {
             assertTrue(result.isSuccess());
             Map<String, Object> params = resolvedParamsOf(result);
             assertEquals(Map.of("quarter", "Q3"), params.get("taskContext"));
+        }
+    }
+
+    @Nested
+    @DisplayName("resolved_params: the task's title and instructions")
+    class TitleAndInstructionsReported {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> run(Core.TaskConfig config, Map<String, String> tokens) {
+            V2TemplateAdapter templateAdapter = mock(V2TemplateAdapter.class);
+            when(mockRegistry.getTemplateAdapter()).thenReturn(templateAdapter);
+            when(templateAdapter.resolveTemplates(anyMap(), any())).thenAnswer(inv -> {
+                Map<String, Object> input = inv.getArgument(0);
+                Map<String, Object> resolved = new HashMap<>();
+                input.forEach((k, v) -> {
+                    Object out = v;
+                    if (v instanceof String s) {
+                        for (Map.Entry<String, String> t : tokens.entrySet()) s = s.replace(t.getKey(), t.getValue());
+                        out = s;
+                    }
+                    resolved.put(k, out);
+                });
+                return resolved;
+            });
+            TaskNode node = buildNode(config);
+            when(mockAgentClient.createTaskForWorkflow(eq("tenant-1"), anyMap()))
+                .thenReturn(Map.of("id", UUID.randomUUID().toString()));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isSuccess());
+            return (Map<String, Object>) result.output().get("resolved_params");
+        }
+
+        @Test
+        @DisplayName("SECURITY: a workspace variable in the instructions is withheld in the report, the agent still gets it")
+        void workspaceVariableInInstructionsIsWithheld() {
+            Map<String, Object> params = run(new Core.TaskConfig(
+                "create_task", null, "Reconcile", "Use key {{$vars.bank_token}} to pull statements", "high",
+                null, null, null, null, null, null), Map.of("{{$vars.bank_token}}", "tok-SECRET-9"));
+
+            assertEquals("Use key <withheld: workspace variable> to pull statements", params.get("instructions"));
+            assertFalse(params.toString().contains("tok-SECRET-9"));
+            verify(mockAgentClient).createTaskForWorkflow(eq("tenant-1"),
+                argThat(request -> String.valueOf(request.get("instructions")).contains("tok-SECRET-9")));
+        }
+
+        @Test
+        @DisplayName("long instructions are reported whole, and the map goes through the report gate")
+        void longInstructionsAreReportedWhole() {
+            String instructions = "Review the contract." + " Check every clause.".repeat(300);
+            Map<String, Object> params = run(new Core.TaskConfig(
+                "create_task", null, "Review", instructions, "high",
+                null, null, null, null, null, null), Map.of());
+
+            assertEquals(instructions, params.get("instructions"));
+            assertFalse(params.get("instructions") instanceof com.apimarketplace.orchestrator.services.template.ReportedParams.ModelInput,
+                "the wrapper is unwrapped by the gate, never persisted");
+        }
+    }
+
+    @Nested
+    @DisplayName("resolved_params: the task's reference params")
+    class ReferenceParamsWithheld {
+
+        @Test
+        @DisplayName("SECURITY: an agent id pulled from a workspace variable is withheld in the report")
+        void agentIdFromVariableIsWithheld() {
+            V2TemplateAdapter templateAdapter = mock(V2TemplateAdapter.class);
+            when(mockRegistry.getTemplateAdapter()).thenReturn(templateAdapter);
+            when(templateAdapter.resolveTemplates(anyMap(), any())).thenAnswer(inv -> {
+                Map<String, Object> input = inv.getArgument(0);
+                Map<String, Object> resolved = new HashMap<>();
+                input.forEach((k, v) -> resolved.put(k, "{{$vars.owner_agent}}".equals(v) ? "agent-SECRET-7" : v));
+                return resolved;
+            });
+            TaskNode node = buildNode(new Core.TaskConfig(
+                "create_task", null, "Review", "Please review", "high",
+                "{{$vars.owner_agent}}", null, null, null, null, null));
+            when(mockAgentClient.createTaskForWorkflow(eq("tenant-1"), anyMap()))
+                .thenReturn(Map.of("id", UUID.randomUUID().toString()));
+
+            NodeExecutionResult result = node.execute(context);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("<withheld: workspace variable>", params.get("agentId"));
+            assertFalse(params.toString().contains("agent-SECRET-7"));
         }
     }
 }

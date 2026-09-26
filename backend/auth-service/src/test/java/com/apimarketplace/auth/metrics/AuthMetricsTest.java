@@ -61,7 +61,7 @@ class AuthMetricsTest {
         // say "the login count went blind". If it were only created on first increment, the
         // very situation it reports would be indistinguishable from the series not existing,
         // which is the same hole as the one it was added to close.
-        for (String provider : new String[]{"keycloak", "google", "github"}) {
+        for (String provider : new String[]{"keycloak", "google", "github", "saml"}) {
             for (String reason : new String[]{AuthMetrics.AUTH_TIME_ABSENT, AuthMetrics.AUTH_TIME_FUTURE}) {
                 Counter c = counter(AuthMetrics.AUTH_TIME_CLAIM_MISSING_TOTAL,
                         "provider", provider, "reason", reason);
@@ -98,7 +98,7 @@ class AuthMetricsTest {
     @DisplayName("counters are pre-registered at value 0 (no Grafana 'no data')")
     void counters_preRegistered() {
         // login success per provider
-        for (String provider : new String[]{"keycloak", "google", "github", "local"}) {
+        for (String provider : new String[]{"keycloak", "google", "github", "local", "saml"}) {
             Counter c = counter(AuthMetrics.LOGIN_TOTAL, "result", "success", "provider", provider);
             assertThat(c).as("login success/" + provider).isNotNull();
             assertThat(c.count()).isZero();

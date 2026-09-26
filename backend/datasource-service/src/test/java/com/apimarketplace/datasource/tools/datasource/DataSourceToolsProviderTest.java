@@ -104,7 +104,7 @@ class DataSourceToolsProviderTest {
             var actionParam = provider.getTools().get(0).parameters().stream()
                     .filter(p -> "action".equals(p.name())).findFirst().orElseThrow();
             assertThat(actionParam.enumValues()).containsExactlyInAnyOrder(
-                    "create", "get", "list", "update", "delete",
+                    "create", "get", "present", "list", "update", "delete",
                     "query_rows", "insert_rows", "update_rows", "delete_rows",
                     "add_columns", "publish", "unpublish", "help");
         }

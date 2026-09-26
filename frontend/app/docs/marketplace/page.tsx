@@ -1,11 +1,11 @@
-import { Store, Workflow, Bot, Table2, LayoutPanelLeft, ShieldCheck } from 'lucide-react';
+import { Workflow, Bot, Table2, LayoutPanelLeft, ShieldCheck, Share2 } from 'lucide-react';
 import { docsMetadata } from '../_meta';
-import { DocsHero, DocsProse, DocsTable, Callout, CardGrid, Card } from '../_components';
+import { DocsHero, DocsProse, DocsTable, Callout, CardGrid, Card, Steps, Step } from '../_components';
 
 export const metadata = docsMetadata({
   title: 'Marketplace',
   description:
-    'Publish and acquire workflows, agents, tables, interfaces, and skills on the LiveContext marketplace: visibility modes, showcase runs, moderation, credential stripping, receipts and free re-acquisition, ratings and reviews, private share links, and the remote marketplace for self-hosted CE.',
+    'Share and install workflows, agents, tables, interfaces, and skills: visibility and review, showcase runs, editable copies, re-installs, reviews, and self-hosted access.',
   path: '/docs/marketplace',
 });
 
@@ -15,302 +15,374 @@ export default function MarketplacePage() {
       <DocsHero
         eyebrow="Share & host"
         title="Marketplace"
-        lead="Publish what you build, fork what others share. A publication isn't a screenshot, it's the whole working stack. Acquiring one gives you your own independent copy: the workflow, its agents, its pages, its tables, even its files."
+        lead="Share what you build and install what others share. A publication carries the whole working stack (workflow, agents, pages, tables, files), and installing it gives you a ready-to-run application in your own workspace."
       />
 
       <DocsProse>
-        <h2>Five publication types</h2>
+        <h2>Overview</h2>
         <p>
-          You can publish a <strong>workflow</strong>, an <strong>agent</strong>, a <strong>table</strong>, an{' '}
-          <strong>interface</strong>, or a <strong>skill</strong>. A workflow publication carries a{' '}
-          <code>workflowId</code>, an agent publication carries an <code>agentConfigId</code>, and
-          table/interface/skill publications carry a generic resource id. Agents and standalone
-          resources have their own publish/unpublish actions, separate from the workflow publish
-          flow.
+          You can publish five kinds of things: a <strong>workflow</strong> (shown as an
+          application), an <strong>agent</strong>, a <strong>table</strong>, an{' '}
+          <strong>interface</strong>, or a <strong>skill</strong>. Open <strong>Marketplace</strong>{' '}
+          from the sidebar. It has three tabs:
         </p>
-        <p>
-          Publishing a workflow captures a self-contained snapshot of the plan{' '}
-          <strong>and everything it uses</strong>: interface HTML/CSS/JS templates and variables,
-          datasource schema and config, agent config and skills, any DataInput files it references,
-          and referenced sub-workflows (recursively). Nothing about the acquirer&apos;s experience
-          depends on your live workflow still existing or being reachable.
-        </p>
-        <Callout variant="warn">
-          A workflow that has already been turned into an <strong>application</strong> (acquired
-          from another publication) cannot itself be published. Only original <code>WORKFLOW</code>
-          -type workflows can be published; publish the source workflow instead, or build a new one.
-        </Callout>
-        <p>
-          Re-publishing updates the existing publication in place: it re-snapshots from the
-          workflow&apos;s current state, so the published snapshot is always fresh. Re-publishing
-          cannot change who owns the publication (a personal publication can&apos;t become an
-          org publication or vice versa), and it&apos;s blocked outright while a previous submission
-          is still pending review.
-        </p>
-
-        <h2>Visibility &amp; the showcase requirement</h2>
-        <p>Every publication has one of three visibility modes:</p>
         <DocsTable
-          head={['Visibility', 'Who can see and acquire it', 'Needs a showcase run?']}
+          caption="Marketplace tabs"
+          rowHeaders
+          head={['Tab', 'What it lists']}
           rows={[
-            ['Public', 'Listed on the marketplace for everyone to browse and acquire.', 'Yes'],
-            ['Unlisted', 'Not listed, but reachable and acquirable by anyone with the direct link.', 'Yes'],
-            [
-              'Private',
-              'Not listed and not acquirable by anyone but you (org members, for an org-owned publication).',
-              'No',
-            ],
+            [<strong key="e">Explore</strong>, 'Everything shared with the community, with search, categories, type filters, and sorting.'],
+            [<strong key="s">My Shared</strong>, 'What you published, with its review status.'],
+            [<strong key="p">My Purchases</strong>, 'Everything you installed, including apps you later deleted, with a Re-install button.'],
           ]}
         />
         <p>
-          Public is the default for a workflow or app publication (standalone skill and interface
-          publications default to Private). A <strong>showcase run</strong> is a frozen preview captured at
-          publish time, so visitors can watch the real thing without ever touching your live
-          workflow or the orchestrator. Public and Unlisted publications require one; Private does
-          not, since there&apos;s no marketplace listing to preview.
+          The marketplace is also public: each publication has its own page, and the whole catalog
+          can be browsed without signing in. Installing requires an account.
         </p>
-        <Callout variant="info">
-          The showcase run must be a <strong>completed automatic run</strong>: a paused,
-          step-by-step run can&apos;t be used, and the run&apos;s final status has to be completed
-          (older runs recorded as partially successful are still accepted), a failed, cancelled, or
-          timed-out run is rejected. If the
-          publication&apos;s display mode is Interface or Application, it additionally needs a
-          showcase interface selected, since there&apos;s nothing to preview otherwise.
-        </Callout>
 
-        <h2>Review &amp; moderation</h2>
+        <h2>Browse the marketplace</h2>
+        <h3>Sorting and filters</h3>
         <p>
-          A publication moves through four statuses: <code>ACTIVE</code>, <code>INACTIVE</code>,{' '}
-          <code>PENDING_REVIEW</code>, and <code>REJECTED</code>. For a workflow or app publication,
-          what happens at publish time depends on visibility:
+          On <strong>Explore</strong>, <strong>Sort by</strong> offers <strong>Most liked</strong>{' '}
+          (the default), <strong>Best rated</strong>, <strong>Newest</strong>, and{' '}
+          <strong>Most installed</strong>. You can narrow the list by category, by type, by rating
+          (<strong>4 stars and up</strong>, <strong>3 stars and up</strong>), by publish date, and by
+          price. <strong>Reset filters</strong> clears them.
         </p>
+        <p>
+          <strong>Most liked</strong> is a popularity ranking. It weighs favorites most, then
+          installs, then the total weight of ratings (the average multiplied by the number of
+          reviews), so one lone five-star review cannot outrank a well-reviewed app. Publications
+          with no activity yet are shown newest first.
+        </p>
+        <h3>Studio shelf and highlights</h3>
+        <p>
+          The <strong>Studio shelf</strong> gathers applications that produce an image, a video, or
+          a sound. The publisher opts in when sharing; the app keeps its category as well. When you
+          open the marketplace from <a href="/studio">Studio</a>, a <strong>Studio only</strong> chip
+          shows the shelf is active; remove it to see the whole marketplace.
+        </p>
+        <p>
+          <strong>Highlights</strong> are publications picked by the LiveContext team for the
+          Highlights row on the home screen and on the public landing pages. They are curated on
+          LiveContext Cloud only.
+        </p>
+        <h3>Publishers and verified accounts</h3>
+        <p>
+          Every card and publication page shows the publisher&apos;s name, and publishers have a
+          profile page with their bio and <strong>Published apps</strong>. On LiveContext Cloud, a blue
+          check marks a <strong>Verified account</strong>: platform administrators, and accounts
+          the LiveContext team verified. The check is not shown for an account whose profile is
+          private. Self-hosted installs show no verified badges.
+        </p>
+
+        <h2>Install an application</h2>
+        <Steps>
+          <Step n={1} title="Open the publication">
+            Click a card to see its preview, description, reviews, and what it contains. The
+            preview replays a real run the publisher captured; it never runs anything.
+          </Step>
+          <Step n={2} title="Click Install">
+            In the install dialog, you can tick <strong>Create an editable copy</strong> if you
+            also want a workflow you can change (see below). It is unticked by default.
+          </Step>
+          <Step n={3} title="Connect your services">
+            Credentials never travel with a publication. If the app uses integrations or email, a
+            banner such as <strong>Connect 2 services to start</strong> lists them. Connect them now, or click{' '}
+            <strong>Skip for now</strong> and do it later. Steps with no quick connect flow (HTTP
+            authentication, JWT keys, webhook secrets) are listed for you to fill in the builder.
+          </Step>
+        </Steps>
+        <h3>What you get</h3>
+        <p>
+          Installing creates an <strong>application</strong> in your workspace: a run-only copy of
+          the whole stack with its own interfaces, tables (with any rows the publication includes),
+          agents, skills, sub-workflows, and files. It no longer depends on the publisher: if they
+          change or delete their workflow, your app keeps working. An application cannot be edited
+          or published again.
+        </p>
+        <p>
+          To modify it, use <strong>Create an editable copy</strong>, either in the install dialog
+          or later from the app&apos;s <strong>Application settings</strong> menu (the cog). The
+          copy is an ordinary workflow in your workflow list, with its own copies of every
+          resource; the installed application keeps running untouched. Asking again opens the copy
+          you already have instead of making another. The copy counts against your workflow limit
+          and costs no credits.
+        </p>
+        <p>
+          A published agent is tightened on install: it can only reach the tables, interfaces, and
+          agents that the publication actually contains.
+        </p>
+        <h3>Example values and resetting the data</h3>
+        <p>
+          In an installed app, the <strong>Load the example values</strong> button fills the forms
+          with the publisher&apos;s example inputs; nothing is sent until you submit.{' '}
+          <strong>Reset the data</strong> restores the app&apos;s tables to the rows it came with,
+          after a confirmation. Rows you added or edited are replaced. Your workflow and its runs are
+          left untouched. Reset is not available for an app a self-hosted install took from the cloud
+          marketplace.
+        </p>
+
+        <h3>Install rules and re-installing</h3>
         <DocsTable
-          head={['Visibility', 'Status right after publish (or update)']}
+          caption="When an install is refused"
+          rowHeaders
+          head={['Situation', 'What happens']}
           rows={[
-            ['Private', 'ACTIVE immediately, no review needed.'],
-            ['Public / Unlisted', 'PENDING_REVIEW, on every publish AND every subsequent update.'],
+            ['Your own publication', 'You cannot install something you or your workspace published.'],
+            ['Already installed', 'A workspace holds one application per publication. Delete it first to install it again.'],
+            ['Private publication', 'Nobody can install it fresh.'],
+            ['Pending review, rejected, or unshared', 'It cannot be installed fresh.'],
           ]}
         />
-        <Callout variant="info">
-          Standalone <a href="/skills">skill</a> and <a href="/interfaces">interface</a> publications
-          review only Public listings: their Private and Unlisted publications activate immediately,
-          and they default to Private.
-        </Callout>
         <p>
-          An admin reviewer either approves a pending submission (status moves to{' '}
-          <code>ACTIVE</code>, any prior rejection reason is cleared) or rejects it (status moves to{' '}
-          <code>REJECTED</code> with a stored reason), and only pending submissions can be acted on.
-          To help the reviewer judge what actually changed, moderation shows a side-by-side
-          comparison of the frozen snapshot against the live source, plus a completeness manifest
-          that flags any agent, datasource, interface, or sub-workflow the plan declares but that
-          didn&apos;t make it into the snapshot. Admins work from a moderation queue with pending,
-          active, and rejected counts.
+          Every install writes a receipt for your workspace, and receipts are kept. Re-installing
+          from <strong>My Purchases</strong> is free and does not count against your plan&apos;s app
+          limit. A re-install always takes the publication&apos;s current version, and it still
+          works if the publisher later made the publication private or unshared it, unless it was
+          rejected. Updates are never pushed to existing installs: to get a newer version, delete
+          your app and re-install it.
         </p>
 
-        <h2>Acquiring (forking): an independent clone</h2>
-        <p>
-          Acquiring a publication clones the entire stack into your workspace with fresh ids and
-          every internal reference rewritten to point at <em>your</em> new resources: sub-workflows,
-          interfaces, datasources, agents and their skills, and any DataInput files. The result is a
-          normal item in your workspace that you can run, edit, and even re-publish as your own.
-          Every cloned resource is tagged back to the source publication for traceability.
-        </p>
+        <h2>Self-hosted only and plan-gated apps</h2>
+        <p>Some publications use features that are not available everywhere.</p>
         <DocsTable
-          head={['Guard', 'What happens']}
+          caption="Special publications on LiveContext Cloud"
+          rowHeaders
+          head={['Publication uses', 'What you see on LiveContext Cloud', 'On a self-hosted install']}
           rows={[
-            ['Your own publication', 'You cannot acquire something you published yourself.'],
             [
-              'Already acquired',
-              'While you still hold an active clone from a publication, acquiring it again is blocked; delete your clone first, or just keep using it.',
-            ],
-            ['Private, not yours', 'A non-owner cannot acquire a Private publication at all.'],
-            ['Not active', 'Only ACTIVE publications (approved, or Private) can be acquired.'],
-          ]}
-        />
-        <Callout variant="warn">
-          Credentials are <strong>stripped</strong> at both publish and acquire time: HTTP
-          authentication (bearer tokens, API keys, passwords) and any linked email-sending
-          credential are removed from the cloned plan. Your secrets never travel with a
-          publication or a clone, connect your own before integration and email steps will run.
-        </Callout>
-        <p>
-          A published agent&apos;s tool access is also tightened on acquisition: its mode is forced
-          to a custom, explicit list, and its tables/interfaces/agents are intersected with what the
-          plan actually contains, so a forked agent can&apos;t reach beyond what you shipped in it.
-          The acquired root workflow is created as an application, exactly one application per
-          (organization, publication) is allowed, while any cloned sub-workflows become ordinary
-          workflows in your workspace.
-        </p>
-
-        <h2>Receipts &amp; free re-acquisition</h2>
-        <p>
-          Every acquisition writes a receipt (tenant, publication, credits paid, timestamp,
-          organization scope) and receipts are never deleted. Publishing an update{' '}
-          <strong>does not</strong> push to people who already acquired it, every clone is
-          independent. To pick up a newer version, acquire again.
-        </p>
-        <Callout variant="info">
-          Because a receipt was kept the first time, re-acquiring later, even after you deleted
-          your clone, is <strong>free</strong>: you&apos;re not re-billed and the acquisition doesn&apos;t
-          count against your plan limit. A re-acquisition always clones from the publication&apos;s{' '}
-          <strong>current</strong> snapshot, so you get the latest version, not the one you first
-          acquired. Your purchase history and currently acquired publications are both browsable.
-        </Callout>
-
-        <h2>The showcase run preview is frozen</h2>
-        <p>
-          Publishing captures a frozen showcase snapshot: the run state, its aggregated steps, epoch
-          signals and timestamps, and pre-rendered templates and items for every interface involved.
-          The marketplace preview reads entirely from that snapshot, it never calls the orchestrator
-          or touches your live workflow. The showcase run itself is cloned on the publisher&apos;s
-          side (including independent file copies) and is never transferred to acquirers, and you can
-          pin a single canonical epoch as the one shown by default; without a pin the preview falls
-          back to a multi-epoch view.
-        </p>
-        <p>
-          For anonymous visitors, any file reference inside the snapshot is rewritten to a
-          short-lived, signed URL minted under your (the publisher&apos;s) account, never the
-          visitor&apos;s, valid for up to 4 hours. Only the data actually rendered in the preview is
-          rewritten this way, not internal trigger data or run-state internals, and a failed rewrite
-          just leaves a broken image rather than breaking the whole preview.
-        </p>
-
-        <h2>Display modes: Workflow vs Interface / Application</h2>
-        <p>
-          Display mode controls how a publication <strong>presents</strong> on the marketplace, it
-          doesn&apos;t change the publish or acquire mechanics underneath.
-        </p>
-        <DocsTable
-          head={['Display mode', 'Presented as']}
-          rows={[
-            ['Workflow (default)', 'A blueprint/template: visitors preview the automation itself.'],
-            [
-              'Interface',
-              'An interactive UI experience backed by the workflow; requires a showcase interface.',
+              'A local CLI agent (Claude Code, Codex, Gemini CLI, Mistral Vibe)',
+              <>A <strong>CE exclusive</strong> badge. Installing shows <strong>Self-hosted install required</strong>: the app cannot run on the cloud at any plan.</>,
+              'Installs normally.',
             ],
             [
-              'Application',
-              'Same as Interface, an interactive app the visitor can use; requires a showcase interface.',
-            ],
-            ['Agent', 'An agent publication.'],
-            ['Table', 'A table publication.'],
-            ['Skill', 'A skill publication.'],
-            [
-              'Landing',
-              'Not a real publication type, only a curated highlight bucket used on the public landing page.',
+              'Vector search (embeddings)',
+              <>Installs from the plan that includes vector search. Below it, you see <strong>A higher plan is needed</strong> with a <strong>See plans</strong> button.</>,
+              'Installs normally.',
             ],
           ]}
         />
 
-        <h2>Version history</h2>
-        <p>
-          Once a publication has been acquired at least once, its snapshot history is retained: each
-          version number, the full plan snapshot at that point, an optional label, and when it was
-          created. A never-acquired publication keeps no history, since there&apos;s nothing yet to
-          look back at. You can browse a lightweight version list, or pull the full snapshot for any
-          specific version.
-        </p>
-
-        <h2>Ratings, reviews, replies &amp; favorites</h2>
-        <p>
-          A review carries an optional rating from 1 to 5 and/or an optional comment (up to 2000
-          characters), independently: you can leave just a rating, just a comment, or both, and
-          update either one on its own. There&apos;s one top-level review per person per publication
-          (submitting again updates your existing review), and you can&apos;t review your own
-          publication. Clearing your comment while keeping your rating (or the reverse) is
-          supported; if nothing&apos;s left, the review is removed entirely.
-        </p>
-        <p>
-          Replies live in the same review thread: a reply has no rating, can&apos;t be empty, and
-          can&apos;t itself be replied to, one level of nesting only. The publication&apos;s average
-          rating and review count are recomputed from top-level reviews that carry a rating; the
-          separate comment count only considers reviews with actual text.
-        </p>
-        <p>
-          <strong>Favorites</strong> are personal: one entry per user per publication, driving your
-          own favorites view, distinct from any admin-curated highlights on the marketplace home.
-        </p>
-
-        <h2>Pre-publish image screening</h2>
-        <p>
-          Before a workflow with an interface publishes, screening scans its HTML/CSS/JS templates
-          and the resolved showcase data for every referenced media resource (images, video, audio,
-          download links, CSS backgrounds), deduplicated by URL.
-        </p>
-        <Callout variant="info">
-          Screening only ever produces a <strong>warning</strong>, never a hard block: you can
-          always proceed, and the decision (whether you attested you have rights to the media, or
-          just acknowledged the warning) is logged. Auto-blocking publishing would shift copyright
-          liability from you to the platform, so the choice, and the responsibility, stays with the
-          publisher.
+        <h2>Share a workflow</h2>
+        <Callout variant="info" title="Before you begin">
+          The workflow needs at least one interface (it becomes the page people open) and a
+          completed automatic run of the version you share. A workflow containing a workflow
+          trigger cannot be shared.
         </Callout>
+        <Steps>
+          <Step n={1} title="Open the Share dialog">
+            In the workflow, click the globe <strong>Share</strong> button. The{' '}
+            <strong>Share Workflow</strong> dialog opens.
+          </Step>
+          <Step n={2} title="Information">
+            Enter a <strong>Title</strong> and a <strong>Description</strong>, and pick the{' '}
+            <strong>Version</strong> to share.
+          </Step>
+          <Step n={3} title="Showcase">
+            Pick the <strong>Showcase Run</strong> whose results visitors will see, and the
+            interface shown as the preview. Optionally pin one <strong>Showcase epoch</strong> as
+            the default view; otherwise visitors can browse every captured epoch.
+          </Step>
+          <Step n={4} title="Visibility">
+            Choose <strong>Private</strong> or <strong>Public</strong>. For Public, also pick a{' '}
+            <strong>Category</strong> and, for a media-producing app, turn on{' '}
+            <strong>Show on the Studio shelf</strong>. The recap under{' '}
+            <strong>Included in shared workflow</strong> lists what will be copied.
+          </Step>
+          <Step n={5} title="Review the media and share">
+            Click <strong>Share</strong>. If the app displays images, video, or audio, a screening
+            step lists them and asks you to confirm you have the rights (see below).
+          </Step>
+        </Steps>
+        <p>
+          A Private share is live at once in your applications. A Public share waits for review;
+          its card shows <strong>Pending Review</strong> in <strong>My Shared</strong> until an
+          administrator approves it. To change it later, open the dialog again and click{' '}
+          <strong>Update</strong>. <strong>Unshare</strong> removes it from the marketplace (you
+          type &ldquo;unpublish&rdquo; to confirm); people who installed it keep their copy.
+        </p>
+        <p>
+          Publishing freezes a snapshot of the workflow and everything it uses: interfaces, tables, agents and
+          their skills, referenced files, and sub-workflows.
+          Credentials are stripped, both when you publish and when someone installs. Updating
+          re-takes the snapshot from the workflow&apos;s current state. On LiveContext Cloud, the
+          number of publications you can create depends on your plan; updates do not count.
+        </p>
+
+        <h3>Visibility and review</h3>
+        <DocsTable
+          caption="Visibility modes"
+          rowHeaders
+          head={['Visibility', 'Who can see it', 'Review', 'Showcase run']}
+          rows={[
+            ['Public', 'Listed on the marketplace for everyone.', 'Yes, on every publish and every update.', 'Required'],
+            ['Unlisted', 'Not listed. Anyone with the link can open and install it.', 'Yes, on every publish and every update.', 'Required'],
+            ['Private', 'Not listed and not installable. Visible to you (to your organization, for an organization publication).', 'No: active at once.', 'Optional'],
+          ]}
+        />
+        <p>
+          The <strong>Share Workflow</strong> dialog offers Private and Public. Unlisted is
+          available when you ask the chat assistant to publish; the assistant uses Private unless
+          you say otherwise. The same review rule applies to every publication type: only Private
+          skips review.
+        </p>
+        <p>
+          A reviewer compares the frozen snapshot with the source and checks that nothing the
+          workflow uses is missing, then approves or rejects. A rejected publication shows{' '}
+          <strong>Rejected</strong>, with <strong>View rejection reason</strong>. You cannot
+          update a publication while its previous submission is still pending, and an update
+          cannot move it between your personal workspace and an organization.
+        </p>
+
+        <h3>Showcase run requirements</h3>
+        <p>The showcase run must be an automatic run (not step by step) whose status is one of:</p>
+        <ul>
+          <li><strong>Completed</strong> or <strong>Partial success</strong>.</li>
+          <li>
+            Waiting for its trigger, for a workflow with a reusable trigger (webhook,
+            manual, chat, schedule) that finished at least one cycle.
+          </li>
+        </ul>
+        <p>
+          Failed, cancelled, and timed-out runs are refused. The preview is a frozen copy kept on
+          your side: visitors never touch your live workflow, and the run is never handed to people
+          who install the app. Files in the preview are served through links signed under your
+          account and valid for up to 4 hours; a file that cannot be served shows as a broken image.
+        </p>
+
+        <h3>Media screening</h3>
+        <p>
+          Before an app with an interface is shared, screening lists every image, video, audio
+          file, download link, and CSS background it displays, and reminds you to check you have
+          the rights to each. For each item you can keep it, <strong>Replace with AI</strong> (a
+          generated image, billed in credits), or <strong>Upload</strong> your own. Then choose{' '}
+          <strong>Publish with attestation</strong> or <strong>Publish anyway</strong>. Screening
+          never blocks publishing, and your decision is logged. You remain responsible for the
+          content you publish.
+        </p>
+
+        <h2>Publish an agent, table, interface, or skill</h2>
+        <p>
+          These have their own <strong>Publish</strong> action, with a title, a description, a
+          category, and, for an agent, table, or skill, a <strong>Landing page</strong>: the
+          interface visitors see on the listing. The visibility and review rules above apply. An
+          agent that has &ldquo;All&rdquo; access to a resource type cannot be published: switch it
+          to an explicit selection first, so the publication cannot carry every workflow, table,
+          and interface in your account. A publication that exceeds the size limit (or a table with
+          too many rows) is refused with the figures.
+        </p>
+
+        <h2>Reviews, favorites, and reports</h2>
+        <p>
+          A review has an optional rating from 1 to 5 and an optional comment of up to 2,000
+          characters. You leave one review per publication (submitting again updates it), and you
+          cannot review your own. Replies go one level deep and cannot be empty. The average
+          rating counts only reviews that carry a rating.
+        </p>
+        <p>
+          <strong>Favorites</strong> are personal bookmarks, and they also feed the{' '}
+          <strong>Most liked</strong> ranking. To flag content that infringes your rights or the
+          terms, use the <strong>Report</strong> tab on the publication.
+        </p>
+
+        <h2>Your public profile</h2>
+        <p>
+          Your name always appears on what you publish. Your profile page is set in{' '}
+          <strong>Settings</strong> &gt; <strong>Overview</strong> &gt;{' '}
+          <strong>Public profile</strong>: a <strong>Bio</strong>, a <strong>Handle</strong> (your
+          profile lives at @handle, changeable once every 7 days), and a{' '}
+          <strong>Profile visibility</strong>:
+        </p>
+        <ul>
+          <li><strong>Public</strong>: listed by search engines.</li>
+          <li><strong>Unlisted</strong>: reachable by anyone with the link.</li>
+          <li><strong>Private</strong>: no profile page.</li>
+        </ul>
+
+        <h2>Paid publications</h2>
+        <p>
+          Charging credits for an install is not available yet. Publications are free: the dialog
+          says <strong>Paid templates are coming soon</strong>, and a non-zero price is refused.
+          Once it is available, a Public publication will still have to be free; a price will need
+          Private or Unlisted visibility.
+        </p>
+
+        <h2>The marketplace on a self-hosted install</h2>
+        <p>
+          A self-hosted <a href="/self-host">Community Edition</a> install shows the community
+          marketplace once it is linked to a LiveContext Cloud account. Until then, the page shows{' '}
+          <strong>Connect your cloud account</strong> with a <strong>Connect to cloud</strong>{' '}
+          button, and no publications. After linking, you browse and install from the same
+          catalog as cloud users, and apps marked <strong>CE exclusive</strong> install normally.
+        </p>
 
         <h2>Private share links</h2>
         <p>
-          Separate from marketplace publications, you can mint a private share link for a running
-          chat, form, conversation, or application, each with its own title and description, an
-          active/inactive flag, and an access counter. Two optional controls are supported on a
-          link: an expiry timestamp (an expired link resolves to not-found) and password protection
-          (the public resolver only ever sees a &ldquo;this link needs a password&rdquo; flag, never
-          the password itself). Share links resolve publicly without any login.
-        </p>
-        <p>
-          The number of share links you can hold is plan-limited (globally, across all resource
-          types), with a self-hosted Community Edition able to disable the limit entirely.
+          Separate from the marketplace, you can share a chat, a form, a conversation, or an
+          application through a private link, with an optional expiry date and password. The number
+          of share links you can hold depends on your plan; self-hosted installs have no limit. See{' '}
+          <a href="/public-access">Public access &amp; sharing</a>.
         </p>
         <DocsTable
-          head={['Plan', 'Max shared links']}
+          caption="Share link limits by plan"
+          rowHeaders
+          head={['Plan', 'Maximum share links']}
           rows={[
             ['Free', '5'],
             ['Starter', '20'],
             ['Pro', '50'],
-            ['Team / Pay-as-you-go', '100'],
+            ['Team', '100'],
             ['Enterprise', '200'],
             ['Self-hosted (CE)', 'Unlimited'],
           ]}
         />
 
-        <h2>Paid publications (gated off by default)</h2>
+        <h2>Troubleshooting</h2>
+        <h3>The Next button stays disabled in the Share dialog</h3>
         <p>
-          Charging credits per acquisition exists in the data model, but it&apos;s{' '}
-          <strong>disabled platform-wide by default</strong>. While disabled, publishing or updating
-          a publication with a non-zero price is rejected outright, existing paid publications from
-          before the gate keep working, but no new ones can be created until the feature ships.
+          The chosen version needs a completed automatic run and at least one interface, and it
+          must not contain a <strong>Workflows</strong> trigger. The dialog shows a message when the version has no
+          interface or contains a <strong>Workflows</strong> trigger.
+          Step-by-step runs appear greyed out in the run list and cannot be used as a showcase.
         </p>
-        <Callout variant="warn">
-          Independently of that gate, a <strong>Public</strong> publication must always be free.
-          Charging for a publication (once the feature is enabled) requires Private or Unlisted
-          visibility.
-        </Callout>
-
-        <h2>Remote cloud marketplace for CE</h2>
+        <h3>My publication is not on the marketplace</h3>
         <p>
-          A self-hosted <a href="/self-host">Community Edition</a> instance can link to a cloud
-          account and, from that link, browse and acquire from the shared cloud marketplace,
-          exactly as a cloud user would. Linking uses OAuth against the cloud identity provider, and
-          a heartbeat keeps the cloud side aware of which CE version is connected. CE can also run
-          its own local marketplace for internal automations independently of any cloud link.
+          Public and Unlisted publications wait for review after every publish and every update.
+          Check <strong>My Shared</strong> for <strong>Pending Review</strong> or{' '}
+          <strong>Rejected</strong>.
+        </p>
+        <h3>I cannot install an app I installed before</h3>
+        <p>
+          Your workspace still has it. Open it from your applications, or delete it and use{' '}
+          <strong>Re-install</strong> in <strong>My Purchases</strong> to get the latest version.
+        </p>
+        <h3>An installed app fails on its first run</h3>
+        <p>
+          Its integrations are not connected yet. Connect the services it asks for; see{' '}
+          <a href="/integrations">Integrations</a>.
         </p>
 
-        <h2>Where to go next</h2>
+        <h2>Related pages</h2>
         <CardGrid cols={3}>
           <Card icon={LayoutPanelLeft} title="Interfaces & apps" href="/interfaces">
-            Package a workflow as a shareable, interactive app.
+            Build the pages your application shows.
           </Card>
           <Card icon={Workflow} title="Workflows" href="/workflows">
-            Build the thing you&apos;ll publish.
+            Build and version the workflow you will share.
           </Card>
           <Card icon={Bot} title="Agents" href="/agents">
-            Publish an agent, scoped to just the tools it needs.
+            Publish an agent with just the tools it needs.
           </Card>
           <Card icon={Table2} title="Tables & data" href="/tables">
-            Publish a table alongside the workflows that use it.
+            Publish a table on its own.
+          </Card>
+          <Card icon={Share2} title="Public access & sharing" href="/public-access">
+            Share links, public forms, and endpoints.
           </Card>
           <Card icon={ShieldCheck} title="Self-hosting" href="/self-host">
-            Run your own instance, optionally linked to the cloud marketplace.
-          </Card>
-          <Card icon={Store} title="Getting started" href="/getting-started">
-            New to LiveContext? Start here.
+            Run your own install and link it to the cloud.
           </Card>
         </CardGrid>
       </DocsProse>

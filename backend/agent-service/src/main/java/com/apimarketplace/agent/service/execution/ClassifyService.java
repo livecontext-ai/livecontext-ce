@@ -67,6 +67,13 @@ public class ClassifyService {
     private final BridgeLoopDispatcher bridgeDispatcher;
     private final com.apimarketplace.agent.service.ModelCatalogService modelCatalogService;
     private final ExecutionLinkRouter executionLinkRouter;
+
+    /**
+     * Swaps a disabled model for its replacement (V515). Field-injected and optional so the
+     * unit tests that construct this service positionally keep compiling (null = no swap).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.agent.service.ModelReplacementResolver modelReplacementResolver;
     private final TypeSafeSystemOneClient typeSafeClient;
 
     /**
@@ -103,7 +110,16 @@ public class ClassifyService {
 
     public ClassifyResponseDto execute(ClassifyRequestDto request, String userRoles) {
         long startTime = System.currentTimeMillis();
-        // Normalise provider against the catalog FIRST: a bridge (CLI) model
+        // A model an admin disabled runs on its replacement, before the provider is
+        // normalised and the execution link resolved: the replacement is what gets billed
+        // and what a link is looked up for.
+        if (modelReplacementResolver != null) {
+            var sub = modelReplacementResolver.substituteIfDisabled(request.provider(), request.model()).orElse(null);
+            if (sub != null) {
+                request = request.withModel(sub.provider(), sub.model());
+            }
+        }
+        // Normalise provider against the catalog: a bridge (CLI) model
         // stored as provider="anthropic" (frontend heuristic / LLM-authored
         // plan) must resolve to its bridge slug so it dispatches via the bridge
         // AND passes through BridgeAccessGuard - identical to the chat path.
@@ -310,12 +326,19 @@ public class ClassifyService {
 
     private String buildPrompt(ClassifyRequestDto request) {
         StringBuilder sb = new StringBuilder();
-        // Use prompt as the primary classification instruction (may already include the content
-        // via resolved templates). Only fall back to content if prompt is absent.
-        if (request.prompt() != null && !request.prompt().isBlank()) {
-            sb.append("## Classification Instruction\n").append(request.prompt()).append("\n\n");
-        } else if (request.content() != null && !request.content().isBlank()) {
-            sb.append("## Content to Classify\n").append(request.content()).append("\n\n");
+        // The prompt is the instruction (it may already carry the content through its own
+        // templates) and the content is what is judged. Both are sent when they differ: this
+        // used to send the prompt ALONE whenever one was set, so a node configured with a
+        // separate content was classified without ever seeing it. When they are the same text
+        // (no content configured, so the orchestrator sent the prompt in both fields) it is
+        // sent once, under the heading it always had.
+        String content = request.content() != null && !request.content().isBlank() ? request.content() : null;
+        String instruction = request.prompt() != null && !request.prompt().isBlank() ? request.prompt() : null;
+        if (instruction != null) {
+            sb.append("## Classification Instruction\n").append(instruction).append("\n\n");
+        }
+        if (content != null && (instruction == null || request.distinctPrompt() != null)) {
+            sb.append("## Content to Classify\n").append(content).append("\n\n");
         }
         sb.append("## Available Categories\n");
         if (request.categories() != null) {

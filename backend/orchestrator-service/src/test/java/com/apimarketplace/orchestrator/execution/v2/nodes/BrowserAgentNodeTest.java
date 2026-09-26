@@ -119,4 +119,94 @@ class BrowserAgentNodeTest {
                 .containsEntry("__toolCallId__", "node-X");
         }
     }
+
+    @Nested
+    @DisplayName("params resolution failure")
+    class ParamsResolutionFailure {
+
+        @Test
+        @DisplayName("fails with the resolution error instead of browsing with the raw {{...}} config")
+        void failsInsteadOfBrowsingWithRawConfig() {
+            BrowserAgentNode node = new BrowserAgentNode("node-1",
+                Map.of("task", "{{core:missing.output.task}}", "llm", Map.of()));
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            when(adapter.resolveTemplates(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new RuntimeException("Template error"));
+            node.setTemplateAdapter(adapter);
+            ExecutionContext ctx = ExecutionContext.create("run-1", "wr-1", "tenant-1", "item-0", 0, Map.of(), null);
+
+            NodeExecutionResult result = node.execute(ctx);
+
+            assertThat(result.isFailure()).isTrue();
+            assertThat(result.errorMessage().orElse("")).contains("Template error");
+        }
+    }
+
+    @Nested
+    @DisplayName("resolved_params: the task the browser model received")
+    class TaskReportedWhole {
+
+        private Map<String, Object> report(BrowserAgentNode node, Map<String, Object> resolved) {
+            ExecutionContext ctx = ExecutionContext.create("run-1", "wr-1", "tenant-1", "item-0", 0, Map.of(), null);
+            return com.apimarketplace.orchestrator.services.template.ReportedParams.forReport(
+                node.withTaskReportedWhole(resolved, ctx));
+        }
+
+        @Test
+        @DisplayName("BUG: a long task is reported whole, never as its first 120 characters and '(N chars)'")
+        void longTaskIsReportedWhole() {
+            String task = "Open the supplier portal and download every invoice." + " Then check the totals.".repeat(150);
+            BrowserAgentNode node = new BrowserAgentNode("node-1", Map.of("task", task, "llm", Map.of()));
+
+            Map<String, Object> reported = report(node, new java.util.LinkedHashMap<>(Map.of("task", task)));
+
+            assertThat(reported.get("task")).isEqualTo(task);
+        }
+
+        @Test
+        @DisplayName("SECURITY: a workspace variable in the task is withheld, the rest shown")
+        void workspaceVariableInTaskIsWithheld() {
+            BrowserAgentNode node = new BrowserAgentNode("node-1",
+                Map.of("task", "Log in with {{$vars.portal_password}} and export", "llm", Map.of()));
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            when(adapter.resolveTemplates(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> inv.getArgument(0));
+            node.setTemplateAdapter(adapter);
+
+            Map<String, Object> reported = report(node,
+                new java.util.LinkedHashMap<>(Map.of("task", "Log in with hunter2 and export")));
+
+            assertThat(reported.get("task")).isEqualTo("Log in with <withheld: workspace variable> and export");
+            assertThat(reported.toString()).doesNotContain("hunter2");
+        }
+    }
+
+    @Nested
+    @DisplayName("resolved_params: the browser agent's other params")
+    class OtherParamsWithheld {
+
+        @Test
+        @DisplayName("SECURITY: a start url pulling a workspace variable is withheld, the api key masked, the task shown")
+        void otherParamWithVariableIsWithheld() {
+            Map<String, Object> config = new java.util.LinkedHashMap<>();
+            config.put("task", "Export the invoices");
+            config.put("start_url", "{{$vars.portal_url}}");
+            config.put("llm", Map.of("provider", "openai", "api_key", "{{$vars.llm_key}}"));
+            BrowserAgentNode node = new BrowserAgentNode("node-1", config);
+            ExecutionContext ctx = ExecutionContext.create("run-1", "wr-1", "tenant-1", "item-0", 0, Map.of(), null);
+            Map<String, Object> resolved = new java.util.LinkedHashMap<>();
+            resolved.put("task", "Export the invoices");
+            resolved.put("start_url", "https://portal.example/?token=SECRET-1");
+            resolved.put("llm", Map.of("provider", "openai", "api_key", "SECRET-2"));
+
+            Map<String, Object> reported = com.apimarketplace.orchestrator.services.template.ReportedParams.forReport(
+                node.withTaskReportedWhole(resolved, ctx));
+
+            assertThat(reported.get("task")).isEqualTo("Export the invoices");
+            assertThat(reported.get("start_url")).isEqualTo("<withheld: workspace variable>");
+            assertThat(reported.toString()).doesNotContain("SECRET-1").doesNotContain("SECRET-2");
+        }
+    }
 }

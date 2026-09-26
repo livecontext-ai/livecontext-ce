@@ -1,1 +1,65 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#F26522"><rect width="24" height="24" rx="4"/><text x="12" y="15.5" fill="#fff" font-family="Arial,sans-serif" font-size="10" font-weight="bold" text-anchor="middle">Av</text></svg>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" viewBox="0 0 48 48">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: none;
+      }
+
+      .cls-2 {
+        clip-path: url(#clippath-1);
+      }
+
+      .cls-3 {
+        clip-path: url(#clippath-2);
+      }
+
+      .cls-4, .cls-5 {
+        fill: #059bd2;
+      }
+
+      .cls-6 {
+        fill: #f60;
+      }
+
+      .cls-5, .cls-7 {
+        display: none;
+      }
+
+      .cls-7 {
+        fill: #e65000;
+      }
+
+      .cls-8 {
+        clip-path: url(#clippath);
+      }
+    </style>
+    <clipPath id="clippath">
+      <path class="cls-1" d="M24,35s-2.2-2.7-3.5-4.1l-1.8,4.3c2.6,3.9,4.3,7.2,5.3,8.8,1.8-3.1,6.4-12.4,15.7-21.1l-1-2.4c-6.1,4.5-11.2,10.2-14.7,14.6"/>
+    </clipPath>
+    <clipPath id="clippath-1">
+      <path class="cls-1" d="M33.5,35.5l4.1,9.7h7.4l-6.5-15.6c-1.9,2-3.5,4-5,5.9"/>
+    </clipPath>
+    <clipPath id="clippath-2">
+      <path class="cls-1" d="M20.7,2.8L3,45.2h7.4l12.8-30.3.6-1.7h.4l.6,1.7,3.8,9c1.7-1.7,3.5-3.4,5.5-4.9L27.3,2.8h-6.5Z"/>
+    </clipPath>
+  </defs>
+  
+  <g>
+    <g id="Layer_1">
+      <path class="cls-7" d="M24.6,5.9c1.1,0,2.3,0,3.4,0,.9,1.9,1.8,3.8,2.6,5.8q.7,1.6,1.5,3.2t.2,5.3c-1.5,2-3,2.8-5.3,3.7-.7-2-1.3-4-2-6h-2c0,.6-.2,1.3-.3,2-1,4.1-2.6,7.9-4.2,11.8-.3.8-.6,1.6-1,2.4q-2.4,5.7-3.5,6.9c-2.3,0-4.7,0-7,0,.7-4.2,2.1-7.9,3.7-11.8.3-.6.5-1.3.8-1.9.6-1.3,1.1-2.7,1.7-4,.9-2,1.7-4.1,2.5-6.1q4.6-11.1,8.9-11.2Z"/>
+      <path class="cls-5" d="M37,20c-.5,4-1.5,6-4.3,8.9-3.2,3.5-5.5,6.9-7.7,11.1h-2q-4.1-6.3-3.8-9.9c.2-.7.5-1.4.8-2.1h3v2c1.3-1.1,2.5-2.2,3.8-3.3.7-.6,1.4-1.2,2.1-1.9q2-1.7,3.6-3.6t4.4-1.3Z"/>
+      <path class="cls-7" d="M34,27h3c.7,1.6,1.3,3.2,2,4.8.4.9.7,1.8,1.1,2.7q.9,2.6.9,6.6h-7q-3.1-6.4-2.8-9.2t2.8-4.8Z"/>
+      <g>
+        <g class="cls-8">
+          <rect class="cls-4" x="14.6" y="16.3" width="29.1" height="31.7"/>
+        </g>
+        <g class="cls-2">
+          <rect class="cls-6" x="29.4" y="25.5" width="19.7" height="23.8"/>
+        </g>
+        <g class="cls-3">
+          <rect class="cls-6" x="-1.1" y="-1.3" width="39.2" height="50.6"/>
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>

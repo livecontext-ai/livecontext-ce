@@ -9,6 +9,7 @@ import {
   WORKFLOW_FOLLOW_NODES_EVENT,
   FOLLOW_DEBOUNCE_MS,
   FOLLOW_MIN_GAP_MS,
+  FOLLOW_WAITING_SETTLE_MS,
 } from '@/app/workflows/builder/services/runFollowEvent';
 
 export interface RunCameraFollowInput {
@@ -19,11 +20,10 @@ export interface RunCameraFollowInput {
    * always express it: a node waiting on an approval can keep reporting `running`, the
    * last row written for it being the RUNNING one (`statusUpdater.ts`).
    *
-   * Know its limit rather than trusting it: in an AUTOMATIC run the frontend never
-   * calls executeStepByStep, so this set is largely empty (`UserApprovalNode.tsx` says
-   * so and works around it), and the filter is then a no-op. It earns its place in
-   * step-by-step runs; it is not a guarantee that the camera never parks on an
-   * approval.
+   * A parked node is WAITING, not running, so it joins the waiting tier (see
+   * `selectFollowedAliases`). In an AUTOMATIC run the frontend never calls
+   * executeStepByStep, so this set is largely empty there (`UserApprovalNode.tsx` says
+   * so); the stream's own `awaiting_signal` status covers that case.
    */
   awaitingSignalAliases: Iterable<string> | null | undefined;
   /**
@@ -53,7 +53,44 @@ export interface RunCameraFollowInput {
 }
 
 /**
- * Keeps the canvas camera framed on whatever is currently running.
+ * The aliases the camera should frame, in two tiers, and which tier they came from.
+ *
+ * RUNNING first. When nothing runs, the nodes WAITING on a signal (an interface page, a
+ * user approval, a wait timer): that is where the run stands and, for an interface,
+ * the page the user has to act on. The tiers never mix, because a non-blocking
+ * interface keeps waiting while the steps after it run, and a box spanning both would
+ * zoom out further with every step. When the waiting node continues, the next step
+ * runs and takes the camera.
+ *
+ * "Nothing runs" is also the ordinary gap between two steps, so the hook frames the
+ * waiting tier only once it has SETTLED (see FOLLOW_WAITING_SETTLE_MS), never in a gap.
+ *
+ * Sorted, so the same set arriving in a different order is the same set. Step order is
+ * not a contract and re-framing on a reshuffle moves the camera for no reason the
+ * viewer can see.
+ */
+export function selectFollowedAliases(
+  steps: StepEntry[],
+  awaitingSignalAliases: Iterable<string> | null | undefined,
+): { aliases: string[]; waiting: boolean } {
+  const parked = awaitingSignalAliases ? new Set(awaitingSignalAliases) : null;
+  const running: string[] = [];
+  const waiting: string[] = [];
+  for (const step of steps) {
+    const status = deriveEffectiveStatus(step.status, step.statusCounts).toLowerCase();
+    if (status === 'running') {
+      (parked?.has(step.alias) ? waiting : running).push(step.alias);
+    } else if (status === 'awaiting_signal') {
+      waiting.push(step.alias);
+    }
+  }
+  if (running.length > 0) return { aliases: running.sort(), waiting: false };
+  return { aliases: waiting.sort(), waiting: waiting.length > 0 };
+}
+
+/**
+ * Keeps the canvas camera framed on whatever is currently running, or waiting on the
+ * user when nothing runs.
  *
  * Mount this beside the CANVAS, never beside the run panel. That panel is one tab
  * among several, so a hook living there stops following as soon as the user opens
@@ -94,7 +131,8 @@ export function useRunCameraFollow({
   isPreviewOnly,
   isRunActive,
 }: RunCameraFollowInput): void {
-  const [enabled, setEnabled] = React.useState<boolean>(false);
+  // Starts from the default (on), so a canvas does not render one frame unfollowed.
+  const [enabled, setEnabled] = React.useState<boolean>(true);
 
   // Mount-time read: the store reaches for localStorage, absent while server rendering.
   React.useEffect(() => {
@@ -105,7 +143,7 @@ export function useRunCameraFollow({
   const active = enabled && !!workflowId && !isViewingHistoricalEpoch && !isPreviewOnly;
 
   // Re-run when THIS workflow's nodes change, so a run that began before the plan
-  // arrived still gets framed. Gated, so a user who never turns following on pays
+  // arrived still gets framed. Gated, so a user who turned following off pays
   // nothing: the store notifies on every publish of every canvas.
   const [nodesEpoch, setNodesEpoch] = React.useState(0);
   const knownNodesRef = React.useRef<unknown>(null);
@@ -133,23 +171,19 @@ export function useRunCameraFollow({
   }, [active, workflowId]);
 
   // Also gated: this runs on every step update, several times a second during a run.
-  const runningAliases = React.useMemo(() => {
-    if (!active || !steps) return [] as string[];
-    const parked = awaitingSignalAliases ? new Set(awaitingSignalAliases) : null;
-    return steps
-      .filter((step) => deriveEffectiveStatus(step.status, step.statusCounts).toLowerCase() === 'running')
-      .map((step) => step.alias)
-      .filter((alias) => !parked || !parked.has(alias))
-      // Sorted, so the same set arriving in a different order is the same set. Step
-      // order is not a contract and re-framing on a reshuffle moves the camera for no
-      // reason the viewer can see.
-      .sort();
+  const followed = React.useMemo(() => {
+    if (!active || !steps) return { aliases: [] as string[], waiting: false };
+    return selectFollowedAliases(steps, awaitingSignalAliases);
   }, [active, steps, awaitingSignalAliases]);
+  const runningAliases = followed.aliases;
+  const isWaitingTier = followed.waiting;
 
   // A primitive, so the effect below is not re-run by a new array identity. That is the
   // difference between a debounce and a starved timer. The aliases travel beside it
   // rather than being re-split out of it.
-  const runningKey = runningAliases.join('\u0000');
+  // The tier is part of the key: a parked node that the stream still calls running
+  // moves from one tier to the other without its alias changing.
+  const runningKey = (isWaitingTier ? 'waiting\u0001' : '') + runningAliases.join('\u0000');
 
   /** Which canvas the framed state below belongs to. */
   const framedWorkflowRef = React.useRef<string | undefined>(undefined);
@@ -167,9 +201,18 @@ export function useRunCameraFollow({
    * means the event can never carry a workflow id that has since changed.
    */
   const targetRef = React.useRef<
-    { key: string; nodeIds: string[]; shape: string; workflowId: string } | null
+    { key: string; nodeIds: string[]; shape: string; workflowId: string; waiting: boolean } | null
   >(null);
   const timerRef = React.useRef<number | null>(null);
+  /** Whether the armed timer is a waiting-tier settle rather than a running move. */
+  const armedWaitingRef = React.useRef(false);
+  /**
+   * Bumped when a move lands on a set that is no longer the current one, so the effect
+   * looks again. Needed because a running move armed before a gap keeps its aim through
+   * the gap (see below); if the gap turns out to be a real wait, nothing else would
+   * re-run the effect to frame the waiting node.
+   */
+  const [recheck, setRecheck] = React.useState(0);
   // -Infinity, not 0: with a monotonic clock that starts near zero, 0 would make the
   // very first move wait the full spacing floor although nothing precedes it.
   const lastMoveAtRef = React.useRef(Number.NEGATIVE_INFINITY);
@@ -189,7 +232,59 @@ export function useRunCameraFollow({
     }
     pendingKeyRef.current = null;
     targetRef.current = null;
+    armedWaitingRef.current = false;
   }, []);
+
+  const armMove = React.useCallback(
+    (target: { key: string; nodeIds: string[]; shape: string; workflowId: string; waiting: boolean }) => {
+      const sinceLast = performance.now() - lastMoveAtRef.current;
+      const paced = Math.max(FOLLOW_DEBOUNCE_MS, FOLLOW_MIN_GAP_MS - sinceLast);
+      const wait = target.waiting ? Math.max(FOLLOW_WAITING_SETTLE_MS, paced) : paced;
+      pendingKeyRef.current = target.key;
+      targetRef.current = target;
+      armedWaitingRef.current = target.waiting;
+      timerRef.current = window.setTimeout(() => {
+        const target = targetRef.current;
+        const key = pendingKeyRef.current;
+        timerRef.current = null;
+        pendingKeyRef.current = null;
+        targetRef.current = null;
+        armedWaitingRef.current = false;
+        // Judged HERE, not at arming. A move is abandoned only when the run is genuinely
+        // OVER: nothing running plus a finished run. Nothing running while the run is
+        // still going is the ordinary gap between two steps, and abandoning there is what
+        // froze the camera for entire runs of short steps. Nothing is stamped when a move
+        // is abandoned, so the next set is framed normally.
+        const nothingRunning = currentKeyRef.current === '';
+        const runOver = nothingRunning && !runActiveRef.current;
+        // A waiting node is only waiting while the run is: one left `awaiting_signal`
+        // in the stream of a cancelled or failed run is not where the run stands.
+        if (!target || key === null || runOver || (target.waiting && !runActiveRef.current)) return;
+        // The nodes it was aimed at may have left the canvas since (a plan reload, a
+        // relabel). Sending ids nothing can frame would move nothing AND stamp the set as
+        // framed, which silently prevents the retry once they come back.
+        const nodesNow = getCanvasNodes(target.workflowId);
+        const targetStillDrawn = target.nodeIds.every((id) => nodesNow.some((n) => n.id === id));
+        if (!targetStillDrawn) return;
+        framedWorkflowRef.current = target.workflowId;
+        framedKeyRef.current = key;
+        framedShapeRef.current = target.shape;
+        lastMoveAtRef.current = performance.now();
+        window.dispatchEvent(
+          new CustomEvent(WORKFLOW_FOLLOW_NODES_EVENT, {
+            // The id captured when the move was AIMED, never a later one: the ids were
+            // resolved against that canvas, so sending them under another workflow would
+            // point a different canvas at nodes that are not running there.
+            detail: { workflowId: target.workflowId, nodeIds: target.nodeIds },
+          }),
+        );
+        // Landed on a set that is no longer current (a running move that kept its aim
+        // through what turned out to be a real wait): look again.
+        if (currentKeyRef.current !== key) setRecheck((v) => v + 1);
+      }, wait);
+    },
+    [],
+  );
 
   // Only on unmount. Clearing on every re-run is precisely the starvation above.
   React.useEffect(() => clearPending, [clearPending]);
@@ -243,8 +338,15 @@ export function useRunCameraFollow({
       // screen, and cancelling on it starved exactly as the idle branch used to: a run
       // that alternates a drawn step with an undrawn one never moved the camera once.
       // Whether the armed move is still worth making is decided when it fires.
+      // One exception: something IS running, so an armed settle for WAITING nodes is
+      // no longer settled. Dropping it is safe (a waiting settle is re-armed by the
+      // next quiet spell) and is what keeps an undrawn step from sending the camera
+      // back to a waiting interface.
+      if (!isWaitingTier && armedWaitingRef.current) clearPending();
       return;
     }
+
+    const target = { key: runningKey, nodeIds, shape, workflowId, waiting: isWaitingTier };
 
     if (armedKey !== null) {
       if (armedKey === runningKey) {
@@ -255,8 +357,30 @@ export function useRunCameraFollow({
         // what was true when it was armed.
         const armed = targetRef.current;
         if (armed && (armed.shape !== shape || armed.workflowId !== workflowId)) {
-          targetRef.current = { key: runningKey, nodeIds, shape, workflowId };
+          targetRef.current = target;
         }
+        return;
+      }
+      if (isWaitingTier) {
+        if (!armedWaitingRef.current) {
+          // A RUNNING move is armed and, for now, only waiting nodes are left. That is
+          // the ordinary gap between two steps far more often than a real wait, so the
+          // move keeps its aim; if nothing starts, the recheck after it lands arms the
+          // settle for the waiting nodes. Retargeting here is what bounced the camera
+          // back to a non-blocking interface between every pair of steps.
+          return;
+        }
+        // Another waiting set replaces the armed one: retarget, clock kept.
+        pendingKeyRef.current = runningKey;
+        targetRef.current = target;
+        return;
+      }
+      if (armedWaitingRef.current) {
+        // A step started while a waiting settle was armed: the wait is over. Move at
+        // the ordinary pace instead of the settle delay. This happens once per wait,
+        // after which the running move is only ever retargeted, so it cannot starve.
+        clearPending();
+        armMove(target);
         return;
       }
       // No cancel here either, even when what is running is already on screen. This was
@@ -270,49 +394,13 @@ export function useRunCameraFollow({
       // shorter than the debounce never lets a timer mature, so the camera never moves
       // at all, for the whole run, silently.
       pendingKeyRef.current = runningKey;
-      targetRef.current = { key: runningKey, nodeIds, shape, workflowId };
+      targetRef.current = target;
       return;
     }
 
     if (alreadyFramed) return;
 
-    const sinceLast = performance.now() - lastMoveAtRef.current;
-    const wait = Math.max(FOLLOW_DEBOUNCE_MS, FOLLOW_MIN_GAP_MS - sinceLast);
-
-    pendingKeyRef.current = runningKey;
-    targetRef.current = { key: runningKey, nodeIds, shape, workflowId };
-    timerRef.current = window.setTimeout(() => {
-      const target = targetRef.current;
-      const key = pendingKeyRef.current;
-      timerRef.current = null;
-      pendingKeyRef.current = null;
-      targetRef.current = null;
-      // Judged HERE, not at arming. A move is abandoned only when the run is genuinely
-      // OVER: nothing running plus a finished run. Nothing running while the run is
-      // still going is the ordinary gap between two steps, and abandoning there is what
-      // froze the camera for entire runs of short steps. Nothing is stamped when a move
-      // is abandoned, so the next set is framed normally.
-      const nothingRunning = currentKeyRef.current === '';
-      const runOver = nothingRunning && !runActiveRef.current;
-      if (!target || key === null || runOver) return;
-      // The nodes it was aimed at may have left the canvas since (a plan reload, a
-      // relabel). Sending ids nothing can frame would move nothing AND stamp the set as
-      // framed, which silently prevents the retry once they come back.
-      const nodesNow = getCanvasNodes(target.workflowId);
-      const targetStillDrawn = target.nodeIds.every((id) => nodesNow.some((n) => n.id === id));
-      if (!targetStillDrawn) return;
-      framedWorkflowRef.current = target.workflowId;
-      framedKeyRef.current = key;
-      framedShapeRef.current = target.shape;
-      lastMoveAtRef.current = performance.now();
-      window.dispatchEvent(
-        new CustomEvent(WORKFLOW_FOLLOW_NODES_EVENT, {
-          // The id captured when the move was AIMED, never a later one: the ids were
-          // resolved against that canvas, so sending them under another workflow would
-          // point a different canvas at nodes that are not running there.
-          detail: { workflowId: target.workflowId, nodeIds: target.nodeIds },
-        }),
-      );
-    }, wait);
-  }, [active, runningKey, workflowId, nodesEpoch, clearPending]);
+    armMove(target);
+  }, [active, runningKey, isWaitingTier, workflowId, nodesEpoch, recheck, clearPending, armMove]);
 }
+

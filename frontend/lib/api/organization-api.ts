@@ -105,6 +105,21 @@ export interface OrganizationSamlConnection {
   lastError: string | null;
 }
 
+export interface OrganizationSsoDomain {
+  id: string;
+  domain: string;
+  verified: boolean;
+  verifiedAt: string | null;
+  lastCheckedAt: string | null;
+  /** DNS name the TXT record goes on (a dedicated label, never the apex). */
+  txtRecordName: string;
+  txtRecordValue: string;
+}
+
+export type SsoDiscovery =
+  | { found: false }
+  | { found: true; organizationId: string; idpHint: string };
+
 export interface OrganizationSamlUpsert {
   displayName: string;
   idpEntityId: string;
@@ -273,6 +288,27 @@ class OrganizationApiService {
 
   async deleteSamlConnection(orgId: string): Promise<void> {
     await apiClient.delete(`/organizations/${orgId}/saml-sso`);
+  }
+
+  async listSsoDomains(orgId: string): Promise<OrganizationSsoDomain[]> {
+    return await apiClient.get<OrganizationSsoDomain[]>(`/organizations/${orgId}/saml-sso/domains`);
+  }
+
+  async addSsoDomain(orgId: string, domain: string): Promise<OrganizationSsoDomain> {
+    return await apiClient.post<OrganizationSsoDomain>(`/organizations/${orgId}/saml-sso/domains`, { domain });
+  }
+
+  async verifySsoDomain(orgId: string, domainId: string): Promise<OrganizationSsoDomain> {
+    return await apiClient.post<OrganizationSsoDomain>(`/organizations/${orgId}/saml-sso/domains/${domainId}/verify`, {});
+  }
+
+  async deleteSsoDomain(orgId: string, domainId: string): Promise<void> {
+    await apiClient.delete(`/organizations/${orgId}/saml-sso/domains/${domainId}`);
+  }
+
+  /** "Sign in with SSO": anonymous by nature, the person is not signed in yet. */
+  async discoverSso(email: string): Promise<SsoDiscovery> {
+    return await apiClient.post<SsoDiscovery>('/auth/sso/discover', { email }, { skipAuth: true });
   }
 
   // ── Workspace avatar (OWNER/ADMIN) ─────────────────────────────

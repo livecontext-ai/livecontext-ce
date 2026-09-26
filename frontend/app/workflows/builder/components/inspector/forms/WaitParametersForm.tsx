@@ -1,11 +1,10 @@
 'use client';
 
 import * as React from 'react';
-import { Info } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { BuilderNodeData } from '../../../types';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 // Maximum wait duration: 10 minutes in milliseconds
 const MAX_DURATION_MS = 10 * 60 * 1000; // 600000ms
@@ -89,27 +88,17 @@ export function WaitParametersForm({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">Duration (milliseconds)</span>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-                >
-                  <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                  <p className="font-semibold text-slate-900 dark:text-slate-100">Wait Node</p>
-                  <p>Pauses workflow execution for a specified duration.</p>
-                  <ul className="list-disc list-inside space-y-1 text-xs">
-                    <li>Duration is specified in milliseconds</li>
-                    <li>Maximum wait time: 10 minutes (600,000ms)</li>
-                    <li>Use presets for common durations</li>
-                  </ul>
-                </div>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label="Duration (milliseconds)" size="sm" side="right" align="start">
+              <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                <p className="font-semibold text-slate-900 dark:text-slate-100">Wait Node</p>
+                <p>Pauses workflow execution for a specified duration.</p>
+                <ul className="list-disc list-inside space-y-1 text-xs">
+                  <li>Duration is specified in milliseconds</li>
+                  <li>Maximum wait time: 10 minutes (600,000ms)</li>
+                  <li>Use presets for common durations</li>
+                </ul>
+              </div>
+            </InfoPopover>
           </div>
           <span className="text-sm text-slate-500 dark:text-slate-400">Required</span>
         </div>

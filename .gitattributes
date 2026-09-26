@@ -6,6 +6,11 @@
 deploy/systemd/* text eol=lf
 deploy/k3s/** text eol=lf
 deploy/config/cron.d/* text eol=lf
+# prodwatch is packaged from the working tree and deployed to lc-websearch by
+# deploy-direct.sh. From a Windows checkout the sudoers file shipped with CRLF
+# and `visudo -c` refused every line ("syntax error" at the line end), which
+# aborted the deploy. The whole tree goes to Linux, so the whole tree is LF.
+deploy/prodwatch/** text eol=lf
 
 # CE export manifests are parsed by POSIX shell loops. Keep them LF so a
 # Windows checkout cannot append CR bytes to path/pattern entries.

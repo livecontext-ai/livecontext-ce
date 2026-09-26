@@ -207,7 +207,10 @@ function ConversationView({
               ))}
             </div>
           )}
-          {msg.contentStorageId && (
+          {/* The API now returns the full stored text; the label only marks an excerpt it could not read back. */}
+          {msg.contentStorageId && (msg.contentLength != null
+            ? (msg.content?.length ?? 0) < msg.contentLength
+            : (msg.content ?? '').endsWith('...[truncated]')) && (
             <span className="text-xs text-theme-muted italic mt-1 block">
               [{t('contentTruncated')}]
             </span>

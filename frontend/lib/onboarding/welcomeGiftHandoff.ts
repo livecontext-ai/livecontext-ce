@@ -5,8 +5,8 @@
  * opened on its credits row. That is the wrong screen for the moment: a reader
  * who has just signed up is not choosing a plan, they are finding out what the
  * one they already have grants. So the app now opens a small welcome-gift
- * modal instead, which states the Free plan's two monthly pots, the workflow
- * credits and the separate AI allowance (V494), and nothing else.
+ * modal instead, which states the Free plan's monthly credits and what they pay
+ * for, and nothing else.
  *
  * <p><b>Why a sessionStorage flag and not a query param.</b> Onboarding finishes
  * by navigating into the app, and the app tree is where the modal is mounted.

@@ -20,7 +20,7 @@ import { CatalogApiService } from './services/catalog-api.service';
 import { ChatApiService } from './services/chat-api.service';
 import { DeveloperApiService } from './services/developer-api.service';
 import { ToolsApiService } from './services/tools-api.service';
-import { UserApiService } from './services/user-api.service';
+import { UserApiService, type ProfileContextPayload } from './services/user-api.service';
 import { quotaApi } from './services/quota-api.service';
 
 // Re-export types for backward compatibility
@@ -165,6 +165,11 @@ export class UnifiedApiService {
   deleteAccount = () => this.userService.deleteAccount();
   getAccountDeletionStatus = () => this.userService.getAccountDeletionStatus();
   restoreAccount = () => this.userService.restoreAccount();
+  reportProfileContext = (payload: ProfileContextPayload) => this.userService.reportProfileContext(payload);
+  reportExplicitLocale = (locale: string) => this.userService.reportExplicitLocale(locale);
+  getMarketingConsent = () => this.userService.getMarketingConsent();
+  setMarketingConsent = (consent: boolean) => this.userService.setMarketingConsent(consent);
+  getMfaStatus = () => this.userService.getMfaStatus();
 
   // ==================== Tools API Methods ====================
 

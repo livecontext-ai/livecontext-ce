@@ -51,7 +51,7 @@ function PromptCompositionInfo({ promptName }: { promptName: string | null }) {
     switch (promptName) {
       case "VERSATILE_AGENT":
         return {
-          usedWhen: "General chat conversations (not linked to a workflow)",
+          usedWhen: "Orbi conversations (not linked to a workflow)",
           blocks: [
             { name: "Base intro", desc: "You are an autonomous assistant..." },
             { name: "CORE_RULES", desc: "Tool calling behavior, autonomy rules" },

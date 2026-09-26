@@ -4,6 +4,7 @@ import com.apimarketplace.agent.domain.CatalogBundleEntity;
 import com.apimarketplace.agent.domain.CatalogBundleSyncStatusEntity;
 import com.apimarketplace.agent.repository.CatalogBundleSyncStatusRepository;
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.common.plan.CeLinkRefusal;
 import com.apimarketplace.common.web.AdminRoleGuard;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -26,10 +27,11 @@ import java.util.Optional;
  * <p>CE download endpoints live under {@code /api/catalog-bundles/*} and are
  * GATED behind an active cloud link: the gateway validates the CE's cloud-link
  * bearer token (injecting {@code X-User-ID}) and the handler additionally checks
- * {@code authClient.userOwnsActiveCeLink} on the {@code X-LiveContext-Install-Id}
+ * {@code authClient.ceLinkAccess} on the {@code X-LiveContext-Install-Id}
  * header - mirroring the LLM relay ({@code CloudLlmRelayController}). Catalog
- * freshness is therefore a benefit of being cloud-linked: an UNLINKED install gets
- * 401/403, never the bundle. Only {@code /api/catalog-bundles/signing-key} stays
+ * freshness is therefore a benefit of being cloud-linked on a paid plan: an UNLINKED
+ * install gets 401/403 CE_LINK_NOT_ACTIVE, a link whose account is not on a paid plan
+ * gets 403 CLOUD_LINK_PLAN_REQUIRED, never the bundle. Only {@code /api/catalog-bundles/signing-key} stays
  * public (trust bootstrap of the Ed25519 public key). Trust is defence-in-depth:
  * the bearer gates WHO may fetch, the signature (verified offline against the
  * operator-pinned key) proves WHAT was fetched. A dedicated
@@ -81,11 +83,9 @@ public class CatalogBundleController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("error", "AUTHENTICATION_REQUIRED"));
         }
-        if (!authClient.userOwnsActiveCeLink(cloudUserId, installId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("error", "CE_LINK_NOT_ACTIVE"));
-        }
-        return null;
+        // Linked AND paid (shared refusal bodies): a suspended link answers
+        // CLOUD_LINK_PLAN_REQUIRED, an unlinked one CE_LINK_NOT_ACTIVE.
+        return CeLinkRefusal.response(authClient.ceLinkAccess(cloudUserId, installId));
     }
 
     /** Admin: build a new bundle (is_active=false) from the current catalog. */

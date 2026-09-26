@@ -27,6 +27,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -127,7 +128,38 @@ class ConversationAgentServiceExecuteSyncErrorTest {
                 eq("FAILED"), eq("Agent execution failed: no response from agent transport"),
                 eq("scheduled prompt"),
                 eq("[Error] Agent execution failed: no response from agent transport"),
-                eq("claude-code"), eq("claude-opus-4-7"));
+                eq("claude-code"), eq("claude-opus-4-7"), anyString());
+    }
+
+    /**
+     * Prod 2026-09-23: a task locked itself to one id and its run was recorded under another, so
+     * the id the task showed led nowhere. The caller's id is the run's id on every path: the
+     * context (and so the success record and the MCP credentials) and the failure record.
+     */
+    @Test
+    @DisplayName("a caller-supplied execution id is the run's id, on the failure record too")
+    void callerExecutionIdIsTheRunId() {
+        ChatRequest request = bridgeRequest("agent-1", "TASK", "user-1", "org-1");
+        String lockId = java.util.UUID.randomUUID().toString();
+        request.setExecutionId(lockId);
+        java.util.Map<String, Object> credentials = new java.util.HashMap<>();
+        credentials.put("__agentId__", "agent-1");
+        AgentLoopContext context = AgentLoopContext.builder()
+            .provider("claude-code").model("claude-opus-4-7")
+            .userPrompt("task prompt").systemPrompt("system")
+            .conversationHistory(Collections.emptyList()).tools(Collections.emptyList())
+            .credentials(credentials)
+            .tenantId("user-1").build();
+        when(contextBuilder.build(any(ChatRequest.class), anyString(), anyString(), any())).thenReturn(context);
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class))).thenReturn(null);
+
+        service.executeSync(request, "conv-1");
+
+        verify(contextBuilder).build(any(ChatRequest.class), eq("conv-1"), anyString(), eq(lockId));
+        verify(observabilityClient).recordFailureAsync(
+                eq("user-1"), eq("org-1"), eq("agent-1"), eq("TASK"), eq("conv-1"),
+                eq("FAILED"), anyString(), anyString(), anyString(),
+                eq("claude-code"), eq("claude-opus-4-7"), eq(lockId));
     }
 
     @Test
@@ -169,7 +201,9 @@ class ConversationAgentServiceExecuteSyncErrorTest {
                 eq("user-1"), eq("org-1"), eq("agent-2"), eq("WEBHOOK"), eq("conv-2"),
                 eq("FAILED"), eq("agent-service unreachable"),
                 eq("prompt body"), eq("[Error] agent-service unreachable"),
-                eq("deepseek"), eq("deepseek-chat"));
+                eq("deepseek"), eq("deepseek-chat"),
+                // Never the run id here: the run may already be recorded under it.
+                isNull());
     }
 
     private ChatRequest bridgeRequest(String agentId, String source, String userId, String orgId) {

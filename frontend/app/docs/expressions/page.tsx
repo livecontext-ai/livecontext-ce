@@ -5,7 +5,7 @@ import { DocsHero, DocsProse, DocsTable, Callout, CardGrid, Card, Steps, Step, C
 export const metadata = docsMetadata({
   title: 'Expressions & variables',
   description:
-    'The {{ }} template syntax used across workflows and interfaces: the six output-resolving prefixes, label normalization, nested paths and array indexing, ~44 built-in functions, SpEL operators and collection selection/projection, split/loop/find item aliases, $vars workflow variables, and the code-node double-result gotcha.',
+    'The {{ }} template syntax used in workflows and interfaces: node references, label normalization, paths, every built-in function, operators, split item aliases, and workspace variables.',
   path: '/docs/expressions',
 });
 
@@ -15,364 +15,446 @@ export default function ExpressionsPage() {
       <DocsHero
         eyebrow="Reference"
         title="Expressions & variables"
-        lead="Workflows and interfaces share one template syntax: {{ ... }}. Inside the braces you reference another node's output, navigate nested paths and array indexes, call built-in functions, and use the full set of comparison, logical, and collection operators."
+        lead="Workflows and interfaces share one template syntax: {{ ... }}. Inside the braces you reference another node's output, navigate nested paths and array indexes, call built-in functions, use operators, and read workspace variables."
       />
 
       <DocsProse>
         <h2>The basic pattern</h2>
+        <p>Every node&apos;s output is reachable with the same shape:</p>
+        <CodeBlock title="Reference pattern">{`{{prefix:label.output.field}}`}</CodeBlock>
         <p>
-          Every node&apos;s output is reachable with the same shape:
-        </p>
-        <CodeBlock language="text">{`{{prefix:label.output.field}}`}</CodeBlock>
-        <p>
-          <code>prefix</code> identifies the kind of node, <code>label</code> is the node&apos;s name (normalized,
-          see below), and <code>.output.</code> is the segment that leads into what the node produced. This
-          form is the recommended and unambiguous one. Writing a reference without <code>.output.</code> (for
-          example <code>{'{{trigger:start.items}}'}</code> or <code>{'{{agent:a.response}}'}</code>) still
-          resolves, because the resolver transparently unwraps the missing <code>output</code> wrapper, but{' '}
-          <code>.output.</code> is the form to write and to teach.
+          <code>prefix</code> identifies the kind of node, <code>label</code> is the node&apos;s name
+          (normalized, see below), and <code>.output.</code> leads into what the node produced. A reference
+          without <code>.output.</code> (for example <code>{'{{trigger:start.items}}'}</code>) still resolves
+          for backward compatibility, but <code>.output.</code> is the form to write.
         </p>
 
-        <h2>Six output-resolving prefixes</h2>
+        <h2>Node prefixes</h2>
         <p>
-          A node&apos;s label always carries one of seven prefixes. Six of them resolve to real data; the
-          seventh, <code>note:</code>, is a valid label prefix that always resolves to <code>null</code> (a
-          note produces no output).
+          A node key carries one of seven prefixes. Six resolve to data; <code>note:</code> always resolves to{' '}
+          <code>null</code> because a note produces no output.
         </p>
         <DocsTable
+          caption="Node prefixes in expressions"
+          rowHeaders
           head={['Prefix', 'Resolves to', 'Node types']}
           rows={[
-            [<code key="p">trigger:</code>, 'Trigger output', 'Webhook, chat, schedule, form, datasource, manual, and workflow triggers'],
-            [<code key="p">mcp:</code>, 'Tool / API step output', 'Tool and API-call action nodes'],
+            [<code key="p">trigger:</code>, 'Trigger output', 'Webhook, chat, schedule, form, table, manual, workflow, and error triggers'],
+            [<code key="p">mcp:</code>, 'Integration step output', 'Catalog API and tool steps'],
             [<code key="p">agent:</code>, 'AI step output', 'Agent, Browser Agent, Guardrail, Classify, Generate'],
-            [<code key="p">core:</code>, 'Control-flow node output', 'Decision, Switch, Loop, Split, Merge, Transform, Wait, Fork, and the rest of the core nodes'],
-            [<code key="p">table:</code>, 'CRUD operation output', 'Table CRUD nodes (find, read, insert, update, delete rows)'],
+            [<code key="p">core:</code>, 'Core node output', 'If / else, Switch, While, Split, Merge, Transform, Wait, Fork, Code, and the other core nodes'],
+            [<code key="p">table:</code>, 'Table operation output', 'Find, get, create, update, and delete rows'],
             [<code key="p">interface:</code>, 'Interface data', 'Action data and user input captured by an interface node'],
-            [<code key="p">note:</code>, <em key="n">always null</em>, 'Note nodes (documentation only, no execution)'],
+            [<code key="p">note:</code>, <em key="n">always null</em>, 'Notes (documentation only, never executed)'],
           ]}
         />
-        <Callout variant="info">
-          These seven prefixes are the single source of truth used to build every node key. See the{' '}
-          <a href="/nodes">Node reference</a> for what each node type actually puts under <code>.output.</code>.
-        </Callout>
+        <p>
+          See the <a href="/nodes">Node reference</a> for what each node type puts under <code>.output.</code>.
+        </p>
 
         <h2>Label normalization</h2>
         <p>
-          A node&apos;s human-readable label is turned into the key used in <code>{'{{prefix:label...}}'}</code>{' '}
-          by one canonical rule, applied in order:
+          A node&apos;s label is turned into the key used in <code>{'{{prefix:label...}}'}</code> by one rule,
+          applied in order:
         </p>
         <Steps>
-          <Step n={1} title="Trim">Leading/trailing whitespace is removed.</Step>
-          <Step n={2} title="Transliterate accents">Accented characters are converted to their ASCII base form.</Step>
+          <Step n={1} title="Trim">Leading and trailing whitespace is removed.</Step>
+          <Step n={2} title="Transliterate accents">Accented characters become their ASCII base letter.</Step>
           <Step n={3} title="Lowercase">The whole string is lowercased.</Step>
-          <Step n={4} title="Replace non-alphanumerics">Every character that isn&apos;t <code>a-z0-9</code> becomes an underscore.</Step>
-          <Step n={5} title="Collapse & trim underscores">Repeated underscores collapse to one; leading/trailing underscores are stripped.</Step>
+          <Step n={4} title="Replace other characters">Every character that isn&apos;t <code>a-z0-9</code> becomes an underscore.</Step>
+          <Step n={5} title="Collapse and trim underscores">Repeated underscores collapse to one; leading and trailing underscores are removed.</Step>
         </Steps>
         <DocsTable
+          caption="Label normalization examples"
+          rowHeaders
           head={['Label', 'Normalized key']}
           rows={[
             ['My Label', <code key="a">my_label</code>],
             ['If / else', <code key="a">if_else</code>],
             ['Step-123', <code key="a">step_123</code>],
-            ['Entree IDs', <code key="a">entree_ids</code>],
+            ['Entrée IDs', <code key="a">entree_ids</code>],
           ]}
         />
         <p>
-          Applied to a full reference: <code>coreKey(&quot;Check Status&quot;)</code> becomes{' '}
-          <code>core:check_status</code>, <code>mcpKey(&quot;API Call&quot;)</code> becomes{' '}
-          <code>mcp:api_call</code>, <code>triggerKey(&quot;My Webhook&quot;)</code> becomes{' '}
-          <code>trigger:my_webhook</code>. If you write a reference using the human-readable label with
-          spaces, for example <code>{'{{mcp:Fetch Profile.output.data}}'}</code>, it is rewritten to the
-          normalized key <code>{'{{mcp:fetch_profile.output.data}}'}</code> before evaluation, and if the
-          normalized key doesn&apos;t match anything, the resolver retries with the raw label as a fallback.
+          So a Core node labelled &ldquo;Check Status&rdquo; is <code>core:check_status</code>, and an
+          integration step labelled &ldquo;API Call&rdquo; is <code>mcp:api_call</code>. A reference written
+          with the human-readable label, such as <code>{'{{mcp:Fetch Profile.output.data}}'}</code>, is
+          rewritten to <code>{'{{mcp:fetch_profile.output.data}}'}</code> before evaluation.
         </p>
 
-        <h2>Nested paths & array indexing</h2>
-        <p>A reference can walk into nested objects and index into lists, and both combine in a single token:</p>
-        <CodeBlock language="text">{`{{mcp:fetch.output.user.name}}
+        <h2>Nested paths and array indexing</h2>
+        <CodeBlock title="Paths">{`{{mcp:fetch.output.user.name}}
 {{mcp:fetch.output.items[0]}}
 {{core:split.output.edges[0].node.text}}`}</CodeBlock>
         <p>
-          Dotted paths walk nested maps (<code>user.name</code>); <code>key[N]</code> indexes into a list
-          after resolving the key. An out-of-range index, or indexing something that isn&apos;t a list,
-          resolves to <code>null</code>. SpEL-native collection access also works directly inside{' '}
-          <code>{'{{ }}'}</code>: a list index <code>{'items[0].name'}</code> or a map key{' '}
-          <code>{"['key']"}</code>.
+          Dotted paths walk nested objects; <code>key[N]</code> indexes into a list. An out-of-range index, or
+          indexing something that isn&apos;t a list, resolves to <code>null</code>. <code>.length</code> works
+          as a property on lists and objects, and on a list of objects <code>list.field</code> returns the
+          list of that field&apos;s values.
         </p>
 
-        <h2>Split / loop / find item aliases</h2>
-        <p>
-          Inside a Split body, two short forms give you the current item and its position without needing
-          the node&apos;s label:
-        </p>
+        <h2>Split item aliases</h2>
+        <p>Inside a Split body, short forms give you the current item and its position:</p>
         <DocsTable
-          head={['Short form', 'Canonical unified form', 'Meaning']}
+          caption="Split item aliases"
+          rowHeaders
+          head={['Short form', 'Full form', 'Meaning']}
           rows={[
             [<code key="s">{'{{item}}'}</code>, <code key="s">{'{{core:split.output.current_item}}'}</code>, 'The current item'],
-            [<code key="s">{'{{item.field}}'}</code>, <code key="s">{'{{core:split.output.current_item.field}}'}</code>, 'A field on the current item'],
+            [<code key="s">{'{{item.field}}'}</code>, <code key="s">{'{{core:split.output.current_item.field}}'}</code>, 'A field of the current item'],
             [<code key="s">{'{{index}}'}</code>, <code key="s">{'{{core:split.output.current_index}}'}</code>, '0-based position in the list'],
-            ['-', <code key="s">{'{{core:split.output.items}}'}</code>, 'The full list being split'],
+            ['none', <code key="s">{'{{core:split.output.items}}'}</code>, 'The full list being split (also readable after the split)'],
           ]}
         />
         <p>
-          <code>current_item</code> and <code>current_index</code> are aliases for the same thing:{' '}
-          <code>{'{{current_item}}'}</code> and <code>{'{{current_item.field}}'}</code> both resolve
-          identically to <code>{'{{item}}'}</code> / <code>{'{{item.field}}'}</code>.
-        </p>
-        <p>
-          A Loop node exposes its 0-based counter as <code>{'{{core:loop.output.iteration}}'}</code> (0 on first entry). Two
-          label-less metadata shortcuts also work anywhere inside <code>core:</code>:{' '}
-          <code>{'{{core:index}}'}</code> (current item index) and <code>{'{{core:iteration}}'}</code> (current
-          iteration). Use the colon form: the equivalent dotted form (<code>{'{{core.index}}'}</code>) is not
-          routed to this shortcut and resolves to <code>null</code>.
-        </p>
-        <p>
-          A CRUD <strong>Find</strong> operation spawns per matched row the same way: the current row is{' '}
-          <code>{'{{table:find.output.current_item.field}}'}</code>, its index is{' '}
-          <code>{'{{table:find.output.current_index}}'}</code>. See{' '}
-          <a href="/tables">Tables &amp; data</a> for the CRUD node set.
+          <code>item</code> is an alias of <code>current_item</code>, and <code>index</code> is an alias of{' '}
+          <code>current_index</code>: <code>{'{{current_item.field}}'}</code> and{' '}
+          <code>{'{{item.field}}'}</code> resolve identically. These values exist only inside the split body.
+          A While node exposes its 0-based pass counter as <code>{'{{core:loop.output.iteration}}'}</code>.
         </p>
         <Callout variant="info">
-          Legacy short forms without <code>.output.</code>, such as <code>{'{{core:label.item}}'}</code> or{' '}
-          <code>{'{{core:label.current_item}}'}</code>, still resolve through a backwards-compatibility path,
-          but the forms above are the ones to write.
+          A table <strong>Find Rows</strong> node does not spawn per row: it returns the matching rows as{' '}
+          <code>items</code> (with <code>item_count</code>). To process each row, add a Split on{' '}
+          <code>{'{{table:find_rows.output.items}}'}</code> and use <code>{'{{item}}'}</code> in its body. See{' '}
+          <a href="/tables">Tables &amp; data</a>.
+        </Callout>
+
+        <h2>Workspace variables ($vars)</h2>
+        <p>
+          Variables are reusable values (URLs, IDs, settings) shared by every workflow of a workspace. You
+          manage them in <strong>Settings &gt; Credentials &amp; Variables</strong>, on the{' '}
+          <strong>Variables</strong> tab, and reference them with <code>{'{{$vars.name}}'}</code> or the
+          alias <code>{'{{vars:name}}'}</code>.
+        </p>
+        <Steps>
+          <Step n={1} title="Open the Variables tab">
+            Go to <strong>Settings &gt; Credentials &amp; Variables</strong> and select <strong>Variables</strong>.
+          </Step>
+          <Step n={2} title="Add a variable">
+            Click <strong>Add variable</strong>. Enter a <strong>Name</strong> (letters, digits, and underscores,
+            not starting with a digit, at most 64 characters), pick a <strong>Type</strong> (Text, Number,
+            Boolean, or JSON), and enter the <strong>Value</strong>.
+          </Step>
+          <Step n={3} title="Reference it">
+            Use <strong>Copy reference</strong> in the list, or type <code>{'{{$vars.name}}'}</code> in any node
+            field.
+          </Step>
+        </Steps>
+        <CodeBlock title="Variable references">{`{{$vars.apiUrl}}
+{{vars:config}}
+{{$vars.config.api.url}}`}</CodeBlock>
+        <p>
+          Variables belong to the workspace you are working in (your personal space or an organization), so
+          every workflow of that workspace can read them. A JSON variable can be navigated like any other
+          object. Values are stored encrypted and fetched once when a run starts; a run paused for more than
+          10 minutes may see updated values when it resumes. Deleting a variable makes references to it
+          resolve as empty. Your plan may limit how many variables you can create.
+        </p>
+        <Callout variant="warn" title="Secret variables">
+          Check <strong>Hide value (secret)</strong> to hide a value: it is stored encrypted and never
+          displayed again, neither in Settings nor to agents. To change it, enter a new value. Workflows still
+          use it when they run, so its resolved value can appear in run outputs: do not route a secret into a
+          field whose output others can read.
+        </Callout>
+
+        <h2>Whole value vs text</h2>
+        <p>
+          When a field&apos;s whole value is exactly one <code>{'{{ ... }}'}</code> block, the result keeps
+          its <strong>type</strong>: a number stays a number, a list stays a list, an object stays an object.
+          This is the only way to pass a real object or list into a field that expects one.
+        </p>
+        <p>
+          When the expression is embedded in text, or there are several blocks, each block is resolved and
+          the result is a <strong>string</strong>. In that case a resolved object or list is written as JSON (
+          <code>{'{"a":1}'}</code>), and a block that resolves to <code>null</code> becomes an empty string. In a
+          condition, a <code>null</code> result counts as false.
+        </p>
+        <CodeBlock title="Typed vs text">{`{{mcp:fetch.output.items}}              → a list
+Found {{size(mcp:fetch.output.items)}} items  → a string, "Found 3 items"`}</CodeBlock>
+
+        <Callout variant="warn" title="Errors resolve to empty, silently">
+          If an expression cannot be evaluated (a syntax error, a wrong number of function arguments, a
+          comparison between incompatible types), it resolves to <code>null</code>, which is an empty string
+          in text and false in a condition. No error is shown. The one exception is <code>json()</code> /{' '}
+          <code>fromjson()</code> on malformed JSON, which reports a parse error in the inspector. When a field
+          comes out empty, check the expression before the data.
         </Callout>
 
         <h2>Built-in functions</h2>
         <p>
-          Around <strong>44 built-in functions</strong> are available as bare calls inside{' '}
-          <code>{'{{ }}'}</code>, for example <code>{'{{uppercase(mcp:fetch.output.name)}}'}</code>. Names are
-          lowercase and chosen not to collide with common field names.
+          46 function names are available as plain calls inside <code>{'{{ }}'}</code>, for example{' '}
+          <code>{'{{uppercase(mcp:fetch.output.name)}}'}</code>. Two are aliases (<code>len</code> of{' '}
+          <code>size</code>, <code>fromjson</code> of <code>json</code>). Names are case-insensitive (
+          <code>formatDate</code> and <code>formatdate</code> are the same function). <code>matches</code> is not among them: it is an
+          operator (see below).
         </p>
+        <Callout variant="warn" title="Pass every argument">
+          Each function takes exactly the arguments shown. Leaving one out makes the expression fail and
+          resolve to empty. Where a default is listed, pass <code>null</code> to get it, for example{' '}
+          <code>{'truncate(x, 20, null)'}</code>.
+        </Callout>
 
-        <h3>Type casting</h3>
+        <h3>Type conversion</h3>
         <DocsTable
-          head={['Function', 'Behavior']}
+          caption="Type conversion functions"
+          rowHeaders
+          head={['Function', 'Behavior', 'Example']}
           rows={[
-            [<code key="f">int(val)</code>, 'Casts to integer. Null-safe: returns 0 on null or unparseable input.'],
-            [<code key="f">long(val)</code>, 'Casts to long. Same null-safety as int.'],
-            [<code key="f">double(val)</code>, 'Casts to double. Same null-safety as int.'],
-            [<code key="f">float(val)</code>, 'Casts to float. Same null-safety as int.'],
-            [<code key="f">string(val)</code>, 'Casts to string. Returns "" on null.'],
-            [<code key="f">bool(val)</code>, 'Casts to boolean. Treats true/1/yes/on as true; returns false on null.'],
+            [<code key="f">int(value)</code>, 'Converts to a whole number; a decimal string is truncated. 0 for null or unparseable input.', <code key="e">int(&apos;42.9&apos;) → 42</code>],
+            [<code key="f">long(value)</code>, 'Like int, for large whole numbers.', <code key="e">long(&apos;9000000000&apos;) → 9000000000</code>],
+            [<code key="f">double(value)</code>, 'Converts to a decimal number. 0.0 for null or unparseable input.', <code key="e">double(&apos;3.5&apos;) → 3.5</code>],
+            [<code key="f">float(value)</code>, 'Like double, lower precision.', <code key="e">float(&apos;3.5&apos;) → 3.5</code>],
+            [<code key="f">string(value)</code>, 'Converts to text. Empty string for null.', <code key="e">string(42) → &apos;42&apos;</code>],
+            [<code key="f">bool(value)</code>, 'true for true, a non-zero number, or the text true, 1, yes, on (any case). false for null.', <code key="e">bool(&apos;yes&apos;) → true</code>],
           ]}
         />
 
-        <h3>Utility</h3>
+        <h3>Checks and fallbacks</h3>
         <DocsTable
-          head={['Function', 'Behavior']}
+          caption="Check and fallback functions"
+          rowHeaders
+          head={['Function', 'Behavior', 'Example']}
           rows={[
-            [<code key="f">size(val)</code>, 'Length of a string, collection, map, or array.'],
-            [<code key="f">len(val)</code>, 'Alias of size().'],
-            [<code key="f">typeof(val)</code>, 'Returns one of: null, string, int, double, bool, list, map, array.'],
-            [<code key="f">default(val, fallback)</code>, 'fallback when val is null, an empty string, an empty collection, or an empty map.'],
-            [<code key="f">coalesce(a, b, ...)</code>, 'First argument that is non-null and non-empty-string.'],
-            [<code key="f">ifempty(val, fallback)</code>, 'fallback only when val is null or an empty string (unlike default(), does not treat empty collections/maps as empty).'],
-            [<code key="f">isnull(val)</code>, 'True when val is null.'],
-            [<code key="f">isempty(val)</code>, 'True when val is null or empty.'],
+            [<code key="f">size(value)</code>, 'Length of a text, list, object, or array. 0 for null and for anything else (numbers, booleans).', <code key="e">size(&apos;abc&apos;) → 3</code>],
+            [<code key="f">len(value)</code>, 'Alias of size.', <code key="e">len(mcp:fetch.output.items)</code>],
+            [<code key="f">length(value)</code>, 'Like size, but a number or boolean is measured as text.', <code key="e">length(12345) → 5</code>],
+            [<code key="f">typeof(value)</code>, 'One of null, string, int, double, bool, list, map, array.', <code key="e">typeof(3.5) → &apos;double&apos;</code>],
+            [<code key="f">default(value, fallback)</code>, 'fallback when value is null, an empty string, an empty list, or an empty object.', <code key="e">default(trigger:form.output.form_data.city, &apos;Paris&apos;)</code>],
+            [<code key="f">ifempty(value, fallback)</code>, 'fallback only when value is null or an empty string (an empty list or object is kept).', <code key="e">ifempty(x, &apos;n/a&apos;)</code>],
+            [<code key="f">coalesce(a, b, ...)</code>, 'Any number of arguments. Returns the first one that is not null and not an empty string (an empty list or object counts as a value).', <code key="e">coalesce(core:poll_2.output.data.url, core:poll_1.output.data.url)</code>],
+            [<code key="f">isnull(value)</code>, 'true when value is null.', <code key="e">isnull(x)</code>],
+            [<code key="f">isempty(value)</code>, 'true when value is null, an empty string, list, object, or array.', <code key="e">isempty(mcp:fetch.output.items)</code>],
           ]}
         />
+        <p>
+          <code>coalesce</code> is the tool for polling: read the value from every attempt, newest first, and
+          you get the latest one that is not empty.
+        </p>
 
         <h3>Math</h3>
         <DocsTable
-          head={['Function', 'Behavior']}
+          caption="Math functions"
+          rowHeaders
+          head={['Function', 'Behavior', 'Example']}
           rows={[
-            [<code key="f">abs(val)</code>, 'Absolute value.'],
-            [<code key="f">round(val, decimals)</code>, 'Rounds to N decimals; decimals ≤ 0 rounds to the nearest whole number.'],
-            [<code key="f">floor(val)</code>, 'Rounds down.'],
-            [<code key="f">ceil(val)</code>, 'Rounds up.'],
-            [<code key="f">min(a, b)</code>, 'Smaller of two values.'],
-            [<code key="f">max(a, b)</code>, 'Larger of two values.'],
-            [<code key="f">pow(base, exp)</code>, 'Exponentiation.'],
-            [<code key="f">sqrt(val)</code>, 'Square root.'],
+            [<code key="f">abs(value)</code>, 'Absolute value, as a decimal number.', <code key="e">abs(-3) → 3.0</code>],
+            [<code key="f">round(value, decimals)</code>, 'Rounds to decimals places; decimals 0 or less returns a whole number.', <code key="e">round(19.956, 2) → 19.96</code>],
+            [<code key="f">floor(value)</code>, 'Rounds down to a whole number.', <code key="e">floor(2.7) → 2</code>],
+            [<code key="f">ceil(value)</code>, 'Rounds up to a whole number.', <code key="e">ceil(2.1) → 3</code>],
+            [<code key="f">min(a, b)</code>, 'Smaller of two values, as a decimal number.', <code key="e">min(1, 2) → 1.0</code>],
+            [<code key="f">max(a, b)</code>, 'Larger of two values, as a decimal number.', <code key="e">max(1, 2) → 2.0</code>],
+            [<code key="f">pow(base, exponent)</code>, 'base raised to exponent, as a decimal number.', <code key="e">pow(2, 10) → 1024.0</code>],
+            [<code key="f">sqrt(value)</code>, 'Square root, as a decimal number.', <code key="e">sqrt(9) → 3.0</code>],
           ]}
         />
 
-        <h3>String</h3>
+        <h3>Text</h3>
         <DocsTable
-          head={['Function', 'Behavior']}
+          caption="Text functions"
+          rowHeaders
+          head={['Function', 'Behavior', 'Example']}
           rows={[
-            [<code key="f">uppercase(val)</code>, 'Upper-cases a string.'],
-            [<code key="f">lowercase(val)</code>, 'Lower-cases a string.'],
-            [<code key="f">capitalize(val)</code>, 'Capitalizes the first letter.'],
-            [<code key="f">trim(val)</code>, 'Strips leading/trailing whitespace.'],
-            [<code key="f">truncate(val, max, suffix)</code>, 'Cuts a string to max length; suffix defaults to "...".'],
-            [<code key="f">padleft(val, len, pad)</code>, 'Pads on the left to len characters.'],
-            [<code key="f">padright(val, len, pad)</code>, 'Pads on the right to len characters.'],
-            [<code key="f">replace(val, search, repl)</code>, 'Replaces all occurrences of search with repl.'],
-            [<code key="f">substring(val, start, end)</code>, 'Extracts a substring.'],
-            [<code key="f">split(val, delim)</code>, 'Splits into a list; delim defaults to ",".'],
-            [<code key="f">join(coll, delim)</code>, 'Joins a collection into a string.'],
-            [<code key="f">startswith(val, prefix)</code>, 'True when val starts with prefix.'],
-            [<code key="f">endswith(val, suffix)</code>, 'True when val ends with suffix.'],
-            [<code key="f">contains(val, needle)</code>, 'Works on both strings and collections.'],
-            [<code key="f">matches(val, regex)</code>, 'True when val matches a regular expression.'],
-            [<code key="f">length(val)</code>, 'A universal length function, same as size().'],
+            [<code key="f">uppercase(value)</code>, 'Upper-cases the text. Empty string for null.', <code key="e">uppercase(&apos;ab&apos;) → &apos;AB&apos;</code>],
+            [<code key="f">lowercase(value)</code>, 'Lower-cases the text. Empty string for null.', <code key="e">lowercase(&apos;AB&apos;) → &apos;ab&apos;</code>],
+            [<code key="f">capitalize(value)</code>, 'Upper-cases the first character and lower-cases all the rest.', <code key="e">capitalize(&apos;hELLO wORLD&apos;) → &apos;Hello world&apos;</code>],
+            [<code key="f">trim(value)</code>, 'Removes leading and trailing whitespace.', <code key="e">trim(&apos;  a  &apos;) → &apos;a&apos;</code>],
+            [<code key="f">truncate(value, max, suffix)</code>, 'Cuts the text to max characters, suffix included; suffix is ... when null.', <code key="e">truncate(&apos;Hello world&apos;, 8, null) → &apos;Hello...&apos;</code>],
+            [<code key="f">padleft(value, length, pad)</code>, 'Pads on the left to length characters; pad is a space when null.', <code key="e">padleft(7, 3, &apos;0&apos;) → &apos;007&apos;</code>],
+            [<code key="f">padright(value, length, pad)</code>, 'Pads on the right to length characters; pad is a space when null.', <code key="e">padright(&apos;ab&apos;, 4, &apos;.&apos;) → &apos;ab..&apos;</code>],
+            [<code key="f">replace(value, search, replacement)</code>, 'Replaces every occurrence of search (plain text, not a pattern).', <code key="e">replace(&apos;a-b-c&apos;, &apos;-&apos;, &apos;/&apos;) → &apos;a/b/c&apos;</code>],
+            [<code key="f">substring(value, start, end)</code>, 'Characters from start (inclusive) to end (exclusive); out-of-range indexes are clamped; end null means the end of the text.', <code key="e">substring(&apos;abcdef&apos;, 1, 3) → &apos;bc&apos;</code>],
+            [<code key="f">split(value, delimiter)</code>, 'Splits into a list on a plain-text delimiter; , when null.', <code key="e">split(&apos;a,b,c&apos;, &apos;,&apos;) → [a, b, c]</code>],
+            [<code key="f">join(list, delimiter)</code>, 'Joins a list into text; , when null.', <code key="e">join(mcp:fetch.output.tags, &apos;, &apos;)</code>],
+            [<code key="f">startswith(value, prefix)</code>, 'true when the text starts with prefix.', <code key="e">startswith(&apos;invoice-12&apos;, &apos;invoice&apos;) → true</code>],
+            [<code key="f">endswith(value, suffix)</code>, 'true when the text ends with suffix.', <code key="e">endswith(&apos;report.pdf&apos;, &apos;.pdf&apos;) → true</code>],
+            [<code key="f">contains(value, search)</code>, 'On a list: true when it holds that exact element. Otherwise: true when the text contains search.', <code key="e">contains(&apos;hello&apos;, &apos;ell&apos;) → true</code>],
           ]}
         />
-
-        <h3>Date &amp; format</h3>
-        <DocsTable
-          head={['Function', 'Behavior']}
-          rows={[
-            [<code key="f">formatdate(value, pattern)</code>, 'Formats a date/epoch-millis in UTC; pattern defaults to yyyy-MM-dd. Uppercase letters DD/YYYY/YY in a pattern are normalized to dd/yyyy/yy.'],
-            [<code key="f">formatnumber(val, decimals)</code>, 'Formats a number with a fixed decimal count; decimals defaults to 2.'],
-            [<code key="f">formatcurrency(val, code)</code>, 'Formats a number as currency; code defaults to EUR.'],
-            [<code key="f">now()</code>, 'Current UTC datetime as ISO text, second precision.'],
-            [<code key="f">today()</code>, 'Current UTC date as ISO text.'],
-          ]}
-        />
-
-        <h3>JSON</h3>
-        <p>
-          <code>json(val)</code> parses a JSON string into a typed map/list/number/boolean/string. It is
-          idempotent: an already-typed map, collection, array, number, or boolean is returned unchanged;{' '}
-          <code>null</code> stays <code>null</code>; a blank string becomes <code>null</code>.{' '}
-          <code>fromjson</code> is a straight alias of <code>json</code>. <code>tojson(val)</code> serializes
-          a map/list/scalar to a compact JSON string, the inverse of <code>json()</code>, so{' '}
-          <code>json(tojson(val))</code> round-trips (a <code>null</code> input serializes to the literal
-          string <code>&quot;null&quot;</code>).
-        </p>
-        <CodeBlock language="text">{`{{json(mcp:fetch.output.body)}}
-{{json('{"responseModalities":["IMAGE"]}')}}`}</CodeBlock>
-        <p>
-          A typical use is wrapping a raw string field so a tool parameter that expects an object gets typed
-          data instead of a literal string. Parsing has hard caps: 256 KB for a single string, 64 levels of
-          nesting, 2 MB for the whole document. On a malformed non-blank string, <code>json()</code> /{' '}
-          <code>fromjson()</code> raise a parse error shown in the inspector rather than silently returning
-          garbage.
-        </p>
-        <Callout variant="info">
-          46 function names are registered, but two are aliases (<code>len</code> for <code>size</code>,{' '}
-          <code>fromjson</code> for <code>json</code>), which is why the effective count is ~44 distinct
-          functions.
+        <Callout variant="warn" title="Use matches as an operator">
+          To test a regular expression, write <code>matches</code> between the value and the pattern:{' '}
+          <code>{"{{trigger:form.output.form_data.email matches '[^@]+@[^@]+'}}"}</code>. The pattern must
+          match the <strong>whole</strong> text: <code>{"'abc' matches 'b'"}</code> is false, while{' '}
+          <code>{"'abc' matches '.*b.*'"}</code> is true. The function form <code>matches(value, pattern)</code>{' '}
+          does not work inside <code>{'{{ }}'}</code> and resolves to empty.
         </Callout>
 
-        <h2>Operators, ternary &amp; collection selection/projection</h2>
-        <p>
-          Inside <code>{'{{ }}'}</code> you also have the standard Spring Expression Language (SpEL)
-          operator set: arithmetic <code>+ - * / %</code>, comparison <code>== != &lt; &gt; &lt;= &gt;=</code>,
-          logical <code>&amp;&amp; || !</code>, and the ternary <code>cond ? a : b</code>.
-        </p>
-        <p>Collection operators run end-to-end over lists resolved from node output:</p>
+        <h3>Dates and formatting</h3>
         <DocsTable
+          caption="Date and formatting functions"
+          rowHeaders
+          head={['Function', 'Behavior', 'Example']}
+          rows={[
+            [<code key="f">now()</code>, 'Current UTC date and time as ISO text, to the second, without a time zone suffix. When the seconds are zero they are left out (2026-09-24T14:05).', <code key="e">now() → &apos;2026-09-24T14:05:09&apos;</code>],
+            [<code key="f">today()</code>, 'Current UTC date as ISO text.', <code key="e">today() → &apos;2026-09-24&apos;</code>],
+            [<code key="f">formatdate(value, pattern)</code>, 'Formats a date with a Java date pattern (yyyy-MM-dd when null). See below for accepted values.', <code key="e">formatdate(now(), &apos;dd/MM/yyyy HH:mm&apos;)</code>],
+            [<code key="f">formatnumber(value, decimals)</code>, 'Formats with exactly decimals decimal places (2 when null), with grouping separators. 0 for null.', <code key="e">formatnumber(1234.5, 2)</code>],
+            [<code key="f">formatcurrency(value, code)</code>, 'Formats as an amount in the ISO currency code (EUR when null). An unknown code gives the number followed by the code.', <code key="e">formatcurrency(19.9, &apos;USD&apos;)</code>],
+          ]}
+        />
+        <p>
+          <code>formatdate</code> accepts a number of epoch milliseconds (formatted in UTC), an ISO date (
+          <code>2026-09-24</code>), or an ISO date and time <strong>without a time zone</strong> (
+          <code>2026-09-24T14:05:09</code>). Any other value, including an ISO timestamp that ends in{' '}
+          <code>Z</code> or an offset such as <code>+02:00</code>, is returned <strong>unchanged</strong>,
+          without an error. In the pattern, <code>DD</code>, <code>YYYY</code>, and <code>YY</code> are read as{' '}
+          <code>dd</code>, <code>yyyy</code>, and <code>yy</code>. The separators used by{' '}
+          <code>formatnumber</code> and <code>formatcurrency</code> follow the server&apos;s settings, not
+          your language.
+        </p>
+
+        <h3>JSON</h3>
+        <DocsTable
+          caption="JSON functions"
+          rowHeaders
+          head={['Function', 'Behavior', 'Example']}
+          rows={[
+            [<code key="f">json(value)</code>, 'Parses JSON text into a typed object, list, number, boolean, or string. An already-typed value is returned unchanged; blank text gives null.', <code key="e">json(mcp:fetch.output.body)</code>],
+            [<code key="f">fromjson(value)</code>, 'Alias of json.', <code key="e">fromjson(&apos;[1,2]&apos;)</code>],
+            [<code key="f">tojson(value)</code>, 'Writes a value as compact JSON text; null gives the text null.', <code key="e">tojson(mcp:fetch.output.user)</code>],
+          ]}
+        />
+        <p>
+          A typical use of <code>json()</code> is turning a text field into typed data for a parameter that
+          expects an object. Parsing is limited to 256 KB per string value, 64 levels of nesting, and 2 MB per document.
+          Unlike every other error, malformed JSON is reported in the inspector instead of resolving to empty.
+        </p>
+        <CodeBlock title="json() examples">{`{{json(mcp:fetch.output.body)}}
+{{json('{"responseModalities":["IMAGE"]}')}}`}</CodeBlock>
+
+        <h2>Operators and collection filters</h2>
+        <p>
+          Expressions use the Spring Expression Language (SpEL) operators: arithmetic{' '}
+          <code>+ - * / %</code>, comparison <code>== != &lt; &gt; &lt;= &gt;=</code>, logical{' '}
+          <code>&amp;&amp; || !</code> (or <code>and</code>, <code>or</code>, <code>not</code>), the ternary{' '}
+          <code>cond ? a : b</code>, and <code>matches</code> for regular expressions.
+        </p>
+        <Callout variant="warn" title="Compare numbers as numbers">
+          <code>{'{{amount > 9}}'}</code> compares numerically only when both sides are numbers. Values that
+          arrive as text (form fields, CSV columns, many API fields) are compared as text, where{' '}
+          <code>&apos;100&apos;</code> is smaller than <code>&apos;9&apos;</code>. Convert first:{' '}
+          <code>{'{{int(trigger:form.output.form_data.amount) > 9}}'}</code>.
+        </Callout>
+        <DocsTable
+          caption="Collection operators"
+          rowHeaders
           head={['Operator', 'Name', 'Example', 'Result']}
           rows={[
             [<code key="o">{'.?[predicate]'}</code>, 'Selection (filter)', <code key="o">{'{{users.?[age >= 18]}}'}</code>, 'A filtered list'],
             [<code key="o">{'.![expr]'}</code>, 'Projection (map)', <code key="o">{'{{users.![name]}}'}</code>, 'A mapped list'],
-            [<code key="o">{'.^[predicate]'}</code>, 'First match', <code key="o">{"{{headers.^[name == 'From'].value}}"}</code>, 'A single scalar'],
-            [<code key="o">{'.$[predicate]'}</code>, 'Last match', <code key="o">{"{{items.$[type == 'a'].id}}"}</code>, 'A single scalar'],
+            [<code key="o">{'.^[predicate]'}</code>, 'First match', <code key="o">{"{{headers.^[name == 'From'].value}}"}</code>, 'A single element'],
+            [<code key="o">{'.$[predicate]'}</code>, 'Last match', <code key="o">{"{{items.$[type == 'a'].id}}"}</code>, 'A single element'],
           ]}
         />
-        <CodeBlock language="text">{`{{nums.?[#this > 10]}}
+        <CodeBlock title="Collection examples">{`{{nums.?[#this > 10]}}
 {{users.?[age >= 18 and active == true]}}
 {{users.?[age >= 18].![name]}}
 {{users.?[age >= 18].size()}}`}</CodeBlock>
         <p>
-          Selection, projection, and first/last-match chain together (<code>{'{{users.?[age >= 18].![name]}}'}</code>
-          {' '}filters then maps), and standard collection methods such as <code>.size()</code> work on the
-          result. A selection with no matches returns an empty list, never <code>null</code>.
-        </p>
-        <Callout variant="warn">
-          For safety, dangerous SpEL surfaces are disabled: type references, constructors, and bean
-          references are blocked, and instance method calls are restricted to a safe allow-list of
-          String/Collection/Map/Number helpers. Calls like <code>getClass()</code>, <code>forName()</code>, or{' '}
-          <code>exec()</code> are not reachable from an expression.
-        </Callout>
-
-        <h2>$vars: workflow variables</h2>
-        <p>
-          A workflow can define named variables and reference them from any node with{' '}
-          <code>{'{{$vars.name}}'}</code> (n8n-style) or the alias <code>{'{{vars:name}}'}</code>, both
-          normalized to the same internal lookup before evaluation. Deep navigation into a JSON-typed
-          variable works the same way as any other reference:
-        </p>
-        <CodeBlock language="text">{`{{$vars.apiKey}}
-{{vars:config}}
-{{$vars.config.api.url}}`}</CodeBlock>
-        <p>
-          Workflow variables are stored per run and delivered alongside the rest of the run&apos;s context, so
-          they resolve the same way in a node parameter, a condition, or an interface mapping.
-        </p>
-
-        <h2>Pure vs mixed evaluation</h2>
-        <p>
-          When a parameter&apos;s whole trimmed value is exactly one <code>{'{{ ... }}'}</code> block (nothing
-          before or after it, no nested <code>{'{{'}</code>), the engine returns the evaluated{' '}
-          <strong>typed</strong> object, not text, a number stays a number, a list stays a list. This is the
-          only way to pass a real object (a map or a list) into a parameter that expects one.
-        </p>
-        <p>
-          Anything else, an expression embedded in surrounding text, or more than one block, is resolved
-          block-by-block and stitched into a single string. In that string context a resolved map or list is
-          embedded as valid JSON (<code>{'{"a":1}'}</code>), not a Java-style dump, so it stays parseable
-          inside a larger JSON template. An expression that evaluates to <code>null</code> is replaced with
-          an empty string. In a condition, a whole-expression <code>null</code> result makes the condition
-          false.
+          Filters and projections chain, and a filter with no match returns an empty list, never{' '}
+          <code>null</code>. Only a safe set of methods can be called on values: on text{' '}
+          <code>length</code>, <code>isEmpty</code>, <code>isBlank</code>, <code>trim</code>,{' '}
+          <code>strip</code>, <code>toLowerCase</code>, <code>toUpperCase</code>, <code>contains</code>,{' '}
+          <code>startsWith</code>, <code>endsWith</code>, <code>substring</code>, <code>replace</code>,{' '}
+          <code>replaceAll</code>, <code>replaceFirst</code>, <code>matches</code>, <code>split</code>,{' '}
+          <code>indexOf</code>, <code>lastIndexOf</code>, <code>charAt</code>, <code>toString</code>; on lists{' '}
+          <code>size</code>, <code>isEmpty</code>, <code>contains</code>, <code>get</code>; on objects{' '}
+          <code>get</code>, <code>getOrDefault</code>, <code>containsKey</code>, <code>containsValue</code>,{' '}
+          <code>size</code>, <code>isEmpty</code>. Type references, constructors, and other method calls are
+          blocked.
         </p>
 
         <h2>Two different defaults: interface pipe vs default()</h2>
         <p>
-          Interfaces and workflow node inputs use the same <code>{'{{ }}'}</code> braces but two different
-          fallback mechanisms, and they are not interchangeable:
+          Interfaces and workflow fields use the same <code>{'{{ }}'}</code> braces but two different fallback
+          mechanisms:
         </p>
         <DocsTable
+          caption="Fallback syntax by context"
+          rowHeaders
           head={['Context', 'Fallback syntax', 'Notes']}
           rows={[
-            ['Interface template', <code key="d">{'{{name|fallback}}'}</code>, 'A simple identifier plus one optional pipe-default. No expressions, no functions, not Handlebars.'],
-            ['Workflow node input / condition', <code key="d">{"default(var, 'x')"}</code>, 'The SpEL path has no pipe fallback operator, so writing name|fallback here does not act as a default.'],
+            ['Interface template', <code key="d">{'{{name|fallback}}'}</code>, 'A simple name plus one optional pipe default. No functions, not Handlebars.'],
+            ['Workflow node field or condition', <code key="d">{"default(var, 'x')"}</code>, 'There is no pipe operator: name|fallback here resolves to empty.'],
           ]}
         />
-        <Callout variant="warn">
-          Using the interface pipe form (<code>{'{{name|fallback}}'}</code>) in a workflow node parameter
-          does not do what it looks like: SpEL has no <code>|</code> fallback operator, so an invalid parse
-          falls through to <code>null</code> (empty string in a string context). Use{' '}
-          <code>{"default(var, 'x')"}</code> instead.
-        </Callout>
         <p>
-          A file reference resolved into an interface template (a value shaped like{' '}
-          <code>{'{path, mimeType}'}</code>) is rendered as just its storage path, so{' '}
-          <code>{'<img src="{{photo}}">'}</code> gets a usable URL fragment directly. See{' '}
+          A file resolved into an interface template is rendered as its storage path, so{' '}
+          <code>{'<img src="{{photo}}">'}</code> gets a usable address directly. See{' '}
           <a href="/interfaces">Interfaces &amp; apps</a> for the full templating model.
         </p>
 
-        <h2>Gotchas</h2>
-        <Callout variant="warn">
-          <strong>Code node double-result wrapper.</strong> A <code>core:code</code> node&apos;s returned
-          value is re-exposed downstream as <code>{'{{core:<label>.output.result.<field>}}'}</code>, the
-          engine wraps whatever you return under an extra <code>result</code> key. A mapping written as{' '}
-          <code>{'{"result":"{{core:normalize.output}}"}'}</code> silently produces a double{' '}
-          <code>result.result</code> and reads as empty. Map past the wrapper instead:{' '}
+        <h2>Common pitfalls</h2>
+        <h3>The Code node&apos;s extra result level</h3>
+        <p>
+          A Code node&apos;s returned value is exposed downstream as{' '}
+          <code>{'{{core:<label>.output.result.<field>}}'}</code>: the engine wraps what you return under an
+          extra <code>result</code> key. A mapping written as <code>{'{"result":"{{core:normalize.output}}"}'}</code>{' '}
+          produces a double <code>result.result</code> and reads as empty. Map past the wrapper:{' '}
           <code>{'{"result":"{{core:normalize.output.result}}"}'}</code>.
-        </Callout>
-        <p>
-          <strong>Legacy namespace aliases.</strong> In addition to the modern <code>type:</code> prefixes,
-          the resolver still recognizes a handful of legacy dotted forms: <code>steps.</code>,{' '}
-          <code>triggers.</code>, <code>data.</code>, <code>current_item.</code>, and <code>mcps.</code>. Write
-          the modern prefixed form; these exist only for backwards compatibility.
         </p>
+        <h3>Sub-workflow outputs use the bare child key</h3>
         <p>
-          <strong>Ordering operators are numeric here, unlike table filters.</strong> Inside a{' '}
-          <code>{'{{ }}'}</code> expression, <code>{'{{amount > 9}}'}</code> compares numerically as you&apos;d
-          expect. This is a different rule from a Table CRUD <code>where</code> filter, which compares
-          lexicographically as text, don&apos;t conflate the two. See{' '}
-          <a href="/tables">Tables &amp; data</a> for CRUD filter semantics.
+          A Sub-Workflow node returns the child&apos;s node outputs keyed by the child node&apos;s key without
+          its prefix: <code>{'{{core:call_child.output.result.step_result.output.transformed.url}}'}</code>, not{' '}
+          <code>result.core:step_result</code>. The prefixed form resolves to empty without an error.
         </p>
-
-        <h2>The in-builder expression editor</h2>
+        <h3>Legacy forms</h3>
         <p>
-          Wherever a parameter accepts an expression, the builder&apos;s expression editor offers categorized
-          autocomplete (including <code>json()</code> / <code>fromjson()</code> / <code>tojson()</code>) and a
-          syntax guide popover covering variables, type casting, arithmetic, comparison, logical operators,
-          math, string functions, utility functions, date/number formatting, collection access, and the
-          ternary operator, each with a runnable example. The interface-mapping inspector has its own
-          focused function-help popover for the utility functions most useful when wiring data into a page.
+          For backward compatibility the resolver still recognizes older dotted forms (<code>steps.</code>,{' '}
+          <code>triggers.</code>, <code>data.</code>, <code>current_item.</code>, <code>mcps.</code>). Write the
+          prefixed form.
         </p>
 
-        <h2>Where to go next</h2>
+        <h2>The expression editor</h2>
+        <p>
+          Fields that accept expressions open an editor with categorized autocomplete for node outputs and
+          functions, and a syntax guide with examples. The interface mapping inspector has its own
+          function-help popover for the functions most useful when wiring data into a page.
+        </p>
+
+        <h2>Troubleshooting</h2>
+        <DocsTable
+          caption="Common expression problems"
+          rowHeaders
+          head={['Symptom', 'Cause', 'Fix']}
+          rows={[
+            [
+              'A reference resolves to empty, with no error',
+              'The path does not exist at that point: a misspelled field, an index past the end of a list, or a node that has not run before this step on the same path (a parallel branch before the merge).',
+              'Pick the field from the expression editor autocomplete, or copy the exact path from the source node output of a past run. Read parallel branches only after they merge.',
+            ],
+            [
+              'A function call comes out empty',
+              <>A function error (wrong argument type, bad date, incompatible comparison) resolves to <code key="n">null</code> silently. Only <code key="j">json()</code> reports malformed input.</>,
+              'Test the function on a literal value first, then swap the reference back in. Convert types explicitly with int(), double(), or string().',
+            ],
+            [
+              <>A number comparison is wrong (<code key="c">{"'100' > '9'"}</code> is false)</>,
+              'Values that arrive as text (form fields, CSV columns, many API fields) are compared as text, character by character.',
+              <>Convert both sides first: <code key="f">{'{{int(trigger:form.output.form_data.amount) > 9}}'}</code>.</>,
+            ],
+            [
+              <><code key="m">matches(value, pattern)</code> resolves to empty</>,
+              <><code key="m">matches</code> is an operator, not a function, so the function form does not parse.</>,
+              <>Write <code key="f">{"value matches 'pattern'"}</code>. The pattern must match the whole text.</>,
+            ],
+            [
+              'A Code node output reads as empty downstream',
+              <>The value the Code node returns is wrapped under an extra <code key="r">result</code> key.</>,
+              <>Read <code key="f">{'{{core:<label>.output.result.<field>}}'}</code>, and map <code key="f2">output.result</code>, not <code key="f3">output</code>.</>,
+            ],
+            [
+              'A reference to a node with spaces or accents in its label resolves to empty',
+              <>Node keys are stored normalized, so <code key="k">core:Check Status</code> does not match the stored key.</>,
+              <>Write the normalized label, for example <code key="f">core:check_status</code>. See Label normalization above.</>,
+            ],
+          ]}
+        />
+
+        <h2>Related pages</h2>
         <CardGrid cols={3}>
-          <Card icon={Workflow} title="Workflows" href="/workflows">Where node labels and outputs come from.</Card>
-          <Card icon={Database} title="Tables & data" href="/tables">CRUD nodes, Find item aliases, and where filters differ from expressions.</Card>
+          <Card icon={Workflow} title="Workflows" href="/workflows">Where node keys and outputs come from.</Card>
+          <Card icon={Database} title="Tables & data" href="/tables">Table nodes, and how their filters compare values.</Card>
           <Card icon={LayoutPanelLeft} title="Interfaces & apps" href="/interfaces">The pipe-default template model used inside a page.</Card>
         </CardGrid>
       </DocsProse>

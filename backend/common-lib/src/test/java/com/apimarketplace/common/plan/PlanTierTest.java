@@ -136,4 +136,46 @@ class PlanTierTest {
             assertFalse(PlanTier.isSelectable(null));
         }
     }
+
+    @Nested
+    @DisplayName("isPaid (strict, fails closed)")
+    class IsPaid {
+
+        @Test
+        @DisplayName("Every known plan ranked above FREE is paid")
+        void knownPaidPlans() {
+            assertTrue(PlanTier.isPaid("STARTER"));
+            assertTrue(PlanTier.isPaid("PAYG"));
+            assertTrue(PlanTier.isPaid("PRO"));
+            assertTrue(PlanTier.isPaid("TEAM"));
+            assertTrue(PlanTier.isPaid("ENTERPRISE_BASIC"));
+            assertTrue(PlanTier.isPaid(" pro "));
+        }
+
+        @Test
+        @DisplayName("An ENTERPRISE SKU not listed yet is still paid (the prefix is the product)")
+        void unlistedEnterpriseSkuIsPaid() {
+            assertTrue(PlanTier.isPaid("ENTERPRISE_GOLD"));
+        }
+
+        @Test
+        @DisplayName("FREE and CREDIT_PACK are not paid: a top-up is not a plan")
+        void freeAndCreditPackAreNotPaid() {
+            assertFalse(PlanTier.isPaid("FREE"));
+            assertFalse(PlanTier.isPaid("CREDIT_PACK"));
+        }
+
+        @Test
+        @DisplayName("CE, no subscription, null, blank and unknown codes are NOT paid, unlike userRank which fails open")
+        void unknownsFailClosed() {
+            assertFalse(PlanTier.isPaid(PlanTier.CE));
+            assertFalse(PlanTier.isPaid(PlanTier.NO_SUBSCRIPTION));
+            assertFalse(PlanTier.isPaid(null));
+            assertFalse(PlanTier.isPaid(""));
+            assertFalse(PlanTier.isPaid("   "));
+            assertFalse(PlanTier.isPaid("PLATINUM"));
+            // The contrast that makes this predicate necessary: the gating rank lets it through.
+            assertTrue(PlanTier.meets("PLATINUM", "PRO"));
+        }
+    }
 }

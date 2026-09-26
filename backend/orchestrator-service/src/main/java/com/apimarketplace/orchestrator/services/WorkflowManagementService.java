@@ -107,6 +107,13 @@ public class WorkflowManagementService implements WorkflowCrud {
     @Autowired
     private com.apimarketplace.auth.client.entitlement.EntitlementGuard entitlementGuard;
 
+    /**
+     * Lifecycle emails: a NEW workflow is the account's activation. Optional so hand-built
+     * test instances are untouched; best-effort, after commit, never fails a save.
+     */
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.lifecycle.WorkflowActivationReporter activationReporter;
+
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -483,6 +490,7 @@ public class WorkflowManagementService implements WorkflowCrud {
         syncAllTriggersForWorkflow(saved, plan);
 
         logger.info("✅ Workflow saved successfully: {} (new: {})", finalWorkflowId, isNew);
+        if (isNew) reportActivation(saved.getTenantId());
 
         // Legacy validation system removed - always returns valid
         ValidationResult validation = new ValidationResult(true, List.of(), List.of(), 0);
@@ -602,6 +610,7 @@ public class WorkflowManagementService implements WorkflowCrud {
         }
 
         logger.info("✅ Draft workflow saved: {} (new: {})", finalWorkflowId, isNew);
+        if (isNew) reportActivation(tenantId);
 
         return saved;
     }
@@ -1097,7 +1106,18 @@ public class WorkflowManagementService implements WorkflowCrud {
         // Issue #149 - clones land in the cloner's personal scope (org_id remains
         // unset on the clone), so the org rollup is intentionally not touched.
         breakdownService.trackSave(tenantId, "CONFIGURATION", estimateWorkflowSize(savedClone), savedClone.getOrganizationId());
+        reportActivation(tenantId);
         return savedClone;
+    }
+
+    /** Best-effort lifecycle signal for a newly created workflow; never throws. */
+    private void reportActivation(String tenantId) {
+        if (activationReporter == null) return;
+        try {
+            activationReporter.workflowCreated(tenantId);
+        } catch (Exception e) {
+            logger.debug("Lifecycle activation not reported for {}: {}", tenantId, e.toString());
+        }
     }
 
     /**

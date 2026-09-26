@@ -93,6 +93,24 @@ class AccountPurgeSchedulerTest {
     }
 
     @Test
+    @DisplayName("lifecycle: a purged account's Resend contact is deleted, a declined purge keeps it")
+    void purgeDeletesLifecycleContact() {
+        com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails =
+                org.mockito.Mockito.mock(com.apimarketplace.auth.lifecycle.LifecycleEmailService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "lifecycleEmails", lifecycleEmails);
+        User purged = user(7L, LocalDateTime.now().minusDays(40), null);
+        User restored = user(8L, LocalDateTime.now().minusDays(40), null);
+        when(userRepository.findAccountsPastGracePeriod(any())).thenReturn(List.of(purged, restored));
+        when(purgeService.purgeUser(7L)).thenReturn(true);
+        when(purgeService.purgeUser(8L)).thenReturn(false);
+
+        scheduler.purgeExpiredAccounts();
+
+        verify(lifecycleEmails).deleteContact("user7@test.local");
+        verify(lifecycleEmails, never()).deleteContact("user8@test.local");
+    }
+
+    @Test
     @DisplayName("does not claim a deletion happened when the purge declined it")
     void noConfirmationWhenNothingWasPurged() {
         User u = user(7L, LocalDateTime.now().minusDays(40), null);
@@ -137,5 +155,16 @@ class AccountPurgeSchedulerTest {
         scheduler.purgeExpiredAccounts();
 
         verify(purgeService).purgeUser(9L);
+    }
+
+    @Test
+    @DisplayName("the nightly pass is guarded by ShedLock, so only one auth replica runs it")
+    void nightlyPassIsGuardedByShedLock() throws Exception {
+        // Without it every replica started the same purge at 03:00 (seen twice per night in the
+        // prod log), each holding a transaction on the same user rows.
+        var lock = AccountPurgeScheduler.class.getMethod("purgeExpiredAccounts")
+                .getAnnotation(net.javacrumbs.shedlock.spring.annotation.SchedulerLock.class);
+        assertThat(lock).as("@SchedulerLock on purgeExpiredAccounts").isNotNull();
+        assertThat(lock.name()).isEqualTo("account_purge");
     }
 }

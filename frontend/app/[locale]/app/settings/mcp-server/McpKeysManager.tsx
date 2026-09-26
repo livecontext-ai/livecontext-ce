@@ -2,11 +2,11 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
-import { Check, Copy, Info, KeyRound, Plus, Trash2 } from 'lucide-react';
+import { Check, Copy, KeyRound, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { InfoPopover } from '@/components/ui/info-popover';
 import {
   Dialog,
   DialogContent,
@@ -295,7 +295,7 @@ export function McpKeysManager({ availableScopes, onToast }: McpKeysManagerProps
                         <span className="text-xs text-theme-muted">{t('keys.scopesRequired')}</span>
                       )}
                     </div>
-                    <TooltipProvider delayDuration={200}>
+                    <>
                       <ul className="max-h-64 space-y-0.5 overflow-y-auto pr-1">
                         {availableScopes.map((scope) => {
                           const granted = selectedScopes.has(scope.name);
@@ -303,20 +303,9 @@ export function McpKeysManager({ availableScopes, onToast }: McpKeysManagerProps
                             <li key={scope.name} className="flex items-center gap-2 rounded-lg px-3 py-2 transition-colors hover:bg-theme-secondary">
                               <span className="text-sm font-medium text-theme-primary">{scope.name}</span>
                               {scope.description && (
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button
-                                      type="button"
-                                      className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-theme-muted transition-colors hover:text-theme-primary"
-                                      aria-label={scope.name}
-                                    >
-                                      <Info className="h-3.5 w-3.5" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="top" className="max-w-xs text-xs">
-                                    {scope.description}
-                                  </TooltipContent>
-                                </Tooltip>
+                                <InfoPopover label={scope.name} contentClassName="w-auto max-w-xs">
+                                  {scope.description}
+                                </InfoPopover>
                               )}
                               <div className="ml-auto flex-shrink-0">
                                 <Switch
@@ -329,7 +318,7 @@ export function McpKeysManager({ availableScopes, onToast }: McpKeysManagerProps
                           );
                         })}
                       </ul>
-                    </TooltipProvider>
+                    </>
                   </div>
                 )}
               </div>

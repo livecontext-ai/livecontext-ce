@@ -21,9 +21,6 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 vi.mock('@/lib/api', () => ({ apiClient: { get: vi.fn(), post: vi.fn() } }));
 vi.mock('@/lib/utils/locale', () => ({ getClientLocale: () => 'en' }));
-vi.mock('../../../hooks/ui/usePopoverPosition', () => ({
-  usePopoverPosition: () => ({ buttonRef: { current: null }, popoverStyle: { top: 0, left: 0, width: 320 } }),
-}));
 vi.mock('@/components/ui/select', () => ({
   Select: ({ children }: any) => <div>{children}</div>,
   SelectContent: ({ children }: any) => <div>{children}</div>,

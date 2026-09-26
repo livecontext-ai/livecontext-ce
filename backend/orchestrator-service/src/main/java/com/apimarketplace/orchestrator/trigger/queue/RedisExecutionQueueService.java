@@ -7,6 +7,7 @@ import com.apimarketplace.common.scaling.queue.QueueMessage;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
+import com.apimarketplace.orchestrator.lifecycle.OrchestratorLifecycleGate;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
 import com.apimarketplace.orchestrator.trigger.ReusableTriggerService;
 import com.apimarketplace.orchestrator.trigger.TriggerExecutionResult;
@@ -69,6 +70,13 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
     private static final String STATUS_PENDING = "PENDING";
     private static final String STATUS_RUNNING = "RUNNING";
     private static final String STATUS_DONE = "DONE";
+    /**
+     * Ledger field the worker writes once the message passed its cancel / expiry check, right
+     * before the run executes: the one proof a sync caller can use that execution STARTED.
+     */
+    static final String LEDGER_EXECUTING_AT = "executingAt";
+    /** How long a sync caller at its deadline waits for a claiming worker to settle start vs cancel. */
+    static final Duration START_VERDICT_GRACE = Duration.ofSeconds(2);
     private static final String STATUS_FAILED = "FAILED";
     private static final String STATUS_CANCELLED = "CANCELLED";
     public static final String QUEUE_UNAVAILABLE_MESSAGE = "Execution queue unavailable, please retry";
@@ -96,8 +104,20 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
     private final ScheduledExecutorService heartbeatPool;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicInteger activeExecutions = new AtomicInteger(0);
+    /**
+     * Workers between the drain-gate check and the moment they either gave up without a
+     * message or were counted in {@link #activeExecutions}. Kept apart from activeExecutions,
+     * which also sizes {@link #getAvailableWorkers()} and the metrics gauge.
+     */
+    private final AtomicInteger claimingWorkers = new AtomicInteger(0);
     private final ConcurrentMap<String, Boolean> activeWorkerPermits = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, QueuedExecutionMessage> activeExecutionLeases = new ConcurrentHashMap<>();
+
+    /**
+     * Optional: absent in slices that do not load the lifecycle package. When present and
+     * DRAINING, this instance's workers stop dequeuing (see {@link #workerLoop}).
+     */
+    private volatile OrchestratorLifecycleGate lifecycleGate;
 
     @Autowired
     public RedisExecutionQueueService(
@@ -312,6 +332,7 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
 
     private TriggerExecutionResult waitForResult(QueuedExecutionMessage message) {
         Instant deadline = message.expiresAt();
+        boolean finishedAtDeadlineRechecked = false;
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 Optional<String> encoded = keyValueStore.get(resultKey(message.requestId()));
@@ -333,8 +354,26 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
                 }
 
                 if (!Instant.now(clock).isBefore(deadline)) {
-                    if (!STATUS_RUNNING.equals(status)) {
-                        cancelQueuedMessage(message);
+                    Map<String, String> settled = settleAtDeadline(message, ledger);
+                    String settledStatus = settled.get("status");
+                    if ((STATUS_DONE.equals(settledStatus) || STATUS_FAILED.equals(settledStatus))
+                            && !finishedAtDeadlineRechecked) {
+                        // Finished right at the deadline: one more pass reads its real result.
+                        finishedAtDeadlineRechecked = true;
+                        continue;
+                    }
+                    // The deadline bounds the WAIT, not the run. A run whose execution started in
+                    // time keeps going and completes its epoch normally, so reporting it as "could
+                    // not start" was false: an ERROR per long run, a false timeout metric, and a
+                    // manual fire rolled back its counters for a run that ran.
+                    if (settled.containsKey(LEDGER_EXECUTING_AT)) {
+                        logger.info("[RedisExecutionQueue] Sync wait ended while run {} is still executing "
+                                + "(requestId={}); it continues in the background",
+                                message.runIdPublic(), message.requestId());
+                        metrics.recordCompleted(message.userPlan(), message.tenantId(),
+                                ExecutionQueueMetrics.OUTCOME_STILL_RUNNING);
+                        return TriggerExecutionResult.stillRunning(
+                                message.runIdPublic(), message.triggerId(), message.triggerType());
                     }
                     String normalizedPlan = message.userPlan() != null ? message.userPlan().toUpperCase() : "FREE";
                     String timeoutMessage = "Execution queue timeout: your workflow could not start within "
@@ -365,6 +404,41 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
         return interrupted;
     }
 
+    /**
+     * Decides, at the deadline, whether the run's EXECUTION started. RUNNING alone does not say
+     * so: the ledger turns RUNNING when a worker CLAIMS the message, before it checks the cancel
+     * key and the expiry, and that check can still drop the message unexecuted. Only
+     * {@link #LEDGER_EXECUTING_AT}, written after that check passed, proves the run started.
+     *
+     * <p>Not started yet: the message is cancelled (the cancel never overrides a claim), then the
+     * ledger is re-read until the worker settles it, by writing the boundary (it passed its check
+     * first) or by completing CANCELLED (it saw the cancel), for at most {@link #START_VERDICT_GRACE}.
+     * A worker that stays silent past that is treated as not started, the conservative answer.
+     *
+     * @return the settled ledger fields
+     */
+    Map<String, String> settleAtDeadline(QueuedExecutionMessage message, Map<String, String> ledger) {
+        if (ledger.containsKey(LEDGER_EXECUTING_AT)) {
+            return ledger;
+        }
+        cancelQueuedMessage(message);
+        Instant graceEnd = Instant.now(clock).plus(START_VERDICT_GRACE);
+        Map<String, String> current = keyValueStore.hashGetAll(ledgerKey(message.requestId()));
+        while (!current.containsKey(LEDGER_EXECUTING_AT)
+                && STATUS_RUNNING.equals(current.get("status"))
+                && Instant.now(clock).isBefore(graceEnd)
+                && !Thread.currentThread().isInterrupted()) {
+            sleepQuietly(pollIdleMs);
+            current = keyValueStore.hashGetAll(ledgerKey(message.requestId()));
+        }
+        return current;
+    }
+
+    @Autowired(required = false)
+    void setLifecycleGate(OrchestratorLifecycleGate lifecycleGate) {
+        this.lifecycleGate = lifecycleGate;
+    }
+
     private void cancelQueuedMessage(QueuedExecutionMessage message) {
         keyValueStore.set(cancelKey(message.requestId()), "1", ledgerTtl);
         Map<String, String> ledger = keyValueStore.hashGetAll(ledgerKey(message.requestId()));
@@ -390,7 +464,27 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
             String workerOwnerId = consumerId + ":" + UUID.randomUUID();
             boolean permitHeld = false;
             boolean activeCounted = false;
+            // Counted as claiming BEFORE the drain gate is read, and until the worker either
+            // gives up without a message or has been counted active. The drain flips the gate
+            // and only then reads getLocalActiveExecutions(), so a worker that read the gate as
+            // open is always visible to it: without this, a worker between the gate and the
+            // dequeue let the drain see idle, destroy() then interrupted the execution it went
+            // on to start, and the reclaim of that message (executingAt already set) acked it
+            // without running it.
+            claimingWorkers.incrementAndGet();
+            boolean claimHeld = true;
             try {
+                // A draining instance stops TAKING work. The shutdown drain waits for this
+                // instance's active executions to reach zero, and the queue is shared: a worker
+                // that kept dequeuing would refill that count from other replicas' traffic until
+                // the drain timed out. A message left in the stream is picked up by a live
+                // replica (or by the next instance), so nothing is lost by not claiming it here.
+                OrchestratorLifecycleGate gate = lifecycleGate;
+                if (gate != null && gate.isDraining()) {
+                    claimHeld = releaseClaim(claimHeld);
+                    sleepQuietly(IDLE_BACKOFF_MAX_MS);
+                    continue;
+                }
                 // Idle fast-path - peeking the stream lengths is READ-ONLY. Without
                 // it every poll cycle WRITES to Redis even with an empty queue
                 // (semaphore ZADD/ZREM + DRR deficit HSETs + reclaim-cursor HSET):
@@ -400,6 +494,7 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
                 // XLEN counts unacked entries too (ack deletes them), so pending
                 // messages from a dead consumer still wake the reclaim path.
                 if (queue.size() == 0) {
+                    claimHeld = releaseClaim(claimHeld);
                     sleepQuietly(idleSleepMs);
                     idleSleepMs = Math.min(idleSleepMs * 2, IDLE_BACKOFF_MAX_MS);
                     continue;
@@ -407,6 +502,7 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
                 idleSleepMs = pollIdleMs;
                 if (!distributedSemaphore.tryAcquire(WORKER_SEMAPHORE_KEY, globalWorkerPermits, workerOwnerId,
                         workerPermitTtl)) {
+                    claimHeld = releaseClaim(claimHeld);
                     sleepQuietly(pollIdleMs);
                     continue;
                 }
@@ -414,6 +510,7 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
 
                 Optional<QueueMessage<QueuedExecutionMessage>> next = queue.dequeue(consumerId);
                 if (next.isEmpty()) {
+                    claimHeld = releaseClaim(claimHeld);
                     sleepQuietly(pollIdleMs);
                     continue;
                 }
@@ -421,13 +518,17 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
                 activeWorkerPermits.put(workerOwnerId, Boolean.TRUE);
                 activeExecutions.incrementAndGet();
                 activeCounted = true;
+                // Active first, claim released second: the sum never dips to zero in between.
+                claimHeld = releaseClaim(claimHeld);
                 processMessage(next.get(), workerOwnerId);
             } catch (Exception e) {
+                claimHeld = releaseClaim(claimHeld);
                 logger.error("[RedisExecutionQueue] Worker loop error: {}", e.getMessage(), e);
                 // Without this, a queue impl whose size()/dequeue throws on every
                 // call would turn the loop into a hot log-spamming spin.
                 sleepQuietly(pollIdleMs);
             } finally {
+                releaseClaim(claimHeld);
                 if (activeCounted) {
                     activeExecutions.decrementAndGet();
                     activeWorkerPermits.remove(workerOwnerId);
@@ -437,6 +538,14 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
                 }
             }
         }
+    }
+
+    /** Releases this worker's claim once; returns the new (always false) held flag. */
+    private boolean releaseClaim(boolean held) {
+        if (held) {
+            claimingWorkers.decrementAndGet();
+        }
+        return false;
     }
 
     private void processMessage(QueueMessage<QueuedExecutionMessage> queueMessage, String ownerId) {
@@ -464,6 +573,7 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
 
             long waitMs = Duration.between(message.enqueuedAt(), Instant.now(clock)).toMillis();
             metrics.recordWaitMs(message.userPlan(), message.tenantId(), waitMs);
+            keyValueStore.hashPut(ledgerKey(message.requestId()), LEDGER_EXECUTING_AT, Instant.now(clock).toString());
             result = executeRehydrated(message);
             shouldAcknowledge = completeExecution(
                     message, result.success() ? STATUS_DONE : STATUS_FAILED, ownerId, result);
@@ -662,6 +772,15 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
         return size > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) size;
     }
 
+    /**
+     * Executions running on this instance plus workers that passed the drain gate and have
+     * not yet dequeued or given up (see {@link #claimingWorkers}).
+     */
+    @Override
+    public int getLocalActiveExecutions() {
+        return activeExecutions.get() + claimingWorkers.get();
+    }
+
     @Override
     public int getAvailableWorkers() {
         if (!isReadyForEnqueue()) {
@@ -720,7 +839,7 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
         logger.info("[RedisExecutionQueue] Shut down");
     }
 
-    private String ledgerKey(String requestId) {
+    String ledgerKey(String requestId) {
         return namespace + ":ledger:" + requestId;
     }
 
@@ -728,7 +847,7 @@ public class RedisExecutionQueueService implements ExecutionQueue, DisposableBea
         return namespace + ":result:" + requestId;
     }
 
-    private String cancelKey(String requestId) {
+    String cancelKey(String requestId) {
         return namespace + ":cancel:" + requestId;
     }
 

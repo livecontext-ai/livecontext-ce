@@ -10,6 +10,8 @@ import { ChatHeader } from '@/components/chat/ChatHeader';
 import { GlobalSearchBar } from '@/components/search/GlobalSearchBar';
 import { useVisibleModels, AIModel, SelectedModel, EMPTY_SELECTED_MODEL, selectedModelFromAIModel, modelMatches, selectedModelEquals, getEffectiveDefaultSelectedModel } from '@/hooks/useModels';
 import { useSafeNavigate } from '@/contexts/NavigationGuardContext';
+import { useMonthlyCreditsCannotPay } from '@/lib/hooks/useMonthlyCreditsCannotPay';
+import { resolveFreeTierPreferredModel } from '@/lib/models/freeTierModel';
 import { useSidePanelSafe, stripLocale, type SidePanelContextValue } from '@/contexts/SidePanelContext';
 import { togglePanelFromHeader } from '@/lib/sidePanel/togglePanelFromHeader';
 import { useAuth } from '@/lib/providers/smart-providers';
@@ -38,6 +40,7 @@ import { buildWorkflowPanelTab, useAutoRegisterWorkflowPanelTab } from '@/lib/si
 import { buildAgentConfigPanelTab } from '@/lib/sidePanel/agentConfigPanelTab';
 import { fetchLinkedAgent } from '@/lib/chat/linkedAgent';
 import { workflowPanelTabId } from '@/lib/sidePanel/tabResource';
+import { openPresentedView, type PresentedView } from '@/lib/sidePanel/presentedView';
 import {
   emitFilesDetailCommand,
   emitFilesFolderNavigate,
@@ -134,9 +137,16 @@ export function AppHeader() {
 
   // Use safe version of useUnifiedApp to handle cases where component is rendered outside provider
   const appContext = useUnifiedAppSafe();
+  // Same fallback as the side panels: on the Free plan an invalid selection falls back
+  // to the free tier's best-ranked model, never to the admin's global #1.
+  const { prefersFreeTierModels, verdictReady } = useMonthlyCreditsCannotPay();
   const defaultAIModel: AIModel | undefined = useMemo(
-    () => (defaultModel ? models.find(m => m.id === defaultModel) : undefined) ?? models[0],
-    [models, defaultModel],
+    () => resolveFreeTierPreferredModel(
+      models,
+      (defaultModel ? models.find(m => m.id === defaultModel) : undefined) ?? models[0],
+      prefersFreeTierModels,
+    ),
+    [models, defaultModel, prefersFreeTierModels],
   );
   const effectiveDefault: SelectedModel = useMemo(
     () => (defaultAIModel ? selectedModelFromAIModel(defaultAIModel) : getEffectiveDefaultSelectedModel()),
@@ -156,13 +166,16 @@ export function AppHeader() {
   // no string splitting, no "forgot to strip the prefix" class of bug.
   useEffect(() => {
     if (!appContext || models.length === 0 || !effectiveDefault.id) return;
+    // Wait for the plan verdict before WRITING, as the panels do: before it answers a
+    // Free account reads as paid, and the catalogue default would be written instead.
+    if (!verdictReady) return;
     const sel = appState.selectedModel;
     const isValid = !!sel && !!sel.id && models.some(m => modelMatches(m, sel));
     if (!isValid && !selectedModelEquals(sel, effectiveDefault)) {
       console.log('[AppHeader] Invalid model detected, switching to default:', effectiveDefault);
       setSelectedModel(effectiveDefault);
     }
-  }, [models, effectiveDefault, appState.selectedModel, setSelectedModel, appContext]);
+  }, [models, effectiveDefault, appState.selectedModel, setSelectedModel, appContext, verdictReady]);
 
   // Detect if we're on a conversation page with a specific conversation ID (/app/c/[cid])
   // Don't show agent config on /app or /app/chat (no conversation to link)
@@ -614,9 +627,18 @@ export function AppHeader() {
           });
           break;
         }
-        case 'workflow_run': {
+        case 'workflow_run':
+        case 'present_run':
+        case 'present_application': {
           if (!eventRunId) break;
           const tabId = workflowPanelTabId(id);  // Deliberately NOT run-scoped: same id, so the run REPLACES the workflow tab
+          // workflow(action='present', view='application'): land on the run's
+          // Application sub-tab once the tab shows that run with its interfaces.
+          if (type === 'present_application') {
+            void import('@/components/app/WorkflowPanelContent').then(({ requestPresentApplication }) => {
+              requestPresentApplication(id, eventRunId);
+            });
+          }
           void import('@/components/app/WorkflowBuilderPanelContent').then(({ WorkflowBuilderPanelContent }) => {
             openFn({
               id: tabId,
@@ -660,6 +682,19 @@ export function AppHeader() {
       window.removeEventListener('agentBrowseLiveTabDisconnected', handleLiveTabDisconnected as EventListener);
     };
   }, [isChatPage, sidePanel, isMobile, tAgentBrowse]);
+
+  // ============== AGENT PRESENTATION (action='present' on workflow/table/interface/agent/files) ==============
+  // On every page, unlike the chat-only auto-open above: see openPresentedView.
+  const presentingWorkflowPageId = normalizedPathname?.match(/^\/app\/workflow\/([^/]+)/)?.[1] ?? null;
+  useEffect(() => {
+    if (!sidePanel) return;
+    const handlePresent = (event: CustomEvent<PresentedView>) => {
+      const panel = isMobile ? { openTab: sidePanel.openTabDeferred } : sidePanel;
+      openPresentedView(panel, event.detail, { workflowPageId: presentingWorkflowPageId, isChatPage });
+    };
+    window.addEventListener('sidePanelAutoOpen', handlePresent as EventListener);
+    return () => window.removeEventListener('sidePanelAutoOpen', handlePresent as EventListener);
+  }, [sidePanel, isMobile, presentingWorkflowPageId, isChatPage]);
 
   // Extract run ID from pathname (workflow routes only - application routes use snapshot-based context)
   const runId = pathname?.match(/\/workflow\/[^\/]+\/run\/([^\/]+)/)?.[1] || null;

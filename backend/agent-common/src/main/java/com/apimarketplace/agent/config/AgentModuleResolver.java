@@ -82,7 +82,7 @@ public final class AgentModuleResolver {
         if (toolsConfig == null) {
             // No config → all opt-out modules enabled. The credit-spending
             // generation module stays opt-in.
-            enabled.addAll(Set.of("table", "interface", "agent", "skill", "memory", "workflow", "application", "web_search", "files", "wait", "ask_user"));
+            enabled.addAll(Set.of("table", "interface", "agent", "skill", "memory", "workflow", "application", "web_search", "files", "wait", "ask_user", "channel"));
             return enabled;
         }
 
@@ -91,7 +91,7 @@ public final class AgentModuleResolver {
             // mode=none → only MCP/catalog tools blocked; internal tools stay enabled.
             // generation still requires explicit opt-in (it is not "internal": it spends
             // the customer's credits).
-            enabled.addAll(Set.of("table", "interface", "agent", "skill", "memory", "workflow", "application", "files", "wait", "ask_user"));
+            enabled.addAll(Set.of("table", "interface", "agent", "skill", "memory", "workflow", "application", "files", "wait", "ask_user", "channel"));
             enabled.remove("catalog");
             // web_search is NOT internal and must honour its opt-out toggle here exactly as the
             // main path below does. This branch used to add it unconditionally. Chat happened to
@@ -144,6 +144,12 @@ public final class AgentModuleResolver {
         // resource to scope. Outside an interactive chat the tool itself answers "nobody is
         // watching" (ToolAuthorizationScope.isUserPromptable), so headless runs are unaffected.
         enabled.add("ask_user");
+        // channel is always registered: connecting a chat the user reads has no resource
+        // to scope, and it is the ONLY way a workspace gets a destination at all. Leaving
+        // it out of this set is not a restriction, it is the feature being unreachable -
+        // the tool list is filtered by exactly this set, so a name absent here is a tool
+        // no agent can ever call, with nothing anywhere saying so.
+        enabled.add("channel");
         if (isResourceAccessible(toolsConfig, "workflows"))    enabled.add("workflow");
         if (isResourceAccessible(toolsConfig, "applications")) enabled.add("application");
         // Web search: opt-out boolean toggle (absent or true = enabled, false = disabled)

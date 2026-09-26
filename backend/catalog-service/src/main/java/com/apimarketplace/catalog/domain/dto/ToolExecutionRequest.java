@@ -227,6 +227,15 @@ public class ToolExecutionRequest {
     private String analyticsNodeId;
 
     /**
+     * True when the result becomes a workflow STEP's output (a StepNode / FindNode call), from the
+     * {@code X-Lc-Step-Output} header only. It selects {@code ResponseShaper.Mode.STEP_OUTPUT},
+     * which lifts the 4 KB text-leaf clip: that output is the data every downstream node reads.
+     * An agent inside a workflow calls with billing scope RUN too, so the scope cannot say it.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private boolean stepOutput;
+
+    /**
      * V428 generation model priced for this call, populated ONLY from the
      * {@code X-Lc-Generation-Model} header by the controller. Null for an
      * ordinary tool call.

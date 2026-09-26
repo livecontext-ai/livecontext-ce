@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { useChangelog } from '@/hooks/useChangelog';
 import { APP_SUGGESTIONS_FLAG, WELCOME_GIFT_FLAG } from '@/lib/onboarding/welcomeGiftHandoff';
 import ChangelogMediaView from './ChangelogMediaView';
+import { track } from '@/lib/analytics/analytics';
 
 /**
  * Onboarding modals already queued in this session. The hook keeps the panel quiet until
@@ -68,13 +69,26 @@ export default function ChangelogModal() {
     if (open) markSeen();
   }, [open, markSeen]);
 
-  const handleClose = useCallback(() => {
+  // Reported once per entry actually on screen: the ref holds the key already reported, so
+  // StrictMode's doubled effect and a re-render while open do not count it twice.
+  const shownKeyRef = useRef<string | null>(null);
+  const visible = open && !!entry && isAvailable;
+  useEffect(() => {
+    if (!visible || !entry || shownKeyRef.current === entry.key) return;
+    shownKeyRef.current = entry.key;
+    track('changelog_shown', { entry_key: entry.key, has_media: !!entry.media });
+  }, [visible, entry]);
+
+  const handleClose = useCallback((action: 'dismiss' | 'learn_more' = 'dismiss') => {
+    if (entry) {
+      track('changelog_closed', { entry_key: entry.key, has_media: !!entry.media, action });
+    }
     setOpen(false);
     // Belt and braces: the open effect above has already acknowledged, and this is a no-op once
     // the key matches. It stays because closing is the moment the user is definitely done with
     // the entry, and an acknowledgement lost to a failed request on open gets a second chance.
     markSeen();
-  }, [markSeen]);
+  }, [markSeen, entry]);
 
   if (!open || !entry || !isAvailable) return null;
 
@@ -123,7 +137,7 @@ export default function ChangelogModal() {
               rel="noopener noreferrer"
               // Acknowledged on the way out too: the user has seen the entry, whatever they do
               // next with it.
-              onClick={handleClose}
+              onClick={() => handleClose('learn_more')}
               className="text-sm text-theme-secondary underline underline-offset-4 hover:text-theme-primary"
             >
               {t('learnMore')}
@@ -131,7 +145,7 @@ export default function ChangelogModal() {
           ) : (
             <span />
           )}
-          <Button onClick={handleClose} data-testid="changelog-dismiss">
+          <Button onClick={() => handleClose('dismiss')} data-testid="changelog-dismiss">
             {t('dismiss')}
           </Button>
         </div>

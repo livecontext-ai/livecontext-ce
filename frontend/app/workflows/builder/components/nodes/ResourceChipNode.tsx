@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { Handle, Position, type NodeProps } from 'reactflow';
 import { Wrench, Zap, GitBranch, Layout, Database, Cpu } from 'lucide-react';
 import type { BuilderNodeKind } from '../../types';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 /**
  * Data shape for ResourceChipNode.
@@ -104,7 +105,7 @@ export function ResourceChipNode({ data }: NodeProps<ResourceChipData>) {
 
       {/* Icon - service image if iconSlug provided, else Lucide icon */}
       {data.iconSlug && !imgError ? (
-        <Image
+        <ServiceLogo as={Image}
           src={`/icons/services/${data.iconSlug}.svg`}
           alt={data.label}
           width={14}

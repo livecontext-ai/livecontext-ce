@@ -57,10 +57,16 @@ function inspectorElement({
   onUpdate = () => undefined,
   interfaceId = 'iface-1',
   nodeId = 'n1',
-}: { onUpdate?: (d: unknown) => void; interfaceId?: string; nodeId?: string } = {}) {
+  actionMapping,
+}: {
+  onUpdate?: (d: unknown) => void;
+  interfaceId?: string;
+  nodeId?: string;
+  actionMapping?: Record<string, string>;
+} = {}) {
   const data = {
     label: 'My Interface',
-    interfaceData: { interfaceId, editorExpression: '<div>x</div>' },
+    interfaceData: { interfaceId, editorExpression: '<div>x</div>', ...(actionMapping ? { actionMapping } : {}) },
   } as never;
   return (
     <InterfaceMappingsColumn
@@ -344,5 +350,81 @@ describe('InterfaceMappingsColumn - interface format', () => {
     fireEvent.click(screen.getByText('save'));
 
     expect(updateInterface).not.toHaveBeenCalled();
+  });
+  it('regression: follows a format stored elsewhere (agent, interface page) without a reload', async () => {
+    // The fields were set once per interface, so the next Save from this inspector wrote the
+    // old format back over the newer one.
+    interfaceDetails.current = { id: 'iface-1', htmlTemplate: '<div>x</div>', format: 'vertical' };
+    const view = mountInspector();
+    await waitFor(() => expect(formatTrigger().textContent).toContain('formatPreset_vertical'));
+
+    interfaceDetails.current = { id: 'iface-1', htmlTemplate: '<div>x</div>', format: 'square' };
+    view.rerender(inspectorElement());
+
+    await waitFor(() => expect(formatTrigger().textContent).toContain('formatPreset_square'));
+  });
+
+  it('keeps a format the user picked and has not saved when the stored one changes', async () => {
+    interfaceDetails.current = { id: 'iface-1', htmlTemplate: '<div>x</div>', format: 'vertical' };
+    const view = mountInspector();
+    await waitFor(() => expect(formatTrigger().textContent).toContain('formatPreset_vertical'));
+    enterEditMode();
+    fireEvent.click(formatTrigger());
+    fireEvent.click(screen.getByText('formatPreset_square'));
+
+    interfaceDetails.current = { id: 'iface-1', htmlTemplate: '<div>x</div>', format: null };
+    view.rerender(inspectorElement());
+
+    await waitFor(() => expect(formatTrigger().textContent).toContain('formatPreset_square'));
+  });
+  it('regression: a Save after an edit made elsewhere does not write the old CSS back', async () => {
+    interfaceDetails.current = { id: 'iface-1', htmlTemplate: '<div>x</div>', cssTemplate: 'a{}', format: null };
+    const view = mountInspector();
+    await waitFor(() => expect(formatTrigger()).toBeTruthy());
+
+    interfaceDetails.current = { id: 'iface-1', htmlTemplate: '<div>x</div>', cssTemplate: 'b{}', format: null };
+    view.rerender(inspectorElement());
+    enterEditMode();
+    fireEvent.click(screen.getByText('save'));
+
+    await waitFor(() => expect(updateInterface).toHaveBeenCalled());
+    expect(updateInterface.mock.calls[0][1]).toMatchObject({ cssTemplate: 'b{}' });
+  });
+
+  it('Cancel restores the format stored now, not the one stored when the edit began', async () => {
+    interfaceDetails.current = { id: 'iface-1', htmlTemplate: '<div>x</div>', format: 'vertical' };
+    const view = mountInspector();
+    await waitFor(() => expect(formatTrigger().textContent).toContain('formatPreset_vertical'));
+    enterEditMode();
+    fireEvent.click(formatTrigger());
+    fireEvent.click(screen.getByText('formatPreset_square'));
+
+    interfaceDetails.current = { id: 'iface-1', htmlTemplate: '<div>x</div>', format: null };
+    view.rerender(inspectorElement());
+    fireEvent.click(screen.getByText('cancel'));
+
+    await waitFor(() => expect(formatTrigger().textContent).toContain('formatAuto'));
+  });
+});
+
+describe('InterfaceMappingsColumn - the "Action name" field', () => {
+  beforeEach(() => {
+    interfaceDetails.current = { id: 'iface-1', htmlTemplate: '<div>x</div>', format: null };
+  });
+  afterEach(cleanup);
+
+  it('names its input, and a click on the field text does not open the info panel', async () => {
+    // The field used to be a <label> with no htmlFor wrapping the text, the "i" button and the
+    // input. Such a label binds to its FIRST labelable child, the "i": the input went unnamed
+    // and a click on "Action name" opened the info panel instead of focusing the field.
+    mountInspector({ actionMapping: { '#submit': 'core:next' } });
+
+    const input = await screen.findByLabelText('actionName');
+    expect((input as HTMLInputElement).value).toBe('#submit');
+
+    const text = screen.getAllByText('actionName').find((el) => el.tagName === 'SPAN')!;
+    fireEvent.pointerDown(text);
+    fireEvent.click(text);
+    expect(document.querySelector('[data-radix-popper-content-wrapper] [role="dialog"]')).toBeNull();
   });
 });

@@ -12,6 +12,7 @@ import { CredentialWizard } from '@/components/credentials';
 import { useToast } from '@/components/Toast';
 import ToastContainer from '@/components/ToastContainer';
 import { normalizeIconSlug } from '@/lib/credentials/iconSlug';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 export interface CredentialCardProps {
   /** Tool ID that requires credentials */
@@ -105,7 +106,7 @@ export function CredentialCard({
             <div className="flex items-center gap-3">
               <div className="flex items-center justify-center w-10 h-10 rounded-full bg-white dark:bg-slate-800 shadow-sm">
                 {iconSlug && !imageError ? (
-                  <Image
+                  <ServiceLogo as={Image}
                     src={`/icons/services/${normalizeIconSlug(iconSlug)}.svg`}
                     alt={displayName}
                     width={24}
@@ -138,7 +139,7 @@ export function CredentialCard({
           <div className="flex items-center gap-3 mb-3">
             <div className="flex items-center justify-center w-10 h-10 rounded-full bg-white dark:bg-slate-800 shadow-sm">
               {iconSlug && !imageError ? (
-                <Image
+                <ServiceLogo as={Image}
                   src={`/icons/services/${normalizeIconSlug(iconSlug)}.svg`}
                   alt={displayName}
                   width={24}

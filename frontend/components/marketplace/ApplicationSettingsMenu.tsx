@@ -25,8 +25,8 @@ interface ApplicationSettingsMenuProps {
 
 /**
  * Settings cog for an installed application: a small popover holding the actions that
- * are not part of reading the app's Info panel. Mounted bottom-right of the application
- * page, opposite the Info panel in the top-right corner.
+ * are not part of reading the app's Info panel. Mounted as the last control of the
+ * application toolbar, the one the central button at the bottom of the app opens.
  *
  * <p>Today it holds a single entry, "Create an editable copy", which used to sit inline
  * in the Info tab. It is a rarely-used, one-shot action, so it reads better behind a cog
@@ -73,12 +73,10 @@ export function ApplicationSettingsMenu({
           data-testid="application-settings-trigger"
           aria-label={t('settingsMenu.label')}
           title={t('settingsMenu.label')}
+          // Same shape as the other icon controls of the application toolbar it sits in.
           className={cn(
-            'relative h-8 w-8 p-0 rounded-xl flex items-center justify-center',
-            'backdrop-blur-sm transition-all duration-200',
-            'bg-white/40 dark:bg-gray-800/40 text-gray-400 dark:text-gray-500',
-            'hover:bg-white/90 dark:hover:bg-gray-800/90 hover:text-gray-700 dark:hover:text-gray-200',
-            'opacity-80 hover:opacity-100',
+            'w-7 h-7 p-0 rounded-xl transition-colors inline-flex items-center justify-center',
+            'text-[var(--text-secondary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)]',
             className
           )}
         >
@@ -86,7 +84,7 @@ export function ApplicationSettingsMenu({
         </button>
       </PopoverTrigger>
       <PopoverContent
-        // Anchored bottom-right of the application page, so the menu opens UPWARD.
+        // The toolbar sits at the bottom of the application, so the menu opens UPWARD.
         side="top"
         align="end"
         sideOffset={6}

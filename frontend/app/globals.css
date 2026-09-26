@@ -16,6 +16,15 @@
    specificity, so no `dark:` rule changes precedence anywhere else. */
 @custom-variant dark (&:where(.dark, .dark *):not(:where(.landing-root:not(.dark) *)));
 
+/* ServiceLogo: a brand icon that ships `<slug>.dark.svg` renders BOTH files and the theme
+   picks one. The two selectors are the `dark` variant above written out, because the dark
+   file must be hidden OUTSIDE the dark theme without setting a display value inside it
+   (the caller's own `block`/`inline-block` must win there). Only `display: none` is ever
+   set, so a caller's layout classes are untouched on the visible file. */
+.svc-logo-light:where(.dark *):not(:where(.landing-root:not(.dark) *)) { display: none !important; }
+.svc-logo-dark:not(:where(.dark *)),
+.svc-logo-dark:where(.landing-root:not(.dark) *) { display: none !important; }
+
 /* Map shadcn/ui theme color tokens to our custom CSS variables.
    This makes classes like bg-background, text-foreground, ring-ring, etc. work.
    Values chain to --bg-primary/--text-primary/etc. which change under .dark selector. */
@@ -1609,6 +1618,186 @@ button:focus-visible,
   animation: shimmer-text 1.5s ease-in-out infinite;
 }
 
+/* Orbi, the general chat's mascot (components/chat/orbi). Moods come from data-mood on the svg.
+   Eye travel is written inline by the pointer follow; thinking and sleep override it. */
+.orbi-mascot .orbi-eye {
+  transition: transform 0.12s ease-out;
+}
+.orbi-mascot .orbi-lid {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: orbi-blink 5s infinite;
+}
+.orbi-mascot[data-mood="thinking"] .orbi-eye {
+  transform: none !important;
+}
+/* Thinking: the eye pulses red, the same pulse as the animated logo (LogoAnimate). */
+.orbi-mascot[data-mood="thinking"] .orbi-lid {
+  color: rgb(220 38 38);
+  animation: orbi-pulse 1.5s ease-in-out infinite;
+}
+.orbi-mascot[data-mood="hop"] {
+  animation: orbi-hop 0.6s ease-out;
+}
+/* Hello wave after a sign-in (ORBI_WAVE_MS). The arm is hidden in every other mood. */
+.orbi-mascot .orbi-arms {
+  opacity: 0;
+}
+.orbi-mascot[data-mood="wave"] .orbi-arms {
+  animation: orbi-arms 3.2s ease-in-out;
+}
+.orbi-mascot[data-mood="wave"] .orbi-arm-wave {
+  transform-origin: 29px 62px;
+  animation: orbi-wave 3.2s ease-in-out;
+}
+.orbi-mascot[data-mood="wave"] .orbi-eye {
+  transform: none !important;
+}
+.orbi-mascot[data-mood="sleep"] .orbi-eye {
+  transform: none !important;
+}
+.orbi-mascot[data-mood="sleep"] .orbi-lid {
+  animation: none;
+  transform: scaleY(0.12);
+}
+.orbi-mascot .orbi-zz {
+  opacity: 0;
+}
+.orbi-mascot[data-mood="sleep"] .orbi-zz {
+  animation: orbi-zz 2.2s ease-in-out infinite;
+}
+/* Poke reactions (OrbiMascot ORBI_TRICK_MS). The body moves; hearts and stars stay put around it. */
+.orbi-mascot .orbi-body {
+  transform-origin: 48px 82px;
+}
+.orbi-mascot .orbi-hearts,
+.orbi-mascot .orbi-dizzy {
+  opacity: 0;
+}
+.orbi-mascot[data-mood="boop"] .orbi-body {
+  animation: orbi-boop 0.5s ease-out;
+}
+.orbi-mascot[data-mood="spin"] .orbi-body {
+  transform-origin: 48px 52px;
+  animation: orbi-spin 0.8s cubic-bezier(0.45, 0, 0.3, 1);
+}
+.orbi-mascot[data-mood="love"] .orbi-eye,
+.orbi-mascot[data-mood="dizzy"] .orbi-eye {
+  transform: none !important;
+}
+.orbi-mascot[data-mood="love"] .orbi-lid {
+  animation: none;
+  transform: scaleY(0.45);
+}
+.orbi-mascot[data-mood="love"] .orbi-hearts path {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: orbi-heart 1.4s ease-out;
+}
+.orbi-mascot[data-mood="love"] .orbi-hearts {
+  opacity: 1;
+}
+.orbi-mascot[data-mood="love"] .orbi-heart-2 {
+  animation-delay: 0.25s !important;
+  animation-fill-mode: backwards !important;
+}
+.orbi-mascot[data-mood="dizzy"] .orbi-lid {
+  animation: orbi-dizzy-eye 0.4s linear infinite;
+  transform-origin: 50px 50px;
+  transform-box: view-box;
+}
+.orbi-mascot[data-mood="dizzy"] .orbi-body {
+  animation: orbi-wobble 1.6s ease-in-out;
+}
+.orbi-mascot[data-mood="dizzy"] .orbi-dizzy {
+  opacity: 1;
+}
+.orbi-mascot[data-mood="dizzy"] .orbi-dizzy-orbit {
+  transform-origin: 50px 17px;
+  animation: orbi-orbit 0.8s linear infinite;
+}
+.orbi-mascot.orbi-static *,
+.orbi-mascot.orbi-static {
+  animation: none !important;
+  transition: none !important;
+}
+.orbi-mascot.orbi-static[data-mood="thinking"] .orbi-eye {
+  transform: none !important;
+}
+.orbi-mascot.orbi-static[data-mood="sleep"] .orbi-zz,
+.orbi-mascot.orbi-static[data-mood="wave"] .orbi-arms,
+.orbi-mascot.orbi-static[data-mood="love"] .orbi-hearts,
+.orbi-mascot.orbi-static[data-mood="dizzy"] .orbi-dizzy {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .orbi-mascot,
+  .orbi-mascot * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+@keyframes orbi-blink {
+  0%, 94%, 100% { transform: scaleY(1); }
+  96% { transform: scaleY(0.12); }
+}
+@keyframes orbi-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.1; }
+}
+@keyframes orbi-arms {
+  0%, 100% { opacity: 0; }
+  8%, 92% { opacity: 1; }
+}
+@keyframes orbi-wave {
+  0% { transform: rotate(-50deg); }
+  10%, 30%, 50%, 70% { transform: rotate(-14deg); }
+  20%, 40%, 60%, 80% { transform: rotate(16deg); }
+  90% { transform: rotate(0deg); }
+  100% { transform: rotate(-50deg); }
+}
+@keyframes orbi-hop {
+  35% { transform: translateY(-7px); }
+  70% { transform: translateY(1px); }
+}
+@keyframes orbi-boop {
+  30% { transform: scale(1.18, 0.8); }
+  60% { transform: scale(0.92, 1.1); }
+  100% { transform: scale(1, 1); }
+}
+@keyframes orbi-spin {
+  0% { transform: translateY(0) rotate(0deg); }
+  40% { transform: translateY(-9px) rotate(200deg); }
+  100% { transform: translateY(0) rotate(360deg); }
+}
+@keyframes orbi-heart {
+  0% { transform: translateY(4px) scale(0.3); opacity: 0; }
+  25% { transform: translateY(0) scale(1.1); opacity: 1; }
+  100% { transform: translateY(-14px) scale(0.9); opacity: 0; }
+}
+@keyframes orbi-dizzy-eye {
+  0% { transform: translate(3px, 0); }
+  25% { transform: translate(0, 3px); }
+  50% { transform: translate(-3px, 0); }
+  75% { transform: translate(0, -3px); }
+  100% { transform: translate(3px, 0); }
+}
+@keyframes orbi-wobble {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(-9deg); }
+  40% { transform: rotate(7deg); }
+  60% { transform: rotate(-5deg); }
+  80% { transform: rotate(3deg); }
+}
+@keyframes orbi-orbit {
+  to { transform: rotate(360deg); }
+}
+@keyframes orbi-zz {
+  0% { transform: translate(0, 0); opacity: 0; }
+  30% { opacity: 1; }
+  100% { transform: translate(6px, -10px); opacity: 0; }
+}
+
 @keyframes shimmer-text {
   0% {
     background-position: 100% 0;
@@ -2054,146 +2243,128 @@ button:focus-visible,
 }
 
 
-
 /* ===========================================================================
-   Studio look: "Darkroom"
+   Studio ambient ground
    ---------------------------------------------------------------------------
-   A second visual treatment for the studio surface ONLY, offered beside the
-   app's own and chosen by the reader (StudioLookSwitch, remembered per browser).
+   One fixed scene behind the studio surface (StudioBackdrop), the same on every
+   load. Three blurred colour fields drift slowly, over a faint dot grid and a
+   film grain. It is decoration: the content keeps the app's own tokens, so no
+   text colour changes and no control needs a second styling.
 
-   WHY a studio needs its own ground rather than the app's. Everywhere else the
-   content is text and controls, and the app's paper-white light theme is right
-   for them. Here the content is an IMAGE or a CLIP, and a bright chrome around
-   it does two things a media surface must not: it drags the eye off the asset,
-   and it shifts how the asset's own colour and exposure read. Galleries and
-   grading suites both answer this the same way - a neutral, desaturated
-   surround that gives the eye no reference of its own.
+   Kept LOW in intensity on purpose. The studio's content is an image or a clip,
+   and a loud ground would compete with it; the fields are strongest at the
+   edges and fade toward the centre, where the composer and the assets sit.
 
-   HOW it is expressed. It redefines the SAME tokens the whole app is built on
-   rather than adding a parallel set of class names, so every control already
-   inside the studio - the composer, the turn cards, the history - follows it
-   with no change of its own, and anything added later follows too. Nothing
-   outside an element carrying the class is touched.
+   The drift is kept near the rims, and the centre is masked out. Measured in
+   a browser at five points of every animation, 1280 and 1920 wide: muted
+   text over the centre 60% keeps the contrast it has on the plain ground
+   (light 4.78 vs 4.83, dark 3.62 vs 3.62). Raising an opacity or narrowing
+   the mask invalidates that measurement.
 
-   A MENU does not inherit it, and that is not an oversight: a popover renders
-   in a portal on the document, outside whatever opened it, so it reads the
-   app's tokens however deeply nested its trigger was. `StudioPopoverContent`
-   carries the class onto those, through a context rather than through the DOM.
-
-   Both themes, deliberately. A "darkroom" that only existed in dark mode would
-   leave the light reader with the bright surround the treatment exists to
-   remove; the light half is a GALLERY WALL (a warm neutral, the asset card
-   staying the brightest thing on screen) and the dark half is the darkroom
-   proper (near-black, cooled a touch so it tints nothing).
+   Only `transform` and `opacity` animate, so the motion stays on the compositor
+   and costs no layout. Everything stops under prefers-reduced-motion.
    ======================================================================== */
 
-.studio-darkroom {
-  /* Light: a gallery wall. The page is the wall, the card is the print, and
-     the print is the brightest surface on screen - which is the one ordering
-     the app's own light theme cannot express, since its page is already white. */
-  --bg-primary: #edecea;
-  --bg-secondary: #f7f6f5;
-  --bg-tertiary: #e3e1de;
-  --bg-hover: #dcdad6;
-  /* Muted text is DARKENED to pay for the darker ground. The app's #6b7280 sits
-     at 4.85:1 on white and at 4.09:1 on this wall, which is below AA - moving
-     the ground moves the contrast whether the treatment means to or not, and
-     muted is the app's most-used text colour (every count, label and price
-     note).
-     Measured on all THREE grounds this block defines, which the first value was
-     not: #5f6672 reached 4.90:1 on the wall and 5.36:1 on the card and then
-     4.43:1 on --bg-tertiary, below AA - and tertiary is where the price note,
-     the parameter pills and the running banner sit. #585f6b clears it on every
-     one: 5.45:1 / 5.96:1 / 4.93:1. */
-  --text-muted: #585f6b;
-  --border-color: #cbc8c3;
-  /* 3.22:1 on the wall: the asset frame, which has to be SEEN. See the
-     .studio-asset-frame rule for why it is not --border-color. */
-  --asset-frame-color: #888279;
-  --shadow-color: rgba(28, 25, 23, 0.16);
-  /* The two Tailwind grays the app's menu rows are written in literally.
-     `menuItemClass` uses `hover:bg-gray-100 dark:hover:bg-gray-800`, and the
-     model picker and the parameter menus mark a selected row the same way, so
-     those three controls did NOT follow the treatment: this block's own comment
-     claims every control inside the studio does, and hovering a row in a studio
-     menu painted the application's gray on the studio's ground.
-     Redefined rather than rewritten at each call site, because they are
-     Tailwind v4 COLOUR tokens (see the warm-stone overrides under `.dark`), so
-     one definition here reaches every utility that names them, including ones
-     written after this. Values track --bg-hover / --bg-tertiary so a row reads
-     the same whichever of the two spellings drew it. */
-  --color-gray-100: #dcdad6;
-  --color-gray-200: #e3e1de;
-  --color-gray-800: #dcdad6;
-  /* The ground is painted BY the treatment, so one class carries the whole look
-     and every surface that adopts it (this one, and the menus portalled out of
-     it) is grounded without a second class to remember. */
-  background-color: var(--bg-primary);
+.studio-ambient {
+  position: absolute;
+  inset: 0;
+  z-index: -10;
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+  /* The colour lives at the rims only. The centre column is where the title,
+     the composer, the history and every muted label sit, so the scene is
+     masked out there rather than trusted to drift politely. */
+  mask-image: radial-gradient(ellipse 62% 60% at 50% 45%, transparent 68%, #000 100%);
+  -webkit-mask-image: radial-gradient(ellipse 62% 60% at 50% 45%, transparent 68%, #000 100%);
+  --studio-orb-opacity: 0.34;
+  --studio-grid-dot: rgba(23, 22, 20, 0.07);
+  --studio-grain-opacity: 0.03;
 }
 
-.dark .studio-darkroom {
-  /* Dark: the darkroom. Cooler and deeper than the app's warm neutral, because
-     a warm surround tints a clip's own whites - the app ground is #171614, and
-     a still graded against it reads a shade yellow next to the same still in a
-     player. */
-  --bg-primary: #0c0c0e;
-  --bg-secondary: #141417;
-  --bg-tertiary: #1c1c20;
-  --bg-hover: #26262b;
-  /* 3.29:1 on the darkroom ground, and still 5.9:1 against a white still, so the
-     frame reads on both sides of the edge it draws. */
-  --asset-frame-color: #63636e;
-  /* Restated, like every other token here: both selectors match the same element
-     in dark mode, so a gray declared only in the light half above would leak the
-     GALLERY value onto the darkroom ground. */
-  --color-gray-100: #26262b;
-  --color-gray-200: #1c1c20;
-  --color-gray-800: #26262b;
-  /* 2.69:1 on this ground, against the 2.64:1 the app's own border has on its own. It was #34343a
-     at 1.58:1, which is a REGRESSION the treatment introduced rather than inherited: the light
-     half is 1.41:1 where the app is 1.39:1 and so owes nothing, but a deeper ground needs a
-     lighter line to keep the same separation. Neither half reaches the 3:1 WCAG asks of a
-     component boundary, and that is the application's standard to move, not this class's - what
-     this class must not do is make it worse. */
-  --border-color: #56565f;
-  --shadow-color: rgba(0, 0, 0, 0.6);
-  /* Muted is RESTATED, not inherited. Both selectors match the same element in
-     dark mode, and the light half above declares `--text-muted` unconditionally,
-     so leaving it out here does not fall back to the app's value: it leaks the
-     GALLERY value onto the darkroom ground.
-
-     The first restatement here was the app's own #736f67, justified as "3.91:1,
-     better than the 3.62:1 the app itself has, so the treatment owes nothing".
-     That was measuring against the wrong thing. AA wants 4.5:1 and 3.91 is not
-     it, the app being worse is not a licence, and on --bg-tertiary the same
-     colour was 3.40:1 - which is where the price note and the parameter pills
-     sit. #8a857c clears AA on all three grounds of this block: 5.33:1 on the
-     ground, 5.01:1 on the card, 4.63:1 on tertiary - and then 4.11:1 on
-     --bg-hover, the FOURTH ground this block defines and the one the first two
-     passes both forgot. It is not only a hover state: the model picker and the
-     parameter menus paint the SELECTED row with it, permanently, and that row
-     carries muted text. #969188 clears AA on all four: 6.24:1 on the ground,
-     5.87:1 on the card, 5.42:1 on tertiary, 4.81:1 on hover. It is lighter than
-     the app's muted, which is what a deeper ground costs. */
-  --text-muted: #969188;
-  background-color: var(--bg-primary);
+.dark .studio-ambient {
+  --studio-orb-opacity: 0.24;
+  --studio-grid-dot: rgba(246, 247, 249, 0.06);
+  --studio-grain-opacity: 0.05;
 }
 
-/* The asset itself gets the one piece of chrome the treatment adds: a hairline
-   that separates a white image from a light wall, and a black frame from a dark
-   one. Without it a white-background generation dissolves into the page and the
-   reader cannot see where their asset ends - the single most common complaint a
-   flat media surface produces. */
-.studio-darkroom .studio-asset-frame {
-  /* Its OWN colour, not --border-color.
-     The frame is the one piece of chrome this treatment adds, and it exists to
-     draw the edge of an asset against the ground. Drawn in --border-color it
-     measured 1.41:1 on the wall and 1.58:1 on the darkroom ground, against the
-     3:1 WCAG asks of a non-text boundary - so the line meant to stop a white
-     generation dissolving into the page very nearly dissolved itself.
-     --border-color is right for what it is used for everywhere else (separating
-     two panels of similar lightness, where a strong line would be noise) and
-     wrong here, which is why this takes a token of its own rather than moving
-     that one and darkening every border in the studio. */
-  box-shadow: 0 0 0 1px var(--asset-frame-color), 0 1px 2px var(--shadow-color);
+.studio-ambient-orb {
+  position: absolute;
+  width: 46vmax;
+  height: 46vmax;
+  border-radius: 9999px;
+  /* The gradients already fade to transparent; a light blur only smooths the
+     edge, and a large one is expensive to re-rasterise while it scales. */
+  filter: blur(32px);
+  opacity: var(--studio-orb-opacity);
+}
+
+.studio-ambient-orb-a {
+  top: -18vmax;
+  left: -12vmax;
+  background: radial-gradient(circle at 30% 30%, #8b5cf6, transparent 65%);
+  animation: studio-drift-a 34s ease-in-out infinite alternate;
+}
+
+.studio-ambient-orb-b {
+  top: -10vmax;
+  right: -16vmax;
+  background: radial-gradient(circle at 60% 40%, #06b6d4, transparent 65%);
+  animation: studio-drift-b 41s ease-in-out infinite alternate;
+}
+
+.studio-ambient-orb-c {
+  bottom: -24vmax;
+  left: 22%;
+  background: radial-gradient(circle at 50% 50%, #f59e0b, transparent 62%);
+  animation: studio-drift-c 47s ease-in-out infinite alternate;
+}
+
+.studio-ambient-grid {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(var(--studio-grid-dot) 1px, transparent 1px);
+  background-size: 22px 22px;
+  /* Visible at the rim, gone in the middle, so it frames the work instead of
+     running under it. */
+  mask-image: radial-gradient(ellipse 75% 65% at 50% 45%, transparent 35%, #000 100%);
+  -webkit-mask-image: radial-gradient(ellipse 75% 65% at 50% 45%, transparent 35%, #000 100%);
+  animation: studio-grid-breathe 12s ease-in-out infinite;
+}
+
+.studio-ambient-grain {
+  position: absolute;
+  inset: 0;
+  opacity: var(--studio-grain-opacity);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+@keyframes studio-drift-a {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(6vw, 6vh, 0) scale(1.08); }
+  100% { transform: translate3d(2vw, 12vh, 0) scale(0.95); }
+}
+
+@keyframes studio-drift-b {
+  0%   { transform: translate3d(0, 0, 0) scale(1.04); }
+  50%  { transform: translate3d(-6vw, 8vh, 0) scale(0.94); }
+  100% { transform: translate3d(-2vw, 14vh, 0) scale(1.06); }
+}
+
+@keyframes studio-drift-c {
+  0%   { transform: translate3d(0, 0, 0) scale(0.96); }
+  50%  { transform: translate3d(-10vw, -4vh, 0) scale(1.05); }
+  100% { transform: translate3d(8vw, -2vh, 0) scale(1); }
+}
+
+@keyframes studio-grid-breathe {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-ambient-orb,
+  .studio-ambient-grid {
+    animation: none;
+  }
 }

@@ -81,7 +81,7 @@ class InterfaceToolsProviderTest {
             .filter(p -> "action".equals(p.name()))
             .findFirst().orElseThrow();
         assertThat(actionParam.enumValues()).containsExactly(
-            "create", "get", "list", "update", "patch", "delete", "publish", "unpublish", "help");
+            "create", "get", "present", "list", "update", "patch", "delete", "publish", "unpublish", "help");
     }
 
     // ==================== execute routing ====================

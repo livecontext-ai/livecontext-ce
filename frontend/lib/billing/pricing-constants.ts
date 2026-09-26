@@ -75,10 +75,10 @@ export const PAYG_USD_PER_1K = 1.25;
  * which is what makes the figures below comparable with the ones a picker quotes.
  */
 export const PRICING_BASIS_RATES = {
-  input: 0.44,
-  output: 1.32,
-  cacheRead: 0.014,
-  cacheWrite: 0.44,
+  input: 0.3,
+  output: 1.2,
+  cacheRead: 0.006,
+  cacheWrite: 0.3,
 } as const;
 
 /** The catalogue row {@link PRICING_BASIS_RATES} is copied from, and its provider. */
@@ -214,7 +214,7 @@ export const MEASURED_PROVIDER_COST: Readonly<Record<string, number>> = Object.f
  * a unit price BELOW the one the ledger will debit. margin-repricing.test.ts pins both
  * ends of that (never below the median, never more than 1.25x it).
  */
-export const CHAT_EXCHANGE_CREDITS = 35;
+export const CHAT_EXCHANGE_CREDITS = 25;
 
 /**
  * What ONE workflow node costs to run, in credits. Not an estimate: a flat, exact
@@ -222,15 +222,12 @@ export const CHAT_EXCHANGE_CREDITS = 35;
  * clause the LLM figures carry.
  *
  * <p>Mirrors {@code CreditService.consumeForWorkflowNode}, which debits
- * {@code BigDecimal.ONE} per node in both editions. It is here because it is the ONLY
- * unit the Free plan's monthly credits can pay for, and the plan card had been pricing
- * that pot with a classification step, which on FREE it cannot fund at all: the monthly
- * bucket is restricted to {@code WORKFLOW_NODE} / {@code WORKFLOW_NODE_PROMO}
- * ({@code CreditService.WORKFLOW_SUB_ELIGIBLE_SOURCE_TYPES}), while a classify step
- * bills as {@code CLASSIFY_EXECUTION} and draws the separate AI allowance, and the
- * add-ons (web search and fetch, image generation, platform markup) draw PAYG. A
- * tooltip that prices a pot with a debit the pot refuses is wrong in the expensive
- * direction: it reads as a promise.
+ * {@code BigDecimal.ONE} per node in both editions. The Free plan's monthly credits pay
+ * for workflow nodes and for chat/agent turns on the models opened to the free tier,
+ * but NOT for the add-ons (web search and fetch, image generation, platform markup),
+ * which draw PAYG. The Free credits tooltip quotes this unit because it is the one
+ * flat, exact price in that list. A tooltip that prices a pot with a debit the pot
+ * refuses is wrong in the expensive direction: it reads as a promise.
  */
 export const WORKFLOW_NODE_CREDITS = 1;
 
@@ -285,7 +282,7 @@ export interface CreditExample {
  * not one number: a plain question and answer sends the prompt once, while an agent
  * building a workflow re-sends the whole transcript on every tool round-trip, and it
  * makes dozens of them. Measured, the two differ by about 5x, and a classification step
- * is another 5x below the cheaper of them (28x below the agent one). A single average
+ * is another 5x below the cheaper of them (25x below the agent one). A single average
  * would be true of almost no one. The classify gap USED to be two orders of magnitude
  * and is not any more: on a lightweight basis its flat per-node fee, which no margin
  * touches, is now most of its price.
@@ -314,9 +311,9 @@ export interface CreditExample {
  * understate the very driver it invokes) and says a longer build costs more.
  */
 export const CREDIT_EXAMPLES: readonly CreditExample[] = [
-  { id: 'simpleChat', creditsEach: 10, perEntryPack: 500 },
-  { id: 'agentChat', creditsEach: 55, perEntryPack: 90 },
-  { id: 'classifyStep', creditsEach: 2, perEntryPack: 2_500 },
+  { id: 'simpleChat', creditsEach: 8, perEntryPack: 625 },
+  { id: 'agentChat', creditsEach: 40, perEntryPack: 125 },
+  { id: 'classifyStep', creditsEach: 1.6, perEntryPack: 3_125 },
 ];
 
 /**
@@ -330,8 +327,8 @@ export const CREDIT_EXAMPLES: readonly CreditExample[] = [
  * an answer with the counts, and the FAQ figures are still derived from them
  * (see the invariants in credit-conversation-copy.test.ts).
  */
-export const AGENT_CONVERSATIONS_PER_PACK = 90;
-export const SIMPLE_CONVERSATIONS_PER_PACK = 500;
+export const AGENT_CONVERSATIONS_PER_PACK = 125;
+export const SIMPLE_CONVERSATIONS_PER_PACK = 625;
 
 /**
  * The entry pack expressed the way a reader thinks about it, ready to
@@ -415,19 +412,6 @@ export const BASE_PRICES: Record<string, number> = {
 export const STARTER_MAX_CREDITS = 100_000;
 
 /**
- * The Free plan's monthly AI allowance (V494): the separate pot that funds chat and
- * agent turns on the models opened to the free tier, so a visitor can try an agent
- * without topping up.
- *
- * Mirrors the `auth.plan.included_ai_credits` seed; keep both in sync, same contract
- * as CREDIT_COSTS mirroring CreditTierConstants.java. It is the FALLBACK only: any
- * surface that can read the live plan (the settings pricing page, via `usePlans`)
- * shows the configured value instead, because an admin can change it with one UPDATE
- * and a card must not keep advertising a number the product no longer grants.
- */
-export const FREE_AI_CREDITS = 100;
-
-/**
  * Highest tier index shown on the slider by default (index 7 = 1,000,000 credits).
  * The two tiers above (5M, 10M) carry intimidating prices for a casual visitor, so
  * they are hidden behind the `?tiers=full` unlock (see resolveMaxTierIndex). The
@@ -480,11 +464,11 @@ export function clampTierIndex(tierIndex: number, maxTierIndex: number): number 
  * deliberately absent from CAPABILITY_KEYS.
  */
 export const PLAN_FEATURE_KEYS: Record<string, string[]> = {
-  free: ['creditsFree', 'aiCreditsFree', 'nodesCore', 'users1', 'workspaces1', 'variables3', 'concurrent1', 'storage100mb', 'logs7', 'supportCommunity'],
-  starter: ['creditsDynamic', 'nodesPublishing', 'users1', 'workspaces1', 'variables25', 'concurrent5', 'storage1gb', 'logs30', 'versioning', 'apiAccess', 'cePlatformCreds', 'analyticsBasic', 'supportEmail'],
-  pro: ['creditsDynamic', 'nodesAll', 'users1', 'workspaces3', 'variables100', 'concurrent20', 'storage10gb', 'logs30', 'versioning', 'apiAccess', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey', 'priorityExecution', 'executionSearch', 'analyticsDetailed', 'supportPriority'],
-  team: ['creditsDynamic', 'nodesAll', 'users25', 'workspaces10', 'variables500', 'concurrent50', 'storage100gb', 'logs90', 'versioning', 'apiAccess', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey', 'priorityExecution', 'executionSearch', 'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling', 'analyticsTeam', 'supportSla'],
-  enterprise: ['creditsCustom', 'nodesAll', 'usersUnlimited', 'workspacesUnlimited', 'variablesUnlimited', 'concurrentUnlimited', 'storage1tb', 'logsCustom', 'versioning', 'apiAccess', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey', 'priorityExecution', 'executionSearch', 'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling', 'dedicatedInstance', 'compliance', 'overageProtection', 'analyticsAdvanced', 'supportSla', 'sla999', 'accountManager', 'onboarding'],
+  free: ['creditsFree', 'nodesCore', 'users1', 'workspaces1', 'variables3', 'concurrent1', 'storage100mb', 'logs7', 'supportCommunity'],
+  starter: ['creditsDynamic', 'nodesPublishing', 'users1', 'workspaces1', 'variables25', 'concurrent5', 'storage1gb', 'logs30', 'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'analyticsBasic', 'supportEmail'],
+  pro: ['creditsDynamic', 'nodesAll', 'users1', 'workspaces3', 'variables100', 'concurrent20', 'storage10gb', 'logs30', 'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey', 'priorityExecution', 'executionSearch', 'analyticsDetailed', 'supportPriority'],
+  team: ['creditsDynamic', 'nodesAll', 'users25', 'workspaces10', 'variables500', 'concurrent50', 'storage100gb', 'logs90', 'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey', 'priorityExecution', 'executionSearch', 'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling', 'analyticsTeam', 'supportSla'],
+  enterprise: ['creditsCustom', 'nodesAll', 'usersUnlimited', 'workspacesUnlimited', 'variablesUnlimited', 'concurrentUnlimited', 'storage1tb', 'logsCustom', 'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey', 'priorityExecution', 'executionSearch', 'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling', 'dedicatedInstance', 'compliance', 'overageProtection', 'analyticsAdvanced', 'supportSla', 'sla999', 'accountManager', 'onboarding'],
 };
 
 /**
@@ -493,7 +477,7 @@ export const PLAN_FEATURE_KEYS: Record<string, string[]> = {
  * Used by the coherence test: each tier must include every capability of the tier below.
  */
 export const CAPABILITY_KEYS = [
-  'versioning', 'apiAccess', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey',
+  'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey',
   'priorityExecution', 'executionSearch',
   'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling',
   'dedicatedInstance', 'compliance', 'overageProtection', 'accountManager', 'onboarding',

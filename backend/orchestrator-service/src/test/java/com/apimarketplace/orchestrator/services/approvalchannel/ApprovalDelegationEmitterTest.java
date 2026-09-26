@@ -67,12 +67,14 @@ class ApprovalDelegationEmitterTest {
 
     private MeterRegistry meterRegistry;
     private ApprovalDelegationEmitter emitter;
+    private com.apimarketplace.orchestrator.services.channel.ChatChannelService channelService;
 
     @BeforeEach
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
+        channelService = mock(com.apimarketplace.orchestrator.services.channel.ChatChannelService.class);
         emitter = new ApprovalDelegationEmitter(signalWaitRepository, workflowRunRepository,
-                workflowRepository, deliveryRepository, registry, meterRegistry);
+                workflowRepository, deliveryRepository, registry, meterRegistry, channelService);
     }
 
     private WorkflowApprovalPendingEvent pendingEvent() {
@@ -108,6 +110,95 @@ class ApprovalDelegationEmitterTest {
 
     private double errorCount(String type) {
         return meterRegistry.counter("approval.delegation.errors", "type", type).count();
+    }
+
+    @Nested
+    @DisplayName("a destination picked in the node")
+    class PickedDestination {
+
+        private Map<String, Object> pickedConfig(String channel, String linkId) {
+            Map<String, Object> config = new HashMap<>();
+            config.put("type", SignalType.USER_APPROVAL.name());
+            Map<String, Object> delegation = new HashMap<>();
+            delegation.put("channel", channel);
+            delegation.put("linkId", linkId);
+            config.put("delegation", delegation);
+            return config;
+        }
+
+        private WorkflowRunEntity orgRun() {
+            WorkflowRunEntity run = runWithTenant(TENANT_ID);
+            run.setOrganizationId("org-1");
+            return run;
+        }
+
+        @Test
+        @DisplayName("is sent through ITS service's notifier, whatever service the node recorded")
+        void routesToTheDestinationService() {
+            java.util.UUID linkId = java.util.UUID.randomUUID();
+            when(signalWaitRepository.findById(SIGNAL_ID))
+                    .thenReturn(Optional.of(signalWithConfig(pickedConfig("telegram", linkId.toString()))));
+            when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(orgRun()));
+            when(channelService.resolveFor("org-1", linkId)).thenReturn(Optional.of(
+                    new com.apimarketplace.orchestrator.services.channel.ChatChannelService.ResolvedTarget(
+                            linkId, "slack", 7L, "C123", java.util.List.of())));
+            when(registry.forChannel("slack")).thenReturn(Optional.of(notifier));
+
+            emitter.onApprovalPending(pendingEvent());
+
+            org.mockito.ArgumentCaptor<ApprovalDelegationConfig> sent =
+                    org.mockito.ArgumentCaptor.forClass(ApprovalDelegationConfig.class);
+            verify(notifier).notifyPending(any(), sent.capture(), any(), any());
+            assertThat(sent.getValue().channel()).isEqualTo("slack");
+            assertThat(sent.getValue().destinationId()).isEqualTo(linkId);
+            verify(registry, never()).forChannel("telegram");
+        }
+
+        @Test
+        @DisplayName("the keyword default resolves the workspace default at send time, not when the node was edited")
+        void defaultIsResolvedAtSend() {
+            when(signalWaitRepository.findById(SIGNAL_ID))
+                    .thenReturn(Optional.of(signalWithConfig(pickedConfig("telegram", "default"))));
+            when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(orgRun()));
+            when(channelService.resolveFor("org-1", null)).thenReturn(Optional.of(
+                    new com.apimarketplace.orchestrator.services.channel.ChatChannelService.ResolvedTarget(
+                            java.util.UUID.randomUUID(), "discord", 8L, "999", java.util.List.of())));
+            when(registry.forChannel("discord")).thenReturn(Optional.of(notifier));
+
+            emitter.onApprovalPending(pendingEvent());
+
+            verify(notifier).notifyPending(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("gone, with no service to report under: nothing is sent, counted, and it stays in-app")
+        void goneWithoutServiceIsDropped() {
+            java.util.UUID linkId = java.util.UUID.randomUUID();
+            when(signalWaitRepository.findById(SIGNAL_ID))
+                    .thenReturn(Optional.of(signalWithConfig(pickedConfig("", linkId.toString()))));
+            when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(orgRun()));
+            when(channelService.resolveFor("org-1", linkId)).thenReturn(Optional.empty());
+
+            emitter.onApprovalPending(pendingEvent());
+
+            verifyNoInteractions(registry);
+            assertThat(errorCount("DestinationGone")).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("gone, with the node's service known: that notifier records the failure")
+        void goneWithServiceIsReported() {
+            java.util.UUID linkId = java.util.UUID.randomUUID();
+            when(signalWaitRepository.findById(SIGNAL_ID))
+                    .thenReturn(Optional.of(signalWithConfig(pickedConfig("slack", linkId.toString()))));
+            when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(orgRun()));
+            when(channelService.resolveFor("org-1", linkId)).thenReturn(Optional.empty());
+            when(registry.forChannel("slack")).thenReturn(Optional.of(notifier));
+
+            emitter.onApprovalPending(pendingEvent());
+
+            verify(notifier).notifyPending(any(), any(), any(), any());
+        }
     }
 
     @Nested

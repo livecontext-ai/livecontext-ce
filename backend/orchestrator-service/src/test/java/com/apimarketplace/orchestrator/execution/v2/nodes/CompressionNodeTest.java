@@ -69,13 +69,13 @@ class CompressionNodeTest {
         private FileStorageService fileStorageService;
 
         @Test
-        @DisplayName("reports the configuration the node USES, and never the payload it compressed")
+        @DisplayName("reports the RESOLVED filename the node uses, and never the payload it compressed")
         @SuppressWarnings("unchecked")
         void reportsWhatTheNodeActuallyRanWith() {
-            // Both of these were re-resolved for display only. `filename` is used CONFIGURED
-            // by the zip entry and the upload, so a resolved one named a file that does not
-            // exist; `value` is the payload, which resolveTemplateString coerced to a String
-            // and copied - in full - onto the step row of every item.
+            // `filename` used to be read CONFIGURED by the zip entry and the upload, so the
+            // file was literally named "{{trigger:start.name}}.gz". It is now resolved once and
+            // that one value names the file and is reported. `value` is the payload, which must
+            // not be copied - in full - onto the step row of every item.
             String payload = "z".repeat(50_000);
             Core.CompressionConfig config =
                 new Core.CompressionConfig("compress", "gzip", payload, "{{trigger:start.name}}");
@@ -83,18 +83,58 @@ class CompressionNodeTest {
                 .nodeId("core:compress")
                 .compressionConfig(config)
                 .build();
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                org.mockito.Mockito.mock(
+                    com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            org.mockito.Mockito.when(adapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.anyMap(),
+                    org.mockito.ArgumentMatchers.any(ExecutionContext.class)))
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo("acme"));
+            node.setTemplateAdapter(adapter);
+            node.setFileStorageService(fileStorageService);
 
             NodeExecutionResult result = node.execute(context);
 
             Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
-            assertEquals("{{trigger:start.name}}", params.get("filename"),
-                "the name the zip entry and the upload actually use");
+            assertEquals("acme", params.get("filename"),
+                "the name the upload actually uses, resolved");
+            verify(fileStorageService).upload(anyString(), any(), anyString(), anyString(), eq("acme.gz"),
+                anyString(), any(byte[].class), anyInt(), anyInt(), nullable(Integer.class), any());
             assertEquals("gzip", params.get("format"));
             String reportedValue = String.valueOf(params.get("value"));
             assertTrue(reportedValue.length() < 300,
                 "a 50 000-char payload must not be copied onto the row: " + reportedValue.length() + " chars");
             assertTrue(reportedValue.contains("50000 chars"),
                 "and the reader is told what was cut: " + reportedValue);
+        }
+
+        @Test
+        @DisplayName("a {{$vars.name}} filename names the upload but is withheld in Params")
+        @SuppressWarnings("unchecked")
+        void workspaceVariableFilenameIsWithheld() {
+            Core.CompressionConfig config =
+                new Core.CompressionConfig("compress", "gzip", "payload", "{{$vars.name}}");
+            CompressionNode node = CompressionNode.builder()
+                .nodeId("core:compress")
+                .compressionConfig(config)
+                .build();
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                org.mockito.Mockito.mock(
+                    com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            org.mockito.Mockito.when(adapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.anyMap(),
+                    org.mockito.ArgumentMatchers.any(ExecutionContext.class)))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{$vars.name}}", "s3cr3t")));
+            node.setTemplateAdapter(adapter);
+            node.setFileStorageService(fileStorageService);
+
+            NodeExecutionResult result = node.execute(context);
+
+            verify(fileStorageService).upload(anyString(), any(), anyString(), anyString(), eq("s3cr3t.gz"),
+                anyString(), any(byte[].class), anyInt(), anyInt(), nullable(Integer.class), any());
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(com.apimarketplace.orchestrator.services.template.ReportedParams.WITHHELD_WORKSPACE_VARIABLE,
+                params.get("filename"));
         }
 
         @Test
@@ -117,7 +157,7 @@ class CompressionNodeTest {
             org.mockito.Mockito.when(adapter.resolveTemplates(
                     org.mockito.ArgumentMatchers.anyMap(),
                     org.mockito.ArgumentMatchers.any(ExecutionContext.class)))
-                .thenReturn(Map.of("__expr__", "the resolved payload"));
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo("the resolved payload"));
             node.setTemplateAdapter(adapter);
 
             NodeExecutionResult result = node.execute(context);
@@ -145,7 +185,7 @@ class CompressionNodeTest {
             org.mockito.Mockito.when(adapter.resolveTemplates(
                     org.mockito.ArgumentMatchers.anyMap(),
                     org.mockito.ArgumentMatchers.any(ExecutionContext.class)))
-                .thenReturn(Map.of("__expr__", "not-valid-base64-gzip!!"));
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo("not-valid-base64-gzip!!"));
             node.setTemplateAdapter(adapter);
 
             NodeExecutionResult result = node.execute(context);

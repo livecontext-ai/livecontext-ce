@@ -169,6 +169,10 @@ public class SubAgentExecutionHandler {
     @Autowired(required = false)
     private ExecutionLinkRouter executionLinkRouter;
 
+    /** Swaps a disabled model for its replacement (V515); null in positional unit tests = no swap. */
+    @Autowired(required = false)
+    private com.apimarketplace.agent.service.ModelReplacementResolver modelReplacementResolver;
+
     /**
      * Optional, exactly like {@code BridgeLoopDispatcher}'s: the bean is wired in agent-service,
      * and optional injection keeps test slices and bridge-less deployments green. Absent means no
@@ -444,6 +448,14 @@ public class SubAgentExecutionHandler {
             subCredentials.put("__inactivityTimeoutSeconds__", entity.getInactivityTimeout());
         }
 
+        // The child's tool-authorization requirement is deliberately NOT carried here.
+        // A sub-agent's credentials contain no stream id (the local one is for streaming
+        // only), and the authorization park refuses to hold a call it cannot paint a card
+        // for, before it would reach the out-of-app delivery. Arming this context would
+        // therefore refuse the child's sensitive actions while asking nobody - a task
+        // stopped by a question that was never put. It stays exempt, inheriting the
+        // parent's authorization as it always has, and AgentToolsProvider says so.
+
         // 8. Find or create conversation.
         // Always pass an explicit owner org so the conversation row can never be
         // stamped from a stale ambient thread context (cross-tenant bleed). Prefer
@@ -542,9 +554,11 @@ public class SubAgentExecutionHandler {
                         publishSubAgentEvent(parentConversationId, "sub_agent_completed",
                             entity.getName(), entity.getAvatarUrl(), agentId.toString());
                     }
-                    recordObservability(refused, entity, tenantId, callerAgentEntityId, subAgentDepth,
+                    recordObservability(refused, entity, entity.getModelProvider(), entity.getModelName(),
+                        tenantId, callerAgentEntityId, subAgentDepth,
                         conversationId, parentConversationId, memoryEnabled, List.of(), BigDecimal.ZERO,
-                        entity.getSystemPrompt(), fullPrompt, "parent_reservation", /*keyRoute*/ null, subCredentials);
+                        entity.getSystemPrompt(), fullPrompt, "parent_reservation", /*keyRoute*/ null, subCredentials,
+                        /*replacement: refused before the model was resolved*/ null);
                     return buildFailure(toolCall, startTime, error);
                 }
             }
@@ -562,6 +576,19 @@ public class SubAgentExecutionHandler {
             // bridge relabel all keep using, whatever a link redirects underneath.
             String model = entity.getModelName();
             String provider = entity.getModelProvider();
+            // A model an admin disabled runs on its replacement, which then becomes the billed
+            // identity and is what the execution link below is looked up for. The entity is
+            // never written: the swap holds for this run only.
+            // null = the resolver is not wired: whether a swap happened is unknown.
+            java.util.Optional<com.apimarketplace.agent.service.ModelReplacementResolver.Substitution> replacement = null;
+            if (modelReplacementResolver != null) {
+                replacement = modelReplacementResolver.substituteIfDisabled(provider, model);
+                var sub = replacement.orElse(null);
+                if (sub != null) {
+                    provider = sub.provider();
+                    model = sub.model();
+                }
+            }
 
             // Model execution link: without it a delegated sub-agent runs on the billed
             // provider's own API key even when an admin routed that pair elsewhere, which
@@ -794,9 +821,9 @@ public class SubAgentExecutionHandler {
             //     refund even if recordObservability/recordFromRequest itself throws - settle
             //     is now the observability service's responsibility.
             reservationHeld = false;
-            recordObservability(result, entity, tenantId, callerAgentEntityId, subAgentDepth,
+            recordObservability(result, entity, provider, model, tenantId, callerAgentEntityId, subAgentDepth,
                 conversationId, parentConversationId, memoryEnabled, chainForChild, requestedReservation,
-                fullSystemPrompt, fullPrompt, bridgeBudgetScope, executedRoute, subCredentials);
+                fullSystemPrompt, fullPrompt, bridgeBudgetScope, executedRoute, subCredentials, replacement);
 
             // 18. Build tool result
             return buildToolResult(toolCall, agentId, entity.getName(), result, durationMs, tenantId, credentials);
@@ -943,7 +970,10 @@ public class SubAgentExecutionHandler {
         Double tenantBalance = null;
         if (creditConsumptionClient != null && context.tenantId() != null) {
             try {
-                BigDecimal balance = creditConsumptionClient.fetchLlmSpendableBalance(context.tenantId());
+                // Model-aware: on the Free plan the monthly credits count only on a
+                // free-tier model (V512), so the wallet total would overstate the budget.
+                BigDecimal balance = creditConsumptionClient.fetchLlmSpendableBalance(
+                        context.tenantId(), context.provider(), context.model());
                 tenantBalance = balance != null ? balance.doubleValue() : null;
             } catch (Exception e) {
                 log.warn("[SUB_AGENT_BRIDGE] Failed to fetch tenant balance: {}", e.getMessage());
@@ -1470,14 +1500,20 @@ public class SubAgentExecutionHandler {
             .build();
     }
 
+    /**
+     * @param billedProvider the pair the run is billed under: the entity's own, or its
+     *                       replacement when the entity's model is disabled (V515)
+     */
     private void recordObservability(AgentLoopResult result, AgentEntity entity,
+                                      String billedProvider, String billedModel,
                                       String tenantId, UUID callerAgentEntityId,
                                       int depth, String conversationId, String parentConversationId,
                                       boolean memoryEnabled,
                                       List<UUID> callerChain, BigDecimal reservedAmount,
                                       String systemPrompt, String userPrompt,
                                       String budgetScope, KeyRoute keyRoute,
-                                      Map<String, Object> credentials) {
+                                      Map<String, Object> credentials,
+                                      java.util.Optional<com.apimarketplace.agent.service.ModelReplacementResolver.Substitution> replacement) {
         try {
             AgentObservabilityRequest request = new AgentObservabilityRequest();
             request.setTenantId(tenantId);
@@ -1491,12 +1527,13 @@ public class SubAgentExecutionHandler {
             // to "WORKFLOW" when callerAgentEntityId is null (e.g., parent's __agentId__
             // not in credentials on certain bridge paths).
             request.setSource("SUB_AGENT");
-            request.setProvider(entity.getModelProvider());
-            request.setModel(entity.getModelName());
+            request.setProvider(billedProvider);
+            request.setModel(billedModel);
             // Whose key this child ran on: the pin of the context that produced the result. A
             // bridge child holds no key (PLATFORM); its execution-link fallback re-pins for the
             // billed pair. Never read off the credentials map: the parent stamp lives there.
             request.setKeyRoute(keyRoute != null ? keyRoute.name() : null);
+            com.apimarketplace.agent.service.AgentObservabilityService.stampModelReplacement(request, replacement);
             request.setStatus(result.success() ? "COMPLETED" : "FAILED");
             request.setStopReason(result.stopReason() != null ? result.stopReason().name() : null);
             request.setBudgetScope(budgetScope);

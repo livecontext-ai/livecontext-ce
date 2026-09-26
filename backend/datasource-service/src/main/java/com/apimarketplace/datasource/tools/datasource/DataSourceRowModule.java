@@ -78,6 +78,9 @@ public class DataSourceRowModule implements ToolModule {
         // the table CRUD module already gates get/update/delete this way; row data must not bypass it.
         var notAllowed = TableToolAccess.denyIfNotAllowed(context, getTableId(parameters));
         if (notAllowed.isPresent()) return notAllowed;
+        var restricted = TableToolAccess.denyIfMemberRestricted(dataSourceService, context, tenantId,
+                getTableId(parameters), !"query_rows".equals(action));
+        if (restricted.isPresent()) return restricted;
 
         // Thread the caller's org workspace through to the CRUD executor so the
         // strict-scope check in verifyDataSourceAccess matches the org id that

@@ -61,8 +61,16 @@ public record Edge(
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record BackEdge(
         String condition,
-        Integer maxIterations
-    ) {}
+        Integer maxIterations,
+        // maxIterations written as a {{...}} template: an Integer cannot hold it, and the parser
+        // used to drop it for the run's default cap. Resolved when the loop decides. Never serialized.
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        String maxIterationsTemplate
+    ) {
+        public BackEdge(String condition, Integer maxIterations) {
+            this(condition, maxIterations, null);
+        }
+    }
 
     public Edge(String from, String to) {
         this(from, to, null, null);

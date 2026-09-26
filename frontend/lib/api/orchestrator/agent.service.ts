@@ -240,6 +240,15 @@ export class AgentService {
   /**
    * Delete webhook for an agent
    */
+  /**
+   * Whether this agent asks permission before a sensitive action in its own unattended runs
+   * (schedule, webhook, task, its own chat). The request reaches the user on the agent's chat
+   * destination when nobody is watching.
+   */
+  async setToolAuthorization(agentId: string, required: boolean): Promise<{ agentId: string; requireToolAuthorization: boolean }> {
+    return apiClient.patch(`/agents/${agentId}/tool-authorization`, { required });
+  }
+
   async deleteWebhook(agentId: string): Promise<void> {
     return apiClient.delete<void>(`/agents/${agentId}/webhook`);
   }

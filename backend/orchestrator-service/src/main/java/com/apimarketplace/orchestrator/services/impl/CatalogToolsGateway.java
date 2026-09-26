@@ -29,9 +29,16 @@ public class CatalogToolsGateway implements ToolsGateway {
     private static final String CRUD_TOOL_PREFIX = "crud/";
 
     /**
+     * Set by the nodes whose catalog result IS a workflow step's output (StepNode, FindNode) and
+     * forwarded as {@code X-Lc-Step-Output}. The catalog then keeps text leaves up to 1 MB instead of
+     * clipping them at 4 KB; every other caller (chat, embedded agents, internal tools) is unchanged.
+     */
+    public static final String STEP_OUTPUT_MARKER = "__stepOutput__";
+
+    /**
      * Per-tool {@code expand} paths sent to the catalog so its
-     * {@code ResponseTruncator} (MAX_STRING_SIZE=2KB) does NOT collapse
-     * large fields the orchestrator needs verbatim.
+     * {@code ResponseShaper} does NOT collapse large fields the orchestrator
+     * needs verbatim (it replaces inline base64 above 4 KB in every mode).
      *
      * <p>Image-gen tools return base64-encoded images in
      * {@code data[].b64_json} (OpenAI) /
@@ -159,7 +166,7 @@ public class CatalogToolsGateway implements ToolsGateway {
             payload.put("context", "orchestrator");
             // Opt-out of catalog truncation for fields the orchestrator must
             // receive verbatim (e.g. image-gen base64 payloads). Without this,
-            // ResponseTruncator collapses any string > 2KB into a placeholder
+            // ResponseShaper replaces inline base64 > 4 KB with a placeholder
             // and downstream providers parse garbage.
             List<String> expandPaths = TOOL_EXPAND_PATHS.get(toolId);
             if (expandPaths != null && !expandPaths.isEmpty()) {
@@ -309,6 +316,9 @@ public class CatalogToolsGateway implements ToolsGateway {
                 if (analyticsNodeId != null) {
                     headers.set("X-Lc-Node-Id", String.valueOf(analyticsNodeId));
                 }
+                if (Boolean.TRUE.equals(billingIdentifiers.get(STEP_OUTPUT_MARKER))) {
+                    headers.set("X-Lc-Step-Output", "true");
+                }
             }
 
             HttpEntity<Map<String, Object>> requestEntity = new HttpEntity<>(payload, headers);
@@ -399,6 +409,30 @@ public class CatalogToolsGateway implements ToolsGateway {
                     List.of(Map.of(
                         "type", isCredentialRefusal ? "credential_selection_error" : "execution_error",
                         "message", message)),
+                    List.of());
+        } catch (org.springframework.web.client.HttpClientErrorException.NotFound e) {
+            // The catalog answers 404 TOOL_NOT_FOUND when the step's tool id names no tool
+            // any more (removed, or re-imported under a new id). It used to answer 500, and
+            // this step read "500 INTERNAL_SERVER_ERROR: {json}" beside an ERROR stack trace
+            // for what is a stale reference in the workflow. Only a body carrying the code is
+            // labelled as one; any other 404 keeps the generic reading.
+            String body = e.getResponseBodyAsString();
+            boolean isToolNotFound = body != null && body.contains("TOOL_NOT_FOUND");
+            if (isToolNotFound) {
+                // Read by people in the run view AND by agents through the run's errors, so the
+                // remedy names only what an agent can do itself: find the tool, update the step.
+                String message = "The tool '" + toolId + "' no longer exists in the catalog "
+                        + "(it may have been removed or replaced), so this step did not run. Replace "
+                        + "the tool on this step: search the catalog for the tool that does this job, "
+                        + "then update the step's tool id to the one found.";
+                logger.warn("Catalog has no tool {} (stale reference on the step)", toolId);
+                return new ExecutionResult(false, Map.of(),
+                        List.of(Map.of("type", "tool_not_found", "message", message)),
+                        List.of());
+            }
+            logger.error("Catalog returned 404 for tool {}: {}", toolId, e.getMessage());
+            return new ExecutionResult(false, Map.of(),
+                    List.of(Map.of("type", "execution_error", "message", e.getMessage())),
                     List.of());
         } catch (Exception e) {
             // A 402 INSUFFICIENT_CREDITS from the catalogue has no catch of its own, so it lands

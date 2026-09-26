@@ -60,6 +60,9 @@ class WorkflowCrudModuleTest {
                 mock(com.apimarketplace.orchestrator.tools.common.RunStopToolHandler.class),
                 mock(com.apimarketplace.orchestrator.services.resume.StepRerunService.class),
                 mock(com.apimarketplace.orchestrator.services.resume.AutoRestartExecutionService.class));
+        // Run reports resolve their plan through the version service (ids only, never the run's lazy workflow).
+        lenient().when(planVersionService.resolvePlanForRun(any(), any(), any()))
+                .thenReturn(new WorkflowPlanVersionService.RunPlan(null, null));
     }
 
     private WorkflowRunSummaryProjection mockProjection(String runId, RunStatus status, int planVersion) {
@@ -344,6 +347,46 @@ class WorkflowCrudModuleTest {
             assertThat(runs.get(0).get("total_nodes")).isEqualTo(5);
             assertThat(runs.get(0).get("execution_mode")).isEqualTo("AUTOMATIC");
             assertThat(data.get("total")).isEqualTo(2L);
+        }
+
+        @Test
+        @DisplayName("regression: each run carries epoch_count (0 for a run that never fired), fetched in ONE batched call")
+        void runs_carryEpochCount() {
+            // Prod 2026-09-25: counting epochs took one get_run per run (~90 calls for 10 workflows).
+            UUID workflowId = UUID.randomUUID();
+            stubInScopeWorkflow(workflowId);
+            var p1 = mockProjection("run-1", RunStatus.WAITING_TRIGGER, 1);
+            var p2 = mockProjection("run-2", RunStatus.WAITING_TRIGGER, 2);
+            when(workflowRunRepository.findRunSummariesByWorkflowId(eq(workflowId), any()))
+                    .thenReturn(new PageImpl<>(List.of(p1, p2), PageRequest.of(0, 20), 2));
+            when(agentWorkflowFireService.countEpochsByRunIds(List.of("run-1", "run-2")))
+                    .thenReturn(Map.of("run-1", 312L));
+
+            var result = module.execute("runs", Map.of("workflow_id", workflowId.toString()), TENANT_ID, null);
+
+            @SuppressWarnings("unchecked")
+            var runs = (List<Map<String, Object>>) ((Map<String, Object>) result.get().data()).get("runs");
+            assertThat(runs.get(0)).containsEntry("epoch_count", 312L);
+            assertThat(runs.get(1)).containsEntry("epoch_count", 0L);
+            verify(agentWorkflowFireService, times(1)).countEpochsByRunIds(any());
+        }
+
+        @Test
+        @DisplayName("epoch counts unavailable: runs still lists, WITHOUT epoch_count rather than a false 0")
+        void runs_epochCountUnavailable_omitsField() {
+            UUID workflowId = UUID.randomUUID();
+            stubInScopeWorkflow(workflowId);
+            var p1 = mockProjection("run-1", RunStatus.COMPLETED, 1);
+            when(workflowRunRepository.findRunSummariesByWorkflowId(eq(workflowId), any()))
+                    .thenReturn(new PageImpl<>(List.of(p1), PageRequest.of(0, 20), 1));
+            when(agentWorkflowFireService.countEpochsByRunIds(any())).thenReturn(null);
+
+            var result = module.execute("runs", Map.of("workflow_id", workflowId.toString()), TENANT_ID, null);
+
+            assertThat(result.get().success()).isTrue();
+            @SuppressWarnings("unchecked")
+            var runs = (List<Map<String, Object>>) ((Map<String, Object>) result.get().data()).get("runs");
+            assertThat(runs.get(0)).containsEntry("run_id", "run-1").doesNotContainKey("epoch_count");
         }
 
         @Test
@@ -644,11 +687,6 @@ class WorkflowCrudModuleTest {
 
             when(workflowRunRepository.findByRunIdPublic(runId)).thenReturn(Optional.of(run));
 
-            // Mock versioned plan
-            var versionEntity = mock(com.apimarketplace.orchestrator.domain.WorkflowPlanVersionEntity.class);
-            when(versionEntity.getPlan()).thenReturn(Map.of("triggers", List.of(), "mcps", List.of()));
-            when(planVersionService.getVersion(workflowId, 5)).thenReturn(Optional.of(versionEntity));
-
             when(agentWorkflowFireService.buildRunMacroReport(eq(run), any(), eq(TENANT_ID)))
                     .thenReturn(Map.of("run_id", runId, "status", "COMPLETED"));
 
@@ -658,8 +696,40 @@ class WorkflowCrudModuleTest {
             assertThat(result).isPresent();
             assertThat(result.get().success()).isTrue();
 
-            // Verify versioned plan was looked up
-            verify(planVersionService).getVersion(workflowId, 5);
+            // The run's own plan version is resolved by id
+            verify(planVersionService).resolvePlanForRun(workflowId, 5, TENANT_ID);
+        }
+
+        @Test
+        @DisplayName("regression: a run whose plan version was pruned is readable and says its plan is the current one")
+        void getRun_prunedPlanVersion_neverTouchesLazyWorkflowAndAddsPlanNote() {
+            // Prod 2026-09-25: 212 runs pointed at a pruned plan version; the fallback read
+            // run.getWorkflow().getPlan() on a detached proxy -> LazyInitializationException.
+            UUID workflowId = UUID.randomUUID();
+            WorkflowEntity lazyWorkflow = mock(WorkflowEntity.class);
+            when(lazyWorkflow.getId()).thenReturn(workflowId);
+            lenient().when(lazyWorkflow.getPlan()).thenThrow(new org.hibernate.LazyInitializationException("no session"));
+
+            WorkflowRunEntity run = new WorkflowRunEntity();
+            run.setRunIdPublic("run-pruned");
+            run.setTenantId(TENANT_ID);
+            run.setStatus(RunStatus.COMPLETED);
+            run.setPlanVersion(2);
+            run.setWorkflow(lazyWorkflow);
+            when(workflowRunRepository.findByRunIdPublic("run-pruned")).thenReturn(Optional.of(run));
+            when(planVersionService.resolvePlanForRun(workflowId, 2, TENANT_ID))
+                    .thenReturn(new WorkflowPlanVersionService.RunPlan(null, 2));
+            when(agentWorkflowFireService.buildRunMacroReport(eq(run), any(), eq(TENANT_ID)))
+                    .thenReturn(Map.of("run_id", "run-pruned", "total_epochs", 4));
+
+            var result = module.execute("get_run", Map.of("run_id", "run-pruned"), TENANT_ID, null);
+
+            assertThat(result.get().success()).isTrue();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) result.get().data();
+            assertThat(data).containsEntry("total_epochs", 4);
+            assertThat((String) data.get("plan_note")).contains("Plan version 2").contains("current plan");
+            verify(lazyWorkflow, never()).getPlan();
         }
     }
 
@@ -1753,6 +1823,70 @@ class WorkflowCrudModuleTest {
 
             assertThat(result.success()).isTrue();
             assertThat(((Map<String, Object>) result.data()).get("id")).isEqualTo(wfId.toString());
+        }
+    }
+
+    // ==================== pruned plan version on every run read ====================
+
+    /**
+     * Regression (prod 2026-09-25): every run read resolved its plan by reading getPlan() on the
+     * run's lazy workflow once the run's plan version had been pruned. Each read site must go
+     * through the version service by id and surface plan_note.
+     */
+    @Nested
+    @DisplayName("pruned plan version: every run read")
+    class PrunedPlanVersionReadTests {
+
+        private WorkflowEntity lazyWorkflow;
+        private WorkflowRunEntity run;
+
+        @BeforeEach
+        void prunedRun() {
+            UUID workflowId = UUID.randomUUID();
+            lazyWorkflow = mock(WorkflowEntity.class);
+            when(lazyWorkflow.getId()).thenReturn(workflowId);
+            lenient().when(lazyWorkflow.getPlan()).thenThrow(new org.hibernate.LazyInitializationException("no session"));
+            run = new WorkflowRunEntity();
+            run.setRunIdPublic("run-pruned");
+            run.setTenantId(TENANT_ID);
+            run.setStatus(RunStatus.COMPLETED);
+            run.setPlanVersion(2);
+            run.setWorkflow(lazyWorkflow);
+            when(workflowRunRepository.findByRunIdPublic("run-pruned")).thenReturn(Optional.of(run));
+            when(planVersionService.resolvePlanForRun(workflowId, 2, TENANT_ID))
+                    .thenReturn(new WorkflowPlanVersionService.RunPlan(null, 2));
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> dataOf(Optional<ToolExecutionResult> result) {
+            assertThat(result.get().success()).isTrue();
+            return (Map<String, Object>) result.get().data();
+        }
+
+        @Test
+        @DisplayName("get_run with epoch=N")
+        void epochDetail() {
+            when(agentWorkflowFireService.buildEpochDetailReport(eq(run), any(), eq(1), eq(TENANT_ID)))
+                    .thenReturn(Map.of("epoch", 1));
+
+            Map<String, Object> data = dataOf(module.execute("get_run",
+                    Map.of("run_id", "run-pruned", "epoch", 1), TENANT_ID, null));
+
+            assertThat(data).containsEntry("epoch", 1).containsKey("plan_note");
+            verify(lazyWorkflow, never()).getPlan();
+        }
+
+        @Test
+        @DisplayName("get_node_output")
+        void nodeOutput() {
+            when(agentWorkflowFireService.buildNodeOutputReport(eq(run), any(), eq(1), eq("core:x"), eq(TENANT_ID),
+                    any(), any(), any(), any(), any(), any())).thenReturn(Map.of("node_id", "core:x"));
+
+            Map<String, Object> data = dataOf(module.execute("get_node_output",
+                    Map.of("run_id", "run-pruned", "epoch", 1, "node_id", "core:x"), TENANT_ID, null));
+
+            assertThat(data).containsEntry("node_id", "core:x").containsKey("plan_note");
+            verify(lazyWorkflow, never()).getPlan();
         }
     }
 }

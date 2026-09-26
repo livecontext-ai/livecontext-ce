@@ -180,6 +180,9 @@ public class StepNode extends BaseNode {
                 billingIdentifiers.put("__workflowId__", context.plan().getId());
             }
             billingIdentifiers.put("__analyticsNodeId__", nodeId);
+            // This result becomes the step's OUTPUT, read whole by downstream nodes: the catalog
+            // then clips text only above 1 MB (inline base64 still above 4 KB).
+            billingIdentifiers.put(com.apimarketplace.orchestrator.services.impl.CatalogToolsGateway.STEP_OUTPUT_MARKER, Boolean.TRUE);
             // Propagate the workflow author's explicit credential choice
             // (CredentialSection.tsx UI toggle, persisted on Step). The gateway
             // forwards these markers to the catalog as `credentialSource` /
@@ -215,7 +218,8 @@ public class StepNode extends BaseNode {
             // Masked and bounded on the way out: a tool argument can be a token the author
             // typed or a {{$vars.secret}} the engine resolved, and a CRUD write carries whole
             // rows. The map handed to the gateway above is untouched - only the reported copy.
-            enrichedOutput.put("resolved_params", ReportedParams.forReport(inputData));
+            enrichedOutput.put("resolved_params",
+                ReportedParams.forReport(CrudDeferredScalars.reportable(inputData, stepConfig.crud())));
             // And, when the credential was chosen at run time, WHICH account served.
             // Null in static mode, so the output of every existing step is unchanged.
             Map<String, Object> credentialSelection = selection.describe(rawSelector);
@@ -241,6 +245,12 @@ public class StepNode extends BaseNode {
                 // right level. Re-logging every case at ERROR here undid that entirely.
                 if (UserActionableFailure.isUserActionable(errorMsg)) {
                     logger.warn("Step refused: nodeId={}, reason={}", nodeId, errorMsg);
+                } else if (isProviderCredentialRefusal(result.output())) {
+                    // The provider refused the credential (401/403). Every catalogue path that can
+                    // report that status has already logged it at ERROR at its source, with the
+                    // provider's reason, so a second ERROR here only doubled the count (21 extra
+                    // lines in 7 days for one expired OAuth token). The step still fails as before.
+                    logger.warn("Step refused by the provider (credential): nodeId={}, reason={}", nodeId, errorMsg);
                 } else {
                     logger.error("❌ Step execution failed: nodeId={}, error={}",
                         nodeId, errorMsg);
@@ -277,7 +287,8 @@ public class StepNode extends BaseNode {
         out.put("item_index", context.itemIndex());
         out.put("itemIndex", context.itemIndex());
         out.put("item_id", context.itemId());
-        out.put("resolved_params", ReportedParams.forReport(inputData != null ? inputData : Map.of()));
+        out.put("resolved_params", ReportedParams.forReport(
+            inputData != null ? CrudDeferredScalars.reportable(inputData, stepConfig.crud()) : Map.of()));
         if (errorMessage != null) {
             out.put("error", errorMessage);
         }
@@ -295,7 +306,8 @@ public class StepNode extends BaseNode {
         // Masked, and reported: this path emitted the whole resolved argument map under
         // `input` with no masking and no `resolved_params` at all, so the one exit where
         // the tool never ran was also the one that published its arguments in full.
-        Map<String, Object> reportable = ReportedParams.forReport(inputData);
+        Map<String, Object> reportable = ReportedParams.forReport(
+            CrudDeferredScalars.reportable(inputData, stepConfig.crud()));
         output.put("input", reportable);
         output.put("resolved_params", reportable);
         output.put("passthrough", true);
@@ -337,6 +349,8 @@ public class StepNode extends BaseNode {
             }
             if (stepConfig.crud() != null) {
                 Map<String, Object> crudMap = buildCrudConfigMap(stepConfig.crud());
+                // A {{...}} limit / offset the parser set aside resolves with the rest of the map.
+                CrudDeferredScalars.putTemplates(crudMap, stepConfig.crud());
                 logger.info("🔧 [CRUD DEBUG] StepNode - crudMap (before template resolution): {}", ReportedParams.forReport(crudMap));
                 rawInput.put("crud", crudMap);
             }
@@ -359,7 +373,7 @@ public class StepNode extends BaseNode {
                     logger.warn("🔧 [CRUD DEBUG] Step {} has unresolved templates, some dependencies may be missing", nodeId);
                 }
 
-                return resolved;
+                return CrudDeferredScalars.coerce(resolved, stepConfig.crud());
             } catch (com.apimarketplace.orchestrator.services.expression.JsonParseException jpe) {
                 // Surface json()/fromjson() typed errors so the outer catch in execute()
                 // marks the step FAILED with the field-named message - never silently
@@ -367,9 +381,13 @@ public class StepNode extends BaseNode {
                 // verbatim to the catalog).
                 logger.error("Template resolution failed for step {}: {}", nodeId, jpe.getMessage());
                 throw jpe;
-            } catch (Exception e) {
-                logger.error("🔧 [CRUD DEBUG] Template resolution failed for step {}: {}", nodeId, e.getMessage());
-                // Fall back to raw input + context
+            } catch (RuntimeException e) {
+                // Same rule as the json() case above, for every other resolution failure: the
+                // step FAILS with the reason. The fallback sent the raw params, {{...}} and all,
+                // to the tool, and reported them plus the whole trigger payload as its input.
+                logger.error("Template resolution failed for step {}: {}", nodeId, e.getMessage());
+                throw new IllegalStateException(
+                    "Could not resolve the step's parameters: " + e.getMessage(), e);
             }
         }
 
@@ -597,5 +615,17 @@ public class StepNode extends BaseNode {
 
     public static Builder builder() {
         return new Builder();
+    }
+
+    /**
+     * True when the catalogue reported that the provider refused the credential: an HTTP 401 or
+     * 403 in the flattened tool output ({@code http_status}).
+     */
+    static boolean isProviderCredentialRefusal(Map<String, Object> output) {
+        if (output == null) {
+            return false;
+        }
+        Object status = output.get("http_status");
+        return status instanceof Number n && (n.intValue() == 401 || n.intValue() == 403);
     }
 }

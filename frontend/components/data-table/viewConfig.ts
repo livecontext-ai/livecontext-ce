@@ -69,7 +69,8 @@ export function createViewConfig(
     // In workflow mode, columns are fully data-driven (backend detailed endpoint
     // at root level, frontend-derived from navigated content at nested level).
     // System fixed columns (Index, Value) would show empty cells - disable them.
-    // ID column is enabled when explicitly requested (modal / jsonPath sub-tables).
+    // ID lane: enabled when the caller asks for it. WorkflowStepTable (run Logs, inspector, run
+    // modal) asks at every depth, so input/output keep the pinned #ID lane too.
     return {
       mode: isModal ? 'workflowModal' : 'workflow',
       isNestedNavigation,

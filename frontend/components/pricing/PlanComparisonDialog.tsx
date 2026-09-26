@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import FeatureLabel from '@/components/pricing/FeatureLabel';
 import ReferencePrice from '@/components/pricing/ReferencePrice';
 import { usePricingEvent } from '@/hooks/usePricingEvent';
-import { calcPrice, creditFactsFor, CREDIT_TIERS, FREE_AI_CREDITS } from '@/lib/billing/pricing-constants';
+import { calcPrice, creditFactsFor, CREDIT_TIERS } from '@/lib/billing/pricing-constants';
 import {
   buildPlanComparison,
   COMPARISON_PLAN_IDS,
@@ -69,20 +69,10 @@ export interface PlanComparisonDialogProps {
    * for a self-hosted install with no cloud plan governing it.
    */
   currentPlanCode?: string | null;
-  /**
-   * The Free plan's monthly AI allowance (V494). Defaults to the seeded figure,
-   * which is the right answer on the public landing: the live value comes from
-   * the plans endpoint, which needs an authenticated query client this surface
-   * deliberately does not assume - see the note on {@link AppPlanComparisonDialog}.
-   * Inside the app the wrapper passes the configured number, so the pricing card
-   * and this table cannot quote two different allowances on the same screen.
-   */
-  freeAiCredits?: number;
 }
 
 export default function PlanComparisonDialog({
   currentPlanCode = null,
-  freeAiCredits = FREE_AI_CREDITS,
 }: PlanComparisonDialogProps) {
   const [open, setOpen] = React.useState(false);
   const [request, setRequest] = React.useState<PlanComparisonRequest>({});
@@ -104,7 +94,6 @@ export default function PlanComparisonDialog({
   return (
     <PlanComparisonBody
       currentPlanCode={currentPlanCode}
-      freeAiCredits={freeAiCredits}
       request={request}
       onClose={() => setOpen(false)}
     />
@@ -113,17 +102,14 @@ export default function PlanComparisonDialog({
 
 function PlanComparisonBody({
   currentPlanCode,
-  freeAiCredits,
   request,
   onClose,
 }: {
   currentPlanCode: string | null;
-  freeAiCredits: number;
   request: PlanComparisonRequest;
   onClose: () => void;
 }) {
   const t = useTranslations('pricing.compare');
-  const tCards = useTranslations('pricing.planCards');
   const tBilling = useTranslations('pricing.billing');
   const locale = useLocale();
   const { event: pricingEvent } = usePricingEvent();
@@ -249,7 +235,6 @@ function PlanComparisonBody({
                     isHighlighted={row.id === highlightRow}
                     rowRef={row.id === highlightRow ? highlightedRowRef : undefined}
                     entryCredits={entryCredits}
-                    freeAiCredits={freeAiCredits}
                     creditFacts={creditFacts}
                   />
                 ))}
@@ -366,7 +351,6 @@ function ComparisonRowView({
   isHighlighted,
   rowRef,
   entryCredits,
-  freeAiCredits,
   creditFacts,
 }: {
   row: ComparisonRow;
@@ -374,7 +358,6 @@ function ComparisonRowView({
   isHighlighted: boolean;
   rowRef?: React.Ref<HTMLTableRowElement>;
   entryCredits: string;
-  freeAiCredits: number;
   creditFacts: Record<string, string | number>;
 }) {
   const t = useTranslations('pricing.compare');
@@ -452,8 +435,6 @@ function ComparisonRowView({
             <ScaleCell
               featureKey={row.cells[planId]}
               entryCredits={entryCredits}
-              freeAiCredits={freeAiCredits}
-              fallbackValueKey={row.fallbackValueKey}
             />
           ) : (
             <FlagCell included={row.cells[planId]} />
@@ -467,41 +448,18 @@ function ComparisonRowView({
 function ScaleCell({
   featureKey,
   entryCredits,
-  freeAiCredits,
-  fallbackValueKey,
 }: {
   featureKey: string | null;
   entryCredits: string;
-  freeAiCredits: number;
-  fallbackValueKey?: string;
 }) {
   const t = useTranslations('pricing.compare');
-  // The APP locale, via next-intl, like every other component here: the figure is
-  // rendered server-side on the public landing too, so a /fr reader must get
-  // "100" grouped the French way on the first paint and after hydration alike.
-  const locale = useLocale();
-  if (!featureKey) {
-    // A dimension can say what "no key here" MEANS rather than leaving the cross
-    // to imply the plan is missing something. The AI allowance is the case: paid
-    // plans have no separate pot because their credits already fund agents.
-    return fallbackValueKey ? <span>{t(`values.${fallbackValueKey}`)}</span> : <FlagCell included={false} />;
-  }
-  // The values that are not constants: paid plans quote the pack the reader is
-  // currently looking at (chosen on the plans page), and the Free AI allowance
-  // quotes whatever the Free plan row carries.
+  if (!featureKey) return <FlagCell included={false} />;
+  // The one value that is not a constant: paid plans quote the pack the reader is
+  // currently looking at (chosen on the plans page).
   const value =
     featureKey === 'creditsDynamic'
       ? t('values.creditsDynamic', { credits: entryCredits })
-      : featureKey === 'aiCreditsFree'
-        // An allowance of zero is how an admin CLOSES the free tier. Printing
-        // '0 / month' would advertise a pot nobody has; printing the paid plans'
-        // "included in credits" would be worse still, since it says the opposite of
-        // what the Free plan's credits do. The honest cell is the same one every other
-        // dimension uses for "this plan does not have it".
-        ? (freeAiCredits > 0
-            ? t('values.aiCreditsFree', { credits: freeAiCredits.toLocaleString(locale) })
-            : t('notIncluded'))
-        : t(`values.${featureKey}`);
+      : t(`values.${featureKey}`);
 
   return <span>{value}</span>;
 }

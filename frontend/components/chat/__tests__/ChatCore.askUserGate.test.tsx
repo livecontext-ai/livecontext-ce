@@ -18,6 +18,7 @@ import { useMessageQueueStore } from '@/lib/stores/message-queue-store';
 
 const mocks = vi.hoisted(() => ({
   clearPendingAction: vi.fn(),
+  track: vi.fn(),
   answerAskUser: vi.fn(),
   dismissAskUser: vi.fn(),
   streaming: {
@@ -35,6 +36,8 @@ const mocks = vi.hoisted(() => ({
     checkAndReconnect: vi.fn(),
   },
 }));
+
+vi.mock('@/lib/analytics/analytics', () => ({ track: (...a: unknown[]) => mocks.track(...a) }));
 
 vi.mock('next-intl', () => ({
   useTranslations: () => (key: string) => key,
@@ -203,6 +206,47 @@ describe('ChatCore ask_user question cards', () => {
     expect(queued()[0].content).toBe('askUser.resumeSkipped');
     expect(queued()[0].keepPendingActions).toBe(true);
     expect(mocks.streaming.clearAskUserQuestion).toHaveBeenCalledWith('conversation-1', `ask:${question.toolCallId}`);
+  });
+
+  it('an answer is reported with counts and flags only, never the question or answer text', async () => {
+    mocks.answerAskUser.mockResolvedValue(true);
+    mockStream([heldQuestion]);
+    renderChat();
+
+    fireEvent.click(screen.getByText('submit-call-7'));
+
+    await waitFor(() => expect(mocks.track).toHaveBeenCalledWith('ask_user_answered', {
+      question_count: 2, answer_count: 2, blocking: true, released: true, free_text_used: true,
+    }));
+    const sent = JSON.stringify(mocks.track.mock.calls);
+    for (const text of ['Tone', 'Friendly', 'Newsletter', 'Which tone?']) expect(sent).not.toContain(text);
+  });
+
+  it('an answer to a hold that timed out reports released=false', async () => {
+    mocks.answerAskUser.mockResolvedValue(false);
+    mockStream([heldQuestion]);
+    renderChat();
+
+    fireEvent.click(screen.getByText('submit-call-7'));
+
+    await waitFor(() => expect(mocks.track).toHaveBeenCalledWith('ask_user_answered', expect.objectContaining({
+      blocking: true, released: false,
+    })));
+  });
+
+  it('a Skip is reported as ask_user_dismissed, and a failed answer reports nothing', async () => {
+    mocks.answerAskUser.mockRejectedValueOnce(new Error('network'));
+    mockStream([unheldQuestion]);
+    renderChat();
+
+    fireEvent.click(screen.getByText('submit-call-8'));
+    await waitFor(() => expect(mocks.answerAskUser).toHaveBeenCalledTimes(1));
+    expect(mocks.track).not.toHaveBeenCalledWith('ask_user_answered', expect.anything());
+
+    fireEvent.click(screen.getByText('skip-call-8'));
+    await waitFor(() => expect(mocks.track).toHaveBeenCalledWith('ask_user_dismissed', {
+      question_count: 2, answer_count: 0, blocking: false, released: false, free_text_used: false,
+    }));
   });
 
   it('a failed Skip preserves the question and permits retry instead of silently losing it', async () => {

@@ -286,6 +286,24 @@ public class PlatformCredentialService {
     }
 
     /**
+     * The V513 {@code selected_scopes} value a save stores. {@code null} in the request leaves the
+     * row's current selection alone (a caller that knows nothing about scope selection, such as the
+     * admin dialog, must not wipe it); an empty list clears it back to "no selection", which means
+     * every catalog scope. Blank and duplicate entries are dropped.
+     */
+    static String resolveSelectedScopes(List<String> requested, String current) {
+        if (requested == null) {
+            return current;
+        }
+        List<String> cleaned = requested.stream()
+                .filter(v -> v != null && !v.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+        return cleaned.isEmpty() ? null : String.join(" ", cleaned);
+    }
+
+    /**
      * Create or update a platform credential, tenant-aware.
      * When tenantId is provided, creates/updates a tenant-scoped credential.
      * When tenantId is null, creates/updates a platform-wide credential (admin).
@@ -361,7 +379,8 @@ public class PlatformCredentialService {
                     current.createdBy(),
                     current.tenantId(),
                     tenantId != null ? PlatformCredential.DEFAULT_VARIANT : current.variant(),
-                    current.organizationId()
+                    current.organizationId(),
+                    resolveSelectedScopes(request.selectedScopes(), current.selectedScopes())
             );
             log.info("Updating platform credential: {}/{} (tenant: {}, org: {})",
                     normalizedName, current.variant(), tenantId, current.organizationId());
@@ -434,7 +453,8 @@ public class PlatformCredentialService {
                     variantToStore,
                     // Tenant BYOK rows carry the active workspace (null = personal
                     // scope). Platform-wide rows (tenantId == null) stay org-NULL.
-                    tenantId != null ? organizationId : null
+                    tenantId != null ? organizationId : null,
+                    resolveSelectedScopes(request.selectedScopes(), null)
             );
             log.info("Creating platform credential: {}/{} (tenant: {}, org: {})",
                     normalizedName, variantToStore, tenantId, tenantId != null ? organizationId : null);
@@ -511,7 +531,8 @@ public class PlatformCredentialService {
                 current.createdBy(),
                 current.tenantId(),
                 current.variant(),
-                current.organizationId()
+                current.organizationId(),
+                current.selectedScopes()
         );
 
         PlatformCredential saved = repository.save(updated);
@@ -538,6 +559,26 @@ public class PlatformCredentialService {
             return repository.deleteByIntegrationName(normalizeIntegrationName(integrationName), tenantId);
         }
         return repository.deleteByIntegrationName(normalizeIntegrationName(integrationName));
+    }
+
+    /**
+     * The BYOK row a {@code DELETE /my} in this workspace would remove, or empty. Exact scope,
+     * no fallback to personal or platform rows (same lookup the delete uses).
+     */
+    public Optional<PlatformCredential> findOwnedRow(String integrationName, String tenantId, String organizationId) {
+        return repository.findOwnedRow(normalizeIntegrationName(integrationName), tenantId, organizationId);
+    }
+
+    /**
+     * Rows other than {@code excludedRowId} that still hold {@code clientId} for {@code tenantId}
+     * (its BYOK rows in any workspace, and platform rows). See
+     * {@code PlatformCredentialRepository#findRowsHoldingClient}.
+     */
+    public List<PlatformCredential> rowsHoldingClient(String clientId, String tenantId, Long excludedRowId) {
+        if (clientId == null || clientId.isBlank()) {
+            return List.of();
+        }
+        return repository.findRowsHoldingClient(clientId, tenantId, excludedRowId);
     }
 
     /**

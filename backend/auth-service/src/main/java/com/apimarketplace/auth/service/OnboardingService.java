@@ -35,6 +35,13 @@ public class OnboardingService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.apimarketplace.auth.analytics.AuthAnalyticsEmitter analytics;
 
+    /**
+     * Lifecycle emails (Resend). Optional so hand-built test instances are untouched; a null
+     * field, like an inactive client, sends nothing.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails;
+
     private static final Logger log = LoggerFactory.getLogger(OnboardingService.class);
 
     private final UserOnboardingRepository onboardingRepository;
@@ -408,6 +415,8 @@ public class OnboardingService {
 
         // The persona record: what the user declared, re-bucketed to the option lists.
         if (analytics != null && !alreadyCompleted) analytics.onboardingCompleted(user.getId(), saved, personalOrgId);
+        // The persona is a contact property of the lifecycle emails.
+        if (lifecycleEmails != null) lifecycleEmails.syncContact(user.getId());
 
         log.info("✅ Onboarding completed for providerId: {}", providerId);
         OnboardingResponse completed = OnboardingResponse.completed(saved);

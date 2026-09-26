@@ -44,6 +44,9 @@ class EmailVerificationServiceTest {
     @Mock
     private KeycloakAdminEmailVerifier kcAdminVerifier;
 
+    @Mock
+    private com.apimarketplace.auth.lifecycle.UserLifecycleContextService lifecycleContext;
+
     @InjectMocks
     private EmailVerificationService emailVerificationService;
 
@@ -64,6 +67,7 @@ class EmailVerificationServiceTest {
         // field-inject additional @Autowired(required=false) fields. Force it here
         // so the kcAdminVerifier mock is reachable in cloud-mode tests.
         ReflectionTestUtils.setField(emailVerificationService, "kcAdminVerifier", kcAdminVerifier);
+        ReflectionTestUtils.setField(emailVerificationService, "lifecycleContext", lifecycleContext);
     }
 
     @Nested
@@ -189,6 +193,76 @@ class EmailVerificationServiceTest {
             verify(kcAdminVerifier).markEmailVerified("kc-uuid-123");
         }
 
+        private void stubValidCode() {
+            EmailVerificationCode code = new EmailVerificationCode(1L, "test@example.com", "123456",
+                    LocalDateTime.now().plusMinutes(10));
+            when(codeRepository.findTopByUserIdAndVerifiedFalseOrderByCreatedAtDesc(1L))
+                    .thenReturn(Optional.of(code));
+            when(codeRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+            when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        }
+
+        @Test
+        @DisplayName("the unverified -> verified transition sends user.signed_up through the write-once guard")
+        void verificationTransitionEmitsSignedUpOnce() {
+            stubValidCode();
+            testUser.setEmailVerified(false);
+
+            emailVerificationService.verifyCode(testUser, "123456");
+
+            verify(lifecycleContext, times(1)).recordSignup(1L);
+            verifyNoMoreInteractions(lifecycleContext);
+        }
+
+        @Test
+        @DisplayName("Regression (double welcome): two verification transitions on one account both go through the guard, never around it")
+        void repeatedTransitionCannotDoubleEmit() {
+            stubValidCode();
+            testUser.setEmailVerified(false);
+            User staleCopy = new User();
+            staleCopy.setId(1L);
+            staleCopy.setEmail("test@example.com");
+            staleCopy.setProviderId("kc-uuid-123");
+            staleCopy.setEmailVerified(false);
+            EmailVerificationCode again = new EmailVerificationCode(1L, "test@example.com", "123456",
+                    LocalDateTime.now().plusMinutes(10));
+            when(codeRepository.findTopByUserIdAndVerifiedFalseOrderByCreatedAtDesc(1L))
+                    .thenReturn(Optional.of(new EmailVerificationCode(1L, "test@example.com", "123456",
+                            LocalDateTime.now().plusMinutes(10))), Optional.of(again));
+
+            emailVerificationService.verifyCode(testUser, "123456");
+            emailVerificationService.verifyCode(staleCopy, "123456");
+
+            // Both saw wasVerified == false; only the guard's write-once stamp keeps one event.
+            verify(lifecycleContext, times(2)).recordSignup(1L);
+            verifyNoMoreInteractions(lifecycleContext);
+        }
+
+        @Test
+        @DisplayName("an account that was already verified emits no second user.signed_up")
+        void alreadyVerifiedEmitsNothing() {
+            stubValidCode();
+            testUser.setEmailVerified(true);
+
+            emailVerificationService.verifyCode(testUser, "123456");
+
+            verifyNoInteractions(lifecycleContext);
+        }
+
+        @Test
+        @DisplayName("a wrong code verifies nothing and emits nothing")
+        void wrongCodeEmitsNothing() {
+            EmailVerificationCode code = new EmailVerificationCode(1L, "test@example.com", "123456",
+                    LocalDateTime.now().plusMinutes(10));
+            when(codeRepository.findTopByUserIdAndVerifiedFalseOrderByCreatedAtDesc(1L))
+                    .thenReturn(Optional.of(code));
+
+            assertThatThrownBy(() -> emailVerificationService.verifyCode(testUser, "000000"))
+                    .isInstanceOf(EmailVerificationService.InvalidCodeException.class);
+
+            verifyNoInteractions(lifecycleContext);
+        }
+
         @Test
         @DisplayName("CE embedded mode disables code verification without Keycloak or repository calls")
         void embeddedModeDisablesCodeVerificationWithoutKeycloakOrRepositoryCalls() {
@@ -296,6 +370,192 @@ class EmailVerificationServiceTest {
             boolean verified = emailVerificationService.isEmailVerified("kc-uuid-123");
 
             assertThat(verified).isTrue();
+        }
+    }
+
+    /**
+     * Real transaction semantics: a recording {@link org.springframework.transaction.PlatformTransactionManager}
+     * drives the verification transaction and the signup claim's own transaction, and the real
+     * lifecycle services sit behind {@code recordSignup}. Only the database and Resend are mocked.
+     */
+    @Nested
+    @DisplayName("user.signed_up at verification, with real transaction semantics")
+    class SignupAfterCommit {
+
+        private final java.util.List<String> events = new java.util.ArrayList<>();
+        private final java.util.List<Runnable> workerQueue = new java.util.ArrayList<>();
+        private RecordingTxManager tm;
+        private com.apimarketplace.auth.lifecycle.ResendClient resend;
+        private EmailVerificationService service;
+
+        @BeforeEach
+        void wire() {
+            tm = new RecordingTxManager(events);
+            resend = mock(com.apimarketplace.auth.lifecycle.ResendClient.class);
+            when(resend.isActive()).thenReturn(true);
+            // The Resend worker runs later, on its own thread: queue the task, run it after the commit.
+            lenient().when(resend.submit(any())).thenAnswer(inv -> {
+                events.add("submit");
+                workerQueue.add(inv.getArgument(0));
+                return true;
+            });
+            com.apimarketplace.auth.lifecycle.LifecycleEmailService emails =
+                    new com.apimarketplace.auth.lifecycle.LifecycleEmailService(resend, userRepository,
+                            mock(com.apimarketplace.auth.repository.UserOnboardingRepository.class), null, tm);
+            com.apimarketplace.auth.lifecycle.UserLifecycleContextService realContext =
+                    new com.apimarketplace.auth.lifecycle.UserLifecycleContextService(userRepository,
+                            mock(com.apimarketplace.auth.repository.UserAcquisitionRepository.class), emails, tm);
+            service = new EmailVerificationService(codeRepository, userRepository, mailSender);
+            ReflectionTestUtils.setField(service, "authMode", "keycloak");
+            ReflectionTestUtils.setField(service, "kcAdminVerifier", kcAdminVerifier);
+            ReflectionTestUtils.setField(service, "lifecycleContext", realContext);
+
+            EmailVerificationCode code = new EmailVerificationCode(1L, "test@example.com", "123456",
+                    LocalDateTime.now().plusMinutes(10));
+            when(codeRepository.findTopByUserIdAndVerifiedFalseOrderByCreatedAtDesc(1L)).thenReturn(Optional.of(code));
+            lenient().when(codeRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            lenient().when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+            lenient().when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
+            testUser.setEmailVerified(false);
+        }
+
+        private void verifyInTransaction() {
+            new org.springframework.transaction.support.TransactionTemplate(tm)
+                    .executeWithoutResult(status -> service.verifyCode(testUser, "123456"));
+        }
+
+        private void runWorker() {
+            events.add("worker");
+            java.util.List<Runnable> tasks = new java.util.ArrayList<>(workerQueue);
+            workerQueue.clear();
+            tasks.forEach(Runnable::run);
+        }
+
+        @Test
+        @DisplayName("Regression (verification undone): a failing signup claim never rolls back the verification")
+        void failingClaimNeverRollsBackVerification() {
+            when(userRepository.markSignupEmittedIfFirst(eq(1L), any())).thenAnswer(inv -> {
+                events.add("claim");
+                throw new org.springframework.dao.DataAccessResourceFailureException("statement timeout");
+            });
+
+            verifyInTransaction();
+            runWorker();
+
+            // The verification committed; the worker read the user (read-only), then claimed in
+            // its own transaction, whose rollback touched nothing else.
+            assertThat(events).containsExactly("begin", "commit", "submit",
+                    "worker", "begin-read", "commit", "begin", "claim", "rollback");
+            assertThat(testUser.isEmailVerified()).isTrue();
+            verify(kcAdminVerifier).markEmailVerified("kc-uuid-123");
+            verify(resend, never()).sendEvent(anyString(), anyString(), anyMap());
+        }
+
+        @Test
+        @DisplayName("happy path: user.signed_up is claimed and sent on the worker, after the verification committed")
+        void signupSentAfterCommit() {
+            when(userRepository.markSignupEmittedIfFirst(eq(1L), any())).thenAnswer(inv -> {
+                events.add("claim");
+                return 1;
+            });
+            when(resend.sendEvent(anyString(), anyString(), anyMap())).thenReturn(true); // delivered: the claim is kept
+
+            verifyInTransaction();
+            assertThat(events).containsExactly("begin", "commit", "submit");
+            verify(resend, never()).sendEvent(anyString(), anyString(), anyMap());
+
+            runWorker();
+
+            assertThat(events).containsExactly("begin", "commit", "submit",
+                    "worker", "begin-read", "commit", "begin", "claim", "commit");
+            org.mockito.InOrder order = inOrder(resend);
+            order.verify(resend).upsertContact(eq("test@example.com"), any(), anyMap());
+            order.verify(resend).sendEvent(eq("test@example.com"),
+                    eq(com.apimarketplace.auth.lifecycle.LifecycleEvents.USER_SIGNED_UP), anyMap());
+        }
+
+        @Test
+        @DisplayName("a verification whose transaction rolls back never claims nor sends user.signed_up")
+        void rolledBackVerificationSendsNothing() {
+            // recordSignup was reached, then the enclosing transaction fails: only the commit
+            // boundary can hold the claim and the event back.
+            assertThatThrownBy(() -> new org.springframework.transaction.support.TransactionTemplate(tm)
+                    .executeWithoutResult(status -> {
+                        service.verifyCode(testUser, "123456");
+                        throw new IllegalStateException("enclosing work failed");
+                    })).isInstanceOf(IllegalStateException.class);
+            runWorker();
+
+            assertThat(events).containsExactly("begin", "rollback", "worker");
+            verify(userRepository, never()).markSignupEmittedIfFirst(anyLong(), any());
+            verify(resend, never()).sendEvent(anyString(), anyString(), anyMap());
+        }
+    }
+
+    /** Minimal real transaction manager: tracks one transaction per test and records begin/commit/rollback. */
+    static final class RecordingTxManager
+            extends org.springframework.transaction.support.AbstractPlatformTransactionManager {
+        private final java.util.List<String> events;
+        private Object current;
+
+        RecordingTxManager(java.util.List<String> events) {
+            this.events = events;
+        }
+
+        private static final class Tx {
+            final boolean existing;
+
+            Tx(boolean existing) {
+                this.existing = existing;
+            }
+        }
+
+        @Override
+        protected Object doGetTransaction() {
+            return new Tx(current != null);
+        }
+
+        @Override
+        protected boolean isExistingTransaction(Object transaction) {
+            return ((Tx) transaction).existing;
+        }
+
+        @Override
+        protected void doBegin(Object transaction, org.springframework.transaction.TransactionDefinition definition) {
+            current = transaction;
+            events.add(definition.isReadOnly() ? "begin-read" : "begin");
+        }
+
+        @Override
+        protected Object doSuspend(Object transaction) {
+            Object suspended = current;
+            current = null;
+            return suspended;
+        }
+
+        @Override
+        protected void doResume(Object transaction, Object suspendedResources) {
+            current = suspendedResources;
+        }
+
+        @Override
+        protected void doCommit(org.springframework.transaction.support.DefaultTransactionStatus status) {
+            events.add("commit");
+        }
+
+        @Override
+        protected void doRollback(org.springframework.transaction.support.DefaultTransactionStatus status) {
+            events.add("rollback");
+        }
+
+        @Override
+        protected void doSetRollbackOnly(org.springframework.transaction.support.DefaultTransactionStatus status) {
+            events.add("rollback-only");
+        }
+
+        @Override
+        protected void doCleanupAfterCompletion(Object transaction) {
+            current = null;
         }
     }
 }

@@ -32,6 +32,8 @@ export function DocsToc() {
   const [activeId, setActiveId] = useState<string>('');
 
   useEffect(() => {
+    // A new page: forget the previous page's highlight (it may share a heading id).
+    setActiveId('');
     const root = document.querySelector('.docs-prose');
     if (!root) {
       setHeadings([]);
@@ -39,7 +41,9 @@ export function DocsToc() {
     }
 
     const els = Array.from(root.querySelectorAll('h2, h3')) as HTMLElement[];
-    const used = new Set<string>();
+    // Seed with the explicit ids already on the page (headings that set their own id,
+    // anchors in the prose), so a generated slug never collides with one of them.
+    const used = new Set<string>(Array.from(document.querySelectorAll('[id]'), (el) => el.id));
     const list: Heading[] = els.map((el) => {
       let id = el.id;
       if (!id) {
@@ -54,6 +58,18 @@ export function DocsToc() {
       return { id, text: el.textContent || '', level: el.tagName === 'H3' ? 3 : 2 };
     });
     setHeadings(list);
+
+    // Heading ids are assigned here, after hydration, so the browser's own
+    // scroll-to-fragment on load found nothing: honour a deep link (#section) now.
+    // A malformed fragment (a stray `%`) must not throw here: an uncaught error in this
+    // effect would take the whole page down.
+    let hash = '';
+    try {
+      hash = decodeURIComponent(window.location.hash.slice(1));
+    } catch {
+      hash = '';
+    }
+    if (hash) document.getElementById(hash)?.scrollIntoView();
 
     if (list.length === 0) return;
 
@@ -80,6 +96,7 @@ export function DocsToc() {
           <a
             key={h.id}
             href={`#${h.id}`}
+            aria-current={activeId === h.id ? 'location' : undefined}
             className={`docs-toc-link${h.level === 3 ? ' is-sub' : ''}${activeId === h.id ? ' is-active' : ''}`}
           >
             {h.text}

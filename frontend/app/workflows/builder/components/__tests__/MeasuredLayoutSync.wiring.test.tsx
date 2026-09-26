@@ -35,12 +35,15 @@ describe('MeasuredLayoutSync wiring', () => {
     expect(tag).toContain('isLocked={isLocked}');
   });
 
-  it('regression: the plan-sync announces AFTER its own layout, and names the workflow', () => {
+  it('regression: the plan-sync announces only a graph laid out from scratch, and names the workflow', () => {
+    // The replay recomputes EVERY node. Announced after a sync that kept the stored
+    // positions (the common case: the agent added one node to a workflow the user laid
+    // out), it moved the nodes the user had placed and saved.
     const listeners = read('hooks/useWorkflowEventListeners.ts');
-    const dagreAt = listeners.indexOf('applyDagreLayout(');
-    const announceAt = listeners.indexOf('dispatchLayoutApplied(', dagreAt);
-    expect(dagreAt).toBeGreaterThan(-1);
-    expect(announceAt).toBeGreaterThan(dagreAt);
+    expect(listeners).not.toContain('applyDagreLayout(');
+    expect(listeners).toMatch(
+      /if \(importResult\.laidOutFromScratch\) \{\s*dispatchLayoutApplied\(workflowId\);\s*\}/,
+    );
     // An id-less announcement is permissive by the scoping rule, so it would reach every
     // mounted canvas and move a sibling workflow's nodes.
     expect(listeners).toMatch(/dispatchLayoutApplied\(\s*workflowId\s*\)/);

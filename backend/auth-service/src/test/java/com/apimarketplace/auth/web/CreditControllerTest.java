@@ -77,6 +77,29 @@ class CreditControllerTest {
         }
 
         @Test
+        @DisplayName("regression: a blank sourceId (what the client sends for 'no key') reaches the service as null")
+        void blankSourceIdIsNormalisedToNull() {
+            var request = new CreditController.CreditConsumeRequest(
+                    "AGENT_EXECUTION", "", "openai", "gpt-4", 100, 50,
+                    null, null, null, null, null, null, null);
+            when(creditService.consumeForAgent(USER_ID, null, "openai", "gpt-4",
+                    LlmTokenBreakdown.of(100, 50), "AGENT_EXECUTION"))
+                    .thenReturn(CreditConsumeResult.success(new BigDecimal("5"), new BigDecimal("95")));
+
+            assertThat(controller.consume(USER_ID, request).getStatusCode().value()).isEqualTo(200);
+            verify(creditService).consumeForAgent(USER_ID, null, "openai", "gpt-4",
+                    LlmTokenBreakdown.of(100, 50), "AGENT_EXECUTION");
+
+            var webSearch = new CreditController.CreditConsumeRequest(
+                    "WEB_SEARCH", "   ", null, null, null, null,
+                    null, null, null, null, null, null, null);
+            when(creditService.consumeForWebSearch(USER_ID, null))
+                    .thenReturn(CreditConsumeResult.success(BigDecimal.ONE, new BigDecimal("94")));
+            controller.consume(USER_ID, webSearch);
+            verify(creditService).consumeForWebSearch(USER_ID, null);
+        }
+
+        @Test
         @DisplayName("keyRoute OWN_KEY routes a chat turn to the flat-fee path too")
         void ownKeyChatTurnTakesTheFlatFeePath() {
             var request = new CreditController.CreditConsumeRequest(
@@ -711,6 +734,37 @@ class CreditControllerTest {
             assertThat(response.getBody())
                     .as("the headline figure must not absorb a restricted pot")
                     .containsEntry("balance", wallet);
+        }
+
+        @Test
+        @DisplayName("V512: llmSpendableBalance is what the service says THIS model can spend, not the headline balance")
+        void llmSpendableBalanceComesFromTheModelAwareRouting() {
+            // A Free account holding 1000 monthly credits and no top-up, asked about a model
+            // outside the free tier: no debit for it can reach the monthly pool, so a budget
+            // guard handed the 1000 would let an agent loop run on money it cannot spend.
+            BigDecimal wallet = new BigDecimal("1000.00");
+            when(creditService.getBalanceBreakdown(USER_ID)).thenReturn(
+                new CreditService.BalanceBreakdown(wallet, wallet, BigDecimal.ZERO, BigDecimal.ZERO, false, true));
+            when(creditService.getLlmSpendableBalance(USER_ID, "anthropic", "claude-opus-4-6"))
+                .thenReturn(BigDecimal.ZERO);
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.getBalance(USER_ID, "anthropic", "claude-opus-4-6");
+
+            assertThat(response.getBody()).containsEntry("llmSpendableBalance", BigDecimal.ZERO);
+            assertThat(response.getBody()).containsEntry("balance", wallet);
+        }
+
+        @Test
+        @DisplayName("without a model the llmSpendableBalance key is absent, as before")
+        void llmSpendableBalanceAbsentWithoutModel() {
+            BigDecimal wallet = new BigDecimal("1000.00");
+            when(creditService.getBalanceBreakdown(USER_ID)).thenReturn(
+                new CreditService.BalanceBreakdown(wallet, wallet, BigDecimal.ZERO, BigDecimal.ZERO, false, true));
+
+            ResponseEntity<Map<String, Object>> response = controller.getBalance(USER_ID, null, null);
+
+            assertThat(response.getBody()).doesNotContainKey("llmSpendableBalance");
         }
 
         @Test

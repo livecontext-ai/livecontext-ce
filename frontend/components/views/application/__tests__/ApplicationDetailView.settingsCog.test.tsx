@@ -3,22 +3,28 @@
  */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 
 /**
- * The application settings cog, bottom-right of the application page.
+ * The application settings cog, in the application controls toolbar.
  *
  * "Create an editable copy" used to sit INLINE in the Info panel's Info tab, above the
  * app description, which every visitor had to scroll past for a one-shot action most
  * never take. It now lives behind this cog (its behaviour is covered by
  * ApplicationSettingsMenu's own suite). What this suite pins is the GATING and the
- * placement: the cog is mounted only for a viewer who can actually make a copy, in its
- * own bottom-right corner, and never for a preview / a publisher / a non-application.
+ * placement: the cog is mounted only for a viewer who can actually make a copy, INSIDE
+ * the controls toolbar the central button opens (it used to float alone in the
+ * bottom-right corner), and never for a preview / a publisher / a non-application.
  */
 
 const cogProps = vi.hoisted(() => [] as Array<{ publicationId?: string; remote?: boolean }>);
 const isPreviewOnly = vi.hoisted(() => ({ value: false }));
 const numericUserId = vi.hoisted(() => ({ value: 42 as number | null }));
+// The interfaces are discovered by a canvas inside a SIDE-PANEL tab: captured here
+// and mounted, so the configs arrive and the carousel (which carries the toolbar) mounts.
+const panelContent = vi.hoisted(() => ({ node: null as unknown }));
+// The interfaces the canvas reports; emptied to play an application with none.
+const canvasConfigs = vi.hoisted(() => ({ value: [{ interfaceId: 'iface-1', actionMapping: {} }] as unknown[] }));
 
 vi.mock('@/lib/api', () => ({ orchestratorApi: { updatePublication: vi.fn() } }));
 vi.mock('next-intl', () => ({ useTranslations: () => (k: string) => k }));
@@ -38,14 +44,35 @@ vi.mock('@/contexts/WorkflowModeContext', () => ({
   }),
 }));
 vi.mock('@/contexts/SidePanelContext', () => ({
-  useSidePanelSafe: () => ({ addTab: vi.fn(), setActiveTab: vi.fn(), open: vi.fn(), isOpen: true }),
+  useSidePanelSafe: () => ({
+    addTab: (tab: { content?: unknown }) => { panelContent.node = tab.content ?? null; },
+    setActiveTab: vi.fn(),
+    open: vi.fn(),
+    isOpen: true,
+  }),
 }));
 vi.mock('@/components/app/WorkflowPanelContent', () => ({
-  WorkflowPanelContent: () => null,
+  WorkflowPanelContent: ({ workflowCanvasSlot }: any) => <>{workflowCanvasSlot}</>,
   setPendingActivateTab: vi.fn(),
 }));
-vi.mock('@/components/workflow/WorkflowRunCanvas', () => ({ WorkflowRunCanvas: () => null }));
-vi.mock('@/components/chat/ApplicationCarousel', () => ({ ApplicationCarousel: () => null }));
+vi.mock('@/components/workflow/WorkflowRunCanvas', async () => {
+  const ReactMod = await import('react');
+  return {
+    WorkflowRunCanvas: ({ onApplicationConfigsChange }: any) => {
+      ReactMod.useEffect(() => {
+        onApplicationConfigsChange?.(canvasConfigs.value);
+      }, [onApplicationConfigsChange]);
+      return null;
+    },
+  };
+});
+// Stand-in for the carousel and its controls toolbar: renders the settings control
+// it is handed inside a toolbar element, as ApplicationTabContent does.
+vi.mock('@/components/chat/ApplicationCarousel', () => ({
+  ApplicationCarousel: (p: { settingsControl?: React.ReactNode }) => (
+    <div data-testid="application-toolbar">{p.settingsControl}</div>
+  ),
+}));
 vi.mock('@/components/marketplace/PublisherAvatar', () => ({ PublisherAvatar: () => null }));
 vi.mock('@/components/marketplace/PublicationInfoPanel', () => ({ PublicationInfoPanel: () => null }));
 vi.mock('@/lib/hooks/useOrgScopedReset', () => ({ useOrgScopedReset: () => undefined }));
@@ -83,17 +110,20 @@ function pub(over: Partial<WorkflowPublication> = {}): WorkflowPublication {
 
 function renderView(props: Partial<React.ComponentProps<typeof ApplicationDetailView>> = {}) {
   cogProps.length = 0;
-  return render(
+  panelContent.node = null;
+  const result = render(
     // `isInstalledClone` is what "installed" MEANS to this component now: the page
     // is bound to the caller's own clone, which is what the copy endpoint resolves.
     <ApplicationDetailView workflowId="wf-1" runId="run-1" publication={pub()} isInstalledClone {...props} />,
   );
+  if (panelContent.node) {
+    act(() => { render(panelContent.node as React.ReactElement); });
+  }
+  return result;
 }
 
-/** The corner the cog is docked in, read off its wrapper. */
-const cogCorner = () => screen.getByTestId('application-settings-menu').parentElement?.className ?? '';
-
 beforeEach(() => {
+  canvasConfigs.value = [{ interfaceId: 'iface-1', actionMapping: {} }];
   cogProps.length = 0;
   isPreviewOnly.value = false;
   numericUserId.value = 42;
@@ -108,12 +138,24 @@ describe('ApplicationDetailView - the settings cog', () => {
     expect(cogProps.at(-1)).toEqual({ publicationId: 'p1', remote: false });
   });
 
-  it('docks it in the BOTTOM-RIGHT corner, opposite the top-right Info panel', () => {
+  it('puts it INSIDE the controls toolbar, no longer floating in the bottom-right corner', () => {
     renderView();
 
-    expect(cogCorner()).toContain('bottom-4');
-    expect(cogCorner()).toContain('right-4');
-    expect(cogCorner()).not.toContain('top-4');
+    const cog = screen.getByTestId('application-settings-menu');
+    expect(cog.parentElement?.getAttribute('data-testid')).toBe('application-toolbar');
+    expect(document.querySelector('.bottom-4.right-4')).toBeNull();
+  });
+
+  it('keeps it reachable, bottom-centre, for an application with NO interface (no toolbar to carry it)', () => {
+    // No interface means no carousel and so no controls toolbar. The copy is then
+    // the one thing the user may still want, so the cog must not vanish with it.
+    canvasConfigs.value = [];
+    renderView();
+
+    const cog = screen.getByTestId('application-settings-menu');
+    expect(screen.queryByTestId('application-toolbar')).toBeNull();
+    expect(cog.parentElement?.className).toContain('left-1/2');
+    expect(cog.parentElement?.className).toContain('bottom-4');
   });
 
   it('forwards the cloud-linked CE flag so the copy goes through the remote endpoint', () => {

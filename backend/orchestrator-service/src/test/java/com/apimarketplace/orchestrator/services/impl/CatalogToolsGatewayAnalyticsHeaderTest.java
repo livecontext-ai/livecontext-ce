@@ -83,4 +83,24 @@ class CatalogToolsGatewayAnalyticsHeaderTest {
         assertThat(headers.getFirst("X-Lc-Node-Id")).isNull();
         assertThat(headers.getFirst("X-Lc-Billing-Scope-Kind")).isEqualTo("STREAM");
     }
+
+    @Test
+    @DisplayName("a step's __stepOutput__ marker becomes X-Lc-Step-Output, so the catalog keeps its text whole")
+    void forwardsStepOutputMarker() {
+        Map<String, Object> ids = new HashMap<>();
+        ids.put("__workflowRunId__", "run_1");
+        ids.put(CatalogToolsGateway.STEP_OUTPUT_MARKER, Boolean.TRUE);
+
+        gateway.executeTool(new ToolRef("gmail/get-message", 1), Map.of(), "42", ids);
+
+        assertThat(outbound().getHeaders().getFirst("X-Lc-Step-Output")).isEqualTo("true");
+    }
+
+    @Test
+    @DisplayName("without the marker (an agent inside a run) X-Lc-Step-Output is not sent")
+    void noStepOutputHeaderWithoutMarker() {
+        gateway.executeTool(new ToolRef("gmail/get-message", 1), Map.of(), "42", Map.of("__workflowRunId__", "run_1"));
+
+        assertThat(outbound().getHeaders().getFirst("X-Lc-Step-Output")).isNull();
+    }
 }

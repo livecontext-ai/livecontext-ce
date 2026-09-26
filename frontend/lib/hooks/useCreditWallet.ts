@@ -29,23 +29,6 @@ export interface CreditWallet {
   subBalance: number | null;
   /** Top-up bucket. null before the V250 payload lands. */
   paygBalance: number | null;
-  /** V494 - the monthly AI allowance, a third bucket deliberately outside `balance`. */
-  aiBalance: number | null;
-  /**
-   * V494 - whether this account is on a plan whose monthly credits cannot fund a turn,
-   * i.e. the shape of account the AI allowance exists for.
-   *
-   * <p>Distinct from `aiBalance > 0`, and the distinction is the whole point: a Free
-   * account that has spent its pot reads 0, exactly like a paid account that never had
-   * one. Hiding both looks identical on screen and means the reader whose chat just
-   * stopped working is shown nothing at all about why.
-   *
-   * <p>It does NOT check that the plan still configures a non-zero allowance: that
-   * lives on the plan row, and this hook is mocked by half the app's suites, so
-   * reaching for another query here would make every one of them fetch more. The quota
-   * page combines the two - see its `hasAiAllowance` prop.
-   */
-  hasAiAllowance: boolean;
   /**
    * Credits granted per billing cycle, incl. the FREE monthly reset.
    * null means "no denominator is knowable" - the billing payload is missing or
@@ -98,10 +81,6 @@ export function useCreditWallet(): CreditWallet {
     balance,
     subBalance,
     paygBalance,
-    aiBalance,
-    // The same server-side answer the modals use: true exactly for the accounts whose
-    // monthly credits cannot fund a turn, which are the accounts the pot exists for.
-    monthlyCreditsAreWorkflowOnly,
     isLoading: isBalanceLoading,
   } = useCreditBalance();
 
@@ -230,8 +209,6 @@ export function useCreditWallet(): CreditWallet {
     balance,
     subBalance,
     paygBalance,
-    aiBalance,
-    hasAiAllowance: monthlyCreditsAreWorkflowOnly === true,
     allowance,
     renewsAt,
     periodEndsAt,

@@ -455,6 +455,8 @@ public class NodeParamsValidator {
             case "object" -> value instanceof Map;
             case "uuid" -> value instanceof String && isValidUuid((String) value);
             case "string|object" -> value instanceof String || value instanceof Map;
+            // Guardrail rules: {ruleId: description} or an array of typed rules.
+            case "object|array" -> value instanceof Map || value instanceof List;
             case "any", "varies" -> true;
             default -> true;
         };

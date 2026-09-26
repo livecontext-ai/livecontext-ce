@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.services.badge;
 import com.apimarketplace.auth.client.AuthClient;
 import com.apimarketplace.orchestrator.domain.badge.UserBadgeEntity;
 import com.apimarketplace.orchestrator.repository.UserBadgeRepository;
+import com.apimarketplace.orchestrator.services.lifecycle.TrophyEmailReporter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,12 +37,13 @@ class BadgeServiceTest {
     @Mock private BadgeStatsCollector statsCollector;
     @Mock private BadgeNotificationEmitter notificationEmitter;
     @Mock private AuthClient authClient;
+    @Mock private TrophyEmailReporter trophyEmails;
 
     private BadgeService service;
 
     @BeforeEach
     void setUp() {
-        service = new BadgeService(badgeRepository, statsCollector, notificationEmitter, authClient);
+        service = new BadgeService(badgeRepository, statsCollector, notificationEmitter, authClient, trophyEmails);
     }
 
     /** No unlock rows: every badge is a candidate. */
@@ -263,6 +265,8 @@ class BadgeServiceTest {
         // The badges ARE awarded - only the announcement is suppressed.
         assertThat(evaluation.unlocked().size()).isGreaterThan(5);
         verifyNoInteractions(notificationEmitter);
+        // Nor emailed: a trophy email for something done months ago is spam, not news.
+        verifyNoInteractions(trophyEmails);
     }
 
     @Test
@@ -320,7 +324,84 @@ class BadgeServiceTest {
         verifyNoInteractions(statsCollector);
     }
 
+    @Test
+    @DisplayName("the trophy email hook gets exactly this pass's inserted unlocks and what was held before")
+    void trophyEmailHookGetsThisPassOnly() {
+        when(badgeRepository.findByTenantIdOrderByUnlockedAtDesc(TENANT)).thenReturn(List.of(
+                new UserBadgeEntity(TENANT, "builder_1", 1, Instant.now())));
+        statsReturn(BadgeStats.builder().put(BadgeMetric.PUBLICATIONS_PUBLISHED, 1).build());
+        insertsSucceed();
+
+        service.evaluate(TENANT, ORG);
+
+        verify(trophyEmails).badgesUnlocked(eq(TENANT),
+                org.mockito.ArgumentMatchers.argThat(list -> list.stream().map(BadgeDefinition::code).toList()
+                        .equals(List.of("publisher_1"))),
+                eq(Set.of("builder_1")));
+    }
+
+    @Test
+    @DisplayName("Regression (spam): a re-evaluation whose insert finds the row already there emails nothing")
+    void lostInsertRaceNeverEmails() {
+        noBadgesUnlockedYet();
+        statsReturn(BadgeStats.builder().put(BadgeMetric.PUBLICATION_USES, 1).build());
+        // The unlock row exists already (another pod, or the previous pass): ON CONFLICT DO NOTHING.
+        when(badgeRepository.insertIfAbsent(anyString(), anyString(), anyLong(), any())).thenReturn(0);
+
+        service.evaluate(TENANT, ORG);
+
+        verifyNoInteractions(trophyEmails);
+    }
+
+    @Test
+    @DisplayName("a badge already held is never handed to the trophy email hook again")
+    void heldBadgeNeverReEmailed() {
+        when(badgeRepository.findByTenantIdOrderByUnlockedAtDesc(TENANT)).thenReturn(List.of(
+                new UserBadgeEntity(TENANT, "popularity_1", 1, Instant.now())));
+        // Still at 1 install: nothing new to unlock in the popularity family.
+        statsReturn(BadgeStats.builder().put(BadgeMetric.PUBLICATION_USES, 1).build());
+
+        service.evaluate(TENANT, ORG);
+
+        verifyNoInteractions(trophyEmails);
+    }
+
     private static BadgeDefinition badgeWithCode(String code) {
         return org.mockito.ArgumentMatchers.argThat(d -> d != null && code.equals(d.code()));
+    }
+
+    @Test
+    @DisplayName("analytics: every real insert reports badge_unlocked, and a backfill is flagged rather than hidden")
+    void reportsEachUnlock() {
+        com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter analytics = org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "analytics", analytics);
+        noBadgesUnlockedYet();
+        statsReturn(BadgeStats.builder().put(BadgeMetric.WORKFLOWS_CREATED, 5).build());
+        insertsSucceed();
+
+        service.evaluate(TENANT, ORG);
+
+        verify(analytics).badgeUnlocked(eq(TENANT), eq(ORG), badgeWithCode("builder_1"), eq(false));
+        verify(analytics).badgeUnlocked(eq(TENANT), eq(ORG), badgeWithCode("builder_5"), eq(false));
+        org.mockito.Mockito.verifyNoMoreInteractions(analytics);
+    }
+
+    @Test
+    @DisplayName("analytics: a backfill pass reports each unlock with backfill=true and a lost insert reports nothing")
+    void reportsBackfill() {
+        com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter analytics = org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.analytics.EngagementAnalyticsEmitter.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "analytics", analytics);
+        noBadgesUnlockedYet();
+        statsReturn(BadgeStats.builder()
+                .put(BadgeMetric.WORKFLOWS_CREATED, 60)
+                .put(BadgeMetric.RUNS_LAUNCHED, 5_000)
+                .put(BadgeMetric.MEMBER_DAYS, 400)
+                .build());
+        insertsSucceed();
+
+        int unlocked = service.evaluate(TENANT, ORG).unlocked().size();
+
+        verify(analytics, org.mockito.Mockito.times(unlocked)).badgeUnlocked(eq(TENANT), eq(ORG), any(), eq(true));
+        verify(analytics, never()).badgeUnlocked(any(), any(), any(), eq(false));
     }
 }

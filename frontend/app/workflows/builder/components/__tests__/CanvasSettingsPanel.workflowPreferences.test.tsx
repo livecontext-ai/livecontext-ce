@@ -1,15 +1,12 @@
 // @vitest-environment jsdom
 /**
- * The canvas settings panel holds PREFERENCES, not workflow-local copies of them.
+ * The canvas settings panel holds two kinds of settings, and this suite pins which is which.
  *
- * Two things are covered here, and the first is a fix rather than a new feature.
- *
- * LAYOUT DIRECTION was the odd one out: its select called `setWorkflowDirection`, which is
- * memory-only by design (it exists for the loader, seeding a workflow's own stored
- * direction from its plan). So changing the reading direction from the workflow in front of
- * you left the account default untouched, and every other workflow still opened the other
- * way round. The control looked general and was not. It now writes the same value the
- * account preference does, exactly as the inspector placement beside it already did.
+ * LAYOUT DIRECTION belongs to the WORKFLOW: it is saved into the plan, and every viewer (the
+ * marketplace included) reads it back from there. The select therefore changes the canvas it
+ * sits on and nothing else: not the account default (Settings > Preferences), and not any
+ * other canvas on screen. It used to write the account default too, which re-oriented every
+ * other workflow that falls back on it.
  *
  * INSPECTOR OPEN MODE is the new one: how much of a node a click opens, its settings alone
  * or the full view with input and output. Same contract, so it is proven the same way.
@@ -48,9 +45,10 @@ vi.mock('@/contexts/SidePanelContext', () => ({
 }));
 vi.mock('../ConnectionTypeSelector', () => ({ ConnectionTypeSelector: () => null }));
 vi.mock('../WorkflowPlanGenerator', () => ({ WorkflowPlanGenerator: () => null }));
+const mockLayoutConfigForDirection = vi.fn((_direction: string) => ({}));
 vi.mock('../../services/LayoutService', () => ({
   applyDagreLayout: (n: unknown) => n,
-  layoutConfigForDirection: () => ({}),
+  layoutConfigForDirection: (direction: string) => mockLayoutConfigForDirection(direction),
 }));
 
 const mockPreviewOnly = { value: false };
@@ -58,6 +56,7 @@ const mockSidePanel = { value: {} as unknown };
 
 import { CanvasSettingsPanel } from '../CanvasSettingsPanel';
 import {
+  WorkflowCanvasDirectionScope,
   WorkflowLayoutDirectionProvider,
   useWorkflowLayoutDirection,
 } from '@/contexts/WorkflowLayoutDirectionContext';
@@ -86,20 +85,33 @@ function AccountPreferenceProbe() {
   );
 }
 
+/** The direction of the canvas the panel sits on, read inside the same scope. */
+function CanvasDirectionProbe({ testId = 'canvas-direction' }: { testId?: string }) {
+  const { direction } = useWorkflowLayoutDirection();
+  return <span data-testid={testId}>{direction}</span>;
+}
+
+/**
+ * Mounted the way the builder mounts it: inside a canvas scope (`WorkflowBuilder` wraps
+ * itself in one), with the account probe outside it, where Settings lives.
+ */
 function renderPanel(props: Partial<React.ComponentProps<typeof CanvasSettingsPanel>> = {}) {
   return render(
     <WorkflowLayoutDirectionProvider>
       <InspectorOpenModeProvider>
         <AccountPreferenceProbe />
-        <CanvasSettingsPanel
-          isOpen
-          onClose={vi.fn()}
-          isRunMode={false}
-          reactFlowConnectionType="bezier"
-          nodes={[]}
-          edges={[]}
-          {...props}
-        />
+        <WorkflowCanvasDirectionScope>
+          <CanvasDirectionProbe />
+          <CanvasSettingsPanel
+            isOpen
+            onClose={vi.fn()}
+            isRunMode={false}
+            reactFlowConnectionType="bezier"
+            nodes={[]}
+            edges={[]}
+            {...props}
+          />
+        </WorkflowCanvasDirectionScope>
       </InspectorOpenModeProvider>
     </WorkflowLayoutDirectionProvider>,
   );
@@ -124,68 +136,60 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
-describe('CanvasSettingsPanel - layout direction is a preference', () => {
-  it('writes the account default, not just this canvas', () => {
-    // The bug, stated: before this the value moved on screen and nowhere else, so the
-    // next workflow opened in the old direction and the setting had to be made again.
+describe('CanvasSettingsPanel - layout direction belongs to the workflow', () => {
+  it('regression: changes this canvas only, never the account default', () => {
+    // The toggle used to write the account default as well, so choosing how ONE workflow
+    // reads re-oriented every other workflow that falls back on the default.
     renderPanel();
 
     fireEvent.change(directionSelect(), { target: { value: 'vertical' } });
 
-    expect(window.localStorage.getItem('lc.workflow.layoutDirection:personal')).toBe('vertical');
-    expect(screen.getByTestId('account-direction')).toHaveProperty('textContent', 'vertical');
+    expect(screen.getByTestId('canvas-direction')).toHaveProperty('textContent', 'vertical');
+    expect(screen.getByTestId('account-direction')).toHaveProperty('textContent', 'horizontal');
+    expect(window.localStorage.getItem('lc.workflow.layoutDirection:personal')).toBeNull();
   });
 
-  it('moves the ACTIVE direction too, which is what the canvas renders', () => {
-    // The shared probe reads `defaultDirection`, so on its own it would let a change that
-    // persisted without re-orienting the canvas pass. Both layers move from this control:
-    // that is the whole claim.
-    function ActiveProbe() {
-      const { direction } = useWorkflowLayoutDirection();
-      return <span data-testid="active-direction">{direction}</span>;
-    }
-
+  it('leaves another canvas on screen alone (a sub-workflow in the side panel)', () => {
     render(
       <WorkflowLayoutDirectionProvider>
         <InspectorOpenModeProvider>
-          <ActiveProbe />
-          <CanvasSettingsPanel
-            isOpen
-            onClose={vi.fn()}
-            isRunMode={false}
-            reactFlowConnectionType="bezier"
-            nodes={[]}
-            edges={[]}
-          />
+          <WorkflowCanvasDirectionScope>
+            <CanvasDirectionProbe testId="other-canvas" />
+          </WorkflowCanvasDirectionScope>
+          <WorkflowCanvasDirectionScope>
+            <CanvasSettingsPanel
+              isOpen
+              onClose={vi.fn()}
+              isRunMode={false}
+              reactFlowConnectionType="bezier"
+              nodes={[]}
+              edges={[]}
+            />
+          </WorkflowCanvasDirectionScope>
         </InspectorOpenModeProvider>
       </WorkflowLayoutDirectionProvider>,
     );
 
     fireEvent.change(directionSelect(), { target: { value: 'vertical' } });
 
-    expect(screen.getByTestId('active-direction')).toHaveProperty('textContent', 'vertical');
+    expect(screen.getByTestId('other-canvas')).toHaveProperty('textContent', 'horizontal');
   });
 
-  it('still re-flows the graph, which is the one place a direction change moves nodes', () => {
-    // The persistence must not come at the cost of the thing the control is FOR: the
-    // loader deliberately does not re-flow (it would trash saved positions), so if this
-    // call site stopped doing it, nothing would.
+  it('re-lays the graph out in the new direction, in the same change', () => {
+    // Positions only mean something in the direction they were computed in, so the
+    // direction and the new positions land together (one undo step, one Save).
     const onForceNodesUpdate = vi.fn();
     renderPanel({ nodes: [{ id: 'a', position: { x: 0, y: 0 }, data: {} }] as any, onForceNodesUpdate });
 
     fireEvent.change(directionSelect(), { target: { value: 'vertical' } });
 
     expect(onForceNodesUpdate).toHaveBeenCalledTimes(1);
+    expect(mockLayoutConfigForDirection).toHaveBeenLastCalledWith('vertical');
   });
 
   it('does nothing when the direction does not change', () => {
     // Re-selecting the value already shown must not re-flow a graph the user has
-    // hand-placed. It also does not persist, and that is a KNOWN LIMIT rather than a
-    // choice: the real control is a controlled Radix Select, which fires `onValueChange`
-    // only on an actual change, so this handler is never even reached on a re-pick. This
-    // suite's `<select>` double DOES fire, which is exactly why a "persist on every pick"
-    // workaround tests green here and ships dead - so the assertion is written to the
-    // behaviour the product has.
+    // hand-placed.
     const onForceNodesUpdate = vi.fn();
     renderPanel({ nodes: [{ id: 'a', position: { x: 0, y: 0 }, data: {} }] as any, onForceNodesUpdate });
 
@@ -193,75 +197,15 @@ describe('CanvasSettingsPanel - layout direction is a preference', () => {
 
     expect(onForceNodesUpdate, 'a graph moved for a direction that did not change')
       .not.toHaveBeenCalled();
-    expect(window.localStorage.getItem('lc.workflow.layoutDirection:personal')).toBeNull();
+    expect(screen.getByTestId('canvas-direction')).toHaveProperty('textContent', 'horizontal');
   });
 
-  it('leaves the account DEFAULT alone when a workflow seeds its own direction', () => {
-    // The other half of "one value, two surfaces", and the half that was wrong: the
-    // Settings select used to read the ACTIVE direction, so opening a workflow whose plan
-    // stamps vertical made that page report vertical as the user's default - a claim
-    // nobody made, on a control that (being a controlled select) could not then be used to
-    // re-pick the value it was showing.
-    // A STORED default, not the fallback constant: otherwise this proves only that the
-    // default survives, which it would even if `defaultDirection` were hardcoded.
-    window.localStorage.setItem('lc.workflow.layoutDirection:personal', 'vertical');
-
-    // Seeded from a handler, not a mount effect. The real loader seeds after FETCHING the
-    // workflow, so the provider's own mount effect (which reads storage) has long since
-    // run; a child mount effect would fire BEFORE it and be overwritten, testing an
-    // ordering production never has.
-    function PlanSeeder() {
-      const { setWorkflowDirection } = useWorkflowLayoutDirection();
-      return (
-        <button type="button" onClick={() => setWorkflowDirection('horizontal')}>
-          seed-from-plan
-        </button>
-      );
-    }
-
-    function DirectionProbe() {
-      const { direction, defaultDirection } = useWorkflowLayoutDirection();
-      return (
-        <>
-          <span data-testid="active">{direction}</span>
-          <span data-testid="stored-default">{defaultDirection}</span>
-        </>
-      );
-    }
-
-    render(
-      <WorkflowLayoutDirectionProvider>
-        <PlanSeeder />
-        <DirectionProbe />
-      </WorkflowLayoutDirectionProvider>,
-    );
-
-    fireEvent.click(screen.getByText('seed-from-plan'));
-
-    // The canvas follows the workflow...
-    expect(screen.getByTestId('active')).toHaveProperty('textContent', 'horizontal');
-    // ...and Settings keeps describing the user's own stored default.
-    expect(screen.getByTestId('stored-default'), 'a workflow restated the account default')
-      .toHaveProperty('textContent', 'vertical');
-    expect(window.localStorage.getItem('lc.workflow.layoutDirection:personal')).toBe('vertical');
-  });
-
-  it('shows the direction already chosen in the account settings', () => {
+  it('starts from the account default for a canvas whose plan has not said otherwise', () => {
     window.localStorage.setItem('lc.workflow.layoutDirection:personal', 'vertical');
 
     renderPanel();
 
     expect(directionSelect().value).toBe('vertical');
-  });
-
-  it('scopes the choice to the active workspace', () => {
-    act(() => useCurrentOrgStore.getState().setCurrentOrg('org-a', 'OWNER'));
-    renderPanel();
-
-    fireEvent.change(directionSelect(), { target: { value: 'vertical' } });
-
-    expect(window.localStorage.getItem('lc.workflow.layoutDirection:org-a')).toBe('vertical');
-    expect(window.localStorage.getItem('lc.workflow.layoutDirection:personal')).toBeNull();
   });
 });
 

@@ -9,11 +9,10 @@ import path from 'node:path';
  * <p><b>Why a source scan.</b> The cell itself is covered
  * (`modelLabels.test.tsx`) and the two filter dropdowns are covered by opening
  * them (`UsageAnalyticsPanel.names.test.tsx`). The usage HISTORY table is not,
- * and cannot be cheaply: it lives inside `page.tsx`, twice (a CE branch and a
- * cloud one), behind auth, a credit summary, a wallet, a PAYG tier list, a
- * workspace store and a cloud-link probe. Rendering it to assert a table cell
- * would be a page harness held together by eight mocks, and the first of them
- * to drift would take the assertion with it.
+ * here: it lives in `UsageHistoryPanel.tsx`, drawn by `page.tsx` twice (a CE
+ * branch and a cloud one) behind auth, a credit summary, a wallet, a PAYG tier
+ * list, a workspace store and a cloud-link probe. The panel's own test renders
+ * rows through a stubbed cell, so it cannot see the naming either.
  *
  * <p>So this asserts the wiring instead, which is exactly what regressed: the
  * table used to interpolate `${entry.provider} / ${entry.model}` straight into
@@ -26,6 +25,7 @@ const HERE = __dirname;
 const QUOTA_DIR = path.resolve(HERE, '..', '..');
 const PAGE = path.join(QUOTA_DIR, 'page.tsx');
 const ANALYTICS = path.join(QUOTA_DIR, 'components', 'UsageAnalyticsPanel.tsx');
+const HISTORY_PANEL = path.join(QUOTA_DIR, 'components', 'UsageHistoryPanel.tsx');
 
 function read(file: string): string {
   expect(fs.existsSync(file), `${file} has moved; this guard is now scanning nothing`).toBe(true);
@@ -34,18 +34,20 @@ function read(file: string): string {
 
 describe('the quota page routes every model it prints through the naming cell', () => {
   it('renders the history model column with ProviderModelCell, in BOTH branches', () => {
-    // CE and cloud each draw their own table. The CE one was written first and
-    // is the one a self-hosted install reads, so "fixed on cloud only" is a
-    // real and invisible half-fix.
-    const source = read(PAGE);
-    const cells = source.match(/<ProviderModelCell\b/g) ?? [];
-    expect(cells.length, 'both the CE and the cloud history tables must use it').toBe(2);
+    // CE and cloud once drew their own table, and "fixed on cloud only" was a real and
+    // invisible half-fix. They now share one panel, which must use the cell, and both
+    // branches must draw THAT panel rather than a table of their own again.
+    const panel = read(HISTORY_PANEL);
+    expect((panel.match(/<ProviderModelCell\b/g) ?? []).length).toBe(1);
+    const page = read(PAGE);
+    expect((page.match(/<UsageHistoryPanel\b/g) ?? []).length, 'both the CE and the cloud branch').toBe(2);
+    expect(page, 'a branch drew its own history table again').not.toMatch(/<table\b/);
   });
 
   it('interpolates no raw model id into that column any more', () => {
     // The exact shape this change replaced. It renders perfectly, it just calls
     // the model something no other screen in the app calls it.
-    const source = read(PAGE);
+    const source = read(PAGE) + read(HISTORY_PANEL);
     expect(source).not.toMatch(/\$\{entry\.provider\}\s*\/\s*\$\{entry\.model\}/);
     expect(source).not.toMatch(/entry\.provider \|\| entry\.model/);
   });

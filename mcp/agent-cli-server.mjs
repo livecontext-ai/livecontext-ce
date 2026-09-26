@@ -117,6 +117,13 @@ const EXECUTION_ID = process.env.EXECUTION_ID || '';
 // JSON array of user-authorized sensitive tool-action rule keys ("tool:action").
 // Forwarded into the CLI session so the bridge guard skips re-prompting on resume.
 const APPROVED_TOOL_ACTIONS = process.env.APPROVED_TOOL_ACTIONS || '[]';
+// The kind of run this session belongs to, as the dispatcher said it (empty = not said).
+// Forwarded so the session's tool calls know a task, an unattended run and an armed agent.
+const TASK_ID = process.env.TASK_ID || '';
+const UNATTENDED_RUN = process.env.UNATTENDED_RUN === 'true';
+const REQUIRE_TOOL_AUTHORIZATION = process.env.REQUIRE_TOOL_AUTHORIZATION === 'true';
+const AGENT_DEPTH = Number(process.env.AGENT_DEPTH || 0);
+const WORKFLOW_RUN_ID = process.env.WORKFLOW_RUN_ID || '';
 // The bridge's inactivity watchdog window for this run, in seconds (0 = disabled, '' =
 // not told). Forwarded to the session so the server-side approval gate can size a park
 // that fits inside it with room left to run the tool afterwards.
@@ -252,6 +259,26 @@ async function startSession() {
   // Forward how long the CLI keeps waiting on one tool call, so the server-side gate can
   // hold a question card (or an approval card) for the person instead of ending it at the
   // floor sized for the shortest CLI. Absent when the bridge did not say.
+  // A task's tool calls must know they belong to one: without it an ask_user from an
+  // unattended task waited on the chat screen instead of reaching the connected channel.
+  if (TASK_ID) {
+    body.taskId = TASK_ID;
+  }
+  if (UNATTENDED_RUN) {
+    body.unattendedRun = true;
+  }
+  if (REQUIRE_TOOL_AUTHORIZATION) {
+    body.requireToolAuthorization = true;
+  }
+  // A sub-agent's session: nobody reads its conversation and its parent waits on it, so it
+  // must not park a question card for a person (the direct route reads the same depth).
+  if (Number.isInteger(AGENT_DEPTH) && AGENT_DEPTH > 0) {
+    body.agentDepth = AGENT_DEPTH;
+  }
+  // A workflow agent node's session: a question has nowhere to land once the node completed.
+  if (WORKFLOW_RUN_ID) {
+    body.workflowRunId = WORKFLOW_RUN_ID;
+  }
   const maxHoldSeconds = Number(AGENT_CLI_MAX_TOOL_HOLD_SECONDS);
   if (AGENT_CLI_MAX_TOOL_HOLD_SECONDS !== '' && Number.isFinite(maxHoldSeconds) && maxHoldSeconds > 0) {
     body.maxToolHoldSeconds = Math.floor(maxHoldSeconds);

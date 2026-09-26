@@ -24,6 +24,12 @@ export interface ModelConfigEntry {
   bundleEnabled?: boolean | null;
   /** Cloud-admin only (V493): whether a Free-plan grant may fund a turn on this model. */
   freeTierEnabled?: boolean;
+  /**
+   * V515: the model that replaces this one at execution time while it is disabled. Both
+   * absent = the platform default model is used.
+   */
+  replacementProvider?: string;
+  replacementModel?: string;
   rateLimitTpm?: number | null;
   rateLimitRpm?: number | null;
   rateLimitTpmPerTenant?: number | null;
@@ -121,6 +127,9 @@ export interface ModelConfigOverrideInput {
   bundleEnabled?: boolean | null;
   /** Cloud-admin only (V493): open/close this model to Free-plan grants. */
   freeTierEnabled?: boolean;
+  /** V515: replacement while disabled. Both null clears it (back to the platform default). */
+  replacementProvider?: string | null;
+  replacementModel?: string | null;
   modelId: string;
   enabled?: boolean;
   displayName?: string;
@@ -163,6 +172,30 @@ export interface ModelExecutionLink {
   /** Surface the link is scoped to; absent ⇒ ALL (applies everywhere). */
   scope?: ModelExecutionLinkScope;
   enabled?: boolean;
+}
+
+/** A (provider, model id) pair, the key a retire / restore request names a model by. */
+export interface ModelRef {
+  provider: string;
+  modelId: string;
+}
+
+/**
+ * A retired model (V533). Retired models are gone from every picker and from the admin model
+ * list; this is the only place they are listed, so they can be restored.
+ */
+export interface RetiredModelEntry {
+  provider: string;
+  modelId: string;
+  displayName: string;
+  providerKind?: 'cloud' | 'byok' | 'bridge' | string;
+  /** ISO timestamp. */
+  retiredAt: string;
+  retiredBy: string | null;
+  /** YYYY-MM-DD, when the catalog knows it. */
+  releaseDate: string | null;
+  /** YYYY-MM-DD, when the vendor announced one. */
+  deprecationDate: string | null;
 }
 
 class ModelConfigService {
@@ -240,6 +273,23 @@ class ModelConfigService {
 
   async resetAll(): Promise<void> {
     await apiClient.post('/model-config/reset', {});
+  }
+
+  // ── Retired models (V533) ────────────────────────────────────────────────
+  // Admin: retire old models for good (no feed sync, seed or bundle brings them back) and
+  // restore them from the retired list. A restored model comes back DISABLED.
+  async listRetiredModels(): Promise<RetiredModelEntry[]> {
+    return apiClient.get<RetiredModelEntry[]>('/model-config/retired');
+  }
+
+  /** Returns how many were newly retired (an already-retired model is not counted). */
+  async retireModels(models: ModelRef[]): Promise<{ retired: number }> {
+    return apiClient.post<{ retired: number }>('/model-config/retired', { models });
+  }
+
+  /** Returns how many were restored (a model that is not retired is not counted). */
+  async restoreModels(models: ModelRef[]): Promise<{ restored: number }> {
+    return apiClient.post<{ restored: number }>('/model-config/retired/restore', { models });
   }
 
   // ── Catalog Bundles ──────────────────────────────────────────────────────

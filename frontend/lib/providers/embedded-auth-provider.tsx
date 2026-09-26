@@ -11,6 +11,7 @@
 'use client';
 
 import React, { createContext, useContext, useCallback, useEffect, useRef, useState, useMemo, type ReactNode } from 'react';
+import { markOrbiGreeting } from '@/components/chat/orbi/orbiGreeting';
 
 // ── Storage keys ────────────────────────────────────────────────
 const ACCESS_TOKEN_KEY = 'ce_access_token';
@@ -315,6 +316,7 @@ export async function embeddedLogin(email: string, password: string): Promise<{ 
 
     const data = await res.json();
     saveTokens(data.accessToken, data.refreshToken, data.expiresIn, data.user);
+    markOrbiGreeting();
     return { success: true, user: data.user };
   } catch (e: any) {
     return { success: false, error: e.message || 'Network error' };
@@ -408,6 +410,7 @@ export async function embeddedRegister(
 
     const data = await res.json();
     saveTokens(data.accessToken, data.refreshToken, data.expiresIn, data.user);
+    markOrbiGreeting();
     return { success: true, user: data.user };
   } catch (e: any) {
     return { success: false, error: e.message || 'Network error' };

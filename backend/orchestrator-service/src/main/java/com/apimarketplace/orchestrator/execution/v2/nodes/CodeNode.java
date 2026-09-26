@@ -68,14 +68,30 @@ public class CodeNode extends BaseNode {
         String rawCode = codeConfig != null ? codeConfig.code() : "";
         int timeoutSeconds = codeConfig != null ? codeConfig.timeoutSeconds() : 10;
         timeoutSeconds = Math.min(Math.max(timeoutSeconds, 1), MAX_TIMEOUT_SECONDS);
-        Map<String, Object> resolvedParams = buildInputDataMap(language, rawCode, timeoutSeconds);
+        // A templated timeout is reported as its template until it has resolved: the default the
+        // typed config holds meanwhile is not what this node was configured with.
+        String timeoutTemplate = deferredScalar("code", "timeoutSeconds");
+        Object reportedTimeout = timeoutTemplate != null ? timeoutTemplate : timeoutSeconds;
+        Map<String, Object> resolvedParams = buildInputDataMap(language, rawCode, reportedTimeout);
 
         try {
+            // The config this execution runs with: a {{...}} timeout resolved now, never the default.
+            Core.CodeConfig effective = withDeferredScalars("code", codeConfig, Core.CodeConfig.class, context);
+            if (effective != codeConfig && effective != null) {
+                timeoutSeconds = Math.min(Math.max(effective.timeoutSeconds(), 1), MAX_TIMEOUT_SECONDS);
+                reportedTimeout = timeoutTemplate != null
+                    ? com.apimarketplace.orchestrator.services.template.ReportedParams.valueFrom(timeoutTemplate, timeoutSeconds)
+                    : timeoutSeconds;
+                resolvedParams = buildInputDataMap(language, rawCode, reportedTimeout);
+            }
+
             if (codeExecutor == null) {
                 throw new IllegalStateException("CodeExecutor is not available. Ensure Piston or embedded executor is configured.");
             }
 
             String userCode = resolveExpression(rawCode, context);
+            // Every exit from here on measures the code that was resolved and run, not the template.
+            resolvedParams = buildInputDataMap(language, userCode, reportedTimeout);
 
             if (userCode == null || userCode.isBlank()) {
                 throw new IllegalArgumentException("Code is required");
@@ -141,7 +157,7 @@ public class CodeNode extends BaseNode {
             result.put("item_index", context.itemIndex());
             result.put("itemIndex", context.itemIndex());
             result.put("item_id", context.itemId());
-            result.put("resolved_params", buildInputDataMap(language, userCode, timeoutSeconds));
+            result.put("resolved_params", buildInputDataMap(language, userCode, reportedTimeout));
 
             logger.info("Code completed: nodeId={}, language={}, exitCode={}, executionTime={}ms",
                 nodeId, language, response.exitCode(), executionTime);
@@ -325,23 +341,12 @@ public class CodeNode extends BaseNode {
         if (expression == null || expression.isBlank()) {
             return null;
         }
-
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object result = resolved.get("__expr__");
-                return result != null ? String.valueOf(result) : expression;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression '{}': {}", expression, e.getMessage());
-                return expression;
-            }
-        }
-
-        return expression;
+        // One resolver for every field of every node: typed, JSON for a structure, never the
+        // configured template in place of a value (BaseNode#resolveTemplateValue).
+        return resolveTemplateString(expression, context);
     }
 
-    private Map<String, Object> buildInputDataMap(String language, String code, int timeoutSeconds) {
+    private Map<String, Object> buildInputDataMap(String language, String code, Object timeoutSeconds) {
         Map<String, Object> inputData = new LinkedHashMap<>();
         inputData.put("language", language);
         inputData.put("codeLength", code != null ? code.length() : 0);

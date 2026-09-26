@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.trigger;
 
+import com.apimarketplace.common.web.LogSafePath;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,7 +40,7 @@ public class PublicFormController {
                     .contentType(MediaType.TEXT_HTML)
                     .body(formRenderer.renderNotFound());
         } catch (Exception e) {
-            logger.error("Error rendering form page for token {}: {}", token, e.getMessage());
+            logger.error("Error rendering form page for token {}: {}", LogSafePath.tokenPreview(token), LogSafePath.withoutToken(e.getMessage(), token));
             return ResponseEntity.status(500)
                     .contentType(MediaType.TEXT_HTML)
                     .body(formRenderer.renderNotFound());
@@ -71,7 +72,7 @@ public class PublicFormController {
         } catch (IllegalStateException e) {
             return ResponseEntity.status(409).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
-            logger.error("Error processing form submission for token {}: {}", token, e.getMessage());
+            logger.error("Error processing form submission for token {}: {}", LogSafePath.tokenPreview(token), LogSafePath.withoutToken(e.getMessage(), token));
             return ResponseEntity.status(500).body(Map.of("error", "Failed to process submission"));
         }
     }

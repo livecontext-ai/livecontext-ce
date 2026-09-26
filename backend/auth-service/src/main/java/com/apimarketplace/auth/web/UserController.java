@@ -41,6 +41,9 @@ public class UserController {
     @Autowired
     private OnboardingService onboardingService;
 
+    @Autowired
+    private com.apimarketplace.auth.lifecycle.UserLifecycleContextService lifecycleContextService;
+
     /**
      * Recupere le profil de l'utilisateur connecte
      */
@@ -103,6 +106,8 @@ public class UserController {
             } catch (IllegalStateException e) {
                 return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                         .body(java.util.Map.of("error", e.getMessage()));
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(java.util.Map.of("error", e.getMessage()));
             }
         }
 
@@ -119,6 +124,8 @@ public class UserController {
         } catch (IllegalStateException e) {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                     .body(java.util.Map.of("error", e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("error", e.getMessage()));
         }
     }
 
@@ -199,6 +206,53 @@ public class UserController {
             return ResponseEntity.notFound().build();
         }
         return ResponseEntity.ok(userService.getDeletionStatus(userOpt.get()));
+    }
+
+    /**
+     * What the app reports about the signed-in person for the lifecycle emails: locale, time
+     * zone, first-touch acquisition. The country and the IP come from the Cloudflare headers,
+     * never from the body. Invalid values are ignored; the answer is 204 either way.
+     */
+    @PutMapping("/profile/context")
+    public ResponseEntity<Void> reportProfileContext(
+            @RequestBody(required = false) com.apimarketplace.auth.dto.ProfileContextRequest request,
+            @RequestHeader(value = "X-User-ID", required = false) String userIdHeader,
+            @RequestHeader(value = "CF-IPCountry", required = false) String cfCountry,
+            @RequestHeader(value = "CF-Connecting-IP", required = false) String cfIp) {
+        Optional<User> userOpt = resolveUser(userIdHeader);
+        if (userOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        lifecycleContextService.updateContext(userOpt.get().getId(), request, cfCountry, cfIp);
+        return ResponseEntity.noContent().build();
+    }
+
+    /** Whether the person agreed to receive LiveContext news and offers by email. */
+    @GetMapping("/profile/marketing-consent")
+    public ResponseEntity<com.apimarketplace.auth.dto.MarketingConsentResponse> getMarketingConsent(
+            @RequestHeader(value = "X-User-ID", required = false) String userIdHeader) {
+        Optional<User> userOpt = resolveUser(userIdHeader);
+        if (userOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        return lifecycleContextService.getMarketingConsent(userOpt.get().getId())
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @PutMapping("/profile/marketing-consent")
+    public ResponseEntity<Void> setMarketingConsent(
+            @RequestBody com.apimarketplace.auth.dto.MarketingConsentRequest request,
+            @RequestHeader(value = "X-User-ID", required = false) String userIdHeader) {
+        if (request == null || request.consent() == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        Optional<User> userOpt = resolveUser(userIdHeader);
+        if (userOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        boolean updated = lifecycleContextService.setMarketingConsent(userOpt.get().getId(), request.consent());
+        return updated ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 
     /**

@@ -714,36 +714,43 @@ class CreditConsumptionAuditTest {
     @DisplayName("Source ID for credit tracking - uses executionId or fallback to nodeId")
     class SourceIdTracking {
 
+        /**
+         * The billing key used to fall back to the node id when no execution id was recorded. A
+         * node id repeats on every run of that node, and auth answers "same payer + same type on
+         * the key" as an idempotent replay, so the second run was never billed. The key is now
+         * a UUID minted once per call: unique per charge, never the node id.
+         */
         @Test
-        @DisplayName("when execution save does not set ID, sourceId falls back to nodeId")
-        void sourceIdFallsBackToNodeIdWhenNoId() {
+        @DisplayName("when execution save does not set an ID, the billing key is a fresh UUID, never the node id")
+        void sourceIdIsAFreshUuidWhenNoId() {
             AgentObservabilityRequest req = buildAgentRequest();
-            // Default mock: save returns null entity ID → executionId stays null at credit call
+            // Default mock: save returns null entity ID, so no execution id is recorded.
 
             service.recordFromRequest(req);
 
-            // With default mock (no ID set), executionId is null → falls back to nodeId
-            verify(creditClient).consumeCredits(
-                    any(), any(),
-                    eq("agent:test_agent"),
-                    any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
-            );
+            assertBilledUnderAFreshUuid();
         }
 
         @Test
-        @DisplayName("when observability recording fails, sourceId falls back to nodeId")
-        void sourceIdFallsBackToNodeIdOnRecordingFailure() {
+        @DisplayName("when observability recording fails, the billing key is a fresh UUID, never the node id")
+        void sourceIdIsAFreshUuidOnRecordingFailure() {
             AgentObservabilityRequest req = buildAgentRequest();
             when(executionRepository.save(any())).thenThrow(new RuntimeException("DB error"));
 
             service.recordFromRequest(req);
 
-            // executionId is null (recording failed), so falls back to nodeId
+            assertBilledUnderAFreshUuid();
+        }
+
+        private void assertBilledUnderAFreshUuid() {
+            org.mockito.ArgumentCaptor<String> key = org.mockito.ArgumentCaptor.forClass(String.class);
             verify(creditClient).consumeCredits(
                     any(), any(),
-                    eq("agent:test_agent"),
+                    key.capture(),
                     any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
+            assertThat(key.getValue()).isNotEqualTo("agent:test_agent");
+            assertThat(java.util.UUID.fromString(key.getValue()).toString()).isEqualTo(key.getValue());
         }
     }
 }

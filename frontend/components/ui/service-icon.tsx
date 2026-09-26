@@ -3,11 +3,8 @@
 import React, { useState } from "react";
 import Image from "next/image";
 import { Key } from "lucide-react";
-import {
-  extractIconSlugFromUrl,
-  monoDarkInvertClass,
-} from "@/lib/credentials/monoIconSlugs";
 import { normalizeIconSlug } from "@/lib/credentials/iconSlug";
+import { ServiceLogo } from "@/components/ui/service-logo";
 
 interface ServiceIconProps {
   /** Icon slug (e.g. "gmail") - resolved to /icons/services/{iconSlug}.svg */
@@ -51,15 +48,14 @@ export function ServiceIcon({
     );
   }
 
-  const monoDark = monoDarkInvertClass(iconSlug ?? extractIconSlugFromUrl(iconUrl));
-
   return (
-    <Image
+    <ServiceLogo
+      as={Image}
       src={src}
       alt=""
       width={width}
       height={height}
-      className={`${sizeClass} ${className} ${monoDark} rounded`}
+      className={`${sizeClass} ${className} rounded`}
       onError={() => setHasError(true)}
     />
   );

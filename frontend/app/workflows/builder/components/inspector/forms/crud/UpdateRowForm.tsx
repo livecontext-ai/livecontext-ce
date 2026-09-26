@@ -9,14 +9,13 @@
  */
 
 import * as React from 'react';
-import { Info } from 'lucide-react';
 import type { Node } from 'reactflow';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { BuilderNodeData } from '../../../../types';
 import { WhereConditionBuilder, type WhereCondition } from './shared/WhereConditionBuilder';
 import { ExpressionField } from '../../ExpressionField';
 import { EmptyState } from '../../../shared/EmptyState';
 import { extractColumnName, filterUserColumns, SYSTEM_COLUMNS } from '../../../../utils/crudHelpers';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 interface UpdateRowFormProps {
   node: Node<BuilderNodeData>;
@@ -103,21 +102,11 @@ export function UpdateRowForm({
       <div className="space-y-3">
         <div className="flex items-center gap-1.5">
           <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">SET Columns</span>
-          <Popover>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-              >
-                <Info className="h-3 w-3 text-slate-400" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-64 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-              <p className="text-sm text-slate-600 dark:text-slate-300">
-                Empty fields will not be updated. Only fill in the columns you want to modify.
-              </p>
-            </PopoverContent>
-          </Popover>
+          <InfoPopover label="SET Columns" size="sm" side="right" align="start" contentClassName="w-64 p-3">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              Empty fields will not be updated. Only fill in the columns you want to modify.
+            </p>
+          </InfoPopover>
         </div>
         <div className="space-y-3">
           {userColumns.length === 0 ? (

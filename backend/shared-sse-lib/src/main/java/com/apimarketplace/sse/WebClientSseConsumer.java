@@ -116,13 +116,13 @@ public class WebClientSseConsumer implements SseStreamConsumer {
                             bytesReceived, effective))
                     .blockLast(effective.maxWait());
         } catch (SseUpstreamException upstream) {
-            log.warn("[SseConsumer] upstream error for {}: {}", url, upstream.getMessage());
+            log.warn("[SseConsumer] upstream error for {}: {}", hostOf(url), upstream.getMessage());
             errorRef.add(upstream.getMessage());
         } catch (IllegalStateException timeout) {
             // blockLast throws IllegalStateException("Timeout on blocking read for ...")
             // when the maxWait deadline is reached without a terminal signal.
             log.warn("[SseConsumer] deadline reached for {} after {} ({} chunks collected)",
-                    url, effective.maxWait(), chunks.size());
+                    hostOf(url), effective.maxWait(), chunks.size());
             // Treat deadline as a soft truncation, not an error.
             truncated.set(true);
         } catch (Exception e) {
@@ -132,10 +132,14 @@ public class WebClientSseConsumer implements SseStreamConsumer {
             // Reactor wraps our SseUpstreamException inside a RuntimeException - unwrap it.
             Throwable cause = e.getCause();
             if (cause instanceof SseUpstreamException upstreamCause) {
-                log.warn("[SseConsumer] upstream error for {}: {}", url, upstreamCause.getMessage());
+                log.warn("[SseConsumer] upstream error for {}: {}", hostOf(url), upstreamCause.getMessage());
                 errorRef.add(upstreamCause.getMessage());
             } else {
-                log.warn("[SseConsumer] unexpected error for {}: {}", url, message, e);
+                // No throwable here: its message is worded around the full URL, which can carry
+                // the caller's credential (a path variable or a query key). The caller scrubs
+                // the returned error; the log names the host and the exception chain instead.
+                log.warn("[SseConsumer] unexpected error for {}: {} ({})", hostOf(url),
+                        withoutUrl(message, url), exceptionChain(e));
                 errorRef.add(e.getClass().getSimpleName() + ": " + message);
             }
         }
@@ -210,5 +214,43 @@ public class WebClientSseConsumer implements SseStreamConsumer {
         SseUpstreamException(String message) {
             super(message);
         }
+    }
+
+    /**
+     * The host of {@code url}, never its path or query: the caller hands this consumer a URL that
+     * can already carry its credential.
+     */
+    static String hostOf(String url) {
+        try {
+            String host = java.net.URI.create(url).getHost();
+            return host != null ? host : "<unparseable url>";
+        } catch (RuntimeException e) {
+            return "<unparseable url>";
+        }
+    }
+
+    /** {@code message} with {@code url}, whole or without its query, replaced by its host. */
+    static String withoutUrl(String message, String url) {
+        if (message == null || url == null || url.isEmpty()) {
+            return message;
+        }
+        int q = url.indexOf('?');
+        String out = message.replace(url, hostOf(url));
+        return q < 0 ? out : out.replace(url.substring(0, q), hostOf(url));
+    }
+
+    /** Class names of {@code e} and its causes, outermost first. */
+    static String exceptionChain(Throwable e) {
+        StringBuilder sb = new StringBuilder();
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (sb.length() > 0) {
+                sb.append(" <- ");
+            }
+            sb.append(t.getClass().getName());
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return sb.toString();
     }
 }

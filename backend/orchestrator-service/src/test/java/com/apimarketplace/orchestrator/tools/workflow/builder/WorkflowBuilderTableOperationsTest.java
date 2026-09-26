@@ -12,6 +12,9 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * #TC3: verify extractTableId accepts all documented aliases for the table-routing
@@ -251,5 +254,30 @@ class WorkflowBuilderTableOperationsTest {
         assertThat(stepParams).doesNotContainKey("table_id");
         assertThat(stepParams).doesNotContainKey("datasource_id");
         assertThat(stepParams).doesNotContainKey("tableId");
+    }
+
+    @Test
+    @DisplayName("table existence check passes the session org, so a teammate's table is not reported missing")
+    void tableLookupCarriesSessionOrg() {
+        WorkflowBuilderSession session = mock(WorkflowBuilderSession.class);
+        when(session.getOrgId()).thenReturn("org-1");
+        Map<String, Object> p = new HashMap<>();
+        p.put("table_id", 42);
+
+        var result = ops.execute(session, p, "tenant-1", "insert_row");
+
+        verify(dataSourceClient).getDataSource(42L, "tenant-1", "org-1");
+        assertThat(result.success()).isFalse(); // the mock has no such table
+    }
+
+    @Test
+    @DisplayName("no session: the lookup is made with no org (unchanged)")
+    void tableLookupWithoutSession() {
+        Map<String, Object> p = new HashMap<>();
+        p.put("table_id", 42);
+
+        ops.execute(null, p, "tenant-1", "insert_row");
+
+        verify(dataSourceClient).getDataSource(42L, "tenant-1", null);
     }
 }

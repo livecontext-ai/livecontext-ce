@@ -566,7 +566,7 @@ export function ApplicationDetailView({ workflowId, runId, title, publisherName,
       ? workflowId
       : undefined;
 
-  // "Create an editable copy" lives in the bottom-right settings cog, not in the Info
+  // "Create an editable copy" lives in the settings cog of the controls toolbar, not in the Info
   // panel: making a copy is an action on the application, not part of reading its
   // description. The endpoint copies the caller's INSTALLED clone and refuses with
   // "Application is not installed in this workspace" when there is none, so the offer
@@ -578,6 +578,18 @@ export function ApplicationDetailView({ workflowId, runId, title, publisherName,
   // refuses - and would deny it to anyone holding an install the publisher happens to
   // be, which the ownership test cannot tell apart.
   const canCreateEditableCopy = isInstalledClone && !!acquiredWorkflowId;
+
+  // The cog is handed to the application controls toolbar (the central toggle at the
+  // bottom of the app) instead of floating in its own corner: settings sit with every
+  // other application control. Nothing is mounted when there is no copy to offer.
+  const settingsControl = publication && canCreateEditableCopy ? (
+    <ApplicationSettingsMenu
+      key="settings"
+      publicationId={publication.id}
+      remote={effectiveRemote}
+      canCreateEditableCopy={canCreateEditableCopy}
+    />
+  ) : undefined;
 
   return (
     <div className="absolute inset-0 overflow-hidden flex flex-col">
@@ -629,26 +641,21 @@ export function ApplicationDetailView({ workflowId, runId, title, publisherName,
         );
       })()}
 
-      {/* Application settings - bottom right, opposite the Info panel. Renders
-          nothing at all when there is no install to copy - a marketplace preview,
-          or anyone who has not installed this application. */}
-      {publication && canCreateEditableCopy && (
-        <div className="absolute bottom-4 right-4 z-[40]">
-          <ApplicationSettingsMenu
-            publicationId={publication.id}
-            remote={effectiveRemote}
-            canCreateEditableCopy={canCreateEditableCopy}
-          />
-        </div>
-      )}
-
       {/* Interface content - main view */}
       {applicationConfigs.length === 0 ? (
         (() => {
           console.log('[AppDebug] MAIN VIEW rendering BLANK div (applicationConfigs is empty)', {
             workflowId, runId, publicPreviewMode,
           });
-          return <div className="flex-1" />;
+          // No interface, so no controls toolbar to carry the cog: keep it reachable
+          // at the same bottom-centre spot the toolbar would occupy.
+          return (
+            <div className="flex-1 relative">
+              {settingsControl && (
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30">{settingsControl}</div>
+              )}
+            </div>
+          );
         })()
       ) : (
         (() => {
@@ -669,6 +676,7 @@ export function ApplicationDetailView({ workflowId, runId, title, publisherName,
               templateSource={templateSource}
               mediaMuted={soundMuted}
               onToggleMediaMuted={toggleSound}
+              settingsControl={settingsControl}
             />
           );
         })()

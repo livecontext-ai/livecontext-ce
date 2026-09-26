@@ -6,6 +6,8 @@ import com.apimarketplace.agent.tools.ToolErrorCode;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
+import com.apimarketplace.common.plan.CeLinkRefusal;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
 import com.apimarketplace.orchestrator.config.WebSearchConfig;
 import com.apimarketplace.orchestrator.tools.websearch.BrowserAgentModule;
@@ -84,13 +86,26 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("rejects installs the caller does not own with 403 and never executes a search")
         void rejectsNonOwnerInstall() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(false);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.notLinked());
 
             ResponseEntity<Map<String, Object>> response =
                     controller.search(CLOUD_USER_ID, INSTALL_ID, request("java"));
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
             assertThat(response.getBody()).isEqualTo(Map.of("error", "CE_LINK_NOT_ACTIVE"));
+            verifyNoInteractions(searchModule);
+        }
+
+        @Test
+        @DisplayName("refuses a linked account that is not on a paid plan with 403 CLOUD_LINK_PLAN_REQUIRED and never searches")
+        void rejectsPlanRequired() {
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.planRequired("FREE"));
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.search(CLOUD_USER_ID, INSTALL_ID, request("java"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(response.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
             verifyNoInteractions(searchModule);
         }
 
@@ -107,7 +122,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("rejects a blank query with 400 after link validation")
         void rejectsBlankQuery() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
 
             ResponseEntity<Map<String, Object>> response =
                     controller.search(CLOUD_USER_ID, INSTALL_ID, request("  "));
@@ -125,7 +140,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("executes the search as the cloud user and threads the CE chat ids into the billing context")
         void executesAsCloudUserWithCeChatIds() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
             Map<String, Object> searchData = Map.of("results", List.of(Map.of("url", "https://e.com")));
             when(searchModule.execute(eq("search"), anyMap(), eq("42"), any()))
                     .thenReturn(Optional.of(ToolExecutionResult.success(searchData)));
@@ -157,7 +172,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("clamps max_results into [1, 50] and omits absent optional params")
         void clampsMaxResultsAndOmitsAbsentParams() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
             when(searchModule.execute(eq("search"), anyMap(), eq("42"), any()))
                     .thenReturn(Optional.of(ToolExecutionResult.success(Map.of("results", List.of()))));
 
@@ -186,7 +201,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("search failure maps to 502 with the module error")
         void searchFailureMapsTo502() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
             when(searchModule.execute(eq("search"), anyMap(), eq("42"), any()))
                     .thenReturn(Optional.of(ToolExecutionResult.failure(
                             ToolErrorCode.EXTERNAL_SERVICE_ERROR, "No response from websearch-service")));
@@ -201,7 +216,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("module returning empty maps to 502")
         void emptyModuleResultMapsTo502() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
             when(searchModule.execute(eq("search"), anyMap(), eq("42"), any()))
                     .thenReturn(Optional.empty());
 
@@ -241,7 +256,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("regression (audit F1): each relayed search bills once with a SERVER-generated sourceId - replaying client ids cannot dedupe-dodge the debit")
         void billsWebSearchOnceOnCloudUser() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
             when(searxRestTemplate.postForObject(eq("http://websearch:8085/search"), any(), eq(Map.class)))
                     .thenReturn(Map.of("results", List.of()));
 
@@ -269,7 +284,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("failed relayed search bills nothing")
         void failedSearchBillsNothing() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
             when(searxRestTemplate.postForObject(eq("http://websearch:8085/search"), any(), eq(Map.class)))
                     .thenReturn(null);
 
@@ -338,7 +353,7 @@ class CloudWebSearchRelayControllerTest {
         @DisplayName("each relayed browse records exactly one BROWSER_AGENT_EXECUTION row on the CLOUD tenant; a second identical browse bills again (no dedup)")
         @SuppressWarnings("unchecked")
         void billsBrowserAgentOnCloudUserEveryCall() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
             when(browseConfig.getBrowserAgentBlpopTimeout()).thenReturn(150);
             when(browseConfig.getCallbackBaseUrl()).thenReturn("http://orchestrator:8099");
             when(browseRedisTemplate.opsForList()).thenReturn(browseListOps);
@@ -390,13 +405,26 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("rejects installs the caller does not own with 403 and never runs a browse")
         void rejectsNonOwnerInstall() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(false);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.notLinked());
 
             ResponseEntity<Map<String, Object>> response =
                     controller.agentBrowse(CLOUD_USER_ID, INSTALL_ID, browse("book a flight"));
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
             assertThat(response.getBody()).isEqualTo(Map.of("error", "CE_LINK_NOT_ACTIVE"));
+            verifyNoInteractions(browserAgentModule);
+        }
+
+        @Test
+        @DisplayName("refuses a linked account that is not on a paid plan with 403 CLOUD_LINK_PLAN_REQUIRED and never browses")
+        void rejectsPlanRequired() {
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.planRequired("FREE"));
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.agentBrowse(CLOUD_USER_ID, INSTALL_ID, browse("book a flight"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(response.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
             verifyNoInteractions(browserAgentModule);
         }
 
@@ -413,7 +441,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("rejects a blank task with 400 after link validation")
         void rejectsBlankTask() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
 
             ResponseEntity<Map<String, Object>> response =
                     controller.agentBrowse(CLOUD_USER_ID, INSTALL_ID, browse("   "));
@@ -426,7 +454,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("runs the browse as the cloud user, threads CE run ids into the browse context, and returns the cloud CDP url verbatim")
         void runsAsCloudUserAndReturnsCdpUrl() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
             Map<String, Object> browseData = Map.of(
                     "stop_reason", "COMPLETED",
                     "session_id", "ses_abc",
@@ -475,7 +503,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("module failure (non-COMPLETED session) maps to 502 with the module error")
         void moduleFailureMapsTo502() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
             when(browserAgentModule.execute(eq("agent_browse"), anyMap(), eq("42"), any()))
                     .thenReturn(Optional.of(ToolExecutionResult.failure(
                             ToolErrorCode.EXECUTION_FAILED, "Browser session failed: DOMAIN_BLOCKED")));
@@ -493,7 +521,7 @@ class CloudWebSearchRelayControllerTest {
         void degradesTo503WithoutModule() {
             CloudWebSearchRelayController noModule =
                     new CloudWebSearchRelayController(authClient, searchModule, null);
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
 
             ResponseEntity<Map<String, Object>> response =
                     noModule.agentBrowse(CLOUD_USER_ID, INSTALL_ID, browse("x"));
@@ -510,7 +538,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("forwards a status call to the module as browse_status with the session id")
         void forwardsStatus() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
             when(browserAgentModule.execute(eq("browse_status"), anyMap(), eq("42"), any()))
                     .thenReturn(Optional.of(ToolExecutionResult.success(Map.of("status", "running"))));
 
@@ -528,7 +556,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("forwards an intervene call with the hint payload as browse_intervene")
         void forwardsInterveneHint() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
             when(browserAgentModule.execute(eq("browse_intervene"), anyMap(), eq("42"), any()))
                     .thenReturn(Optional.of(ToolExecutionResult.success(Map.of("ok", true))));
 
@@ -549,7 +577,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("rejects an unknown control verb with 400 and never touches the module")
         void rejectsUnknownVerb() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
 
             ResponseEntity<Map<String, Object>> response = controller.browseControl(
                     CLOUD_USER_ID, INSTALL_ID, "ses_abc", "teleport", null);
@@ -562,7 +590,7 @@ class CloudWebSearchRelayControllerTest {
         @Test
         @DisplayName("rejects a non-owner install with 403 before any control call")
         void rejectsNonOwner() {
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(false);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.notLinked());
 
             ResponseEntity<Map<String, Object>> response = controller.browseControl(
                     CLOUD_USER_ID, INSTALL_ID, "ses_abc", "abort", null);
@@ -586,7 +614,7 @@ class CloudWebSearchRelayControllerTest {
         void degradesTo503WithoutModule() {
             CloudWebSearchRelayController noModule =
                     new CloudWebSearchRelayController(authClient, searchModule, null);
-            when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
+            when(authClient.ceLinkAccess("42", INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
 
             ResponseEntity<Map<String, Object>> response = noModule.browseControl(
                     CLOUD_USER_ID, INSTALL_ID, "ses_abc", "status", null);

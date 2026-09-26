@@ -26,6 +26,16 @@ import java.util.Map;
  * {@code isEmbeddedAuth()}.
  *
  * <p>See {@code CLAUDE.md} section "Règle architecturale CE / Cloud".
+ *
+ * <p>Authenticates with the {@code livecontext-admin-api} service account
+ * ({@code client_credentials} on the application realm), like
+ * {@link KcAdminLogoutService} and {@link AccountPurgeService}. It used to log in
+ * as the master-realm {@code admin} with a password, the only runtime use of that
+ * password in the app: when the master password was reset on 2026-09-19 and only
+ * the GitHub copy was updated, every check failed and every new account, Google
+ * included, was sent to the email-code step. The service-account secret is
+ * provisioned by configure-keycloak.sh and carried to the cluster by
+ * deploy-keycloak.yml, so it cannot drift the same way.
  */
 @Service
 @ConditionalOnProperty(name = "auth.mode", havingValue = "keycloak", matchIfMissing = false)
@@ -41,10 +51,19 @@ public class KeycloakAdminEmailVerifier {
     @Value("${keycloak.admin.realm}")
     private String keycloakRealm;
 
-    @Value("${keycloak.admin.username}")
+    @Value("${keycloak.admin.client-id:livecontext-admin-api}")
+    private String adminClientId;
+
+    @Value("${keycloak.admin.client-secret:}")
+    private String adminClientSecret;
+
+    // Local dev only: the local stack has no service-account secret, so the
+    // master admin login stays as a fallback when the secret is blank. Deployed
+    // environments always carry the secret and never reach this path.
+    @Value("${keycloak.admin.username:admin}")
     private String keycloakAdminUsername;
 
-    @Value("${keycloak.admin.password}")
+    @Value("${keycloak.admin.password:admin}")
     private String keycloakAdminPassword;
 
     public KeycloakAdminEmailVerifier(RestTemplate restTemplate) {
@@ -101,23 +120,35 @@ public class KeycloakAdminEmailVerifier {
     }
 
     private String getAdminToken() {
-        String tokenUrl = keycloakServerUrl + "/realms/master/protocol/openid-connect/token";
+        boolean serviceAccount = adminClientSecret != null && !adminClientSecret.isBlank();
+        String tokenUrl = keycloakServerUrl + "/realms/" + (serviceAccount ? keycloakRealm : "master")
+                + "/protocol/openid-connect/token";
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
 
         MultiValueMap<String, String> params = new LinkedMultiValueMap<>();
-        params.add("grant_type", "password");
-        params.add("client_id", "admin-cli");
-        params.add("username", keycloakAdminUsername);
-        params.add("password", keycloakAdminPassword);
+        if (serviceAccount) {
+            params.add("grant_type", "client_credentials");
+            params.add("client_id", adminClientId);
+            params.add("client_secret", adminClientSecret);
+        } else {
+            params.add("grant_type", "password");
+            params.add("client_id", "admin-cli");
+            params.add("username", keycloakAdminUsername);
+            params.add("password", keycloakAdminPassword);
+        }
 
         HttpEntity<MultiValueMap<String, String>> entity = new HttpEntity<>(params, headers);
 
         ResponseEntity<Map> response = restTemplate.exchange(tokenUrl, HttpMethod.POST, entity, Map.class);
-        if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-            return (String) response.getBody().get("access_token");
+        if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+            throw new IllegalStateException("KC admin token endpoint returned " + response.getStatusCode());
         }
-        throw new RuntimeException("Failed to obtain Keycloak admin token");
+        Object token = response.getBody().get("access_token");
+        if (!(token instanceof String s) || s.isBlank()) {
+            throw new IllegalStateException("KC admin token response missing access_token");
+        }
+        return s;
     }
 }

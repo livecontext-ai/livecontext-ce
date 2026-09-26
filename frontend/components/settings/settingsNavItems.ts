@@ -3,14 +3,12 @@ import {
   BadgeCheck,
   LayoutDashboard,
   CreditCard,
-  Wrench,
   KeyRound,
   BotMessageSquare,
   HardDrive,
   Code,
   Shield,
   Building2,
-  Bot,
   Bug,
   Blocks,
   Globe,
@@ -23,6 +21,8 @@ import {
   ScrollText,
   Star,
   Gift,
+  MessagesSquare,
+  Wrench,
 } from 'lucide-react';
 import { McpIcon } from '@/components/icons/McpIcon';
 import { IS_CE, IS_MANAGED_CLOUD } from '@/lib/edition';
@@ -52,7 +52,7 @@ export interface SettingsNavItem {
 
 /**
  * Navigation items for /app/settings routes, grouped by concern:
- *  1. Account (overview, organization, agents & chat defaults, information)
+ *  1. Account (overview, organization, information)
  *  2. Billing & usage (pricing, quota, storage)
  *  3. Access & sharing (public access)
  *  4. Credentials (user credentials, platform keys, AI providers)
@@ -62,7 +62,6 @@ export const settingsNavItems: SettingsNavItem[] = [
   // ── Account ───────────────────────────────────────
   { href: '/app/settings/overview', label: 'Overview', icon: LayoutDashboard },
   { href: '/app/settings/organization', label: 'Organization', icon: Building2 },
-  { href: '/app/settings/agents', label: 'Agents & Chat', icon: Bot },
   { href: '/app/settings/information', label: 'Information', icon: Info },
 
   // ── Billing & usage ──────────────────────────────
@@ -72,9 +71,14 @@ export const settingsNavItems: SettingsNavItem[] = [
   { href: '/app/settings/storage', label: 'Storage', icon: HardDrive },
   { href: '/app/settings/rewards', label: 'Refer & earn', icon: Gift },
   { href: '/app/settings/admin-credits', label: 'Credits & Plans', icon: Crown, adminOnly: true, hiddenInCE: true },
+  // Not hiddenInCE: a self-hosted admin has the same tool failures to chase, and
+  // agent_execution_tool_calls is populated there too. The cross-tenant verdict
+  // simply degrades to SINGLE_TENANT on a one-tenant install, which the page says.
+  { href: '/app/settings/tool-health', label: 'Tool Health', icon: Wrench, adminOnly: true },
 
   // ── Access & sharing ─────────────────────────────
   { href: '/app/settings/public-access', label: 'Public Access', icon: Globe, groupStart: true },
+  { href: '/app/settings/channels', label: 'Channels', icon: MessagesSquare },
 
   // ── Credentials & keys ───────────────────────────
   { href: '/app/settings/credentials', label: 'Credentials & Variables', icon: KeyRound, groupStart: true },
@@ -104,7 +108,7 @@ export const settingsNavItems: SettingsNavItem[] = [
   { href: '/app/settings/cloud-account', label: 'Cloud', icon: Cloud, adminOnly: true },
 
   // ── Hidden ──
-  { href: '/app/settings/mcp', label: 'MCPs', icon: Wrench, hidden: true },
+  { href: '/app/settings/mcp', label: 'Integrations', icon: Plug, hidden: true },
   { href: '/app/settings/developers', label: 'Developers', icon: Code, hidden: true },
 ];
 

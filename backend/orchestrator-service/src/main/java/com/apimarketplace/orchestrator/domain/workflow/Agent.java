@@ -46,7 +46,24 @@ public record Agent(
         // Guardrail-specific fields
         List<Map<String, Object>> guardrailRules,
         String guardrailParams,
-        String graphNodeId) {
+        String graphNodeId,
+        // temperature / maxTokens / maxIterations / maxTools written as {{...}} templates, by field
+        // name. The typed fields fall back to their defaults (0.7 / 4096 / 10 / 5) and the node
+        // resolves these at run time. Never serialized: the raw plan stays the source of truth.
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        Map<String, String> deferredScalars) {
+
+    /** The constructor before {@link #deferredScalars}: an agent with no templated number. */
+    public Agent(String id, String type, String label, String agentConfigId, Boolean withMemory,
+                 String provider, String model, String systemPrompt, String prompt,
+                 Double temperature, Integer maxTokens, Integer maxIterations, Integer maxTools,
+                 List<String> tools, String parentLoopId, Map<String, Object> params,
+                 List<Map<String, Object>> classifyCategories, String classifyParams,
+                 List<Map<String, Object>> guardrailRules, String guardrailParams, String graphNodeId) {
+        this(id, type, label, agentConfigId, withMemory, provider, model, systemPrompt, prompt,
+            temperature, maxTokens, maxIterations, maxTools, tools, parentLoopId, params,
+            classifyCategories, classifyParams, guardrailRules, guardrailParams, graphNodeId, Map.of());
+    }
 
     public Agent {
         id = normalizeNullable(id);
@@ -79,6 +96,7 @@ public record Agent(
         // Guardrail-specific fields
         guardrailRules = guardrailRules == null ? List.of() : List.copyOf(guardrailRules);
         guardrailParams = guardrailParams != null ? guardrailParams.trim() : null;
+        deferredScalars = deferredScalars == null ? Map.of() : Map.copyOf(deferredScalars);
     }
 
     public String normalizedLabel() {
@@ -118,6 +136,16 @@ public record Agent(
                         temperature, maxTokens, maxIterations, maxTools,
                         tools, parentLoopId, newParams,
                         classifyCategories, classifyParams, guardrailRules, guardrailParams,
-                        graphNodeId);
+                        graphNodeId, deferredScalars);
+    }
+
+    /** This agent with its numeric settings as resolved for one execution, nothing left deferred. */
+    public Agent withNumbers(Double newTemperature, Integer newMaxTokens, Integer newMaxIterations, Integer newMaxTools) {
+        return new Agent(id, type, label, agentConfigId, withMemory,
+                        provider, model, systemPrompt, prompt,
+                        newTemperature, newMaxTokens, newMaxIterations, newMaxTools,
+                        tools, parentLoopId, params,
+                        classifyCategories, classifyParams, guardrailRules, guardrailParams,
+                        graphNodeId, Map.of());
     }
 }

@@ -2,13 +2,13 @@
 
 import React, { useCallback, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { ChevronDown, ChevronRight, Info, Loader2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { ModelPicker } from '@/components/ai/ModelPicker';
 import {
   getEffectiveDefaultSelectedModel,
@@ -63,9 +63,9 @@ const TURN_LIMIT_FIELDS: NumericField[] = [
  * Used from:
  *   - MessageComposer → AttachmentHandler Options tab (conversation scope)
  *   - (NOT CreateAgentModal: it renders its own native fields and no longer mounts this)
- *   - AgentChatDefaults, i.e. the Agents page "Settings" tab and Settings > Agents & Chat
+ *   - AgentChatDefaults, i.e. the Agents page "Settings" tab
  *     (userDefault scope - the per-(user, workspace) defaults. Settings > Overview >
- *     Preferences used to mount this too and now only links to those two surfaces.)
+ *     Preferences used to mount this too and now only links to that tab.)
  *
  * Persistence is routed by `useChatConfig` based on whether `agentId` is provided.
  */
@@ -127,10 +127,10 @@ export function ChatConfigPanel({
     return (
       <div className="space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
+          <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
             <span className="min-w-0">{t('compactionEnabledLabel')}</span>
-            <InfoTooltip text={t('compactionEnabledInfo')} />
-          </label>
+            <InfoPopover label={t('compactionEnabledLabel')}>{t('compactionEnabledInfo')}</InfoPopover>
+          </span>
           <Switch
             checked={enabled}
             onCheckedChange={(checked) => updateConfig({ compactionEnabled: checked })}
@@ -154,10 +154,10 @@ export function ChatConfigPanel({
                 the summariser is a bare single completion no CLI bridge can serve. */}
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-3">
-                <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
+                <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
                   <span className="min-w-0">{t('compactionModelLabel')}</span>
-                  <InfoTooltip text={t('compactionModelInfo')} />
-                </label>
+                  <InfoPopover label={t('compactionModelLabel')}>{t('compactionModelInfo')}</InfoPopover>
+                </span>
                 <Switch
                   checked={modelOverrideOpen}
                   onCheckedChange={handleModelOverrideToggle}
@@ -200,7 +200,7 @@ export function ChatConfigPanel({
 
   if (limitsOnly) {
     return (
-      <TooltipProvider delayDuration={0}>
+      <>
         <div className={`${gap} p-4`}>
           {isSaving && (
             <div className="flex justify-end">
@@ -230,7 +230,7 @@ export function ChatConfigPanel({
             {renderCompaction()}
           </div>
         </div>
-      </TooltipProvider>
+      </>
     );
   }
 
@@ -241,7 +241,7 @@ export function ChatConfigPanel({
   if (userDefault) {
     const temperature = config.temperature ?? 0.7;
     return (
-      <TooltipProvider delayDuration={0}>
+      <>
         <div className="space-y-6">
           {isSaving && (
             <div className="flex justify-end">
@@ -258,7 +258,7 @@ export function ChatConfigPanel({
           <div className="space-y-2">
             <h4 className="flex items-center gap-1.5 font-medium text-theme-primary">
               {t('systemPromptLabel')}
-              <InfoTooltip text={t('systemPromptInfo')} />
+              <InfoPopover label={t('systemPromptLabel')}>{t('systemPromptInfo')}</InfoPopover>
             </h4>
             <Textarea
               value={config.systemPrompt ?? ''}
@@ -273,7 +273,7 @@ export function ChatConfigPanel({
           <div className="space-y-2">
             <h4 className="flex items-center gap-1.5 font-medium text-theme-primary">
               {t('temperatureLabel')}
-              <InfoTooltip text={t('temperatureInfo')} />
+              <InfoPopover label={t('temperatureLabel')}>{t('temperatureInfo')}</InfoPopover>
             </h4>
             <Slider
               value={[temperature]}
@@ -440,12 +440,12 @@ export function ChatConfigPanel({
             </div>
           </div>
         </div>
-      </TooltipProvider>
+      </>
     );
   }
 
   return (
-    <TooltipProvider delayDuration={0}>
+    <>
       <div className={`${gap} p-4`}>
         {/* Scope label - hidden for the user-default (account Preferences) target, which
             renders its own section header; we keep only the saving indicator there. */}
@@ -481,10 +481,10 @@ export function ChatConfigPanel({
 
         {/* System prompt */}
         <div>
-          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+          <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
             {t('systemPromptLabel')}
-            <InfoTooltip text={t('systemPromptInfo')} />
-          </label>
+            <InfoPopover label={t('systemPromptLabel')}>{t('systemPromptInfo')}</InfoPopover>
+          </span>
           <textarea
             value={config.systemPrompt ?? ''}
             onChange={(e) => updateConfig({ systemPrompt: e.target.value })}
@@ -496,10 +496,10 @@ export function ChatConfigPanel({
 
         {/* Temperature */}
         <div>
-          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+          <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
             {t('temperatureLabel')}
-            <InfoTooltip text={t('temperatureInfo')} />
-          </label>
+            <InfoPopover label={t('temperatureLabel')}>{t('temperatureInfo')}</InfoPopover>
+          </span>
           <Slider
             value={[config.temperature ?? 0.7]}
             onValueChange={(values) => updateConfig({ temperature: values[0] })}
@@ -560,10 +560,10 @@ export function ChatConfigPanel({
         {/* Tools mode + web search */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+            <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
               {t('toolsModeLabel')}
-              <InfoTooltip text={t('toolsModeInfo')} />
-            </label>
+              <InfoPopover label={t('toolsModeLabel')}>{t('toolsModeInfo')}</InfoPopover>
+            </span>
             {/* Only All / No tools here. A custom tool list isn't a conversation-scope
                 concept - it has no per-conversation storage or picker; tool curation is an
                 agent-level feature (the agent editor). A legacy stored 'custom' is shown as
@@ -585,10 +585,10 @@ export function ChatConfigPanel({
             </Select>
           </div>
           <div>
-            <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+            <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
               {t('webSearchLabel')}
-              <InfoTooltip text={t('webSearchInfo')} />
-            </label>
+              <InfoPopover label={t('webSearchLabel')}>{t('webSearchInfo')}</InfoPopover>
+            </span>
             <button
               type="button"
               onClick={() => updateConfig({ webSearch: !(config.webSearch ?? true) })}
@@ -602,10 +602,10 @@ export function ChatConfigPanel({
               tool. Opt-in on its own: a per-second video model spends an order of
               magnitude more per call. */}
           <div>
-            <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+            <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
               {t('generationLabel')}
-              <InfoTooltip text={t('generationInfo')} />
-            </label>
+              <InfoPopover label={t('generationLabel')}>{t('generationInfo')}</InfoPopover>
+            </span>
             <button
               type="button"
               onClick={() => updateConfig({
@@ -627,10 +627,10 @@ export function ChatConfigPanel({
           {target !== 'agent' && (
             <>
               <div>
-                <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                   {t('mailboxLabel')}
-                  <InfoTooltip text={t('mailboxInfo')} />
-                </label>
+                  <InfoPopover label={t('mailboxLabel')}>{t('mailboxInfo')}</InfoPopover>
+                </span>
                 <button
                   type="button"
                   onClick={() => {
@@ -653,10 +653,10 @@ export function ChatConfigPanel({
               </div>
               {config.mailbox?.enabled && (
                 <div>
-                  <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                     {t('mailboxAccessLabel')}
-                    <InfoTooltip text={t('mailboxAccessInfo')} />
-                  </label>
+                    <InfoPopover label={t('mailboxAccessLabel')}>{t('mailboxAccessInfo')}</InfoPopover>
+                  </span>
                   <button
                     type="button"
                     onClick={() => updateConfig({
@@ -687,10 +687,10 @@ export function ChatConfigPanel({
               which the backend turns into a "*" gate-skip. */}
           {target !== 'agent' && (
             <div>
-              <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+              <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
                 {t('autoAuthorizeLabel')}
-                <InfoTooltip text={t('autoAuthorizeInfo')} />
-              </label>
+                <InfoPopover label={t('autoAuthorizeLabel')}>{t('autoAuthorizeInfo')}</InfoPopover>
+              </span>
               <button
                 type="button"
                 onClick={() => updateConfig({ autoAuthorizeTools: !(config.autoAuthorizeTools ?? false) })}
@@ -740,7 +740,7 @@ export function ChatConfigPanel({
           )}
         </div>
       </div>
-    </TooltipProvider>
+    </>
   );
 }
 
@@ -759,7 +759,7 @@ function SettingRow({
   children,
 }: {
   title: string;
-  /** Tooltip text behind an ⓘ icon - same affordance as the NumericInput fields. */
+  /** Explanation behind the ⓘ icon (opens on click) - same affordance as the NumericInput fields. */
   info: string;
   children: React.ReactNode;
 }) {
@@ -768,7 +768,7 @@ function SettingRow({
       <div className="min-w-0">
         <h4 className="flex items-center gap-1.5 font-medium text-theme-primary">
           {title}
-          <InfoTooltip text={info} />
+          <InfoPopover label={title}>{info}</InfoPopover>
         </h4>
       </div>
       <div className="flex-shrink-0">{children}</div>
@@ -776,18 +776,6 @@ function SettingRow({
   );
 }
 
-function InfoTooltip({ text }: { text: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-      </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs z-[100000]">
-        <p className="text-xs">{text}</p>
-      </TooltipContent>
-    </Tooltip>
-  );
-}
 
 interface NumericInputProps {
   label: string;
@@ -818,10 +806,10 @@ function NumericInput({ label, info, value, onChange, min, max, inline = false }
   if (inline) {
     return (
       <div className="flex items-center justify-between gap-3">
-        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
+        <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
           <span className="min-w-0">{label}</span>
-          <InfoTooltip text={info} />
-        </label>
+          <InfoPopover label={label}>{info}</InfoPopover>
+        </span>
         {input}
       </div>
     );
@@ -829,10 +817,10 @@ function NumericInput({ label, info, value, onChange, min, max, inline = false }
 
   return (
     <div>
-      <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+      <span className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
         {label}
-        <InfoTooltip text={info} />
-      </label>
+        <InfoPopover label={label}>{info}</InfoPopover>
+      </span>
       {input}
     </div>
   );

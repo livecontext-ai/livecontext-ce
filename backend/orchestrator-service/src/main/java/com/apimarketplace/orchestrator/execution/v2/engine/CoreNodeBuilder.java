@@ -87,6 +87,25 @@ public class CoreNodeBuilder {
         createSshNodes(nodeMap, plan);
         createSftpNodes(nodeMap, plan);
         createDatabaseNodes(nodeMap, plan);
+        attachDeferredScalars(nodeMap, plan);
+    }
+
+    /**
+     * Hands every core node the numeric / boolean config fields its plan wrote as {@code {{...}}}
+     * templates (set aside by the plan parser), so it resolves them at run time instead of running
+     * on the default the typed config fell back to. One place for every node type, so a node added
+     * later cannot miss it.
+     */
+    private static void attachDeferredScalars(Map<String, ExecutionNode> nodeMap, WorkflowPlan plan) {
+        for (Core core : plan.getCores()) {
+            if (core.deferredScalars().isEmpty()) {
+                continue;
+            }
+            ExecutionNode node = nodeMap.get(core.getNormalizedKey());
+            if (node instanceof com.apimarketplace.orchestrator.execution.v2.nodes.BaseNode base) {
+                base.setDeferredScalars(core.deferredScalars());
+            }
+        }
     }
 
     /**

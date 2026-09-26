@@ -3,10 +3,9 @@
 import * as React from 'react';
 import clsx from 'clsx';
 import { useTranslations } from 'next-intl';
-import { ChevronRight, Info } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { InspectorToggleRow } from './InspectorToggleRow';
 import type { BuilderNodeData, NodePolicy } from '../../types';
 import {
@@ -18,6 +17,7 @@ import {
 } from '../../utils/nodePolicy';
 import { nodeSupportsMock, sanitizeNodeMock } from '../../utils/nodeMock';
 import { MockOutputSection } from './MockOutputSection';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 interface NodeSettingsSectionProps {
   node: Node<BuilderNodeData>;
@@ -252,36 +252,20 @@ export function NodeSettingsSection({
                 <label className="text-sm font-medium text-slate-500 dark:text-slate-400">
                   {t('providerRetryLabel')}
                 </label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button
-                      type="button"
-                      className="inline-flex items-center justify-center rounded-md p-0.5 hover:bg-slate-200 dark:hover:bg-slate-700"
-                      aria-label={t('providerRetryLabel')}
-                      data-testid="node-settings-provider-retry-info"
-                    >
-                      <Info className="h-3 w-3 text-slate-400" />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent
-                    className="z-[99999] w-[300px] rounded-xl border border-gray-200/50 bg-[var(--bg-primary)] p-3 dark:border-gray-700/50"
-                    side="right"
-                    align="start"
-                  >
-                    <p className="text-xs text-slate-600 dark:text-slate-300">
-                      {t('providerRetryInfoDefault')}
-                    </p>
-                    <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
-                      {t('providerRetryInfoZero')}
-                    </p>
-                    <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
-                      {t('providerRetryInfoCap')}
-                    </p>
-                    <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
-                      {t('providerRetryInfoRunning')}
-                    </p>
-                  </PopoverContent>
-                </Popover>
+                <InfoPopover label={t('providerRetryLabel')} size="sm" side="right" align="start" contentClassName="w-[300px] p-3" data-testid="node-settings-provider-retry-info">
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    {t('providerRetryInfoDefault')}
+                  </p>
+                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
+                    {t('providerRetryInfoZero')}
+                  </p>
+                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
+                    {t('providerRetryInfoCap')}
+                  </p>
+                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
+                    {t('providerRetryInfoRunning')}
+                  </p>
+                </InfoPopover>
               </div>
               <Input
                 type="number"

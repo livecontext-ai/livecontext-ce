@@ -255,6 +255,42 @@ class WebhookControllerTest {
         }
 
         @Test
+        @DisplayName("lifecycle: a completed subscription checkout emits checkout.completed {kind=subscription}")
+        void checkoutCompletedEmitsLifecycleEvent() throws Exception {
+            com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails =
+                    mock(com.apimarketplace.auth.lifecycle.LifecycleEmailService.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(controller, "lifecycleEmails", lifecycleEmails);
+            Session session = mock(Session.class);
+            lenient().when(session.getId()).thenReturn("cs_lc_1");
+            lenient().when(session.getCustomer()).thenReturn("cus_lc_1");
+            lenient().when(session.getSubscription()).thenReturn("sub_lc_1");
+            lenient().when(session.getClientReferenceId()).thenReturn("n_lcNonce");
+            when(nonceUtil.decodeNonce("n_lcNonce")).thenReturn(42L);
+            Event event = createMockEvent("evt_lc_1", "checkout.session.completed", session);
+            when(billingEventRepository.existsByEventId("evt_lc_1")).thenReturn(false);
+            when(billingEventRepository.save(any(BillingEvent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            performWebhookPost("{\"type\":\"checkout.session.completed\"}", event, 200);
+
+            verify(lifecycleEmails).emit(42L, com.apimarketplace.auth.lifecycle.LifecycleEvents.CHECKOUT_COMPLETED,
+                    java.util.Map.of("kind", "subscription"));
+        }
+
+        @Test
+        @DisplayName("lifecycle: a failing lifecycle bean never fails the webhook")
+        void checkoutCompletedLifecycleFailureIsSwallowed() {
+            com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails =
+                    mock(com.apimarketplace.auth.lifecycle.LifecycleEmailService.class);
+            org.mockito.Mockito.doThrow(new IllegalStateException("boom")).when(lifecycleEmails).emit(any(), any(), any());
+            org.springframework.test.util.ReflectionTestUtils.setField(controller, "lifecycleEmails", lifecycleEmails);
+
+            controller.emitCheckoutCompleted(42L, true);
+
+            verify(lifecycleEmails).emit(42L, com.apimarketplace.auth.lifecycle.LifecycleEvents.CHECKOUT_COMPLETED,
+                    java.util.Map.of("kind", "credits"));
+        }
+
+        @Test
         @DisplayName("2. customer.subscription.created event dispatches to handleSubscriptionUpsert")
         void subscriptionCreated_dispatchesCorrectly() throws Exception {
             com.stripe.model.Subscription sub = mock(com.stripe.model.Subscription.class);

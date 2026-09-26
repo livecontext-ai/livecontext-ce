@@ -36,7 +36,7 @@ const routerReplace = vi.fn();
  */
 const replace = vi.fn();
 const realReplaceState = window.history.replaceState;
-let currentSearch = new URLSearchParams();
+let currentSearch: URLSearchParams | null = new URLSearchParams();
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: routerReplace }),
@@ -68,18 +68,27 @@ function makeWrapper(client: QueryClient) {
  * (no mounted observer) - exactly the state on OAuth redirect return:
  *   - inspector: plain ['user-credentials'] (CredentialSection)
  *   - validator: org-scoped ['org','__personal__','user-credentials'] (ValidationContext)
+ *   - checker:   ['user-credentials-all'] (useCredentialCheck: chat cards, the onboarding
+ *                integrations step, anything answering "is this connected?")
+ *
+ * All THREE, because the predicate that misses one is not obviously different from the one that
+ * catches them all: this hook tested `queryKey.includes('user-credentials')`, an exact element
+ * match, which covers the first two and silently never matched the third.
  */
 async function seedCredentialQueries(client: QueryClient) {
   const inspectorFn = vi.fn().mockResolvedValue([{ id: 1 }]);
   const validatorFn = vi.fn().mockResolvedValue([{ id: 1 }]);
+  const checkerFn = vi.fn().mockResolvedValue([{ id: 1 }]);
   await client.prefetchQuery({ queryKey: ['user-credentials'], queryFn: inspectorFn });
   await client.prefetchQuery({
     queryKey: ['org', '__personal__', 'user-credentials'],
     queryFn: validatorFn,
   });
+  await client.prefetchQuery({ queryKey: ['user-credentials-all'], queryFn: checkerFn });
   inspectorFn.mockClear();
   validatorFn.mockClear();
-  return { inspectorFn, validatorFn };
+  checkerFn.mockClear();
+  return { inspectorFn, validatorFn, checkerFn };
 }
 
 afterEach(() => { window.history.replaceState = realReplaceState; });
@@ -96,7 +105,7 @@ beforeEach(() => {
 describe('useOAuthCredentialCallback', () => {
   it('on ?success=true refetches BOTH the inspector key and the org-scoped validator key so "required credential" clears without reconnecting', async () => {
     const client = makeClient();
-    const { inspectorFn, validatorFn } = await seedCredentialQueries(client);
+    const { inspectorFn, validatorFn, checkerFn } = await seedCredentialQueries(client);
     currentSearch = new URLSearchParams('success=true');
 
     renderHook(() => useOAuthCredentialCallback({ addToast, tCredentials }), {
@@ -106,6 +115,9 @@ describe('useOAuthCredentialCallback', () => {
     await waitFor(() => {
       expect(inspectorFn).toHaveBeenCalledTimes(1);
       expect(validatorFn).toHaveBeenCalledTimes(1); // the guard root cause (b) would fail
+      // The entry that decides whether a screen says "Connected". An exact-element predicate
+      // refreshes the two above and leaves this one holding the pre-connect answer.
+      expect(checkerFn).toHaveBeenCalledTimes(1);
     });
     expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ type: 'success' }));
     expect(replace).toHaveBeenCalledWith('/app/workflows/builder');
@@ -147,6 +159,23 @@ describe('useOAuthCredentialCallback', () => {
     expect(inspectorFn).not.toHaveBeenCalled();
     expect(validatorFn).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('REGRESSION: a null useSearchParams (no router request) does nothing instead of crashing the page', async () => {
+    const client = makeClient();
+    const { inspectorFn } = await seedCredentialQueries(client);
+    currentSearch = null;
+
+    // Before: searchParams.get threw in the effect and unmounted the whole page it sits in
+    // (the onboarding page, under every test that mocks navigation without search params).
+    expect(() => renderHook(() => useOAuthCredentialCallback({ addToast, tCredentials }), {
+      wrapper: makeWrapper(client),
+    })).not.toThrow();
+
+    await Promise.resolve();
+    expect(addToast).not.toHaveBeenCalled();
+    expect(inspectorFn).not.toHaveBeenCalled();
+    currentSearch = new URLSearchParams();
   });
 
   it('handles the callback only once per return even if the component re-renders', async () => {

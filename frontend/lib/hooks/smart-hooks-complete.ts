@@ -348,14 +348,9 @@ export function useCreditBalance() {
     // {@code balance} when both are non-null.
     subBalance: data?.subBalance ?? null,
     paygBalance: data?.paygBalance ?? null,
-    // V494 - the monthly AI allowance, deliberately NOT part of {@code balance}:
-    // it can only pay for agent/chat turns on the models opened to the free tier,
-    // so adding it to the headline total would overstate spending power. Absent
-    // (CE, or no subscription) reads as null, i.e. "not answered".
-    aiBalance: data?.aiBalance ?? null,
     delinquent: data?.delinquent ?? false,
-    // The server's answer to "may this account's monthly credits pay for a
-    // platform-key purchase". Absent (pre-V250 shape, or CE where the rule does
+    // The server's answer to "are this account's monthly credits scoped" (the Free
+    // plan: workflows plus chat/agent turns on free-tier models only). Absent (pre-V250 shape, or CE where the rule does
     // not exist) reads as false, so a surface never warns on a guess.
     monthlyCreditsAreWorkflowOnly: data?.monthlyCreditsAreWorkflowOnly ?? false,
     // V494 - whether the payload actually ARRIVED, as opposed to "not loading".

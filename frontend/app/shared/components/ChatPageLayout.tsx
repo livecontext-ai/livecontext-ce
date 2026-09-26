@@ -357,6 +357,7 @@ export function ChatPageLayout({
                 hideDataSourceToggle={messageHistoryProps.hideDataSourceToggle}
                 leadingControl={composerProps.leadingControl}
                 linkedAgentId={composerProps.linkedAgentId}
+                showOrbi={composerProps.showOrbi}
                 className="flex-1 min-h-0"
               />
               {activityOpen && conversationId && (

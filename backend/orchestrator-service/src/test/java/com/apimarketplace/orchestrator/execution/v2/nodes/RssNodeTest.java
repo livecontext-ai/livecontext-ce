@@ -703,4 +703,42 @@ class RssNodeTest {
             }
         };
     }
+
+    @Nested
+    @DisplayName("templated maxItems")
+    class TemplatedMaxItems {
+
+        private RssNode templatedNode(Object resolvedMax) {
+            // A loopback url is refused by the SSRF guard: the node fails AFTER maxItems resolved,
+            // without any network call.
+            RssNode node = new RssNode("core:rss", new Core.RssConfig("http://127.0.0.1/feed.xml", 20));
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            org.mockito.Mockito.when(adapter.resolveTemplates(org.mockito.ArgumentMatchers.anyMap(),
+                    org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:x.output.n}}", resolvedMax)));
+            node.setTemplateAdapter(adapter);
+            node.setDeferredScalars(Map.of("rss", Map.of("maxItems", "{{core:x.output.n}}")));
+            return node;
+        }
+
+        @Test
+        @DisplayName("regression: a {{...}} maxItems is resolved and reported; it used to drop the whole rss config")
+        @SuppressWarnings("unchecked")
+        void templatedMaxItemsIsResolved() {
+            NodeExecutionResult result = templatedNode(7).execute(context);
+
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(7, params.get("maxItems"));
+        }
+
+        @Test
+        @DisplayName("a {{...}} maxItems resolving to a non-number fails, naming the config")
+        void templatedMaxItemsNotANumberFails() {
+            NodeExecutionResult result = templatedNode("lots").execute(context);
+
+            assertFalse(result.isSuccess());
+            assertTrue(result.errorMessage().orElse("").contains("rss"), result.errorMessage().orElse(""));
+        }
+    }
 }

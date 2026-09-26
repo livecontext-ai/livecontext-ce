@@ -31,6 +31,11 @@ public record TriggerExecutionResult(
     int epoch
 ) {
 
+    /** Message of {@link #stillRunning}: the run started and outlived the synchronous wait. */
+    public static final String STILL_RUNNING_MESSAGE =
+        "Workflow started and is still running; it continues in the background";
+
+
     /**
      * Create a success result.
      *
@@ -92,6 +97,24 @@ public record TriggerExecutionResult(
             type,
             true,
             "Trigger accepted, executing asynchronously",
+            Set.of(),
+            -1
+        );
+    }
+
+    /**
+     * The run STARTED within the synchronous wait but had not finished when the wait ran out. It is
+     * not a failure: the run keeps executing and completes its epoch normally, exactly like a run
+     * paused on an async agent. Returned instead of the queue timeout, whose message ("could not
+     * start") would be false here.
+     */
+    public static TriggerExecutionResult stillRunning(String runId, String triggerId, TriggerType type) {
+        return new TriggerExecutionResult(
+            runId,
+            triggerId,
+            type,
+            true,
+            STILL_RUNNING_MESSAGE,
             Set.of(),
             -1
         );

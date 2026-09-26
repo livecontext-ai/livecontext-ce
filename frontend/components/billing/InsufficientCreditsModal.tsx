@@ -12,7 +12,6 @@ import { useLocale, useTranslations } from 'next-intl';
 import { useRouter } from 'next/navigation';
 import { CREDIT_TIERS, STARTER_MAX_CREDITS, calcPrice as calcPriceBase, creditFactsFor, formatTierLabel } from '@/lib/billing/pricing-constants';
 import { useSubscription, usePaygTiers } from '@/lib/hooks/smart-hooks-complete';
-import { useFreeAiCredits } from '@/lib/hooks/useFreeAiCredits';
 import { isCeMode } from '@/lib/format-cost';
 import DeploymentBadge from '@/components/pricing/DeploymentBadge';
 import FeatureLabel from '@/components/pricing/FeatureLabel';
@@ -53,9 +52,9 @@ export default function InsufficientCreditsModal() {
   // restating it here in different words is how two surfaces start disagreeing about
   // what a credit buys - which is a pricing claim, not copy.
   const tCompare = useTranslations('pricing.compare');
-  // Same reasoning for the free plan's AI allowance: the plan cards answer
-  // "what does that allowance buy" with a measured figure, and this modal used
-  // to answer it with a figure-free paraphrase of its own. One message.
+  // Same reasoning for the free plan's credits: the plan cards answer "what do
+  // they buy" with a measured figure, and this modal used to answer it with a
+  // figure-free paraphrase of its own. One message.
   const tCards = useTranslations('pricing.planCards');
   const locale = useLocale();
   const creditFacts = React.useMemo(() => creditFactsFor(locale), [locale]);
@@ -134,13 +133,6 @@ export default function InsufficientCreditsModal() {
   // Declared with the other hooks, ABOVE the CE early return: a hook after a
   // conditional return breaks the Rules of Hooks.
   const { event: pricingEvent } = usePricingEvent();
-  // The Free column states BOTH pots, like every other pricing surface: the
-  // monthly credits that fund workflows and the separate AI allowance that
-  // funds chat and agent turns. A reader who has just been refused for lack of
-  // credits is precisely the one who needs to know the second pot exists, and
-  // a column that named only the first read as "chat costs you credits too".
-  // Live value, not the seeded constant - the allowance is admin-configurable.
-  const freeAiCredits = useFreeAiCredits();
 
   // Defense-in-depth: never render the Stripe-pricing modal in CE.
   if (isCeMode) return null;
@@ -155,23 +147,13 @@ export default function InsufficientCreditsModal() {
       credits: '1,000',
       features: [
         // The PLAN CARD's free-credits tooltip, not this dialog's own note plus the paid
-        // sentence. That concatenation said both things about one pot two sentences
-        // apart: "chat and agents draw the separate allowance instead", then "about N
-        // credits for a short exchange with a configured agent". On the FREE plan the
-        // monthly bucket funds only WORKFLOW_NODE (CreditService), so the second half
-        // priced this pot with a debit it refuses, in front of the one reader who has
-        // just been refused and is deciding what to top up. One message, maintained in
-        // one place, answering both questions: what the grant may be spent on, and what
-        // a credit buys. Rendered by FeatureLabel via the "label||tooltip" convention.
+        // sentence: the paid tooltip prices any model, while the Free pool pays for
+        // workflows and for chat/agent turns on the models marked Free only. Quoting it
+        // here would over-promise to the one reader who has just been refused and is
+        // deciding what to top up. One message, maintained in one place, answering both
+        // questions: what the grant may be spent on, and what a credit buys. Rendered by
+        // FeatureLabel via the "label||tooltip" convention.
         `${t('features.freeCredits')}||${freeCreditsTooltip(tCards, creditFacts)}`,
-        // Dropped when an admin has closed the free tier (allowance 0), same
-        // rule the plan cards apply: a "0 AI credits" bullet looks like a
-        // feature while advertising nothing.
-        ...(freeAiCredits > 0
-          ? [`${t('features.freeAiCredits', {
-              credits: freeAiCredits.toLocaleString(getClientLocale()),
-            })}||${tCards('features.aiCreditsFreeTooltip', creditFacts)}`]
-          : []),
         t('features.freeConcurrent'),
         t('features.freeStorage'),
       ],
@@ -229,7 +211,8 @@ export default function InsufficientCreditsModal() {
               {t('description')}
             </p>
 
-            {/* Free-plan scoping: workflows are free, chat/agents are paid. */}
+            {/* Free-plan scoping: the monthly credits cover workflows and the
+                free-tier models only; everything else needs a top-up or a plan. */}
             {isFreePlan && (
               <div className="mt-3 flex items-start gap-2 rounded-lg border border-theme bg-theme-tertiary px-3 py-2 text-left">
                 <Info className="h-3.5 w-3.5 text-theme-muted flex-shrink-0 mt-0.5" />

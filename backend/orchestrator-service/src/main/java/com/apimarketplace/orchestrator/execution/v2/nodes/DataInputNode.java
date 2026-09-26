@@ -93,20 +93,9 @@ public class DataInputNode extends BaseNode {
         if (expression == null || expression.isBlank()) {
             return null;
         }
-
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object value = resolved.get("__expr__");
-                return value != null ? value.toString() : null;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression: {} - {}", expression, e.getMessage());
-                return expression;
-            }
-        }
-
-        return expression;
+        // One resolver for every field of every node: typed, JSON for a structure, never the
+        // configured template in place of a value (BaseNode#resolveTemplateValue).
+        return resolveTemplateString(expression, context);
     }
 
     public List<Core.DataInputItem> getItems() {

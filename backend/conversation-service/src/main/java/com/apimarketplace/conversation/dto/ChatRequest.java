@@ -71,6 +71,14 @@ public class ChatRequest {
     @JsonProperty("reviewerExecutionId")
     private String reviewerExecutionId;
 
+    /**
+     * The id this run is recorded under, when the caller already holds one. A task locks itself
+     * to an id before dispatching; recording the run under another id left the task pointing at
+     * a run that does not exist. Honoured on the internal synchronous path only.
+     */
+    @JsonProperty("executionId")
+    private String executionId;
+
     // Org context (set from HTTP headers, not from JSON body)
     private transient String orgId;
     private transient String orgRole;
@@ -139,6 +147,8 @@ public class ChatRequest {
 
     public String getReviewerExecutionId() { return reviewerExecutionId; }
     public void setReviewerExecutionId(String reviewerExecutionId) { this.reviewerExecutionId = reviewerExecutionId; }
+    public String getExecutionId() { return executionId; }
+    public void setExecutionId(String executionId) { this.executionId = executionId; }
 
     public String getOrgId() { return orgId; }
     public void setOrgId(String orgId) { this.orgId = orgId; }

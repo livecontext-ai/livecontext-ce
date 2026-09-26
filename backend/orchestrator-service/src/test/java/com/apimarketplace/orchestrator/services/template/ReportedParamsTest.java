@@ -794,4 +794,380 @@ class ReportedParamsTest {
             assertThat(reported.toString()).contains("Quarterly report");
         }
     }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("a structure with a quoted {{$vars.x}} leaf is withheld: the text form hid it inside a string literal")
+    void structuredConfiguredValueWithWorkspaceVariableIsWithheld() {
+        Map<String, Object> configured = Map.of("order", Map.of("tenant", "{{$vars.tenant}}"), "n", 1);
+        Map<String, Object> resolved = Map.of("order", Map.of("tenant", "s3cr3t"), "n", 1);
+
+        Object reported = ReportedParams.valueFromConfigured(configured, resolved);
+
+        org.junit.jupiter.api.Assertions.assertFalse(String.valueOf(reported).contains("s3cr3t"), String.valueOf(reported));
+        org.junit.jupiter.api.Assertions.assertEquals(ReportedParams.WITHHELD_WORKSPACE_VARIABLE,
+            ReportedParams.valueFromConfigured(java.util.List.of("{{$vars.x}}"), "s3cr3t"));
+        org.junit.jupiter.api.Assertions.assertEquals("plain",
+            ReportedParams.valueFromConfigured(Map.of("a", "{{core:x.output.y}}"), "plain"));
+    }
+
+    @Nested
+    @DisplayName("a value a model received (ModelInput)")
+    class ModelInputs {
+
+        @Test
+        @DisplayName("BUG: a prompt over the inline budget is reported whole, never described as '… (N chars)'")
+        void longPromptIsReportedWhole() {
+            String prompt = "p".repeat(5_044);
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("prompt", new ReportedParams.ModelInput(prompt));
+
+            Map<String, Object> reported = ReportedParams.forReport(params);
+
+            assertThat(reported.get("prompt")).isEqualTo(prompt);
+        }
+
+        @Test
+        @DisplayName("the same value WITHOUT the wrapper is still described, so the budget holds for everything else")
+        void unwrappedValueIsStillDescribed() {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("body", "b".repeat(5_044));
+
+            assertThat(ReportedParams.forReport(params).get("body")).asString().contains("(5044 chars)");
+        }
+
+        @Test
+        @DisplayName("model inputs neither count against the map budget nor get dropped by it")
+        void modelInputsAreOutsideTheMapBudget() {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("systemPrompt", new ReportedParams.ModelInput("s".repeat(30_000)));
+            params.put("prompt", new ReportedParams.ModelInput("p".repeat(30_000)));
+            params.put("model", "gpt-4o");
+            params.put("temperature", 0.2);
+
+            Map<String, Object> reported = ReportedParams.forReport(params);
+
+            assertThat(reported.get("systemPrompt")).asString().hasSize(30_000);
+            assertThat(reported.get("prompt")).asString().hasSize(30_000);
+            assertThat(reported).containsEntry("model", "gpt-4o").containsEntry("temperature", 0.2)
+                .doesNotContainKey(ReportedParams.TRUNCATED);
+        }
+
+        @Test
+        @DisplayName("a list of categories keeps its structure, every description whole")
+        void categoriesKeepTheirStructure() {
+            List<Map<String, Object>> categories = new ArrayList<>();
+            for (int i = 0; i < 9; i++) {
+                categories.add(Map.of("label", "c" + i, "description", "d".repeat(400)));
+            }
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("categories", new ReportedParams.ModelInput(categories));
+
+            Object reported = ReportedParams.forReport(params).get("categories");
+
+            assertThat(reported).isEqualTo(categories);
+        }
+
+        @Test
+        @DisplayName("a credential-named key inside a model input is still masked")
+        void credentialsInsideAreMasked() {
+            Map<String, Object> rule = new LinkedHashMap<>();
+            rule.put("description", "No leaks");
+            rule.put("apiKey", SECRET);
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("rules", new ReportedParams.ModelInput(List.of(rule)));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> reported = (List<Map<String, Object>>) ReportedParams.forReport(params).get("rules");
+
+            assertThat(reported.get(0)).containsEntry("description", "No leaks")
+                .containsEntry("apiKey", ReportedParams.WITHHELD_CREDENTIAL);
+        }
+
+        @Test
+        @DisplayName("past the ceiling the text is cut with a note giving its real length, never silently")
+        void pastTheCeilingTheCutIsStated() {
+            int length = ReportedParams.MODEL_INPUT_CEILING + 1_234;
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("prompt", new ReportedParams.ModelInput("x".repeat(length)));
+
+            String reported = (String) ReportedParams.forReport(params).get("prompt");
+
+            assertThat(reported).startsWith("x".repeat(ReportedParams.MODEL_INPUT_CEILING))
+                .endsWith("[1234 more chars not shown in this report; the model received all " + length + "]");
+        }
+
+        @Test
+        @DisplayName("the ceiling is shared across one value: many texts together cannot exceed it")
+        void ceilingIsSharedAcrossTheValue() {
+            List<String> parts = List.of("a".repeat(100_000), "b".repeat(100_000), "c".repeat(10));
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("rules", new ReportedParams.ModelInput(parts));
+
+            @SuppressWarnings("unchecked")
+            List<Object> reported = (List<Object>) ReportedParams.forReport(params).get("rules");
+
+            assertThat(reported.get(0)).isEqualTo("a".repeat(100_000));
+            assertThat((String) reported.get(1)).startsWith("b".repeat(ReportedParams.MODEL_INPUT_CEILING - 100_000 - 2))
+                .contains("more chars not shown");
+            assertThat(reported.get(2)).asString().contains("more not shown");
+        }
+
+        @Test
+        @DisplayName("a null model input is reported as null, not as a failure of the node")
+        void nullIsReported() {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("content", new ReportedParams.ModelInput(null));
+
+            assertThat(ReportedParams.forReport(params)).containsEntry("content", null);
+        }
+    }
+
+    @Nested
+    @DisplayName("maskWorkspaceReferences: a text with its workspace variables withheld")
+    class MaskWorkspaceReferences {
+
+        @Test
+        @DisplayName("a template with no workspace variable is returned as it is")
+        void noVariableIsUnchanged() {
+            String template = "Classify {{trigger:start.output.body}} now";
+
+            assertThat(ReportedParams.maskWorkspaceReferences(template)).isSameAs(template);
+            assertThat(ReportedParams.maskWorkspaceReferences(null)).isNull();
+        }
+
+        @Test
+        @DisplayName("each {{...}} pulling a workspace variable is withheld, both author spellings, the rest kept")
+        void eachVariableReferenceIsWithheld() {
+            String masked = ReportedParams.maskWorkspaceReferences(
+                "Key {{$vars.api_key}}, region {{vars:region}}, body {{trigger:start.output.body}}");
+
+            assertThat(masked).isEqualTo("Key " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE
+                + ", region " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE
+                + ", body {{trigger:start.output.body}}");
+        }
+
+        @Test
+        @DisplayName("a reference spanning lines, or an expression using a variable, is withheld whole")
+        void expressionUsingAVariableIsWithheld() {
+            String masked = ReportedParams.maskWorkspaceReferences(
+                "A {{ $vars.threshold > 3\n ? 'high' : 'low' }} B");
+
+            assertThat(masked).isEqualTo("A " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE + " B");
+        }
+
+        @Test
+        @DisplayName("$vars written in prose outside {{...}} is text, not a reference, and stays")
+        void proseOutsideBracesStays() {
+            String masked = ReportedParams.maskWorkspaceReferences("Write $vars.x literally, then {{$vars.x}}");
+
+            assertThat(masked).isEqualTo("Write $vars.x literally, then " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE);
+        }
+    }
+
+    @Nested
+    @DisplayName("a model input's structure is walked whole")
+    class ModelInputStructure {
+
+        @Test
+        @DisplayName("an array is walked like a list")
+        void arrayIsWalked() {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("rules", new ReportedParams.ModelInput(new String[] {"a", "b"}));
+
+            assertThat(ReportedParams.forReport(params).get("rules")).isEqualTo(List.of("a", "b"));
+        }
+
+        @Test
+        @DisplayName("a credential key two levels deep is masked")
+        void deepCredentialIsMasked() {
+            Map<String, Object> config = new LinkedHashMap<>();
+            config.put("password", SECRET);
+            config.put("pattern", "\\d+");
+            Map<String, Object> rule = new LinkedHashMap<>();
+            rule.put("config", config);
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("rules", new ReportedParams.ModelInput(List.of(rule)));
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> reportedConfig = (Map<String, Object>)
+                ((List<Map<String, Object>>) ReportedParams.forReport(params).get("rules")).get(0).get("config");
+
+            assertThat(reportedConfig).containsEntry("password", ReportedParams.WITHHELD_CREDENTIAL)
+                .containsEntry("pattern", "\\d+");
+        }
+
+        @Test
+        @DisplayName("past the depth the gate walks, a structure is described rather than copied")
+        void pastMaxDepthIsDescribed() {
+            Object nested = "leaf";
+            for (int i = 0; i < ReportedParams.MAX_DEPTH + 1; i++) {
+                nested = Map.of("k", nested);
+            }
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("rules", new ReportedParams.ModelInput(nested));
+
+            assertThat(ReportedParams.forReport(params).get("rules").toString()).contains("Map(keys=[k])");
+        }
+
+        @Test
+        @DisplayName("a model input nested in another is unwrapped, not serialised as its wrapper")
+        void nestedModelInputIsUnwrapped() {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("rules", new ReportedParams.ModelInput(List.of(new ReportedParams.ModelInput("inner"))));
+
+            assertThat(ReportedParams.forReport(params).get("rules")).isEqualTo(List.of("inner"));
+        }
+    }
+
+    @Nested
+    @DisplayName("maskWorkspaceReferences: every spelling the engine resolves")
+    class MaskInternalSpelling {
+
+        @Test
+        @DisplayName("SECURITY: the internal spelling {{vars.x}} resolves too, so it is withheld too")
+        void internalSpellingIsWithheld() {
+            assertThat(ReportedParams.maskWorkspaceReferences("Key {{vars.api_key}} end"))
+                .isEqualTo("Key " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE + " end");
+        }
+
+        @Test
+        @DisplayName("a path that merely CONTAINS a vars segment is a step reference, not a workspace variable")
+        void varsSegmentInsideAPathIsNotAVariable() {
+            String template = "A {{core:x.output.vars.y}} B {{trigger:t.output.envvars.z}}";
+
+            assertThat(ReportedParams.maskWorkspaceReferences(template)).isEqualTo(template);
+        }
+
+        @Test
+        @DisplayName("references are found as the engine finds them: a quoted }} does not end one early")
+        void quotedBracesDoNotSplitAReference() {
+            String masked = ReportedParams.maskWorkspaceReferences("A {{ '}}' + $vars.x }} B");
+
+            assertThat(masked).isEqualTo("A " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE + " B");
+        }
+    }
+
+    @Nested
+    @DisplayName("maskWorkspaceReferences fails closed")
+    class MaskFailsClosed {
+
+        @Test
+        @DisplayName("SECURITY: a template the engine evaluates as ONE expression, which the pattern cannot isolate, is withheld whole")
+        void unisolatedReferenceIsWithheldWhole() {
+            assertThat(ReportedParams.maskWorkspaceReferences("{{ $vars.x | default('}') }}"))
+                .isEqualTo(ReportedParams.WITHHELD_WORKSPACE_VARIABLE);
+        }
+
+        @Test
+        @DisplayName("the internal spelling inside a function call is withheld")
+        void internalSpellingInAFunctionCallIsWithheld() {
+            assertThat(ReportedParams.maskWorkspaceReferences("A {{ upper(vars.x) }} B"))
+                .isEqualTo("A " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE + " B");
+        }
+    }
+
+    @Nested
+    @DisplayName("every spelling that reaches the workspace-variable map is withheld")
+    class EverySpelling {
+
+        @Test
+        @DisplayName("SECURITY: a top-level {{vars.x}} expression is withheld by valueFrom, not reported in clear")
+        void internalSpellingThroughValueFrom() {
+            assertThat(ReportedParams.valueFrom("{{vars.api_key}}", "sk-SECRET"))
+                .isEqualTo(ReportedParams.WITHHELD_WORKSPACE_VARIABLE);
+            assertThat(ReportedParams.valueFromConfigured("{{vars.api_key}}", "sk-SECRET"))
+                .isEqualTo(ReportedParams.WITHHELD_WORKSPACE_VARIABLE);
+        }
+
+        @Test
+        @DisplayName("SECURITY: a map leaf {{vars.x}} makes the configured structure withheld")
+        void internalSpellingInAMapLeaf() {
+            Object reported = ReportedParams.valueFromConfigured(
+                Map.of("a", "{{vars.api_key}}"), Map.of("a", "sk-SECRET"));
+
+            assertThat(reported.toString()).doesNotContain("sk-SECRET").startsWith("Map(keys=[");
+        }
+
+        @Test
+        @DisplayName("SECURITY: vars['x'], vars?.x and the bare map vars are withheld inside a reference")
+        void indexedSafeNavAndBareMapAreWithheld() {
+            String w = ReportedParams.WITHHELD_WORKSPACE_VARIABLE;
+            assertThat(ReportedParams.maskWorkspaceReferences("A {{vars['api_key']}} B")).isEqualTo("A " + w + " B");
+            assertThat(ReportedParams.maskWorkspaceReferences("A {{vars?.api_key}} B")).isEqualTo("A " + w + " B");
+            assertThat(ReportedParams.maskWorkspaceReferences("A {{vars}} B")).isEqualTo("A " + w + " B");
+        }
+
+        @Test
+        @DisplayName("the word 'vars' in prose, even after a reference, does not withhold the text")
+        void theWordInProseIsText() {
+            String template = "Read {{trigger:start.output.body}} and list the vars you find";
+
+            assertThat(ReportedParams.maskWorkspaceReferences(template)).isEqualTo(template);
+            assertThat(ReportedParams.referencesAnyWorkspaceVariable(template)).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("prose that mentions a variable is text")
+    class ProseIsText {
+
+        @Test
+        @DisplayName("BUG: prose citing $vars.x or vars.x AFTER a kept reference no longer withholds the whole prompt")
+        void proseAfterAKeptReferenceIsShown() {
+            String dotted = "Use {{trigger:x.output.body}}. Later we will set vars.config manually.";
+            String dollar = "Read {{trigger:x.output.body}}; the doc mentions $vars.foo syntax.";
+
+            assertThat(ReportedParams.maskWorkspaceReferences(dotted)).isEqualTo(dotted);
+            assertThat(ReportedParams.maskWorkspaceReferences(dollar)).isEqualTo(dollar);
+        }
+
+        @Test
+        @DisplayName("literal author text saying 'vars.x' is reported, not withheld")
+        void literalTextIsNotWithheld() {
+            assertThat(ReportedParams.valueFrom("Tell the user: vars.x is deprecated", "Tell the user: vars.x is deprecated"))
+                .isEqualTo("Tell the user: vars.x is deprecated");
+        }
+
+        @Test
+        @DisplayName("SECURITY: an internal-spelling reference the pattern cannot isolate is still withheld whole")
+        void unisolatedInternalSpellingStillFailsClosed() {
+            assertThat(ReportedParams.maskWorkspaceReferences("{{ vars.x | default('}') }}"))
+                .isEqualTo(ReportedParams.WITHHELD_WORKSPACE_VARIABLE);
+        }
+    }
+
+    @Nested
+    @org.junit.jupiter.api.DisplayName("scrubUrl - a url inside a message is rewritten to its printable form")
+    class ScrubUrl {
+
+        private static final String SIGNED = "https://bucket.s3.amazonaws.com/f.pdf?X-Amz-Credential=AKIAFAKE&X-Amz-Signature=deadbeefcafe0123456789";
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("WebClient wording (whole url): the signature is withheld, the rest kept")
+        void wholeUrlMasked() {
+            String out = ReportedParams.scrubUrl("GET " + SIGNED + " failed: Connection reset", SIGNED);
+
+            assertThat(out).doesNotContain("deadbeefcafe").contains("https://bucket.s3.amazonaws.com/f.pdf?")
+                .contains("Connection reset");
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("RestTemplate wording (query dropped) with a safe form: the path is rewritten too")
+        void queryLessPathRewrittenToSafeForm() {
+            String real = "http://example.com/s3cr3t/items?page=2";
+            String out = ReportedParams.scrubUrl(
+                "I/O error on GET request for \"http://example.com/s3cr3t/items\": reset",
+                real, "http://example.com/{{$vars.path_token}}/items?page=2");
+
+            assertThat(out).isEqualTo("I/O error on GET request for \"http://example.com/{{$vars.path_token}}/items\": reset");
+        }
+
+        @Test
+        @org.junit.jupiter.api.DisplayName("Null-safe, and a message without the url is returned unchanged")
+        void nullSafeAndNoOp() {
+            assertThat(ReportedParams.scrubUrl(null, SIGNED)).isNull();
+            assertThat(ReportedParams.scrubUrl("boom", null)).isEqualTo("boom");
+            assertThat(ReportedParams.scrubUrl("timeout", SIGNED)).isEqualTo("timeout");
+        }
+    }
 }

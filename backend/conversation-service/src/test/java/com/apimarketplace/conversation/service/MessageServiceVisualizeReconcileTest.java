@@ -64,7 +64,7 @@ class MessageServiceVisualizeReconcileTest {
     void setUp() {
         messageService = new MessageService(
                 conversationRepository, messageRepository, messageAttachmentRepository,
-                messageMapper, eventBus, objectMapper, storageBreakdownService, compactionOrchestrator);
+                messageMapper, eventBus, objectMapper, storageBreakdownService, compactionOrchestrator, org.mockito.Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class));
 
         Conversation c = new Conversation(USER, "title", "claude-sonnet-4-6", "anthropic");
         c.setId(CONV);

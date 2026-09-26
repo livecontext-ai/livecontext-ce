@@ -49,6 +49,13 @@ public class SubscriptionService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.apimarketplace.auth.analytics.AuthAnalyticsEmitter analytics;
 
+    /**
+     * Lifecycle emails (Resend): the contact property {@code plan} follows the plan. Optional
+     * like the analytics emitter above; a null field sends nothing.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails;
+
     private static final Logger log = LoggerFactory.getLogger(SubscriptionService.class);
 
     private final StripeClient stripe;
@@ -347,6 +354,9 @@ public class SubscriptionService {
                 analytics.subscriptionChanged(bc.getUser().getId(), oldPlanCode, newPlanCode,
                         local.getStatus(), creditQuantity, "stripe");
             }
+            if (lifecycleEmails != null && (isNewSubscription || planChanged || statusChanged)) {
+                lifecycleEmails.syncContact(bc.getUser().getId());
+            }
 
             // Sync the tenant's storage quota to the new plan's allowance ONLY
             // on actual plan transitions. Pre-fix this fired on every webhook
@@ -525,6 +535,9 @@ public class SubscriptionService {
             if (analytics != null && sub.getBillingCustomer() != null && sub.getBillingCustomer().getUser() != null) {
                 analytics.subscriptionCancelled(sub.getBillingCustomer().getUser().getId(),
                         sub.getPlan() != null ? sub.getPlan().getCode() : null);
+            }
+            if (lifecycleEmails != null && sub.getBillingCustomer() != null && sub.getBillingCustomer().getUser() != null) {
+                lifecycleEmails.syncContact(sub.getBillingCustomer().getUser().getId());
             }
 
             // V311: cancellation leaves the owner with no active subscription, so the workspace cap

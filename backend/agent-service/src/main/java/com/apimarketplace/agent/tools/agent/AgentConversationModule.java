@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.tools.agent;
 
+import com.apimarketplace.common.web.LogSafePath;
 import com.apimarketplace.agent.domain.AgentEntity;
 import com.apimarketplace.agent.domain.Message;
 import com.apimarketplace.agent.config.ToolAccessControl;
@@ -705,7 +706,7 @@ public class AgentConversationModule implements ToolModule {
 
             if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null) {
                 String slToken = (String) resp.getBody().get("token");
-                log.info("[AGENT_SHARE] Registered shared link: sl_token={}", slToken);
+                log.info("[AGENT_SHARE] Registered shared link: sl_token={}", LogSafePath.tokenPreview(slToken));
                 return slToken;
             }
         } catch (Exception e) {

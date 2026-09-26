@@ -174,6 +174,24 @@ describe('analytics facade (key configured)', () => {
     );
   });
 
+  it('track() keeps the reserved common props even when a caller sends the same keys', () => {
+    // Regression: trophy_viewed and the studio events used to send their own `surface`
+    // ('grid', 'modal', ...), which silently replaced the frontend/backend split.
+    grantConsent();
+    analytics.identifyUser('user-uuid', 'org-uuid');
+    analytics.track('app_install_started', {
+      publication_id: 'pub-1',
+      surface: 'modal',
+      app_edition: 'spoofed',
+      organization_id: 'other-org',
+    });
+    const props = fake.capture.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(props.surface).toBe('frontend');
+    expect(props.app_edition).not.toBe('spoofed');
+    expect(props.organization_id).toBe('org-uuid');
+    expect(props.publication_id).toBe('pub-1');
+  });
+
   it('identifyUser() forwards the stable id and org, and lazily inits', () => {
     grantConsent();
     analytics.identifyUser('user-uuid', 'org-uuid');

@@ -1432,7 +1432,14 @@ public class UnifiedExecutionEngine {
         }
 
         String sourceExpression = node.getListExpression();
-        int maxItems = node.getSplitMaxItems();
+        int maxItems;
+        try {
+            maxItems = node.getSplitMaxItems(context);
+        } catch (IllegalStateException e) {
+            // A templated maxItems that resolved to nothing usable: the split FAILS naming it,
+            // rather than fanning out on a default cap nobody chose.
+            return NodeExecutionResult.failure(nodeId, e.getMessage(), 0L);
+        }
 
         logger.info("[V2StepByStep] Split executing: nodeId={}, expression={}, maxItems={}, workflowItem={}",
             nodeId, sourceExpression, maxItems, workflowItemIndex);
@@ -1593,8 +1600,9 @@ public class UnifiedExecutionEngine {
             }
 
             // Top-level split node: use SplitNodeExecutor directly
-            logger.info("[AUTO] Executing split node: nodeId={}, type={}, listExpression={}, maxItems={}, itemIndex={}",
-                nodeId, node.getType(), node.getListExpression(), node.getSplitMaxItems(), itemIndex);
+            // maxItems is resolved (a {{...}} cap included) where the split executes, not logged here.
+            logger.info("[AUTO] Executing split node: nodeId={}, type={}, listExpression={}, itemIndex={}",
+                nodeId, node.getType(), node.getListExpression(), itemIndex);
             return executeSplitNodeSimplified(node, nodeId, runId, context, itemIndex);
 
         } else if (node.isMergeNode()) {

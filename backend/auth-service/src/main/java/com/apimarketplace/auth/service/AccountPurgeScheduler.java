@@ -4,6 +4,7 @@ import com.apimarketplace.auth.domain.User;
 import com.apimarketplace.auth.domain.UserOnboarding;
 import com.apimarketplace.auth.repository.UserOnboardingRepository;
 import com.apimarketplace.auth.repository.UserRepository;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -35,6 +36,13 @@ public class AccountPurgeScheduler {
     private final AccountPurgeService purgeService;
     private final AccountDeactivationMailer mailer;
 
+    /**
+     * Lifecycle emails (Resend): a purged account's contact is deleted too, so no sequence
+     * keeps writing to someone who no longer has an account. Optional; null sends nothing.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails;
+
     public AccountPurgeScheduler(UserRepository userRepository,
                                  UserOnboardingRepository onboardingRepository,
                                  AccountPurgeService purgeService,
@@ -46,6 +54,11 @@ public class AccountPurgeScheduler {
     }
 
     @Scheduled(cron = "${account.purge.cron:0 0 3 * * *}", zone = "UTC")
+    // One pod runs the pass. Without the lock every auth replica started the same purge at
+    // 03:00 (both passes showed up in the prod log). The user row lock taken by purgeUser keeps
+    // them from interleaving, but the second pass still redoes the work: it finds the user gone
+    // when the first one committed, and retries the very same failure when it rolled back.
+    @SchedulerLock(name = "account_purge", lockAtMostFor = "PT30M", lockAtLeastFor = "PT1M")
     public void purgeExpiredAccounts() {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(GRACE_PERIOD_DAYS);
         List<User> expired = userRepository.findAccountsPastGracePeriod(cutoff);
@@ -78,6 +91,7 @@ public class AccountPurgeScheduler {
                 boolean purged = purgeService.purgeUser(user.getId());
                 if (purged) {
                     mailer.sendPurgeConfirmationEmail(email, displayName);
+                    if (lifecycleEmails != null) lifecycleEmails.deleteContact(email);
                     logger.info("Account purge: successfully purged user {} ({})", user.getId(), email);
                 }
             } catch (Exception e) {

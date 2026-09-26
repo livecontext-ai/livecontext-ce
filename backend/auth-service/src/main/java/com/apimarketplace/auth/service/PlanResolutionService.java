@@ -339,27 +339,83 @@ public class PlanResolutionService {
     public ActiveOrgEntitlement resolveActiveOrgEntitlement(Long userId) {
         if (userId == null) return ActiveOrgEntitlement.free();
         try {
-            Optional<OrganizationMember> workspaceMembership =
-                    resolveCurrentWorkspaceMembership(userId);
-            if (workspaceMembership.isEmpty()) return ActiveOrgEntitlement.free();
-
-            Organization workspaceOrg = workspaceMembership.get().getOrganization();
-            if (workspaceOrg == null || workspaceOrg.isDeleted()) return ActiveOrgEntitlement.free();
-
-            User owner = workspaceOrg.getOwner();
-            if (owner == null || owner.getId() == null) return ActiveOrgEntitlement.free();
-
-            return subscriptionRepository.findActiveByUserId(owner.getId())
-                    .map(sub -> {
-                        String code = sub.getPlan() != null ? sub.getPlan().getCode() : FREE_PLAN_CODE;
-                        int qty = sub.getCreditQuantity() != null ? sub.getCreditQuantity() : 0;
-                        return new ActiveOrgEntitlement(code, CreditTierConstants.resolveTierIndex(qty, code), sub.getCadence());
-                    })
-                    .orElse(ActiveOrgEntitlement.free());
+            return ownerEntitlement(resolveCurrentWorkspaceMembership(userId));
         } catch (Exception e) {
             // Hot path - never let a lookup glitch break user resolution.
             return ActiveOrgEntitlement.free();
         }
+    }
+
+    /**
+     * The plan of the OWNER of the user's DEFAULT workspace, resolved exactly as the gateway
+     * resolves a request that carries no active-workspace claim (a CE install calling the cloud
+     * over its cloud link): the default membership when the user may act in it, else, when the
+     * default is missing or paused / dormant ({@link #canMemberActInOrg}), the user's OWN personal
+     * workspace (the {@code AuthenticationFilter} fallback). Deliberately IGNORES any
+     * {@code X-Organization-ID} on the current request, so the CE-link plan gate answers the same
+     * thing whether it is asked from the browser (eligibility, in whatever workspace is active
+     * there) or from the CE (register, heartbeat, relays).
+     *
+     * <p>Unlike {@link #resolveActiveOrgEntitlement} it does NOT turn a lookup failure into FREE:
+     * it reports it ({@link DefaultWorkspacePlan#lookupFailed()}), so a fail-closed caller can
+     * refuse the call without remembering the refusal.
+     */
+    public DefaultWorkspacePlan resolveDefaultWorkspacePlan(Long userId) {
+        if (userId == null) return DefaultWorkspacePlan.of(FREE_PLAN_CODE);
+        try {
+            return DefaultWorkspacePlan.of(ownerEntitlement(resolveDefaultWorkspaceMembership(userId)).planCode());
+        } catch (Exception e) {
+            return DefaultWorkspacePlan.failed();
+        }
+    }
+
+    /**
+     * Plan code of the default-workspace owner, or a failed lookup (plan code null).
+     *
+     * @param planCode     never null unless {@code lookupFailed}
+     * @param lookupFailed the plan could not be read; the caller must not treat it as FREE forever
+     */
+    public record DefaultWorkspacePlan(String planCode, boolean lookupFailed) {
+        static DefaultWorkspacePlan of(String planCode) {
+            return new DefaultWorkspacePlan(planCode == null || planCode.isBlank() ? FREE_PLAN_CODE : planCode, false);
+        }
+
+        static DefaultWorkspacePlan failed() {
+            return new DefaultWorkspacePlan(null, true);
+        }
+    }
+
+    /** Entitlement of the owner of {@code membership}'s workspace. Throws on a lookup failure. */
+    private ActiveOrgEntitlement ownerEntitlement(Optional<OrganizationMember> membership) {
+        if (membership.isEmpty()) return ActiveOrgEntitlement.free();
+
+        Organization workspaceOrg = membership.get().getOrganization();
+        if (workspaceOrg == null || workspaceOrg.isDeleted()) return ActiveOrgEntitlement.free();
+
+        User owner = workspaceOrg.getOwner();
+        if (owner == null || owner.getId() == null) return ActiveOrgEntitlement.free();
+
+        return subscriptionRepository.findActiveByUserId(owner.getId())
+                .map(sub -> {
+                    String code = sub.getPlan() != null ? sub.getPlan().getCode() : FREE_PLAN_CODE;
+                    int qty = sub.getCreditQuantity() != null ? sub.getCreditQuantity() : 0;
+                    return new ActiveOrgEntitlement(code, CreditTierConstants.resolveTierIndex(qty, code), sub.getCadence());
+                })
+                .orElse(ActiveOrgEntitlement.free());
+    }
+
+    /**
+     * The workspace a request WITHOUT an active-workspace claim lands on, mirroring the gateway
+     * {@code AuthenticationFilter}: the (non-deleted) default membership when the user may act in
+     * it, else the personal workspace the user OWNS (never paused for its owner by the dormant
+     * rule). Empty when the user has neither.
+     */
+    private Optional<OrganizationMember> resolveDefaultWorkspaceMembership(Long userId) {
+        Optional<OrganizationMember> defaultMembership = memberRepository.findActiveDefaultByUserId(userId);
+        if (defaultMembership.isPresent() && canMemberActInOrg(defaultMembership.get())) {
+            return defaultMembership;
+        }
+        return memberRepository.findPersonalByUserId(userId);
     }
 
     /** Governing plan code + credit-tier index + billing cadence (the X-User-Plan tier, extended). */

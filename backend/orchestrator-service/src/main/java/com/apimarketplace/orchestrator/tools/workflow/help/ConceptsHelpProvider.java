@@ -310,6 +310,17 @@ public final class ConceptsHelpProvider {
                 "credential(action='variables') lists them and credential(action='set_variable') creates one.")
         ));
 
+        result.put("NUMBER_AND_BOOLEAN_SETTINGS",
+            "A numeric or true/false setting of a core or table node (limit.count, code.timeoutSeconds, " +
+            "wait.duration, a table read's limit/offset, split maxItems, loop maxIterations, http timeout, " +
+            "approval requiredApprovals/timeoutMs, ssh/database port...) accepts a {{...}} reference instead of " +
+            "a literal, e.g. limit: {count: '{{core:settings.output.page_size}}'}. It is resolved when the node " +
+            "runs; a reference to a number or to numeric text ('25') both work, and wait.duration is read in " +
+            "milliseconds. If it resolves to nothing, or to something that is not a number (or not true/false), " +
+            "the node FAILS and its error names the setting: check the referenced node ran and the path exists. " +
+            "Not supported (use a literal): an agent's temperature / maxTokens / maxIterations, and settings " +
+            "nested in a list such as html_extract fields[].required.");
+
         result.put("VISIBILITY_RULE", Map.of(
             "statement", "A node can ONLY access outputs from nodes that execute BEFORE it",
             "definition", "Ancestor = any node that must COMPLETE before the current node can START",

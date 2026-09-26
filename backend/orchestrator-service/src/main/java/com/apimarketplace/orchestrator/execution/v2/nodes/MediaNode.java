@@ -727,18 +727,42 @@ public class MediaNode extends BaseNode {
 
     // ==================== Value helpers ====================
 
-    /** Resolve the params map, keeping RAW object types for whole-value templates. */
+    /** The list params a template can fill: a reference may hand them over as a JSON string. */
+    private static final List<String> LIST_PARAMS = List.of("tracks", "inputs", "cues");
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
+        new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * Resolve the params map, keeping RAW object types for whole-value templates, and FAIL if
+     * that cannot be done.
+     *
+     * <p>It used to swallow the failure and render with the RAW params, so a source of
+     * {@code {{core:clip.output.file}}} reached the renderer as that text. GenerateNode stopped
+     * doing this for the same reason: the literal template is not a value, and the node that
+     * receives it can only produce something wrong from it.
+     *
+     * <p>A list param (tracks, inputs, cues) that resolves to a JSON STRING, which is what a code
+     * node or an LLM step usually returns, is parsed into the list it describes; it used to be
+     * refused as "not an array" although it was one.
+     */
     private Map<String, Object> resolveParams(ExecutionContext context) {
         if (templateAdapter == null || params.isEmpty()) {
             return new LinkedHashMap<>(params);
         }
-        try {
-            Map<String, Object> resolved = templateAdapter.resolveTemplates(params, context);
-            return resolved != null ? new LinkedHashMap<>(resolved) : new LinkedHashMap<>(params);
-        } catch (Exception e) {
-            logger.warn("Failed to resolve media params for nodeId={}: {}", nodeId, e.getMessage());
-            return new LinkedHashMap<>(params);
+        Map<String, Object> resolved = templateAdapter.resolveTemplates(params, context);
+        Map<String, Object> out = resolved != null ? new LinkedHashMap<>(resolved) : new LinkedHashMap<>(params);
+        for (String key : LIST_PARAMS) {
+            if (out.get(key) instanceof String text && text.trim().startsWith("[")) {
+                try {
+                    out.put(key, JSON.readValue(text, List.class));
+                } catch (Exception e) {
+                    // Left as the string: the operation's own check names the param and says
+                    // an array was expected, which is the right message for malformed JSON too.
+                    logger.debug("Media param '{}' is not a JSON array: {}", key, e.getMessage());
+                }
+            }
         }
+        return out;
     }
 
     private Map<String, Object> requireFileRef(Map<String, Object> source, String key, List<String> errors) {

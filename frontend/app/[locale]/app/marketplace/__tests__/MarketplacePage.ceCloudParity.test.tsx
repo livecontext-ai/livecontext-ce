@@ -43,9 +43,21 @@ const cloudLinkServiceMock = vi.hoisted(() => ({
   getAuthUrl: vi.fn(),
   connect: vi.fn(),
 }));
-vi.mock('@/lib/api/cloud-link.service', () => ({
-  cloudLinkService: cloudLinkServiceMock,
-}));
+// getConnectUrl keeps its REAL startUrl-over-authUrl choice; only the backend call is stubbed.
+vi.mock('@/lib/api/cloud-link.service', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api/cloud-link.service')>(
+    '@/lib/api/cloud-link.service',
+  );
+  return {
+    cloudLinkService: {
+      ...cloudLinkServiceMock,
+      getAuthUrl: (...args: unknown[]) => cloudLinkServiceMock.getAuthUrl(...args),
+      connect: (...args: unknown[]) => cloudLinkServiceMock.connect(...args),
+      getConnectUrl: async (returnPath?: string) =>
+        actual.resolveConnectUrl(await cloudLinkServiceMock.getAuthUrl(returnPath)),
+    },
+  };
+});
 
 vi.mock('@/lib/hooks/useOrgScopedReset', () => ({
   useOrgScopedReset: () => {},
@@ -292,6 +304,53 @@ describe('MarketplacePage - CE cloud-parity gate', () => {
       expect(cloudLinkServiceMock.getAuthUrl).toHaveBeenCalledWith('/en/app/marketplace');
     });
     expect(assignedHref).toBe('https://kc.example/auth');
+  });
+
+  it('unlinked CE shows the expired message on ?cloud_link_error=expired and removes the parameter from the URL', async () => {
+    searchParamsState.params = new URLSearchParams('cloud_link_error=expired');
+    assignedHref = 'http://ce.local/en/app/marketplace?cloud_link_error=expired';
+    const replaceState = vi.spyOn(window.history, 'replaceState').mockImplementation(() => {});
+
+    render(<MarketplacePage />);
+
+    expect(await screen.findByTestId('cloud-link-expired-notice')).toHaveTextContent('expired');
+    expect(replaceState.mock.calls[0].slice(1)).toEqual(['', '/en/app/marketplace']);
+    // The connect CTA is still there to start again.
+    expect(screen.getByRole('button', { name: 'cloudConnect.button' })).toBeInTheDocument();
+    replaceState.mockRestore();
+  });
+
+  it('linked CE (refresh after a completed link) cleans ?cloud_link_error=expired without showing the notice', async () => {
+    searchParamsState.params = new URLSearchParams('cloud_link_error=expired');
+    assignedHref = 'http://ce.local/en/app/marketplace?cloud_link_error=expired';
+    linkState.isCloudLinked = true;
+    linkState.isInstallCloudLinked = true;
+    const replaceState = vi.spyOn(window.history, 'replaceState').mockImplementation(() => {});
+
+    render(<MarketplacePage />);
+
+    await waitFor(() => expect(replaceState).toHaveBeenCalled());
+    expect(replaceState.mock.calls[0].slice(1)).toEqual(['', '/en/app/marketplace']);
+    expect(screen.queryByTestId('cloud-link-expired-notice')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'cloudConnect.button' })).toBeNull();
+    replaceState.mockRestore();
+  });
+
+  it('unlinked CE shows no expired message without the parameter', async () => {
+    render(<MarketplacePage />);
+    await screen.findByRole('button', { name: 'cloudConnect.button' });
+    expect(screen.queryByTestId('cloud-link-expired-notice')).toBeNull();
+  });
+
+  it('connect CTA navigates to the cloud onboarding startUrl when the backend offers one', async () => {
+    cloudLinkServiceMock.getAuthUrl.mockResolvedValue({
+      authUrl: 'https://kc.example/auth',
+      state: 's1',
+      startUrl: 'https://livecontext.ai/onboarding?ce_link=1&state=s1',
+    });
+    render(<MarketplacePage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'cloudConnect.button' }));
+    await waitFor(() => expect(assignedHref).toBe('https://livecontext.ai/onboarding?ce_link=1&state=s1'));
   });
 
   it('completes the cloud link and refreshes the cached status when returning from the OAuth callback', async () => {

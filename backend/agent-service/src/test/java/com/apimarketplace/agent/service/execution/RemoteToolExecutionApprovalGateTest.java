@@ -35,6 +35,8 @@ import static org.mockito.Mockito.when;
 @DisplayName("RemoteToolExecutionService - parking a call on the user's answer")
 class RemoteToolExecutionApprovalGateTest {
 
+    private static final String TENANT = "42";
+
     private RemoteToolExecutionService service;
     private ToolApprovalGate gate;
     private ApprovalCardPublisher publisher;
@@ -152,7 +154,7 @@ class RemoteToolExecutionApprovalGateTest {
         when(gate.awaitDecision(argThat(p -> "conv-1".equals(p.conversationId()) && "call-1".equals(p.gateKey()))))
                 .thenReturn(ToolApprovalGate.Decision.APPROVED);
 
-        ToolResult held = service.parkForAuthorization(call(), chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
+        ToolResult held = service.parkForAuthorization(call(), TENANT, chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
 
         // null == "the user said yes, go run it" - the contract executeTool relies on.
         assertThat(held).isNull();
@@ -165,7 +167,7 @@ class RemoteToolExecutionApprovalGateTest {
         when(gate.awaitDecision(any()))
                 .thenReturn(ToolApprovalGate.Decision.DENIED);
 
-        ToolResult held = service.parkForAuthorization(call(), chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
+        ToolResult held = service.parkForAuthorization(call(), TENANT, chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
 
         assertThat(held).isNotNull();
         // The content now states the refusal (see refusalTellsTheAgentTheAnswerWasNo); what
@@ -185,7 +187,7 @@ class RemoteToolExecutionApprovalGateTest {
         when(gate.awaitDecision(any()))
                 .thenReturn(ToolApprovalGate.Decision.EXPIRED);
 
-        ToolResult held = service.parkForAuthorization(call(), chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
+        ToolResult held = service.parkForAuthorization(call(), TENANT, chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
 
         assertThat(held).isNotNull();
         assertThat(held.metadata()).containsEntry(ToolApprovalGate.META_CARD_EMITTED, true);
@@ -200,7 +202,7 @@ class RemoteToolExecutionApprovalGateTest {
         when(gate.isEnabled()).thenReturn(false);
         ToolResult original = authorizationGateResult("workflow:execute");
 
-        ToolResult held = service.parkForAuthorization(call(), chatCredentials(), original, 0L);
+        ToolResult held = service.parkForAuthorization(call(), TENANT, chatCredentials(), original, 0L);
 
         assertThat(held).isSameAs(original);
         // Untouched means the streaming callback still paints the card, exactly as before.
@@ -215,7 +217,7 @@ class RemoteToolExecutionApprovalGateTest {
         creds.put("conversationId", "conv-1");
         ToolResult original = authorizationGateResult("workflow:execute");
 
-        assertThat(service.parkForAuthorization(call(), creds, original, 0L)).isSameAs(original);
+        assertThat(service.parkForAuthorization(call(), TENANT, creds, original, 0L)).isSameAs(original);
         verifyNoInteractions(publisher);
     }
 
@@ -226,7 +228,7 @@ class RemoteToolExecutionApprovalGateTest {
 
         ToolResult held = service.parkForAuthorization(
                 new ToolCall("call-1", "application", Map.of("action", "acquire"), null),
-                chatCredentials(), original, 0L);
+                TENANT, chatCredentials(), original, 0L);
 
         assertThat(held).isSameAs(original);
         verifyNoInteractions(publisher);
@@ -395,7 +397,7 @@ class RemoteToolExecutionApprovalGateTest {
         when(gate.beginPark(any())).thenReturn(false);
         ToolResult original = authorizationGateResult("workflow:execute");
 
-        ToolResult held = service.parkForAuthorization(call(), chatCredentials(), original, 0L);
+        ToolResult held = service.parkForAuthorization(call(), TENANT, chatCredentials(), original, 0L);
 
         // A card claiming "the agent is waiting for you" that no park is listening to is a
         // dead end: answering releases nothing and no turn restarts. Better to keep the
@@ -427,7 +429,7 @@ class RemoteToolExecutionApprovalGateTest {
         when(gate.awaitDecision(any()))
                 .thenReturn(ToolApprovalGate.Decision.DENIED);
 
-        service.parkForAuthorization(call(), creds, authorizationGateResult("workflow:execute"), 0L);
+        service.parkForAuthorization(call(), TENANT, creds, authorizationGateResult("workflow:execute"), 0L);
 
         verify(gate).awaitDecision(argThat(p ->
                 p.hardDeadlineEpochMs() == 1_700_000_000_000L
@@ -444,7 +446,7 @@ class RemoteToolExecutionApprovalGateTest {
                 .thenReturn(null);
         ToolResult original = authorizationGateResult("workflow:execute");
 
-        ToolResult held = service.parkForAuthorization(call(), chatCredentials(), original, 0L);
+        ToolResult held = service.parkForAuthorization(call(), TENANT, chatCredentials(), original, 0L);
 
         // Holding now would be minutes of spinner with nothing to click, and the
         // "already emitted" flag would stop the result consumer painting the fallback card
@@ -466,7 +468,7 @@ class RemoteToolExecutionApprovalGateTest {
         long callStarted = System.currentTimeMillis() - 5_000;
         when(gate.awaitDecision(any())).thenReturn(ToolApprovalGate.Decision.DENIED);
 
-        service.parkForAuthorization(call(), chatCredentials(), authorizationGateResult("workflow:execute"), callStarted);
+        service.parkForAuthorization(call(), TENANT, chatCredentials(), authorizationGateResult("workflow:execute"), callStarted);
         service.parkForCredential(call(), null, "tenant-1", chatCredentials(), credentialGateResult(), callStarted);
 
         verify(gate, times(2)).awaitDecision(argThat(p -> p.callStartedEpochMs() == callStarted));
@@ -477,7 +479,7 @@ class RemoteToolExecutionApprovalGateTest {
     void theTwoParksOfOneCallUseDifferentKeys() {
         when(gate.awaitDecision(any())).thenReturn(ToolApprovalGate.Decision.DENIED);
 
-        service.parkForAuthorization(call(), chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
+        service.parkForAuthorization(call(), TENANT, chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
         service.parkForCredential(call(), null, "tenant-1", chatCredentials(), credentialGateResult(), 0L);
 
         // A duplicate answer to the first card (double click, client retry) would otherwise
@@ -497,7 +499,7 @@ class RemoteToolExecutionApprovalGateTest {
                 ToolApprovalGate.Decision.DENIED,
                 ToolApprovalGate.Decision.STOPPED)) {
             when(gate.awaitDecision(any())).thenReturn(settled);
-            service.parkForAuthorization(call(), chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
+            service.parkForAuthorization(call(), TENANT, chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
         }
         // A card the user dealt with must not come back on a reload: the turn keeps running
         // after a release, so it WOULD come back, and answering it again releases nothing
@@ -508,7 +510,7 @@ class RemoteToolExecutionApprovalGateTest {
                 ToolApprovalGate.Decision.EXPIRED,
                 ToolApprovalGate.Decision.UNAVAILABLE)) {
             when(gate.awaitDecision(any())).thenReturn(unanswered);
-            service.parkForAuthorization(call(), chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
+            service.parkForAuthorization(call(), TENANT, chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
         }
         // Nobody answered these, and the database row that would otherwise carry them is
         // only written at the END OF THE RUN - on the bridge that is minutes later, while
@@ -524,7 +526,7 @@ class RemoteToolExecutionApprovalGateTest {
         creds.put("__cliBridgeSession__", true);
         when(gate.awaitDecision(any())).thenReturn(ToolApprovalGate.Decision.DENIED);
 
-        service.parkForAuthorization(call(), creds, authorizationGateResult("workflow:execute"), 0L);
+        service.parkForAuthorization(call(), TENANT, creds, authorizationGateResult("workflow:execute"), 0L);
 
         // This is what bounds the hold on that route. Inferred from the inactivity window it
         // was wrong twice: absent when the watchdog is off (cap gone where it was needed),
@@ -542,12 +544,12 @@ class RemoteToolExecutionApprovalGateTest {
         // that quit long ago), recognising a stray one only shortens a wait.
         Map<String, Object> asText = chatCredentials();
         asText.put("__cliBridgeSession__", "true");
-        service.parkForAuthorization(call(), asText, authorizationGateResult("workflow:execute"), 0L);
+        service.parkForAuthorization(call(), TENANT, asText, authorizationGateResult("workflow:execute"), 0L);
         verify(gate).awaitDecision(argThat(ToolApprovalGate.ParkRequest::cliBridgeSession));
 
         Map<String, Object> explicitlyOff = chatCredentials();
         explicitlyOff.put("__cliBridgeSession__", false);
-        service.parkForAuthorization(call(), explicitlyOff, authorizationGateResult("workflow:execute"), 0L);
+        service.parkForAuthorization(call(), TENANT, explicitlyOff, authorizationGateResult("workflow:execute"), 0L);
         verify(gate).awaitDecision(argThat(p -> !p.cliBridgeSession()));
     }
 
@@ -596,7 +598,7 @@ class RemoteToolExecutionApprovalGateTest {
         // it would cut a direct-route connect card down to the bridge's budget, and that is
         // the one card the short budget is known to make unusable, since it waits on an
         // OAuth round trip in another tab.
-        service.parkForAuthorization(call(), creds, authorizationGateResult("workflow:execute"), 0L);
+        service.parkForAuthorization(call(), TENANT, creds, authorizationGateResult("workflow:execute"), 0L);
         service.parkForCredential(call(), null, "tenant-1", creds, credentialGateResult(), 0L);
 
         verify(gate, times(2)).awaitDecision(argThat(p -> !p.cliBridgeSession()));
@@ -609,7 +611,7 @@ class RemoteToolExecutionApprovalGateTest {
         creds.put("__inactivityTimeoutSeconds__", 120);
         when(gate.awaitDecision(any())).thenReturn(ToolApprovalGate.Decision.DENIED);
 
-        service.parkForAuthorization(call(), creds, authorizationGateResult("workflow:execute"), 0L);
+        service.parkForAuthorization(call(), TENANT, creds, authorizationGateResult("workflow:execute"), 0L);
 
         // Without it the gate would use its own budget and the run would be killed for
         // silence while the card was still waiting - on an agent whose window is shorter
@@ -624,7 +626,7 @@ class RemoteToolExecutionApprovalGateTest {
         creds.put("__inactivityTimeoutSeconds__", 3);   // below the 10s contract floor
         when(gate.awaitDecision(any())).thenReturn(ToolApprovalGate.Decision.DENIED);
 
-        service.parkForAuthorization(call(), creds, authorizationGateResult("workflow:execute"), 0L);
+        service.parkForAuthorization(call(), TENANT, creds, authorizationGateResult("workflow:execute"), 0L);
 
         // A 3s window would make every park expire instantly. The bridge ignores the same
         // values, so agreeing with it is what keeps the two ends consistent.
@@ -638,7 +640,7 @@ class RemoteToolExecutionApprovalGateTest {
         creds.put("__toolDeadlineEpochMs__", "1700000000000");
         when(gate.awaitDecision(any())).thenReturn(ToolApprovalGate.Decision.DENIED);
 
-        service.parkForAuthorization(call(), creds, authorizationGateResult("workflow:execute"), 0L);
+        service.parkForAuthorization(call(), TENANT, creds, authorizationGateResult("workflow:execute"), 0L);
 
         verify(gate).awaitDecision(argThat(p -> p.hardDeadlineEpochMs() == 1_700_000_000_000L));
     }
@@ -650,7 +652,7 @@ class RemoteToolExecutionApprovalGateTest {
         creds.put("__toolExecutionReserveMs__", 30_000);
         when(gate.awaitDecision(any())).thenReturn(ToolApprovalGate.Decision.DENIED);
 
-        service.parkForAuthorization(call(), creds, authorizationGateResult("workflow:execute"), 0L);
+        service.parkForAuthorization(call(), TENANT, creds, authorizationGateResult("workflow:execute"), 0L);
 
         // The one credential of this family whose CONSUMER side nothing pinned: the loop's
         // write was tested and the gate's use was tested, but the wire between them could be
@@ -667,7 +669,7 @@ class RemoteToolExecutionApprovalGateTest {
         creds.put("__toolDeadlineEpochMs__", "not-a-number");
         when(gate.awaitDecision(any())).thenReturn(ToolApprovalGate.Decision.DENIED);
 
-        service.parkForAuthorization(call(), creds, authorizationGateResult("workflow:execute"), 0L);
+        service.parkForAuthorization(call(), TENANT, creds, authorizationGateResult("workflow:execute"), 0L);
 
         // Reading it as 0 keeps the gate's own budget; anything else would silently disable
         // parking for a caller that merely sent the wrong type.
@@ -679,7 +681,7 @@ class RemoteToolExecutionApprovalGateTest {
     void stoppedParkTellsTheAgentItIsOver() {
         when(gate.awaitDecision(any())).thenReturn(ToolApprovalGate.Decision.STOPPED);
 
-        ToolResult held = service.parkForAuthorization(call(), chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
+        ToolResult held = service.parkForAuthorization(call(), TENANT, chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
 
         assertThat(held.metadata()).containsEntry(ToolApprovalGate.META_DECISION, "stopped");
         // The pre-gate wording says the action will run "if the user approves" - after a
@@ -692,7 +694,7 @@ class RemoteToolExecutionApprovalGateTest {
     void refusalTellsTheAgentTheAnswerWasNo() {
         when(gate.awaitDecision(any())).thenReturn(ToolApprovalGate.Decision.DENIED);
 
-        ToolResult held = service.parkForAuthorization(call(), chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
+        ToolResult held = service.parkForAuthorization(call(), TENANT, chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
 
         // Metadata records the refusal but only conversation-service reads metadata; the
         // model reads the CONTENT, and left untouched it says the user "has only been asked".
@@ -705,7 +707,7 @@ class RemoteToolExecutionApprovalGateTest {
     void expiredParkKeepsTheOriginalWording() {
         when(gate.awaitDecision(any())).thenReturn(ToolApprovalGate.Decision.EXPIRED);
 
-        ToolResult held = service.parkForAuthorization(call(), chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
+        ToolResult held = service.parkForAuthorization(call(), TENANT, chatCredentials(), authorizationGateResult("workflow:execute"), 0L);
 
         assertThat(held.content()).isEqualTo("{\"status\":\"authorization_required\"}");
     }

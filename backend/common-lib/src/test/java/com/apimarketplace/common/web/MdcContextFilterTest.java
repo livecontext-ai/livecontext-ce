@@ -194,6 +194,52 @@ class MdcContextFilterTest {
         }
     }
 
+    private static final String TOKEN = "wh_FAKEcapabilityTokenForTheLogTest";
+
+    @Test
+    @DisplayName("Regression 2026-09-25: a token path variable named by the matched pattern is masked in the access line")
+    void accessLineMasksTokenNamedByPattern() throws Exception {
+        ListAppender<ILoggingEvent> logged = attachAppender();
+        HttpServletRequest req = mockRequest(Map.of(), "/api/internal/trigger/webhooks/by-token/" + TOKEN);
+        when(req.getMethod()).thenReturn("GET");
+        when(req.getAttribute(LogSafePath.BEST_MATCHING_PATTERN_ATTRIBUTE))
+                .thenReturn("/api/internal/trigger/webhooks/by-token/{token}");
+
+        filter.doFilter(req, mock(HttpServletResponse.class), (ServletRequest r, ServletResponse s) -> {});
+
+        assertThat(logged.list).hasSize(1);
+        assertThat(logged.list.get(0).getFormattedMessage())
+                .contains("path=/api/internal/trigger/webhooks/by-token/{token} ")
+                .doesNotContain(TOKEN);
+    }
+
+    @Test
+    @DisplayName("Regression 2026-09-25: the path enters the MDC already masked, so no line of the request carries the token")
+    void mdcPathIsMaskedDuringTheRequest() throws Exception {
+        HttpServletRequest req = mockRequest(Map.of(), "/webhook/" + TOKEN);
+        when(req.getMethod()).thenReturn("POST");
+        java.util.concurrent.atomic.AtomicReference<String> seen = new java.util.concurrent.atomic.AtomicReference<>();
+
+        filter.doFilter(req, mock(HttpServletResponse.class),
+                (ServletRequest r, ServletResponse s) -> seen.set(MDC.get(MdcContextFilter.MDC_REQUEST_PATH)));
+
+        assertThat(seen.get()).isEqualTo("/webhook/{token}");
+    }
+
+    @Test
+    @DisplayName("A route whose variables are ids, not tokens, is logged unchanged")
+    void idPathUnchanged() throws Exception {
+        ListAppender<ILoggingEvent> logged = attachAppender();
+        HttpServletRequest req = mockRequest(Map.of(), "/api/workflows/1234/runs/5678");
+        when(req.getMethod()).thenReturn("GET");
+        when(req.getAttribute(LogSafePath.BEST_MATCHING_PATTERN_ATTRIBUTE))
+                .thenReturn("/api/workflows/{workflowId}/runs/{runId}");
+
+        filter.doFilter(req, mock(HttpServletResponse.class), (ServletRequest r, ServletResponse s) -> {});
+
+        assertThat(logged.list.get(0).getFormattedMessage()).contains("path=/api/workflows/1234/runs/5678 ");
+    }
+
     @Test
     @DisplayName("Nothing is logged at the async hand-off, and the completion line carries the real duration")
     void asyncLineIsEmittedAtCompletionNotAtHandoff() throws Exception {

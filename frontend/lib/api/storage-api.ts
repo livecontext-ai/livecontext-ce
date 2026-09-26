@@ -404,8 +404,11 @@ class StorageApiService {
 
   /**
    * Search storage entries with filtering and pagination.
+   *
+   * @param orgId optional workspace override (Storage page workspace filter); omit to list the
+   *   active workspace. See {@link orgScopeRequestOptions}.
    */
-  async getExplorerEntries(params: StorageExplorerParams = {}): Promise<StorageExplorerPage> {
+  async getExplorerEntries(params: StorageExplorerParams = {}, orgId?: string | null): Promise<StorageExplorerPage> {
     const queryParams: Record<string, string> = {};
     if (params.page !== undefined) queryParams.page = String(params.page);
     if (params.size !== undefined) queryParams.size = String(params.size);
@@ -432,6 +435,7 @@ class StorageApiService {
 
     return await apiClient.get<StorageExplorerPage>('/storage/explorer', {
       params: queryParams,
+      ...(orgScopeRequestOptions(orgId) ?? {}),
     });
   }
 

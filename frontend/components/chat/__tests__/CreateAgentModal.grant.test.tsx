@@ -17,6 +17,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * `modals.createAgent.grant_none` / `…grant_all` / `…grant_custom`.
  */
 
+// The destination picker reads the workspace's destinations; that is covered in its own test.
+vi.mock('@/components/app/ChannelDestinationPicker', () => ({
+  ChannelDestinationPicker: () => null,
+  isWorking: () => true,
+  useChatDestinations: () => ({ destinations: [], workspaceDefault: null, isLoading: false, isError: false }),
+}));
 vi.mock('next-intl', () => ({
   useTranslations: (ns?: string) => (key: string) => `${ns}.${key}`,
 }));
@@ -47,6 +53,15 @@ vi.mock('@/components/ui/tooltip', () => ({
   TooltipContent: () => null,
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+// The field "i" (InfoPopover) sits on the stubbed Popover above, which would render its panel
+// inline next to the control. Stand it in with a marker that carries its label and its text,
+// neither a button nor visible copy, so each field block still holds only its own control
+// while a test can assert which "i" is wired to which field.
+vi.mock('@/components/ui/info-popover', () => ({
+  InfoPopover: ({ label, children }: { label: string; children: React.ReactNode }) => (
+    <span data-info-label={label} data-info-text={typeof children === 'string' ? children : undefined} />
+  ),
 }));
 
 vi.mock('@/lib/api/storage-api', () => ({
@@ -509,6 +524,18 @@ describe('CreateAgentModal - mailbox grant and access mode', () => {
     await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
     expect(emittedToolsConfig().mailbox).toBe(true);
     expect(emittedToolsConfig().mailboxAccessMode).toBe('read');
+  });
+
+  it('explains the mailbox and its access mode through the shared click "i", one per field', async () => {
+    renderModal({ id: 'a-mbx-info', name: 'A', toolsConfig: { mode: 'all', mailbox: true } });
+    await openAdvanced();
+    await screen.findByText('chatConfig.mailboxAccessLabel');
+
+    // Each field names its own "i" and carries its own explanation: a copy-paste slip that
+    // wires the access-mode text to the mailbox field (or drops one) fails here.
+    const info = (label: string) => document.querySelector(`[data-info-label="${label}"]`);
+    expect(info('chatConfig.mailboxLabel')?.getAttribute('data-info-text')).toBe('chatConfig.mailboxInfo');
+    expect(info('chatConfig.mailboxAccessLabel')?.getAttribute('data-info-text')).toBe('chatConfig.mailboxAccessInfo');
   });
 
   it('emits an explicit false when the tool is switched off, since the backend merges', async () => {

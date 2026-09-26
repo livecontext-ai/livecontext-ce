@@ -26,6 +26,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * `modals.createAgent.<key>`.
  */
 
+// The destination picker reads the workspace's destinations; that is covered in its own test.
+// A button per choice stands in for the real select: what matters here is what the modal
+// does with the value it is handed.
+const trackMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/analytics/analytics', () => ({ track: (...a: unknown[]) => trackMock(...a) }));
+const channelState = vi.hoisted(() => ({ working: true, loading: false, error: false }));
+vi.mock('@/components/app/ChannelDestinationPicker', () => ({
+  isWorking: () => channelState.working,
+  useChatDestinations: () => ({
+    destinations: [{ linkId: 'link-ops' }], workspaceDefault: null,
+    isLoading: channelState.loading, isError: channelState.error,
+  }),
+  ChannelDestinationPicker: ({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) => (
+    <div data-testid="channel-destination-picker" data-value={String(value)}>
+      <button type="button" onClick={() => onChange('link-finance')}>pick-finance</button>
+      <button type="button" onClick={() => onChange(null)}>pick-default</button>
+    </div>
+  ),
+}));
 vi.mock('next-intl', () => ({
   useTranslations: (ns?: string) => (key: string) => `${ns}.${key}`,
 }));
@@ -54,6 +73,15 @@ vi.mock('@/components/ui/tooltip', () => ({
   TooltipContent: () => null,
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+// The field "i" (InfoPopover) sits on the stubbed Popover above, which would render its panel
+// inline next to the control. Stand it in with a marker that carries its label and its text,
+// neither a button nor visible copy, so each field block still holds only its own control
+// while a test can assert which "i" is wired to which field.
+vi.mock('@/components/ui/info-popover', () => ({
+  InfoPopover: ({ label, children }: { label: string; children: React.ReactNode }) => (
+    <span data-info-label={label} data-info-text={typeof children === 'string' ? children : undefined} />
+  ),
 }));
 
 vi.mock('@/lib/api/storage-api', () => ({
@@ -97,9 +125,10 @@ vi.mock('@/lib/api/orchestrator/publication.service', () => ({
   },
 }));
 
-const { getScheduleMock, createOrUpdateScheduleMock } = vi.hoisted(() => ({
+const { getScheduleMock, createOrUpdateScheduleMock, setToolAuthorizationMock } = vi.hoisted(() => ({
   getScheduleMock: vi.fn().mockResolvedValue(null),
   createOrUpdateScheduleMock: vi.fn().mockResolvedValue({ id: 'sched-1' }),
+  setToolAuthorizationMock: vi.fn().mockResolvedValue({ requireToolAuthorization: true }),
 }));
 
 vi.mock('@/lib/api/orchestrator/agent.service', () => ({
@@ -111,6 +140,7 @@ vi.mock('@/lib/api/orchestrator/agent.service', () => ({
     deleteSchedule: vi.fn().mockResolvedValue(undefined),
     createOrUpdateWebhook: vi.fn().mockResolvedValue(undefined),
     deleteWebhook: vi.fn().mockResolvedValue(undefined),
+    setToolAuthorization: setToolAuthorizationMock,
   },
 }));
 vi.mock('@/lib/api/orchestrator/schedule-settings.service', () => ({
@@ -202,6 +232,9 @@ interface TestAgent {
   compactionAfterTurns?: number | null;
   compactionModelProvider?: string | null;
   compactionModelName?: string | null;
+  requireToolAuthorization?: boolean;
+  chatChannelLinkId?: string | null;
+  chatChannelEnabled?: boolean;
 }
 
 function renderModal(agent?: TestAgent, initialStep = 1) {
@@ -223,6 +256,10 @@ beforeEach(() => {
   updateAgentMock.mockResolvedValue({ id: 'agent-1' });
   createAgentMock.mockResolvedValue({ id: 'created-agent-1' });
   createOrUpdateScheduleMock.mockResolvedValue({ id: 'sched-1' });
+  setToolAuthorizationMock.mockResolvedValue({ requireToolAuthorization: true });
+  channelState.working = true;
+  channelState.loading = false;
+  channelState.error = false;
 });
 afterEach(() => cleanup());
 
@@ -311,6 +348,17 @@ describe('CreateAgentModal - CREATE keeps omit-when-empty', () => {
 });
 
 describe('CreateAgentModal - Task 2: backlog lives under Schedule → Advanced Options', () => {
+  it('the integration step, where runs happen without the person, carries the destination picker', async () => {
+    renderModal({ id: 'agent-1', name: 'A' }, 3);
+    await screen.findByText('modals.createAgent.scheduleLabel');
+    expect(screen.getByTestId('channel-destination-picker')).toBeInTheDocument();
+  });
+
+  it('the other steps do not', async () => {
+    renderModal({ id: 'agent-1', name: 'A' }, 1);
+    expect(screen.queryByTestId('channel-destination-picker')).not.toBeInTheDocument();
+  });
+
   it('does NOT render the backlog control while the schedule is disabled', async () => {
     renderModal({ id: 'agent-1', name: 'A' }, 3);
     // Wait for the integration step to mount (Schedule card present).
@@ -588,5 +636,156 @@ describe('CreateAgentModal - widget toggle-off on update deactivates it (regress
     await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
     expect(orchestratorApi.createOrUpdateWidgetConfig).not.toHaveBeenCalled();
     expect(orchestratorApi.setWidgetActive).not.toHaveBeenCalled();
+  });
+});
+
+describe('CreateAgentModal - where the agent reaches the person (V523)', () => {
+  it('shows the stored destination, and an untouched one is not sent back', async () => {
+    renderModal({ id: 'agent-1', name: 'A', chatChannelLinkId: 'link-ops' }, 3);
+    expect((await screen.findByTestId('channel-destination-picker')).getAttribute('data-value')).toBe('link-ops');
+
+    save();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    expect(updateAgentMock.mock.calls[0][1]).not.toHaveProperty('chatChannelLinkId');
+    // Nothing on the channel card changed: nothing to report.
+    expect(trackMock).not.toHaveBeenCalledWith('agent_channel_configured', expect.anything());
+  });
+
+  it('a picked destination is sent with the update', async () => {
+    renderModal({ id: 'agent-1', name: 'A' }, 3);
+    fireEvent.click(await screen.findByText('pick-finance'));
+    save();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    expect(updateAgentMock.mock.calls[0][1]).toHaveProperty('chatChannelLinkId', 'link-finance');
+    // The choice is reported, the link id is not.
+    await waitFor(() => expect(trackMock).toHaveBeenCalledWith('agent_channel_configured', {
+      enabled: true, destination: 'specific', sensitive_actions: false,
+    }));
+    expect(JSON.stringify(trackMock.mock.calls)).not.toContain('link-finance');
+  });
+
+  it('going back to the default sends null, which the backend reads as "the workspace default"', async () => {
+    renderModal({ id: 'agent-1', name: 'A', chatChannelLinkId: 'link-ops' }, 3);
+    fireEvent.click(await screen.findByText('pick-default'));
+    save();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    expect(updateAgentMock.mock.calls[0][1]).toHaveProperty('chatChannelLinkId', null);
+    await waitFor(() => expect(trackMock).toHaveBeenCalledWith('agent_channel_configured', {
+      enabled: true, destination: 'default', sensitive_actions: false,
+    }));
+  });
+});
+
+describe('CreateAgentModal - the channel card (V524) and its sensitive-actions switch (V299)', () => {
+  it('with no working channel, the card is greyed and points to connecting one; nothing inside is offered', async () => {
+    channelState.working = false;
+    renderModal({ id: 'agent-1', name: 'A' }, 3);
+
+    const toggle = await screen.findByTestId('agent-channel-toggle');
+    expect((toggle as HTMLButtonElement).disabled).toBe(true);
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByTestId('agent-channel-connect').getAttribute('href')).toBe('/en/app/settings/channels');
+    expect(screen.queryByTestId('channel-destination-picker')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sensitive-actions-toggle')).not.toBeInTheDocument();
+  });
+
+  it('while the channels load, the card waits: no "connect a channel first" to a workspace that may have some', async () => {
+    channelState.loading = true;
+    renderModal({ id: 'agent-1', name: 'A' }, 3);
+
+    const card = await screen.findByTestId('agent-channel-card');
+    expect(card.textContent).toContain('modals.createAgent.channelCardLoading');
+    expect(card.textContent).not.toContain('modals.createAgent.channelCardUnavailable');
+    expect(screen.queryByTestId('agent-channel-connect')).not.toBeInTheDocument();
+  });
+
+  it('when the channels cannot be read, says so instead of claiming there are none', async () => {
+    channelState.error = true;
+    renderModal({ id: 'agent-1', name: 'A' }, 3);
+
+    const card = await screen.findByTestId('agent-channel-card');
+    expect(card.textContent).toContain('modals.createAgent.channelCardError');
+    expect(screen.queryByTestId('agent-channel-connect')).not.toBeInTheDocument();
+  });
+
+  it('the connect link opens in a new tab, so the half-filled modal is not lost', async () => {
+    channelState.working = false;
+    renderModal({ id: 'agent-1', name: 'A' }, 3);
+
+    expect((await screen.findByTestId('agent-channel-connect')).getAttribute('target')).toBe('_blank');
+  });
+
+  it('an armed agent with no channel says so, and can be disarmed from there', async () => {
+    channelState.working = false;
+    renderModal({ id: 'agent-1', name: 'A', requireToolAuthorization: true }, 3);
+
+    expect(await screen.findByTestId('agent-armed-without-channel')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('modals.createAgent.armedWithoutChannelDisarm'));
+    expect(screen.queryByTestId('agent-armed-without-channel')).not.toBeInTheDocument();
+    save();
+
+    await waitFor(() => expect(setToolAuthorizationMock).toHaveBeenCalledWith('agent-1', false));
+  });
+
+  it('with a channel, an agent is on by default and offers the destination and the sensitive-actions switch', async () => {
+    renderModal({ id: 'agent-1', name: 'A' }, 3);
+
+    expect((await screen.findByTestId('agent-channel-toggle')).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('channel-destination-picker')).toBeInTheDocument();
+    expect(screen.getByTestId('sensitive-actions-toggle').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('sensitive actions are no longer in the advanced settings of step 2', async () => {
+    renderModal({ id: 'agent-1', name: 'A' }, 2);
+    fireEvent.click(await screen.findByText('modals.createAgent.advancedModeLabel'));
+
+    expect(screen.queryByTestId('sensitive-actions-toggle')).not.toBeInTheDocument();
+  });
+
+  it('asking permission is saved through its own endpoint after the agent', async () => {
+    renderModal({ id: 'agent-1', name: 'A' }, 3);
+    fireEvent.click(await screen.findByTestId('sensitive-actions-toggle'));
+    save();
+
+    await waitFor(() => expect(setToolAuthorizationMock).toHaveBeenCalledWith('agent-1', true));
+    expect(updateAgentMock.mock.calls[0][1]).not.toHaveProperty('requireToolAuthorization');
+    expect(updateAgentMock.mock.calls[0][1]).not.toHaveProperty('chatChannelEnabled');
+  });
+
+  it('switching the card off saves it off and disarms an armed agent', async () => {
+    renderModal({ id: 'agent-1', name: 'A', requireToolAuthorization: true }, 3);
+    expect((await screen.findByTestId('sensitive-actions-toggle')).getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(screen.getByTestId('agent-channel-toggle'));
+    expect(screen.queryByTestId('sensitive-actions-toggle')).not.toBeInTheDocument();
+    save();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    expect(updateAgentMock.mock.calls[0][1]).toHaveProperty('chatChannelEnabled', false);
+    await waitFor(() => expect(setToolAuthorizationMock).toHaveBeenCalledWith('agent-1', false));
+  });
+
+  it('an agent stored off shows the card off, and switching it on sends it', async () => {
+    renderModal({ id: 'agent-1', name: 'A', chatChannelEnabled: false }, 3);
+    const toggle = await screen.findByTestId('agent-channel-toggle');
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(toggle);
+    save();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    expect(updateAgentMock.mock.calls[0][1]).toHaveProperty('chatChannelEnabled', true);
+  });
+
+  it('untouched, neither the switch nor the endpoint is sent', async () => {
+    renderModal({ id: 'agent-1', name: 'A', requireToolAuthorization: true }, 3);
+    save();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    expect(updateAgentMock.mock.calls[0][1]).not.toHaveProperty('chatChannelEnabled');
+    expect(setToolAuthorizationMock).not.toHaveBeenCalled();
   });
 });

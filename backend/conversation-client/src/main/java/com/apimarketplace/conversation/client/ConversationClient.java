@@ -262,6 +262,19 @@ public class ConversationClient {
                                              String agentId, String model, String provider,
                                              String source, String taskId, String organizationId,
                                              String reviewerExecutionId) {
+        return sendChatSync(tenantId, conversationId, message, agentId, model, provider,
+                source, taskId, organizationId, reviewerExecutionId, null);
+    }
+
+    /**
+     * Same, recorded under {@code executionId}: a task that locked itself to an id passes it, so
+     * the run it dispatches is the run the task points at.
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> sendChatSync(String tenantId, String conversationId, String message,
+                                             String agentId, String model, String provider,
+                                             String source, String taskId, String organizationId,
+                                             String reviewerExecutionId, String executionId) {
         String url = baseUrl + "/api/internal/chat/sync";
         try {
             Map<String, Object> body = new HashMap<>();
@@ -273,6 +286,7 @@ public class ConversationClient {
             if (source != null) body.put("source", source);
             if (taskId != null) body.put("taskId", taskId);
             if (reviewerExecutionId != null) body.put("reviewerExecutionId", reviewerExecutionId);
+            if (executionId != null) body.put("executionId", executionId);
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
@@ -592,10 +606,27 @@ public class ConversationClient {
      * @param terminalState "COMPLETED" or "ERROR"
      */
     public void finalizeStream(String streamId, String terminalState) {
+        finalizeStream(streamId, terminalState, null);
+    }
+
+    /**
+     * Finalize a stream, carrying the producer's own reason when it ends in ERROR.
+     *
+     * <p>Without the reason conversation-service could only record a fixed placeholder, so
+     * the stored stream error said nothing and the real cause lived only in the producer's
+     * log. Optional on the wire: a blank reason is not sent, and a conversation-service
+     * that predates the field ignores it.
+     *
+     * @param errorMessage why the stream failed, or null
+     */
+    public void finalizeStream(String streamId, String terminalState, String errorMessage) {
         String url = baseUrl + "/api/internal/streams/" + streamId + "/finalize";
         try {
             Map<String, Object> body = new HashMap<>();
             body.put("state", terminalState);
+            if (errorMessage != null && !errorMessage.isBlank()) {
+                body.put("errorMessage", errorMessage);
+            }
 
             restTemplate.exchange(url, HttpMethod.POST, createInternalEntity(body), Void.class);
             log.debug("Finalized stream {} with state {}", streamId, terminalState);
@@ -679,6 +710,82 @@ public class ConversationClient {
     }
 
     // ==================== HELPER ====================
+
+    // ==================== TOOL AUTHORIZATION ====================
+
+    /**
+     * Answer a tool-authorization card from outside the app (a button pressed in a
+     * linked chat), through the SAME endpoints the in-app card posts to.
+     *
+     * <p>Going through the endpoint rather than writing the verdict directly is the
+     * whole point: that endpoint already knows the two cases that matter. If the
+     * call is still parked it is released and the run continues in place; if it is
+     * not, a single-shot grant is written and the next turn replays the call with
+     * permission. Reimplementing either here would mean a late answer silently
+     * doing nothing.
+     *
+     * @param rule    the authorization rule the card carried, e.g. {@code catalog:execute}
+     * @param gateKey the parked tool call's id
+     * @param askFingerprint what identifies the call that asked. When present, a grant written
+     *                       because nothing was parked any more covers THAT call and no other
+     *                       call of the same rule: the answer came from somewhere the person
+     *                       cannot see what the agent does next. Omitted by the in-app card,
+     *                       which keeps its rule-wide grant.
+     * @return true when the answer was recorded (released or granted), false when it
+     *         could not be, so the caller can say so instead of showing a verdict
+     */
+    public boolean answerToolAuthorization(String conversationId, String tenantId, String organizationId,
+                                           String rule, String gateKey, String askFingerprint,
+                                           boolean approved) {
+        String url = baseUrl + "/api/conversations/" + conversationId
+                + "/tool-authorization/" + (approved ? "approve" : "deny");
+        try {
+            Map<String, Object> body = new HashMap<>();
+            body.put("rule", rule);
+            body.put("toolCallId", gateKey);
+            body.put("remember", false);
+            if (askFingerprint != null && !askFingerprint.isBlank()) {
+                body.put("askFingerprint", askFingerprint);
+            }
+            ResponseEntity<Map> resp = restTemplate.exchange(
+                    url, HttpMethod.POST, createEntity(body, tenantId, organizationId), Map.class);
+            return resp.getStatusCode().is2xxSuccessful();
+        } catch (Exception e) {
+            log.warn("Failed to answer tool authorization on conversation {}: {}", conversationId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Hand a question's answers, given in a chat, to the conversation that asked them.
+     *
+     * <p>Posts to the SAME endpoint the in-app card uses, deliberately. That endpoint holds the
+     * rule this must not re-implement: release the parked call if one is still holding,
+     * otherwise record the answers for the next turn to read. Answering from a phone hours
+     * later therefore behaves like answering in the app, which is the whole promise.
+     *
+     * @return whether a parked call was released. False is the ordinary case from a chat: by
+     *         the time somebody answers, the turn that asked has long since ended, and the
+     *         caller then has to start the next one itself.
+     */
+    public boolean answerUserQuestion(String conversationId, String tenantId, String organizationId,
+                                      String toolCallId, String gateKey, List<Map<String, Object>> answers) {
+        String url = baseUrl + "/api/conversations/" + conversationId + "/ask-user/answer";
+        try {
+            Map<String, Object> body = new HashMap<>();
+            body.put("toolCallId", toolCallId);
+            body.put("gateKey", gateKey);
+            body.put("answers", answers);
+            ResponseEntity<Map> resp = restTemplate.exchange(
+                    url, HttpMethod.POST, createEntity(body, tenantId, organizationId), Map.class);
+            Map<String, Object> payload = resp.getBody();
+            return payload != null && Boolean.TRUE.equals(payload.get("parkedCallReleased"));
+        } catch (Exception e) {
+            log.warn("Failed to answer the user question on conversation {}: {}",
+                    conversationId, e.getMessage());
+            return false;
+        }
+    }
 
     private <T> HttpEntity<T> createEntity(T body, String tenantId) {
         return createEntity(body, tenantId, null);

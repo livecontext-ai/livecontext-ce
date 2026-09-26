@@ -8,10 +8,10 @@
  * without releasing the hand-off strands the suggested-applications modal that
  * queues behind it. Every branch below asserts BOTH the screen and the hand-off.
  *
- * <p>The two QUERIES are stubbed, not the hooks that read them, so the real
- * `useMonthlyCreditsCannotPay` and `useFreeAiCreditsAnswer` run: what this modal
- * gets wrong is which answers it waits for, and stubbing those two hooks would
- * be stubbing the question rather than answering it.
+ * <p>The balance QUERY is stubbed, not the hook that reads it, so the real
+ * `useMonthlyCreditsCannotPay` runs: what this modal gets wrong is which answer it
+ * waits for, and stubbing that hook would be stubbing the question rather than
+ * answering it.
  */
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
@@ -21,6 +21,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const edition = vi.hoisted(() => ({ isCe: false }));
 const balance = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 const plans = vi.hoisted(() => ({ value: undefined as unknown }));
+const track = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/analytics/analytics', () => ({ track: (...a: unknown[]) => track(...a) }));
 
 vi.mock('next-intl', () => ({
   useTranslations: () => (key: string) => key,
@@ -39,7 +41,6 @@ vi.mock('@/lib/hooks/smart-hooks-complete', () => ({
 }));
 
 import WelcomeGiftModal, { ANSWER_TIMEOUT_MS } from '../WelcomeGiftModal';
-import { FREE_AI_CREDITS } from '@/lib/billing/pricing-constants';
 import {
   WELCOME_GIFT_DONE_EVENT,
   WELCOME_GIFT_FLAG,
@@ -114,6 +115,28 @@ describe('WelcomeGiftModal', () => {
     handoff.stop();
   });
 
+  it('reports welcome_plan_shown once when it opens and welcome_plan_dismissed when closed', () => {
+    track.mockReset();
+    armWelcomeGift();
+    render(<React.StrictMode><WelcomeGiftModal /></React.StrictMode>);
+
+    expect(track.mock.calls).toEqual([['welcome_plan_shown', { is_free_plan: true }]]);
+
+    act(() => {
+      screen.getByRole('button', { name: 'cta' }).click();
+    });
+    expect(track).toHaveBeenLastCalledWith('welcome_plan_dismissed', { is_free_plan: true });
+  });
+
+  it('reports nothing when the gift is skipped for a paid account', () => {
+    track.mockReset();
+    balance.value = PAID_ACCOUNT;
+    armWelcomeGift();
+    render(<WelcomeGiftModal />);
+
+    expect(track).not.toHaveBeenCalled();
+  });
+
   it('releases the hand-off when the reader presses Escape instead of the button', () => {
     // Escape and an outside click do not go through the CTA: they arrive on the
     // dialog's own onOpenChange. If that wire were dropped the gift would vanish
@@ -184,31 +207,6 @@ describe('WelcomeGiftModal', () => {
     handoff.stop();
   });
 
-  it('waits for the ALLOWANCE answer too, rather than quoting the seeded figure', () => {
-    // The plan list reads as an empty array both in flight and after a failed
-    // request, and the allowance resolver answers the seeded 100 for both. On
-    // any other surface that stand-in is a fair trade for rendering at once;
-    // here it is the one number the screen exists to state, so opening early
-    // would quote a figure this account may never have been granted.
-    plans.value = [];
-    armWelcomeGift();
-    const handoff = watchHandoff();
-
-    const view = render(<WelcomeGiftModal />);
-
-    expect(isOpen()).toBe(false);
-    expect(handoff.released).not.toHaveBeenCalled();
-
-    plans.value = [{ code: 'FREE', includedAiCredits: 250 }];
-    view.rerender(<WelcomeGiftModal />);
-
-    expect(isOpen()).toBe(true);
-    expect(screen.getByTestId('welcome-gift-ai-credits').textContent).toContain('250');
-    expect(screen.getByTestId('welcome-gift-ai-credits').textContent)
-      .not.toContain(String(FREE_AI_CREDITS));
-    handoff.stop();
-  });
-
   it('gives up on a plan answer that never arrives, so nothing queues forever', () => {
     // The bounded wait. Showing no gift is recoverable; leaving the next modal
     // armed with nothing left to release it is not.
@@ -219,28 +217,6 @@ describe('WelcomeGiftModal', () => {
 
     render(<WelcomeGiftModal />);
     expect(handoff.released).not.toHaveBeenCalled();
-
-    act(() => {
-      vi.advanceTimersByTime(ANSWER_TIMEOUT_MS);
-    });
-
-    expect(isOpen()).toBe(false);
-    expect(sessionStorage.getItem(WELCOME_GIFT_FLAG)).toBeNull();
-    expect(handoff.released).toHaveBeenCalledTimes(1);
-    handoff.stop();
-  });
-
-  it('gives up on an allowance answer that never arrives, on the same bound', () => {
-    // The second wait has to be bounded by the same timer as the first. A plan
-    // request that succeeds and an allowance request that exhausts its retries
-    // is a state the account can sit in indefinitely.
-    vi.useFakeTimers();
-    plans.value = [];
-    armWelcomeGift();
-    const handoff = watchHandoff();
-
-    render(<WelcomeGiftModal />);
-    expect(isOpen()).toBe(false);
 
     act(() => {
       vi.advanceTimersByTime(ANSWER_TIMEOUT_MS);
@@ -333,40 +309,30 @@ describe('WelcomeGiftModal', () => {
     expect(isOpen()).toBe(false);
   });
 
-  it('drops the AI row when an admin has closed the free tier', () => {
-    // A row reading "0 AI credits" looks like a feature while advertising
-    // nothing. Same rule the plan cards apply. The workflow credits stay: that
-    // grant is untouched by the allowance being closed.
-    plans.value = [{ code: 'FREE', includedAiCredits: 0 }];
-    armWelcomeGift();
-
-    render(<WelcomeGiftModal />);
-
-    expect(screen.getByTestId('welcome-gift-credits')).toBeInTheDocument();
-    expect(screen.queryByTestId('welcome-gift-ai-credits')).toBeNull();
-  });
-
-  it('adapts the renewal sentence when there is only one pot left to renew', () => {
-    // "Both refill" describing a single row is a sentence about something the
-    // reader cannot see. The two lines are separate keys in all six locales
-    // rather than one with a count, because the shapes are different sentences
-    // and not a plural of each other.
-    plans.value = [{ code: 'FREE', includedAiCredits: 0 }];
-    armWelcomeGift();
-
-    render(<WelcomeGiftModal />);
-
-    const modal = screen.getByTestId('welcome-gift-modal');
-    expect(modal.textContent).toContain('renewalSingle');
-    expect(modal.textContent).not.toContain('renewal,');
-  });
-
-  it('quotes the allowance an admin configured, not the shipped default', () => {
+  it('regression: states ONE pool, with no separate AI credits row', () => {
+    // The Free plan used to carry a separate monthly AI allowance shown as a second
+    // row. It was merged into the monthly credits, so even a stale plan row that
+    // still carries an AI figure must not bring a second pot back on screen.
     plans.value = [{ code: 'FREE', includedAiCredits: 250 }];
     armWelcomeGift();
 
     render(<WelcomeGiftModal />);
 
-    expect(screen.getByTestId('welcome-gift-ai-credits').textContent).toContain('250');
+    expect(screen.getByTestId('welcome-gift-credits').textContent).toContain('1,000');
+    expect(screen.queryByTestId('welcome-gift-ai-credits')).toBeNull();
+    const modal = screen.getByTestId('welcome-gift-modal');
+    expect(modal.textContent).toContain('renewal');
+    expect(modal.textContent).not.toContain('freeAiCredits');
+  });
+
+  it('opens without waiting on the plans request, which it no longer reads', () => {
+    // It used to wait for the live AI allowance figure; with one fixed pool the
+    // plan verdict alone decides, so an empty or failed plans list cannot hold it.
+    plans.value = [];
+    armWelcomeGift();
+
+    render(<WelcomeGiftModal />);
+
+    expect(isOpen()).toBe(true);
   });
 });

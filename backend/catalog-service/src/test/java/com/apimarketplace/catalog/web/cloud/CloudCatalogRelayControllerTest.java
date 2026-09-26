@@ -1,6 +1,8 @@
 package com.apimarketplace.catalog.web.cloud;
 
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
+import com.apimarketplace.common.plan.CeLinkRefusal;
 import com.apimarketplace.auth.client.dto.CeLinkEntitlementsResult;
 import com.apimarketplace.catalog.domain.dto.CeCatalogRelayRequest;
 import com.apimarketplace.catalog.domain.dto.ToolExecutionResponse;
@@ -60,8 +62,8 @@ class CloudCatalogRelayControllerTest {
     }
 
     private void stubActiveLink() {
-        when(authClient.userOwnsActiveCeLink(String.valueOf(CLOUD_USER_ID), INSTALL_ID))
-                .thenReturn(true);
+        when(authClient.ceLinkAccess(String.valueOf(CLOUD_USER_ID), INSTALL_ID))
+                .thenReturn(CeLinkAccessResult.active("PRO"));
     }
 
     private void stubSubscription(CeLinkEntitlementsResult entitlements) {
@@ -91,13 +93,26 @@ class CloudCatalogRelayControllerTest {
         @Test
         @DisplayName("install not owned/active yields 403 CE_LINK_NOT_ACTIVE and never reaches the service")
         void inactiveLinkIs403() {
-            when(authClient.userOwnsActiveCeLink(String.valueOf(CLOUD_USER_ID), INSTALL_ID))
-                    .thenReturn(false);
+            when(authClient.ceLinkAccess(String.valueOf(CLOUD_USER_ID), INSTALL_ID))
+                    .thenReturn(CeLinkAccessResult.notLinked());
 
             ResponseEntity<?> response = execute(request());
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
             assertThat(response.getBody()).isEqualTo(Map.of("error", "CE_LINK_NOT_ACTIVE"));
+            verifyNoInteractions(relayService);
+        }
+
+        @Test
+        @DisplayName("a linked account that is not on a paid plan yields 403 CLOUD_LINK_PLAN_REQUIRED and never reaches the service")
+        void planRequiredIs403() {
+            when(authClient.ceLinkAccess(String.valueOf(CLOUD_USER_ID), INSTALL_ID))
+                    .thenReturn(CeLinkAccessResult.planRequired("FREE"));
+
+            ResponseEntity<?> response = execute(request());
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(response.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
             verifyNoInteractions(relayService);
         }
 
@@ -291,11 +306,25 @@ class CloudCatalogRelayControllerTest {
                     controller.platformInfo(null, INSTALL_ID, "openweather", null, null, null, null);
             assertThat(unauthenticated.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 
-            when(authClient.userOwnsActiveCeLink(String.valueOf(CLOUD_USER_ID), INSTALL_ID))
-                    .thenReturn(false);
+            when(authClient.ceLinkAccess(String.valueOf(CLOUD_USER_ID), INSTALL_ID))
+                    .thenReturn(CeLinkAccessResult.notLinked());
             ResponseEntity<Map<String, Object>> unlinked =
                     controller.platformInfo(CLOUD_USER_ID, INSTALL_ID, "openweather", null, null, null, null);
             assertThat(unlinked.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            verifyNoInteractions(relayService);
+        }
+
+        @Test
+        @DisplayName("a suspended link (plan not paid) is refused 403 CLOUD_LINK_PLAN_REQUIRED, not answered with an upsell body")
+        void planRequiredIs403() {
+            when(authClient.ceLinkAccess(String.valueOf(CLOUD_USER_ID), INSTALL_ID))
+                    .thenReturn(CeLinkAccessResult.planRequired("FREE"));
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.platformInfo(CLOUD_USER_ID, INSTALL_ID, "openweather", null, null, null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(response.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
             verifyNoInteractions(relayService);
         }
 

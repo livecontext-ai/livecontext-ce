@@ -166,6 +166,26 @@ class GenerateNodeTest {
         }
 
         @Test
+        @DisplayName("a provider refusal AFTER resolution reports the RESOLVED prompt; it used to report the {{...}} template, which read as unresolved")
+        @SuppressWarnings("unchecked")
+        void aFailureAfterResolutionReportsResolvedParams() {
+            Map<String, Object> values = new java.util.HashMap<>();
+            values.put("{{trigger:t.output.text}}", "a paper boat");
+            when(templateAdapter.resolveTemplates(anyMap(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(values));
+            when(generationExecutionService.generate(anyString(), anyString(), anyString(),
+                    anyString(), anyMap(), any(), any()))
+                .thenReturn(GenerationResult.failed("'duration_seconds' must be <= 12"));
+
+            NodeExecutionResult result = node(Map.of("model", "seedance-2.0-fast",
+                    "prompt", "{{trigger:t.output.text}}")).execute(context);
+
+            assertFalse(result.isSuccess());
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("a paper boat", params.get("prompt"));
+        }
+
+        @Test
         @DisplayName("a template that cannot be resolved FAILS the node, and never reaches a paid provider")
         void anUnresolvableTemplateIsNotPaidFor() {
             // This used to be swallowed: the failure was logged as a warning and
@@ -618,6 +638,27 @@ class GenerateNodeTest {
                 "credential_source configures the node, it is not a parameter the provider understands");
             assertFalse(paramsCaptor.getValue().containsKey("model"),
                 "model configures the node, it is passed as its own argument");
+        }
+    }
+
+    @Nested
+    @DisplayName("resolved_params on the success path")
+    class SuccessPathReport {
+
+        @Test
+        @DisplayName("BUG: a long prompt comes back whole in the SUCCESS output, not re-described by a second report pass")
+        void longPromptSurvivesTheSuccessPath() {
+            String prompt = "A slow dolly shot over a harbour at dawn." + " Gulls circle the masts.".repeat(200);
+            when(generationExecutionService.generate(anyString(), anyString(), anyString(),
+                    anyString(), anyMap(), any(), any()))
+                .thenReturn(produced());
+
+            NodeExecutionResult result = node(Map.of("model", "seedance-2.0-fast", "prompt", prompt)).execute(context);
+
+            assertTrue(result.isSuccess());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> reported = (Map<String, Object>) result.output().get("resolved_params");
+            org.assertj.core.api.Assertions.assertThat(reported.get("prompt")).isEqualTo(prompt);
         }
     }
 }

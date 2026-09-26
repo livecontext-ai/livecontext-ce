@@ -64,6 +64,9 @@ public class HtmlExtractNode extends BaseNode {
     @Override
     public NodeExecutionResult execute(ExecutionContext context) {
         long startTime = System.currentTimeMillis();
+        // This execution's own value: a {{...}} cleanWhitespace resolves below, never the shared field.
+        boolean cleanWhitespace = this.cleanWhitespace;
+        String cleanWhitespaceTemplate = deferredScalar("htmlExtract", "cleanWhitespace");
         logger.info("HtmlExtract node executing: nodeId={}, mode={}, rootSelector={}, fields={}, itemId={}",
             nodeId, extractionMode, rootSelector, fields.size(), context.itemId());
 
@@ -72,7 +75,7 @@ public class HtmlExtractNode extends BaseNode {
         earlyResolvedParams.put("sourceHtml", sourceHtmlExpression);
         earlyResolvedParams.put("extractionMode", extractionMode);
         if (rootSelector != null) earlyResolvedParams.put("rootSelector", rootSelector);
-        earlyResolvedParams.put("cleanWhitespace", cleanWhitespace);
+        earlyResolvedParams.put("cleanWhitespace", cleanWhitespaceTemplate != null ? cleanWhitespaceTemplate : cleanWhitespace);
         earlyResolvedParams.put("field_count", fields.size());
 
         if (sourceHtmlExpression == null || sourceHtmlExpression.isBlank()) {
@@ -102,16 +105,30 @@ public class HtmlExtractNode extends BaseNode {
         }
 
         try {
+            if (cleanWhitespaceTemplate != null) {
+                Core.HtmlExtractConfig effective = withDeferredScalars("htmlExtract",
+                    new Core.HtmlExtractConfig(sourceHtmlExpression, extractionMode, rootSelector, fields, this.cleanWhitespace),
+                    Core.HtmlExtractConfig.class, context);
+                cleanWhitespace = effective.cleanWhitespace();
+                earlyResolvedParams.put("cleanWhitespace",
+                    com.apimarketplace.orchestrator.services.template.ReportedParams.valueFrom(cleanWhitespaceTemplate, cleanWhitespace));
+            }
             // Resolve the source HTML via templates
             String html;
             if (templateAdapter != null) {
                 Map<String, Object> resolved = templateAdapter.resolveTemplates(
                     Map.of("__html__", sourceHtmlExpression), context);
                 Object resolvedValue = resolved.get("__html__");
-                html = resolvedValue == null ? "" : String.valueOf(resolvedValue);
+                // A structure is its JSON, never Java's {a=b}: the shared text rule.
+                String text = com.apimarketplace.orchestrator.services.TemplateEngine.asText(resolvedValue);
+                html = text == null ? "" : text;
             } else {
                 html = sourceHtmlExpression;
             }
+            // From here on a failure (a bad selector, jsoup) reports the HTML that was parsed,
+            // not the expression that produced it.
+            earlyResolvedParams.put("sourceHtml", html.length() > 500 ? html.substring(0, 500) + "..." : html);
+            earlyResolvedParams.put("sourceHtmlLength", html.length());
 
             // Handle empty resolved HTML gracefully: return an empty items list with a note
             // in errors rather than crashing jsoup or producing misleading success output.
@@ -146,6 +163,10 @@ public class HtmlExtractNode extends BaseNode {
                 roots.add(doc);
             }
 
+            // Each field's fallback, resolved once. It used to be used as configured, so a
+            // `{{trigger:in.output.fallback}}` default landed in the items as that text.
+            Map<Core.HtmlExtractField, Object> defaults = resolveDefaultValues(context);
+
             List<Map<String, Object>> items = new ArrayList<>();
             List<String> errors = new ArrayList<>();
 
@@ -164,9 +185,9 @@ public class HtmlExtractNode extends BaseNode {
                         if (field.required()) {
                             errors.add("field '" + field.name() + "' missing on item " + i);
                         }
-                        extracted = field.defaultValue();
+                        extracted = defaults.get(field);
                     } else {
-                        extracted = extractAttribute(matched, field.attribute());
+                        extracted = extractAttribute(matched, field.attribute(), cleanWhitespace);
                     }
                     item.put(field.name(), applyTransform(extracted, field.transform()));
                 }
@@ -189,7 +210,9 @@ public class HtmlExtractNode extends BaseNode {
             resolvedParams.put("sourceHtmlLength", html.length());
             resolvedParams.put("extractionMode", extractionMode);
             if (rootSelector != null) resolvedParams.put("rootSelector", rootSelector);
-            resolvedParams.put("cleanWhitespace", cleanWhitespace);
+            resolvedParams.put("cleanWhitespace", cleanWhitespaceTemplate != null
+                ? com.apimarketplace.orchestrator.services.template.ReportedParams.valueFrom(cleanWhitespaceTemplate, cleanWhitespace)
+                : cleanWhitespace);
             resolvedParams.put("fields", fields.stream()
                 .map(f -> {
                     Map<String, Object> m = new LinkedHashMap<>();
@@ -214,7 +237,23 @@ public class HtmlExtractNode extends BaseNode {
         }
     }
 
-    private Object extractAttribute(Element element, String attribute) {
+    /**
+     * Each field's {@code defaultValue}, with any {@code {{...}}} resolved. A literal default is
+     * kept as it is and never sent to the resolver. Keyed by identity so two identical field
+     * definitions still each get their own entry.
+     */
+    private Map<Core.HtmlExtractField, Object> resolveDefaultValues(ExecutionContext context) {
+        Map<Core.HtmlExtractField, Object> defaults = new java.util.IdentityHashMap<>();
+        for (Core.HtmlExtractField field : fields) {
+            String configured = field.defaultValue();
+            defaults.put(field, configured != null && configured.contains("{{")
+                ? resolveTemplateValue(configured, context)
+                : configured);
+        }
+        return defaults;
+    }
+
+    private Object extractAttribute(Element element, String attribute, boolean cleanWhitespace) {
         if (attribute == null || "text".equalsIgnoreCase(attribute)) {
             String text = element.text();
             return cleanWhitespace ? text.trim() : text;

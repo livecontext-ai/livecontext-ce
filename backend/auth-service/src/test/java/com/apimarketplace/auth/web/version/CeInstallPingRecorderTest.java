@@ -343,6 +343,53 @@ class CeInstallPingRecorderTest {
     }
 
     @Test
+    @DisplayName("a released image's tag is recorded as its version, without the v")
+    void releaseTagIsRecordedWithoutItsV() {
+        CeInstallPingRepository repository = emptyLedger();
+        CeInstallPingRecorder recorder = new CeInstallPingRecorder(repository, 0, 1_000_000, NO_REFRESH_CAP, NO_ROW_CAP, clock);
+
+        recorder.record(INSTALL, "v0.3.1");
+        recorder.record(INSTALL, "V0.2.14-rc1");
+
+        // Regression: every released image reports APP_VERSION=vX.Y.Z verbatim, and the pattern
+        // demanded a leading digit, so the whole released fleet (v0.2.14 to v0.3.1) was stored as
+        // "dev". The v is dropped so a tag and a bare number land in the same bucket, the form the
+        // release feed advertises.
+        verify(repository).refreshSighting(INSTALL, "0.3.1");
+        verify(repository).refreshSighting(INSTALL, "0.2.14-rc1");
+    }
+
+    @Test
+    @DisplayName("a lone v, or a v in front of anything but a version, is still dev")
+    void vAloneIsNotAVersion() {
+        CeInstallPingRepository repository = emptyLedger();
+        CeInstallPingRecorder recorder = new CeInstallPingRecorder(repository, 0, 1_000_000, NO_REFRESH_CAP, NO_ROW_CAP, clock);
+
+        recorder.record(INSTALL, "v");
+        recorder.record(INSTALL, "vv0.3.1");
+        recorder.record(INSTALL, "vdev-4a55253");
+        recorder.record(INSTALL, "v0.2\u000113");
+        recorder.record(INSTALL, "v" + "9".repeat(CeInstallPingRecorder.MAX_VERSION_LENGTH));
+
+        // A control character after the v is judged on the raw value, exactly like one without it,
+        // and the length cap counts the v: stripping first would let both through.
+        verify(repository, times(5)).refreshSighting(INSTALL, CeInstallPingRecorder.UNPUBLISHED_VERSION);
+    }
+
+    @Test
+    @DisplayName("a tag is stripped of surrounding whitespace and keeps its build suffix")
+    void tagWhitespaceAndBuildSuffix() {
+        CeInstallPingRepository repository = emptyLedger();
+        CeInstallPingRecorder recorder = new CeInstallPingRecorder(repository, 0, 1_000_000, NO_REFRESH_CAP, NO_ROW_CAP, clock);
+
+        recorder.record(INSTALL, "  v0.3.1 ");
+        recorder.record(INSTALL, "v0.3.1+b7");
+
+        verify(repository).refreshSighting(INSTALL, "0.3.1");
+        verify(repository).refreshSighting(INSTALL, "0.3.1+b7");
+    }
+
+    @Test
     @DisplayName("a from-source build is recorded as dev, not by its commit id")
     void fromSourceBuildIsNotFingerprinted() {
         CeInstallPingRepository repository = emptyLedger();

@@ -2,6 +2,7 @@ package com.apimarketplace.auth.web;
 
 import com.apimarketplace.auth.service.ChangelogSeenService;
 import com.apimarketplace.auth.service.ChangelogSeenService.ChangelogState;
+import com.apimarketplace.auth.service.ChangelogSeenService.SeenOutcome;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -112,7 +113,7 @@ class ChangelogControllerRoutingTest {
     @Test
     @DisplayName("POST /api/changelog/seen accepts the documented JSON body on that exact path")
     void seenIsMappedAtTheDocumentedPath() throws Exception {
-        when(service.markSeen(42L, "2026-09-entry")).thenReturn(true);
+        when(service.markSeen(42L, "2026-09-entry")).thenReturn(SeenOutcome.RECORDED);
 
         mockMvc.perform(post("/api/changelog/seen")
                         .header("X-User-ID", "42")
@@ -126,7 +127,7 @@ class ChangelogControllerRoutingTest {
     @Test
     @DisplayName("a disabled deployment answers enabled=false with seenKey present and null")
     void disabledAcknowledgementKeepsTheShape() throws Exception {
-        when(service.markSeen(42L, "2026-09-entry")).thenReturn(false);
+        when(service.markSeen(42L, "2026-09-entry")).thenReturn(SeenOutcome.DISABLED);
 
         mockMvc.perform(post("/api/changelog/seen")
                         .header("X-User-ID", "42")
@@ -162,5 +163,18 @@ class ChangelogControllerRoutingTest {
                 .andExpect(status().isBadRequest());
 
         verify(service, never()).markSeen(anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("POST /api/changelog/seen for a deleted user answers 404 with a JSON error")
+    void seenForDeletedUserIsNotFoundOnTheWire() throws Exception {
+        when(service.markSeen(404L, "2026-09-entry")).thenReturn(SeenOutcome.UNKNOWN_USER);
+
+        mockMvc.perform(post("/api/changelog/seen")
+                        .header("X-User-ID", "404")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"key\":\"2026-09-entry\"}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("user not found"));
     }
 }

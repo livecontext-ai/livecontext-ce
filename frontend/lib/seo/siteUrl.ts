@@ -43,6 +43,23 @@ export function ogLocale(locale: string) {
   return OG_TERRITORY[locale] ?? OG_TERRITORY.en;
 }
 
+/**
+ * The share card of a localised landing page, in that page's language.
+ *
+ * <p>One pre-rendered image per locale under `public/landing/og/`, rather than an
+ * `opengraph-image` route: the zh card needs a CJK font far too heavy to ship with the
+ * renderer, and this card only changes when the tagline does. A locale with no card
+ * falls back to the site-wide English one instead of pointing at a missing file;
+ * `__tests__/landingOgImage.test.ts` fails when a locale is added without its image.
+ * The cards are rendered by `scripts/render-landing-og-cards.mjs`, which holds their copy:
+ * re-run it after changing the tagline.
+ */
+export function landingOgImage(locale: string) {
+  return locales.some((value: Locale) => value === locale)
+    ? `/landing/og/home-${locale}.jpg`
+    : '/og-image.jpg';
+}
+
 /** Every other locale, in the form Open Graph expects for `og:locale:alternate`. */
 export function ogAlternateLocales(locale: string) {
   return locales.filter((value: Locale) => value !== locale).map(ogLocale);

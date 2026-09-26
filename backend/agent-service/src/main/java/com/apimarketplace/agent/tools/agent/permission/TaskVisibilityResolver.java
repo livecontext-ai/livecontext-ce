@@ -69,7 +69,9 @@ public class TaskVisibilityResolver {
      */
     public Role resolveRole(UUID callerAgentId, UUID taskId, String tenantId,
                              ToolExecutionContext context) {
-        if (callerAgentId == null || taskId == null || tenantId == null) {
+        // No caller agent is the person's own chat, not an unknown caller: it is judged by the
+        // same GOD rule as any other unrestricted caller (see resolveRoleAndTask).
+        if (taskId == null || tenantId == null) {
             return Role.NONE;
         }
 
@@ -90,6 +92,7 @@ public class TaskVisibilityResolver {
         if (isGodAgent) return Role.GOD;
 
         AgentTaskEntity task = taskOpt.get();
+        if (callerAgentId == null) return Role.NONE;
         if (callerAgentId.equals(task.getReviewerAgentId())) return Role.REVIEWER;
         if (callerAgentId.equals(task.getCreatedByAgentId())) return Role.CREATOR;
         return Role.NONE;
@@ -101,7 +104,12 @@ public class TaskVisibilityResolver {
      */
     public ResolvedTask resolveRoleAndTask(UUID callerAgentId, UUID taskId, String tenantId,
                                             ToolExecutionContext context) {
-        if (callerAgentId == null || taskId == null || tenantId == null) {
+        // callerAgentId is null in the person's own chat, which is where a task is most often
+        // assigned from. Refusing it up front meant the chat that created a task could not read
+        // what its run did (prod 2026-09-23: task_get_execution "Not authorized"), while the
+        // same chat, bound to an unrestricted agent, could. It is judged by the GOD rule below;
+        // the agent roles simply cannot match it.
+        if (taskId == null || tenantId == null) {
             return new ResolvedTask(Role.NONE, null);
         }
 
@@ -110,6 +118,7 @@ public class TaskVisibilityResolver {
         if (task == null) return new ResolvedTask(Role.NONE, null);
 
         if (isGodAgent) return new ResolvedTask(Role.GOD, task);
+        if (callerAgentId == null) return new ResolvedTask(Role.NONE, task);
         if (callerAgentId.equals(task.getReviewerAgentId())) return new ResolvedTask(Role.REVIEWER, task);
         if (callerAgentId.equals(task.getCreatedByAgentId())) return new ResolvedTask(Role.CREATOR, task);
         return new ResolvedTask(Role.NONE, task);

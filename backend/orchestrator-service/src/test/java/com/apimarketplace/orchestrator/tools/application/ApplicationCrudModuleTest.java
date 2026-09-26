@@ -78,6 +78,9 @@ class ApplicationCrudModuleTest {
                 credentialClient, new ApplicationShowcaseResolver(workflowRunRepository),
                 new com.apimarketplace.orchestrator.services.ApplicationLifecycleService(workflowRepository));
         module.setWorkflowManagementService(workflowManagementService);
+        // Run reports resolve their plan through the version service (ids only, never the run's lazy workflow).
+        lenient().when(planVersionService.resolvePlanForRun(any(), any(), any()))
+                .thenReturn(new com.apimarketplace.orchestrator.services.WorkflowPlanVersionService.RunPlan(null, null));
     }
 
     // ------------------------------------------------------------------
@@ -1408,5 +1411,130 @@ class ApplicationCrudModuleTest {
         return new ToolExecutionContext(
                 TENANT_ID, Map.of(), Map.of(), Set.of(),
                 null, null, CALLER_ORG_ID, null);
+    }
+
+    // ==================== pruned plan version + epoch_count (application surface) ====================
+
+    @Nested
+    @DisplayName("run reads: pruned plan version and epoch_count")
+    class RunReadsTests {
+
+        private WorkflowEntity lazyWorkflow;
+        private WorkflowRunEntity run;
+        private final UUID workflowId = UUID.randomUUID();
+
+        @BeforeEach
+        void prunedRun() {
+            lazyWorkflow = mock(WorkflowEntity.class);
+            lenient().when(lazyWorkflow.getId()).thenReturn(workflowId);
+            lenient().when(lazyWorkflow.getPlan()).thenThrow(new org.hibernate.LazyInitializationException("no session"));
+            run = new WorkflowRunEntity();
+            run.setRunIdPublic("run-pruned");
+            run.setTenantId(TENANT_ID);
+            run.setOrganizationId(CALLER_ORG_ID);
+            run.setStatus(RunStatus.COMPLETED);
+            run.setPlanVersion(2);
+            run.setWorkflow(lazyWorkflow);
+            lenient().when(workflowRunRepository.findByRunIdPublic("run-pruned")).thenReturn(Optional.of(run));
+            lenient().when(planVersionService.resolvePlanForRun(workflowId, 2, TENANT_ID))
+                    .thenReturn(new com.apimarketplace.orchestrator.services.WorkflowPlanVersionService.RunPlan(null, 2));
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> dataOf(Optional<ToolExecutionResult> result) {
+            assertThat(result.get().success()).as(String.valueOf(result.get().error())).isTrue();
+            return (Map<String, Object>) result.get().data();
+        }
+
+        @Test
+        @DisplayName("regression: get_run on a pruned version answers with plan_note (kept through the application hint rewrite)")
+        void getRunPruned() {
+            when(agentWorkflowFireService.buildRunMacroReport(eq(run), any(), eq(TENANT_ID)))
+                    .thenReturn(Map.of("run_id", "run-pruned", "NEXT", "workflow(action='get_run', run_id='run-pruned', epoch=1)"));
+
+            Map<String, Object> data = dataOf(module.execute("get_run",
+                    Map.of("run_id", "run-pruned"), TENANT_ID, contextWithOrg()));
+
+            assertThat((String) data.get("plan_note")).contains("Plan version 2");
+            assertThat((String) data.get("NEXT")).startsWith("application(action='get_run'");
+            verify(lazyWorkflow, never()).getPlan();
+        }
+
+        @Test
+        @DisplayName("regression: get_run epoch=N on a pruned version")
+        void getRunEpochPruned() {
+            when(agentWorkflowFireService.buildEpochDetailReport(eq(run), any(), eq(1), eq(TENANT_ID)))
+                    .thenReturn(Map.of("epoch", 1));
+
+            Map<String, Object> data = dataOf(module.execute("get_run",
+                    Map.of("run_id", "run-pruned", "epoch", 1), TENANT_ID, contextWithOrg()));
+
+            assertThat(data).containsEntry("epoch", 1).containsKey("plan_note");
+            verify(lazyWorkflow, never()).getPlan();
+        }
+
+        @Test
+        @DisplayName("regression: get_node_output on a pruned version")
+        void nodeOutputPruned() {
+            when(agentWorkflowFireService.buildNodeOutputReport(eq(run), any(), eq(1), eq("core:x"), eq(TENANT_ID),
+                    any(), any(), any(), any(), any(), any())).thenReturn(Map.of("node_id", "core:x"));
+
+            Map<String, Object> data = dataOf(module.execute("get_node_output",
+                    Map.of("run_id", "run-pruned", "epoch", 1, "node_id", "core:x"), TENANT_ID, contextWithOrg()));
+
+            assertThat(data).containsEntry("node_id", "core:x").containsKey("plan_note");
+            verify(lazyWorkflow, never()).getPlan();
+        }
+
+        private void stubAcquiredApp() {
+            WorkflowEntity clone = mock(WorkflowEntity.class);
+            when(clone.getId()).thenReturn(workflowId);
+            when(workflowRepository.findByOrganizationIdAndSourcePublicationIdAndWorkflowType(
+                    CALLER_ORG_ID, APP_PUB_ID, WorkflowEntity.WorkflowType.APPLICATION))
+                    .thenReturn(Optional.of(clone));
+        }
+
+        private com.apimarketplace.orchestrator.repository.WorkflowRunSummaryProjection summary(String runId) {
+            var p = mock(com.apimarketplace.orchestrator.repository.WorkflowRunSummaryProjection.class);
+            when(p.getRunIdPublic()).thenReturn(runId);
+            return p;
+        }
+
+        @SuppressWarnings("unchecked")
+        private List<Map<String, Object>> runsOf(Optional<ToolExecutionResult> result) {
+            return (List<Map<String, Object>>) dataOf(result).get("runs");
+        }
+
+        @Test
+        @DisplayName("runs: epoch_count per run, 0 for a run that never fired")
+        void runsCarryEpochCount() {
+            stubAcquiredApp();
+            var s1 = summary("run-1");
+            var s2 = summary("run-2");
+            when(workflowRunRepository.findRunSummariesByWorkflowId(eq(workflowId), any()))
+                    .thenReturn(new PageImpl<>(List.of(s1, s2), org.springframework.data.domain.PageRequest.of(0, 20), 2));
+            when(agentWorkflowFireService.countEpochsByRunIds(List.of("run-1", "run-2"))).thenReturn(Map.of("run-1", 9L));
+
+            List<Map<String, Object>> runs = runsOf(module.execute("runs",
+                    Map.of("application_id", APP_PUB_ID.toString()), TENANT_ID, contextWithOrg()));
+
+            assertThat(runs.get(0)).containsEntry("epoch_count", 9L);
+            assertThat(runs.get(1)).containsEntry("epoch_count", 0L);
+        }
+
+        @Test
+        @DisplayName("runs: epoch counts unavailable -> field omitted, never a false 0")
+        void runsOmitEpochCountWhenUnavailable() {
+            stubAcquiredApp();
+            var s1 = summary("run-1");
+            when(workflowRunRepository.findRunSummariesByWorkflowId(eq(workflowId), any()))
+                    .thenReturn(new PageImpl<>(List.of(s1), org.springframework.data.domain.PageRequest.of(0, 20), 1));
+            when(agentWorkflowFireService.countEpochsByRunIds(any())).thenReturn(null);
+
+            List<Map<String, Object>> runs = runsOf(module.execute("runs",
+                    Map.of("application_id", APP_PUB_ID.toString()), TENANT_ID, contextWithOrg()));
+
+            assertThat(runs.get(0)).containsEntry("run_id", "run-1").doesNotContainKey("epoch_count");
+        }
     }
 }

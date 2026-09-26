@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest
 @DisplayName("Yearly Stripe subscription - the monthly credit cycle lands and stays (real Postgres)")
-class YearlyCreditCyclePersistenceTest extends AuthPostgresIntegrationTest {
+class YearlyCreditCyclePersistenceTest extends AuthScratchPostgresSpringTest {
 
     @Autowired private YearlyCreditCycleScheduler scheduler;
     @Autowired private com.apimarketplace.auth.service.CreditAttributionService creditAttributionService;

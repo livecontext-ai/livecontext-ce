@@ -106,7 +106,7 @@ public class CatalogMergeService {
         }
 
         int inserted = 0, updated = 0, deprecated = 0;
-        int skippedCustom = 0, skippedUserModified = 0;
+        int skippedCustom = 0, skippedUserModified = 0, skippedRetired = 0;
         List<PricingChange> pricingChanges = new ArrayList<>();
 
         // Baseline for assigning sequential rankings to newly inserted models
@@ -180,8 +180,8 @@ public class CatalogMergeService {
                 //   • model-catalog SEED (forSeed=true): keeps the payload's
                 //     `enabled` (default true when omitted) - the seed IS the
                 //     curated, code-shipped baseline, usable out of the box.
-                // Only fresh INSERTS are affected - the update branch below
-                // leaves existing rows' enabled untouched.
+                // On UPDATE a feed sync never writes enabled either (see the
+                // update branch); a bundle/seed update applies the payload's.
                 if (opts.honorEnabledOnInsert()) {
                     if (row.getEnabled() == null) row.setEnabled(true);
                 } else {
@@ -236,6 +236,14 @@ public class CatalogMergeService {
                 // bypass the is_custom guard for the per-category dimension.
                 continue;
             }
+            if (row.isRetired()) {
+                // V533: an admin retired this model. No automated source (feed sync, seed,
+                // bundle) may bring it back, re-enable it, un-deprecate it or rewrite its
+                // categories: only an explicit admin restore does. Not tracked in idByKey
+                // for the same reason as is_custom above.
+                skippedRetired++;
+                continue;
+            }
             idByKey.put(keyOf(provider, modelId), row.getId());
 
             // Bridge rows are mutable via the bundle path so cloud's
@@ -255,7 +263,17 @@ public class CatalogMergeService {
             // output price happened to move, which for a mature model is never.
             BigDecimal prevCacheRead  = row.getPriceCacheRead();
             BigDecimal prevCacheWrite = row.getPriceCacheWrite();
-            applyFields(row, m, protect, opts.partialUpdate());
+            // A caller that does not own `enabled` on INSERT (feed sync) does not
+            // own it on UPDATE either. No feed carries `enabled`, so the full
+            // overwrite nulled it on the second refresh, and NULL reads as ON in
+            // every picker: a model inserted disabled went live one sync later
+            // with no admin click (prod 2026-09-23, claude-code/claude-opus-5-5).
+            Set<String> applyProtect = protect;
+            if (!opts.honorEnabledOnInsert() && !protect.contains("enabled")) {
+                applyProtect = new HashSet<>(protect);
+                applyProtect.add("enabled");
+            }
+            applyFields(row, m, applyProtect, opts.partialUpdate());
             if (opts.bundleVersion() != null) row.setBundleVersion(opts.bundleVersion());
             row.setLastSyncedAt(now);
             // Un-deprecate: the incoming set still includes the model.
@@ -330,6 +348,9 @@ public class CatalogMergeService {
             }
         }
 
+        if (skippedRetired > 0) {
+            log.info("Catalog merge [{}]: left {} retired model row(s) untouched", opts.label(), skippedRetired);
+        }
         return new MergeResult(inserted, updated, deprecated,
                 skippedCustom, skippedUserModified, pricingChanges.size());
     }

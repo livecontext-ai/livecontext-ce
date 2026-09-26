@@ -828,6 +828,79 @@ class SubAgentExecutionHandlerTest {
             verify(observabilityService).recordFromRequest(obsCaptor.capture());
             assertThat(obsCaptor.getValue().getOrganizationId()).isEqualTo("org-123");
             assertThat(obsCaptor.getValue().getSource()).isEqualTo("SUB_AGENT");
+            // No resolver wired: whether a swap happened is unknown, so nothing is claimed.
+            assertThat(obsCaptor.getValue().getModelReplaced()).isNull();
+            assertThat(obsCaptor.getValue().getReplacedModel()).isNull();
+        }
+
+        @Test
+        @DisplayName("an ENABLED model the resolver left alone is recorded as not replaced (resolution ran)")
+        void enabledModelIsRecordedAsNotReplaced() {
+            AgentEntity entity = createAgent();
+            when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-sub");
+            var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
+            when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(mockCallback);
+            com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+                mock(com.apimarketplace.agent.service.ModelReplacementResolver.class);
+            when(resolver.substituteIfDisabled(entity.getModelProvider(), entity.getModelName()))
+                .thenReturn(Optional.empty());
+            org.springframework.test.util.ReflectionTestUtils.setField(handler, "modelReplacementResolver", resolver);
+            when(agentLoopService.execute(any(AgentLoopContext.class), any(StreamingCallback.class))).thenReturn(
+                AgentLoopResult.success(CompletionResponse.text("OK"), List.of(), 1, null, 100, "openai", "gpt-4"));
+
+            handler.execute(createToolCall(Map.of(
+                "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "hello", "memory", false)),
+                TENANT_ID, defaultCredentials());
+
+            ArgumentCaptor<com.apimarketplace.agent.client.dto.AgentObservabilityRequest> obs =
+                ArgumentCaptor.forClass(com.apimarketplace.agent.client.dto.AgentObservabilityRequest.class);
+            verify(observabilityService).recordFromRequest(obs.capture());
+            assertThat(obs.getValue().getModelReplaced()).isFalse();
+            assertThat(obs.getValue().getReplacedModel()).isNull();
+        }
+
+        @Test
+        @DisplayName("regression V515: a sub-agent whose model is DISABLED runs on the replacement and is billed as it; the entity is never rewritten")
+        void disabledModelRunsOnReplacement() {
+            AgentEntity entity = createAgent();
+            String storedProvider = entity.getModelProvider();
+            String storedModel = entity.getModelName();
+            when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-sub");
+            var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
+            when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(mockCallback);
+            com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+                mock(com.apimarketplace.agent.service.ModelReplacementResolver.class);
+            when(resolver.substituteIfDisabled(storedProvider, storedModel)).thenReturn(Optional.of(
+                new com.apimarketplace.agent.service.ModelReplacementResolver.Substitution(
+                    "deepseek", "deepseek-chat", storedProvider, storedModel, false)));
+            org.springframework.test.util.ReflectionTestUtils.setField(handler, "modelReplacementResolver", resolver);
+            AgentLoopResult loopResult = AgentLoopResult.success(
+                CompletionResponse.text("OK"), List.of(), 1, null, 100, "deepseek", "deepseek-chat");
+            ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
+            when(agentLoopService.execute(ctx.capture(), any(StreamingCallback.class))).thenReturn(loopResult);
+
+            ToolCall toolCall = createToolCall(Map.of(
+                "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "hello", "memory", false));
+            handler.execute(toolCall, TENANT_ID, defaultCredentials());
+
+            // Pre-fix the child ran (and was billed) on the disabled pair stored on the entity.
+            assertThat(ctx.getValue().provider()).isEqualTo("deepseek");
+            assertThat(ctx.getValue().model()).isEqualTo("deepseek-chat");
+            ArgumentCaptor<com.apimarketplace.agent.client.dto.AgentObservabilityRequest> obs =
+                ArgumentCaptor.forClass(com.apimarketplace.agent.client.dto.AgentObservabilityRequest.class);
+            verify(observabilityService).recordFromRequest(obs.capture());
+            assertThat(obs.getValue().getProvider()).isEqualTo("deepseek");
+            assertThat(obs.getValue().getModel()).isEqualTo("deepseek-chat");
+            // The swap reaches analytics: which disabled model the run was configured with.
+            assertThat(obs.getValue().getModelReplaced()).isTrue();
+            assertThat(obs.getValue().getReplacedModel()).isEqualTo(storedModel);
+            // A run-time swap only: the agent's stored configuration is left as the admin found it.
+            assertThat(entity.getModelProvider()).isEqualTo(storedProvider);
+            assertThat(entity.getModelName()).isEqualTo(storedModel);
         }
 
         @Test

@@ -348,14 +348,14 @@
       "category": "ai",
       "description": "Content validation and safety checks",
       "parameters": [
-        { "name": "rules", "type": "array", "itemType": "object", "required": true, "status": "aligned", "action": "keep", "notes": "UI uses guardrailRules internally, serializes to rules" },
+        { "name": "rules", "type": "array", "itemType": "object", "required": true, "status": "aligned", "action": "keep", "notes": "UI stores guardrailRules ([{id, type, action, config}]) and the plan keeps that key; the builder tool also accepts rules as {ruleId: description}. keyword_filter, regex_pattern, length_check, pii_detection (not address), custom and competitor_mention are checked without a model" },
         { "name": "input", "type": "string", "required": true, "status": "aligned", "action": "keep", "notes": "UI uses guardrailInput internally, serializes to input" }
       ],
       "outputs": [
         { "name": "passed", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether content passed all checks" },
-        { "name": "violations", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "List of rule violations" },
-        { "name": "details", "type": "string", "status": "aligned", "action": "keep", "notes": "Detailed validation information" },
-        { "name": "sanitized", "type": "string", "status": "aligned", "action": "keep", "notes": "Sanitized version of input (if applicable)" },
+        { "name": "violations", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Ids of the violated rules, including flagged and sanitized ones" },
+        { "name": "details", "type": "object", "status": "aligned", "action": "keep", "notes": "Per rule id: {violated, severity, explanation, matched_content, type, action}" },
+        { "name": "sanitized", "type": "string", "status": "aligned", "action": "keep", "notes": "Input with every sanitize match replaced by [REDACTED]" },
         { "name": "response", "type": "string", "status": "aligned", "action": "keep", "notes": "Human-readable result summary" },
         { "name": "model", "type": "string", "status": "aligned", "action": "keep" },
         { "name": "provider", "type": "string", "status": "aligned", "action": "keep" },
@@ -364,14 +364,18 @@
       ],
       "nestedTypes": {
         "GuardrailRule": [
-          { "name": "type", "type": "string", "required": true, "enum": ["pii_detection", "toxic_language", "prompt_injection", "keyword_filter", "topic_filter", "custom"] },
+          { "name": "id", "type": "string" },
+          { "name": "type", "type": "string", "required": true, "enum": ["pii_detection", "toxic_language", "prompt_injection", "keyword_filter", "regex_pattern", "length_check", "topic_restriction", "competitor_mention", "custom"] },
           { "name": "action", "type": "string", "enum": ["block", "sanitize", "flag"] },
           { "name": "config", "type": "object" }
         ],
-        "Violation": [
-          { "name": "rule_type", "type": "string" },
-          { "name": "message", "type": "string" },
-          { "name": "severity", "type": "string" }
+        "RuleDetail": [
+          { "name": "violated", "type": "boolean" },
+          { "name": "severity", "type": "string" },
+          { "name": "explanation", "type": "string" },
+          { "name": "matched_content", "type": "string" },
+          { "name": "type", "type": "string" },
+          { "name": "action", "type": "string" }
         ]
       }
     },
@@ -984,7 +988,7 @@
         { "name": "timeoutMs", "type": "number", "default": 86400000, "status": "aligned", "notes": "Timeout in milliseconds (default 24h). Triggers timeout port." },
         { "name": "contextTemplate", "type": "string", "required": true, "status": "aligned", "notes": "Template (literal + {{...}} expressions) resolved at pause time and shown to the approver as approvalContext. Required (warning, non-blocking): the run still works if empty." },
         { "name": "continuationMode", "type": "string", "enum": ["all_items", "per_item"], "default": "all_items", "status": "aligned", "notes": "Split-context continuation. all_items (default): downstream steps start once after every per-item approval is decided. per_item: each decided item continues its own downstream chain immediately; the first cross-item consumer (merge, aggregate, loop, fork, nested split) still waits for all items. No effect outside a split." },
-        { "name": "delegation", "type": "object", "status": "aligned", "notes": "Optional external-channel delegation: {channel, credentialId, chatId, messageTemplate, image, allowedUserIds, approveLabel, rejectLabel}. channel: 'telegram' only in v1. credentialId: OPTIONAL numeric id; omit = the user's own Telegram credential is resolved implicitly (same as an mcp:telegram step without an explicit credential), a numeric id pins a specific bot. chatId: destination chat id, template-capable ({{...}}). messageTemplate: optional message body, template-capable; blank = falls back to the resolved contextTemplate. image: optional image, template-capable; non-blank = the message is sent as a photo with the text as caption. allowedUserIds: optional allowlist of channel user ids; empty = anyone in the chat can decide. approveLabel/rejectLabel: optional custom inline-button text, template-capable; blank = the defaults '✅ Approve' / '❌ Reject' (only the button text changes, the approve/reject outcome is unaffected)." }
+        { "name": "delegation", "type": "object", "status": "aligned", "notes": "Optional external-channel delegation: {channel, linkId, credentialId, chatId, messageTemplate, image, allowedUserIds, approveLabel, rejectLabel}. linkId: a workspace destination picked like a credential (a destination id, or 'default' for the workspace default); when set it decides the service, account and chat, and credentialId/chatId are ignored; a destination that is gone is never replaced by another chat. channel: one of telegram, slack, discord, whatsapp, teams. credentialId: OPTIONAL numeric id; omit = the user's own Telegram credential is resolved implicitly (same as an mcp:telegram step without an explicit credential), a numeric id pins a specific bot. chatId: destination chat id, template-capable ({{...}}). messageTemplate: optional message body, template-capable; blank = falls back to the resolved contextTemplate. image: optional image, template-capable; non-blank = the message is sent as a photo with the text as caption. allowedUserIds: optional allowlist of channel user ids; empty = anyone in the chat can decide. approveLabel/rejectLabel: optional custom inline-button text, template-capable; blank = the defaults '✅ Approve' / '❌ Reject' (only the button text changes, the approve/reject outcome is unaffected)." }
       ],
       "outputs": [
         { "name": "approver_roles", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Configured approver roles (in AWAITING_SIGNAL output)" },

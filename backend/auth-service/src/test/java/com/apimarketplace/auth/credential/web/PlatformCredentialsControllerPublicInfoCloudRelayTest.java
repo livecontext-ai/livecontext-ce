@@ -1,7 +1,7 @@
 package com.apimarketplace.auth.credential.web;
 
 import com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredentialResponse;
-import com.apimarketplace.auth.credential.service.CredentialService;
+import com.apimarketplace.auth.credential.service.ByokDeleteService;
 import com.apimarketplace.auth.credential.service.PlatformCredentialPricingService;
 import com.apimarketplace.auth.credential.service.PlatformCredentialService;
 import com.apimarketplace.common.credential.CloudPlatformCredentialInfoAccess;
@@ -45,7 +45,7 @@ class PlatformCredentialsControllerPublicInfoCloudRelayTest {
     @Mock
     private PlatformCredentialPricingService pricingService;
     @Mock
-    private CredentialService credentialService;
+    private ByokDeleteService credentialService;
     @Mock
     private TenantResolver tenantResolver;
     @Mock

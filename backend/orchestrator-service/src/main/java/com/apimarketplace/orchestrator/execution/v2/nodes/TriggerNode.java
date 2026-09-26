@@ -104,7 +104,18 @@ public class TriggerNode extends BaseNode {
             nodeId, triggerId, context.itemId());
 
         // Resolve trigger.params templates if defined
-        Map<String, Object> resolvedParams = resolveTriggerParams(context);
+        String paramsResolutionError = null;
+        Map<String, Object> resolvedParams;
+        try {
+            resolvedParams = resolveTriggerParams(context);
+        } catch (RuntimeException e) {
+            // Not a node failure: a trigger that fails ends the epoch before anything runs, and
+            // the payload itself is still delivered below. But the report says so, instead of
+            // showing the RAW plan map as if the node had run on it.
+            logger.error("❌ TriggerNode params resolution failed: {}", e.getMessage(), e);
+            paramsResolutionError = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            resolvedParams = Map.of();
+        }
 
         // Build output map with consistent structure for expression resolution
         // All trigger payload fields are copied to output at top level, making them
@@ -128,10 +139,14 @@ public class TriggerNode extends BaseNode {
         // The resolution the node ran on, and the configured map only when there was no
         // resolution to speak of (no template adapter wired): reporting nothing at all is
         // the defect this column exists to remove, and the redaction applies either way.
-        Map<String, Object> reportable = !resolvedParams.isEmpty()
+        // A resolution that FAILED is reported as the failure, never as the configured map.
+        Map<String, Object> reportable = paramsResolutionError != null || !resolvedParams.isEmpty()
             ? resolvedParams
             : (trigger != null && trigger.params() != null ? trigger.params() : Map.of());
         resolvedParamsSnapshot.putAll(ReportedParams.forReport(reportable));
+        if (paramsResolutionError != null) {
+            resolvedParamsSnapshot.put("paramsResolutionError", paramsResolutionError);
+        }
         output.put("resolved_params", resolvedParamsSnapshot);
 
         // Copy ALL trigger payload fields to output (form fields, webhook body, datasource data, etc.)
@@ -212,18 +227,14 @@ public class TriggerNode extends BaseNode {
             return Map.of();
         }
 
-        try {
-            // The V2TemplateAdapter.convertToV1Context() already sets current_item from triggerData
-            // So we can directly use resolveTemplates()
-            Map<String, Object> resolved = templateAdapter.resolveTemplates(trigger.params(), context);
+        // The V2TemplateAdapter.convertToV1Context() already sets current_item from triggerData
+        // So we can directly use resolveTemplates(). A failure propagates to execute(), which
+        // reports it.
+        Map<String, Object> resolved = templateAdapter.resolveTemplates(trigger.params(), context);
 
-            logger.debug("🎯 TriggerNode params resolution: raw={}, resolved={}",
-                ReportedParams.forReport(trigger.params()), ReportedParams.forReport(resolved));
-            return resolved;
-        } catch (Exception e) {
-            logger.error("❌ TriggerNode params resolution failed: {}", e.getMessage(), e);
-            return Map.of();
-        }
+        logger.debug("🎯 TriggerNode params resolution: raw={}, resolved={}",
+            ReportedParams.forReport(trigger.params()), ReportedParams.forReport(resolved));
+        return resolved;
     }
 
     @Override

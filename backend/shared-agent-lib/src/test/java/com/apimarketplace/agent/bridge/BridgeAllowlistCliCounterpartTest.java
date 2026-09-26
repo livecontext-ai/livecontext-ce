@@ -85,8 +85,8 @@ class BridgeAllowlistCliCounterpartTest {
         @DisplayName("rejects ids the CLI cannot route, and any non-bridge provider")
         void rejectsUnroutableIds() {
             assertThat(BridgeAllowlist.routesModel("claude-code", "claude-3-opus-20240229")).isFalse();
-            // codex is curated-only on purpose: a bare gpt-5.6 is a real OpenAI API
-            // id that the Codex CLI refuses with a ChatGPT account.
+            // A bare gpt-5.6 is a real OpenAI API id that the Codex CLI refuses with
+            // a ChatGPT account, so codex discovers codenamed tiers only.
             assertThat(BridgeAllowlist.routesModel("codex", "gpt-5.6")).isFalse();
             assertThat(BridgeAllowlist.routesModel("gemini-cli", "gemini-1.5-flash-8b")).isFalse();
             assertThat(BridgeAllowlist.routesModel("anthropic", "claude-opus-4-7")).isFalse();
@@ -101,13 +101,14 @@ class BridgeAllowlistCliCounterpartTest {
         @Test
         @DisplayName("codex routes the codenamed tiers it ships, and NOT the bare generation id")
         void codexRoutesCodenamedTiersOnly() {
-            // The reason codex has no discovery pattern: a bare generation id is a real
-            // OpenAI API model that Codex refuses with a ChatGPT account (typed 400), and
-            // that is precisely what a numeric rule would derive. gpt-5.6 already caused
-            // that incident (e399615a4/V399); gpt-6 must never repeat it, and no pattern
-            // able to guess "astra" could avoid catching "gpt-6" too.
+            // A bare generation id is a real OpenAI API model that Codex refuses with a
+            // ChatGPT account (typed 400), and that is precisely what a numeric rule
+            // derived (e399615a4/V399). The codex pattern names the codenames instead,
+            // so the new tiers route with no allow-list edit and "gpt-6" never does.
             assertThat(BridgeAllowlist.routesModel("codex", "gpt-6-astra")).isTrue();
             assertThat(BridgeAllowlist.routesModel("codex", "gpt-5.6-sol")).isTrue();
+            assertThat(BridgeAllowlist.routesModel("codex", "gpt-6-sol")).isTrue();
+            assertThat(BridgeAllowlist.routesModel("codex", "gpt-6-luna")).isTrue();
             assertThat(BridgeAllowlist.routesModel("codex", "gpt-6")).isFalse();
         }
 
@@ -170,6 +171,7 @@ class BridgeAllowlistCliCounterpartTest {
             assertThat(BridgeAllowlist.cliCounterpart("anthropic", "claude-opus-4-7")).isEqualTo("claude-code");
             assertThat(BridgeAllowlist.cliCounterpart("anthropic", "claude-sonnet-4-6")).isEqualTo("claude-code");
             assertThat(BridgeAllowlist.cliCounterpart("openai", "gpt-5.5")).isEqualTo("codex");
+            assertThat(BridgeAllowlist.cliCounterpart("openai", "gpt-6-sol")).isEqualTo("codex");
             assertThat(BridgeAllowlist.cliCounterpart("google", "gemini-2.5-pro")).isEqualTo("gemini-cli");
         }
 
@@ -179,6 +181,7 @@ class BridgeAllowlistCliCounterpartTest {
             // The whole point of the second half of the rule: openai HAS a CLI, but
             // Codex rejects these ids, so no button may be offered for them.
             assertThat(BridgeAllowlist.cliCounterpart("openai", "gpt-5.6")).isNull();
+            assertThat(BridgeAllowlist.cliCounterpart("openai", "gpt-5.6-cyber")).isNull();
             assertThat(BridgeAllowlist.cliCounterpart("openai", "gpt-4o")).isNull();
             assertThat(BridgeAllowlist.cliCounterpart("anthropic", "claude-3-opus-20240229")).isNull();
             // mistral-vibe's ids are ~/.vibe config aliases, NOT mistral API ids, so a

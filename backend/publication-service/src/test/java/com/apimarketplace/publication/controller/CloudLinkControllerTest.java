@@ -124,6 +124,22 @@ class CloudLinkControllerTest {
         }
 
         @Test
+        @DisplayName("PUT /llm-source returns 403 CLOUD_LINK_PLAN_REQUIRED (not 409 NOT_READY) when the cloud account needs a paid plan")
+        void shouldReturnPlanRequiredWhenCloudAccountIsNotPaid() {
+            when(cloudLinkService.setLlmSource(TENANT_ID, CloudLlmSource.CLOUD))
+                    .thenThrow(new CloudLinkService.CloudLinkPlanRequiredException("FREE"));
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.setLlmSource(TENANT_ID, Map.of("source", "CLOUD"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(response.getBody())
+                    .containsEntry("error", "CLOUD_LINK_PLAN_REQUIRED")
+                    .containsEntry("planCode", "FREE")
+                    .containsKey("message");
+        }
+
+        @Test
         @DisplayName("PUT /llm-source rejects invalid source instead of silently switching to BYOK")
         void shouldRejectInvalidLlmSource() {
             ResponseEntity<Map<String, Object>> response =
@@ -191,6 +207,20 @@ class CloudLinkControllerTest {
         }
 
         @Test
+        @DisplayName("PUT /catalog-source returns 403 CLOUD_LINK_PLAN_REQUIRED when the cloud account needs a paid plan")
+        void shouldReturnPlanRequiredWhenCloudAccountIsNotPaid() {
+            when(cloudLinkService.setCatalogSource(TENANT_ID, CloudLlmSource.CLOUD))
+                    .thenThrow(new CloudLinkService.CloudLinkPlanRequiredException(null));
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.setCatalogSource(TENANT_ID, Map.of("source", "CLOUD"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(response.getBody()).containsEntry("error", "CLOUD_LINK_PLAN_REQUIRED");
+            assertThat(response.getBody()).containsEntry("planCode", null);
+        }
+
+        @Test
         @DisplayName("PUT /catalog-source rejects invalid source instead of silently switching to BYOK")
         void shouldRejectInvalidCatalogSource() {
             ResponseEntity<Map<String, Object>> response =
@@ -221,6 +251,23 @@ class CloudLinkControllerTest {
             assertThat(response.getBody()).containsKey("authUrl");
             assertThat(response.getBody()).containsKey("state");
             assertThat(response.getBody().get("authUrl")).contains("keycloak.example.com");
+        }
+
+        @Test
+        @DisplayName("Should pass the onboarding startUrl through next to authUrl")
+        void shouldPassStartUrlThrough() {
+            Map<String, String> authData = Map.of(
+                    "authUrl", "https://keycloak.example.com/auth?client_id=test",
+                    "state", "random-state-uuid",
+                    "startUrl", "https://livecontext.ai/onboarding?ce_link=1&state=random-state-uuid"
+            );
+            when(cloudLinkService.generateAuthUrl(TENANT_ID, null)).thenReturn(authData);
+
+            ResponseEntity<Map<String, String>> response = controller.getAuthUrl(TENANT_ID, null);
+
+            assertThat(response.getBody())
+                    .containsEntry("startUrl", "https://livecontext.ai/onboarding?ce_link=1&state=random-state-uuid")
+                    .containsKey("authUrl");
         }
 
         @Test
@@ -272,6 +319,52 @@ class CloudLinkControllerTest {
             assertThat(response.getHeaders().getLocation().toString())
                     .isEqualTo("http://localhost:14000/en/ce-setup?cloud_link_callback=1&state=state-uuid");
             assertThat(response.getHeaders().getLocation().toString()).doesNotContain("auth-code-123");
+        }
+
+        @Test
+        @DisplayName("Unknown or expired state redirects (303) to the cloud-account page with cloud_link_error=expired, not a bare 400")
+        void unknownOrExpiredStateRedirectsToDefaultPageWithExpiredError() {
+            when(cloudLinkService.receiveCallback("auth-code-123", "stale-state"))
+                    .thenThrow(new CloudLinkService.CallbackStateException("Invalid or expired state parameter", null));
+
+            ResponseEntity<Void> response = controller.callback("auth-code-123", "stale-state");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SEE_OTHER);
+            String location = response.getHeaders().getLocation().toString();
+            assertThat(location)
+                    .isEqualTo("http://localhost:14000/app/settings/cloud-account?cloud_link_error=expired");
+            // Neither the code nor the state is reflected into the browser URL.
+            assertThat(location).doesNotContain("auth-code-123").doesNotContain("stale-state");
+            assertThat(response.getHeaders().getFirst("Content-Security-Policy")).contains("default-src 'none'");
+            assertThat(response.getHeaders().getFirst("Referrer-Policy")).isEqualTo("no-referrer");
+            assertThat(response.getHeaders().getCacheControl()).isEqualTo("no-store");
+        }
+
+        @Test
+        @DisplayName("Already-used state redirects back to the flow's own allowlisted return path with cloud_link_error=expired")
+        void replayedStateRedirectsToItsOwnReturnPath() {
+            when(cloudLinkService.receiveCallback("replayed-code", "used-state"))
+                    .thenThrow(new CloudLinkService.CallbackStateException(
+                            "Authorization callback already completed", "/en/ce-setup"));
+
+            ResponseEntity<Void> response = controller.callback("replayed-code", "used-state");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SEE_OTHER);
+            assertThat(response.getHeaders().getLocation().toString())
+                    .isEqualTo("http://localhost:14000/en/ce-setup?cloud_link_error=expired");
+        }
+
+        @Test
+        @DisplayName("A malformed callback (blank code) stays a bare 400 with the security headers")
+        void malformedCallbackStaysBadRequest() {
+            when(cloudLinkService.receiveCallback(" ", "state-uuid"))
+                    .thenThrow(new IllegalArgumentException("authCode and state are required"));
+
+            ResponseEntity<Void> response = controller.callback(" ", "state-uuid");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(response.getHeaders().getLocation()).isNull();
+            assertThat(response.getHeaders().getFirst("Referrer-Policy")).isEqualTo("no-referrer");
         }
     }
 

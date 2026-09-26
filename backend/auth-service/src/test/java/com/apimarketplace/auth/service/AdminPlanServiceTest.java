@@ -117,6 +117,24 @@ class AdminPlanServiceTest {
     }
 
     @Test
+    @DisplayName("lifecycle: an admin plan grant re-syncs the grantee's Resend contact (plan property)")
+    void adminGrantSyncsLifecycleContact() {
+        com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails =
+                mock(com.apimarketplace.auth.lifecycle.LifecycleEmailService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "lifecycleEmails", lifecycleEmails);
+        User user = mockUser();
+        when(planRepository.findByCode("PRO")).thenReturn(Optional.of(plan("PRO")));
+        when(userRepository.findById(TARGET_ID)).thenReturn(Optional.of(user));
+        when(subscriptionRepository.findActiveByUserIdForUpdate(TARGET_ID))
+                .thenReturn(Optional.of(internalSub("FREE")));
+        stubSaveReturnsArg();
+
+        service.assignPlan(TARGET_ID, "PRO", ADMIN_ID);
+
+        verify(lifecycleEmails).syncContact(TARGET_ID);
+    }
+
+    @Test
     @DisplayName("revert to FREE sets the FREE plan on the internal sub")
     void revertToFree() {
         User user = mockUser();

@@ -106,6 +106,30 @@ class ClassifyServiceExecutionLinkTest {
     }
 
     @Test
+    @DisplayName("regression V515: a DISABLED billed model is swapped for its replacement before the link and the guard see it")
+    void disabledModelRunsOnReplacementThroughItsLink() {
+        com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+            org.mockito.Mockito.mock(com.apimarketplace.agent.service.ModelReplacementResolver.class);
+        when(resolver.substituteIfDisabled("anthropic", "claude-opus-4-8")).thenReturn(java.util.Optional.of(
+            new com.apimarketplace.agent.service.ModelReplacementResolver.Substitution(
+                "anthropic", "claude-opus-4-9", "anthropic", "claude-opus-4-8", true)));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "modelReplacementResolver", resolver);
+        when(executionLinkRouter.runnableRoute("anthropic", "claude-opus-4-9", "WORKFLOW")).thenReturn(BRIDGE_ROUTE);
+        when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+
+        var response = service.execute(request());
+
+        // Pre-fix the disabled pair itself reached the link lookup and the guard, and ran
+        // on a model the admin had turned off. The replacement is now what is linked,
+        // priced and executed (classification still succeeds).
+        verify(executionLinkRouter).runnableRoute("anthropic", "claude-opus-4-9", "WORKFLOW");
+        verify(executionLinkRouter, never()).runnableRoute(eq("anthropic"), eq("claude-opus-4-8"), any());
+        verify(guardChainFactory).forAgent(any(), any(), eq("anthropic"), eq("claude-opus-4-9"));
+        verify(bridgeDispatcher).execute(any(), eq(true));
+        assertThat(response.success()).isTrue();
+    }
+
+    @Test
     @DisplayName("the key route is pinned once for the execution provider and rides on the loop context")
     void keyRouteIsPinnedOnTheLoopContext() {
         KeyRouteResolver keyRouteResolver = org.mockito.Mockito.mock(KeyRouteResolver.class);

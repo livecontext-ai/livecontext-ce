@@ -1023,8 +1023,10 @@ public class ReusableTriggerService {
             }
 
             if (triggerPayload != null && !triggerPayload.isEmpty()) {
-                logger.info("[ReusableTrigger] Storing {} payload for triggerId={}: {}",
-                           triggerType, triggerId, triggerPayload);
+                // Keys only: the payload is third-party content (webhook body and query, form
+                // fields, rows) and may carry anything, a forwarded OAuth code or a password.
+                logger.info("[ReusableTrigger] Storing {} payload for triggerId={}: keys={}",
+                           triggerType, triggerId, triggerPayload.keySet());
                 execution.setWebhookTriggerPayload(triggerId, triggerPayload);
             }
 
@@ -1946,6 +1948,20 @@ public class ReusableTriggerService {
                 // are swallowed by Spring downstream. We log here only if the
                 // publisher rejected the event (e.g. context shutdown).
                 logger.warn("[ReusableTrigger] Failed to publish epoch-failed event for runId={} epoch={}: {}",
+                        runId, currentEpoch, ex.getMessage());
+            }
+        } else if (eventPublisher != null) {
+            // The success twin: how a workflow that was failing is reported as
+            // recovered. The listener probes for an open incident before doing any
+            // other work, so the common case (nothing was failing) costs one index hit.
+            try {
+                eventPublisher.publishEvent(new com.apimarketplace.orchestrator.services.events.WorkflowEpochSucceededEvent(
+                        lockedRun.getId(),
+                        lockedRun.getWorkflow() != null ? lockedRun.getWorkflow().getId() : null,
+                        currentEpoch,
+                        lockedRun.getPlanVersion()));
+            } catch (Exception ex) {
+                logger.warn("[ReusableTrigger] Failed to publish epoch-succeeded event for runId={} epoch={}: {}",
                         runId, currentEpoch, ex.getMessage());
             }
         }

@@ -44,13 +44,32 @@ public class DatabaseNode extends BaseNode {
         this.credentialClient = registry.getCredentialClient();
     }
 
+    /** A templated port / timeout / sslEnabled is reported through the workspace-variable rule. */
+    private void reportDeferred(Map<String, Object> resolvedParams, String field, Object value) {
+        String template = deferredScalar("database", field);
+        if (template != null) {
+            resolvedParams.put(field,
+                com.apimarketplace.orchestrator.services.template.ReportedParams.valueFrom(template, value));
+        }
+    }
+
     @Override
     public NodeExecutionResult execute(ExecutionContext context) {
         long startTime = System.currentTimeMillis();
 
-        if (config == null) {
+        if (this.config == null) {
             return NodeExecutionResult.failureWithOutput(nodeId,
                 "Database configuration is required.",
+                Map.of("node_type", "DATABASE", "resolved_params", Map.of()),
+                System.currentTimeMillis() - startTime);
+        }
+        // This execution's config: a {{...}} port, timeout or sslEnabled resolved now, never the
+        // default. A local, not the field: the node is shared by concurrent items.
+        Core.DatabaseConfig config;
+        try {
+            config = withDeferredScalars("database", this.config, Core.DatabaseConfig.class, context);
+        } catch (IllegalStateException e) {
+            return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(),
                 Map.of("node_type", "DATABASE", "resolved_params", Map.of()),
                 System.currentTimeMillis() - startTime);
         }
@@ -64,6 +83,16 @@ public class DatabaseNode extends BaseNode {
         if (credentialId != null && credentialClient != null) {
             Optional<CredentialSummaryDto> cred = credentialClient.getCredentialById(context.tenantId(), credentialId);
             if (cred.isEmpty()) {
+                String credentialTemplate = deferredScalar("database", "credentialId");
+                if (credentialTemplate != null) {
+                    // A credential chosen by a {{...}} reference is never swapped for the default:
+                    // upstream data picked it, and running on another account would hide that.
+                    return NodeExecutionResult.failureWithOutput(nodeId,
+                        "database.credentialId '" + credentialTemplate + "' resolved to credential " + credentialId
+                            + ", which is not available. No other credential was used.",
+                        Map.of("node_type", "DATABASE", "resolved_params", Map.of()),
+                        System.currentTimeMillis() - startTime);
+                }
                 logger.warn("Database credential {} not found, falling back to default", credentialId);
                 cred = credentialClient.getDefaultCredential(context.tenantId(), DATABASE_INTEGRATION);
             }
@@ -128,6 +157,9 @@ public class DatabaseNode extends BaseNode {
         resolvedParams.put("timeout", timeout);
 
         resolvedParams.put("sslEnabled", sslEnabled);
+        reportDeferred(resolvedParams, "port", port);
+        reportDeferred(resolvedParams, "timeout", timeout);
+        reportDeferred(resolvedParams, "sslEnabled", sslEnabled);
 
         logger.info("Database node executing: nodeId={}, dbType={}, host={}, database={}, operation={}, itemId={}",
             nodeId, dbType, host, databaseName, operation, context.itemId());

@@ -373,6 +373,15 @@ public class AgentWorkflowFireService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("run_id", run.getRunIdPublic());
         result.put("trigger_id", triggerResult.triggerId());
+        if (triggerResult.success() && triggerResult.epoch() < 0) {
+            // The run started but was still executing when the wait for it ended (a long node).
+            // There is no finished epoch to point at yet, so do not report one.
+            result.put("status", "RUNNING");
+            result.put("message", triggerResult.message());
+            result.put("NEXT", "workflow(action='get_run', run_id='" + run.getRunIdPublic()
+                    + "') to follow it: it is still executing and will finish on its own.");
+            return result;
+        }
         result.put("epoch", triggerResult.epoch());
 
         // Fire count = epoch + 1 (epoch is 0-based index of the last completed epoch)
@@ -501,6 +510,22 @@ public class AgentWorkflowFireService {
         result.put("mocked_nodes", mockedNodes);
         result.put("mock_note", "Outputs of mocked_nodes are CONFIGURED MOCKS, not real executions "
                 + "(get_node_output shows mocked=true on those rows). Re-run with mock_mode='off' to execute for real.");
+    }
+
+    /**
+     * Epoch count per run for a page of runs, the same figure {@code total_epochs} reports in
+     * {@link #buildRunMacroReport}, in one query. Absent from the map = zero epochs.
+     *
+     * <p>Returns null when the lookup fails, so a run listing answers without {@code epoch_count}
+     * instead of reporting a false zero.
+     */
+    public Map<String, Long> countEpochsByRunIds(List<String> runIds) {
+        try {
+            return epochService.countEpochsByRunIds(runIds);
+        } catch (Exception e) {
+            log.warn("Epoch counts unavailable for {} runs: {}", runIds.size(), e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -1071,7 +1096,8 @@ public class AgentWorkflowFireService {
      * frontend's {@code useStepData} hook already consumes for the user UI;
      * this method makes them reachable from the agent surface too.
      */
-    private void enrichZoomFromStep(Map<String, Object> result, WorkflowStepDataEntity step, String tenantId,
+    // Package-private for AgentWorkflowFireServiceExpandTest, like windowOutputField.
+    void enrichZoomFromStep(Map<String, Object> result, WorkflowStepDataEntity step, String tenantId,
                                     String expandField, Integer offset, Integer maxBytes) {
         // Identity dimensions - what makes this row unique within the epoch
         if (step.getItemIndex() != null)  result.put("item_index", step.getItemIndex());
@@ -1121,7 +1147,11 @@ public class AgentWorkflowFireService {
         }
 
         if (step.getInputData() != null && !step.getInputData().isEmpty()) {
-            result.put("resolved_params", step.getInputData());
+            // Same per-string bound as the output (128 KB): an agent, classify or guardrail node
+            // reports what its model received in full, up to ReportedParams' own 120,000-char
+            // ceiling, which sits below this one on purpose so the two never cut differently.
+            // This bound is for everything else a row may hold.
+            result.put("resolved_params", capLargeStringsRecursive(step.getInputData()));
         }
 
         if (step.getErrorMessage() != null && !step.getErrorMessage().isBlank()) {

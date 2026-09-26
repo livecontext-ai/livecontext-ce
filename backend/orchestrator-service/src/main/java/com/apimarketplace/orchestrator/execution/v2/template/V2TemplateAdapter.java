@@ -98,6 +98,27 @@ public class V2TemplateAdapter {
     }
 
     /**
+     * The key of the plan trigger that owns this context, or {@code null} when the context names
+     * none of the plan's triggers (then the payload keeps being offered under every label).
+     */
+    private static String owningTriggerKey(ExecutionContext v2Context) {
+        String own = v2Context.triggerId();
+        if (own == null || v2Context.plan() == null) {
+            return null;
+        }
+        for (var trigger : v2Context.plan().getTriggers()) {
+            if (trigger.label() == null) {
+                continue;
+            }
+            String key = LabelNormalizer.triggerKey(trigger.label());
+            if (own.equals(key) || own.equals(trigger.getNormalizedKey())) {
+                return key;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Converts V2 ExecutionContext to V1 WorkflowExecutionContext.
      * This is the bridge between the two systems.
      */
@@ -112,25 +133,29 @@ public class V2TemplateAdapter {
         // V2 stores as raw data, V1 expects "trigger:xxx" or "current_item" keys
         if (v2Context.triggerData() != null && !v2Context.triggerData().isEmpty()) {
             // Build current_item with legacy structure: {data: {...}, ...}
-            // This is needed for expressions like ${int(current_item.data.user_id)}
-            Map<String, Object> currentItem = new HashMap<>(v2Context.triggerData());
-            // If data is not already a nested map, wrap it
-            if (!currentItem.containsKey("data")) {
-                // Create the wrapper structure expected by legacy templates
-                Map<String, Object> wrappedItem = new HashMap<>();
-                wrappedItem.put("data", currentItem);
-                // Also expose data at top level for direct access
-                wrappedItem.putAll(currentItem);
-                currentItem = wrappedItem;
-            }
+            // This is needed for expressions like ${int(current_item.data.user_id)}.
+            // Built by EvalContextBuilder so the condition path derives the same item.
+            Map<String, Object> currentItem =
+                com.apimarketplace.orchestrator.execution.v2.engine.EvalContextBuilder
+                    .legacyCurrentItem(v2Context.triggerData());
             // Add as current_item for legacy template resolution
             v1Context.setDataItem("current_item", currentItem);
 
             // Also add individual trigger entries if available
+            String owner = owningTriggerKey(v2Context);
+            java.util.Set<String> otherTriggerKeys = new java.util.HashSet<>();
+            if (owner != null) {
+                for (var trigger : v2Context.plan().getTriggers()) {
+                    if (trigger.label() != null && !owner.equals(LabelNormalizer.triggerKey(trigger.label()))) {
+                        otherTriggerKeys.add(LabelNormalizer.triggerKey(trigger.label()));
+                    }
+                }
+            }
             for (Map.Entry<String, Object> entry : v2Context.triggerData().entrySet()) {
                 String key = entry.getKey();
-                // If it's not already prefixed, add with trigger prefix
-                if (!key.startsWith("trigger:")) {
+                // If it's not already prefixed, add with trigger prefix - except under ANOTHER
+                // trigger's name: a payload field called like it would answer for that trigger.
+                if (!key.startsWith("trigger:") && !otherTriggerKeys.contains(LabelNormalizer.triggerKey(key))) {
                     v1Context.setDataItem(LabelNormalizer.triggerKey(key), entry.getValue());
                 }
                 v1Context.setDataItem(key, entry.getValue());
@@ -140,10 +165,19 @@ public class V2TemplateAdapter {
             // Priority: Use trigger output from stepOutputs if available (already executed),
             // otherwise wrap raw triggerData in consistent structure for self-referencing
             if (v2Context.plan() != null && !v2Context.plan().getTriggers().isEmpty()) {
+                // The payload in this context belongs to ONE trigger: the one whose DAG runs it.
+                // It used to be registered under EVERY trigger label, so in a two-trigger plan
+                // {{trigger:other.output.x}} silently read THIS trigger's `x`. Another trigger's
+                // output lives in another epoch and is not visible here: it resolves to nothing.
+                // When the context names no trigger of the plan (a legacy "trigger:default", a
+                // context built outside a DAG), every label still gets the payload, as before.
+                String ownTriggerKey = owningTriggerKey(v2Context);
                 for (var trigger : v2Context.plan().getTriggers()) {
                     String triggerLabel = trigger.label();
                     if (triggerLabel != null) {
                         String triggerKey = LabelNormalizer.triggerKey(triggerLabel);
+                        boolean ownsThisPayload = ownTriggerKey == null || ownTriggerKey.equals(triggerKey)
+                            || ownTriggerKey.equals(trigger.getNormalizedKey());
 
                         // Check if trigger has already executed and has output in stepOutputs
                         // This output contains resolved inputs from trigger.input mapping
@@ -156,7 +190,7 @@ public class V2TemplateAdapter {
                             v1Context.setDataItem(triggerKey, triggerOutput);
                             v1Context.setStepOutput(triggerKey, triggerOutput);
                             logger.debug("Set trigger output from stepOutputs: {} (resolved)", triggerKey);
-                        } else {
+                        } else if (ownsThisPayload) {
                             // Wrap raw triggerData in { output: {...} } structure for consistent access
                             // Also flatten data.* fields to output level for simpler expressions
                             // This allows both:
@@ -200,6 +234,11 @@ public class V2TemplateAdapter {
 
         // Transfer item index
         v1Context.setCurrentItemIndex(v2Context.itemIndex());
+        // {{item_id}} answers with the item this node runs for, like {{item_index}} (see
+        // NamespaceResolver.resolveDirectItemAlias), never a field of some upstream output.
+        if (v2Context.itemId() != null) {
+            v1Context.setGlobalVariable("item_id", v2Context.itemId());
+        }
 
         // Transfer global data from state
         v2Context.getGlobalData("iterations").ifPresent(iter ->

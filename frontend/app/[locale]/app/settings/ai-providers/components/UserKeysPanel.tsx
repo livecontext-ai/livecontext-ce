@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Eye, EyeOff, Save, Trash2, ExternalLink, Check, KeyRound, Lock, AlertCircle } from "lucide-react";
+import { Eye, EyeOff, Save, Trash2, ExternalLink, Check, KeyRound, AlertCircle, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,7 @@ import { clearModelsCache } from "@/hooks/useModels";
 import { track } from "@/lib/analytics/analytics";
 import OwnKeyFeeInfo from "./OwnKeyFeeInfo";
 import type { Credential, LlmProviderDefinition } from "@/lib/api/orchestrator/types";
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 /** The credential field the resolver reads: `no_proxy` = my key serves the call, `proxy` = the platform key. */
 type KeyMode = "no_proxy" | "proxy";
@@ -124,21 +125,6 @@ export default function UserKeysPanel({ definitions, t, pricingHref }: UserKeysP
         <p>{t("yourKeys.intro")}</p>
       </div>
 
-      {lock.locked && lock.requiredPlan && (
-        <div
-          className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4"
-          role="status"
-        >
-          <div className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-400">
-            <Lock className="h-3.5 w-3.5 flex-shrink-0" aria-hidden />
-            <span>{t("yourKeys.requiresPlan", { plan: lock.requiredPlan })}</span>
-          </div>
-          <Button asChild size="sm" className="h-8 px-3">
-            <Link href={pricingHref}>{t("yourKeys.upgrade", { plan: lock.requiredPlan })}</Link>
-          </Button>
-        </div>
-      )}
-
       {error && (
         <div className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400" role="alert">
           <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" aria-hidden />
@@ -169,6 +155,35 @@ export default function UserKeysPanel({ definitions, t, pricingHref }: UserKeysP
             />
           ))}
         </div>
+      )}
+
+      {/* Upgrade card below the required plan, same look as the Organization upsells
+          (Members / Workspaces) so every plan prompt in Settings reads as one family. */}
+      {lock.locked && lock.requiredPlan && (
+        <section className="bg-theme-secondary rounded-xl p-6 border border-theme">
+          <div className="flex items-start gap-4">
+            <div className="w-10 h-10 bg-black dark:bg-white rounded-xl flex items-center justify-center flex-shrink-0">
+              <KeyRound className="h-5 w-5 text-white dark:text-black" aria-hidden />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-theme-primary mb-1">
+                {t("yourKeys.requiresPlan", { plan: lock.requiredPlan })}
+              </h3>
+              <p className="text-sm text-theme-secondary mb-4">
+                {t("yourKeys.requiresPlanDescription", { plan: lock.requiredPlan })}
+              </p>
+              <Button asChild size="sm" className="h-8 px-4">
+                <Link
+                  href={pricingHref}
+                  onClick={() => track("byok_upgrade_clicked", { required_plan: lock.requiredPlan?.toLowerCase() })}
+                >
+                  {t("yourKeys.upgrade", { plan: lock.requiredPlan })}
+                  <ArrowUpRight className="h-3.5 w-3.5 ml-1.5" aria-hidden />
+                </Link>
+              </Button>
+            </div>
+          </div>
+        </section>
       )}
     </div>
   );
@@ -306,7 +321,7 @@ function UserKeyRow({ definition, credential, locked, t, onChanged, onError }: U
       <div className="flex flex-col gap-2 mb-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-10 h-10 flex-shrink-0 bg-theme-tertiary rounded-lg flex items-center justify-center">
-            <img
+            <ServiceLogo
               src={`/icons/services/${definition.providerName}.svg`}
               alt={definition.displayName}
               className="w-6 h-6"

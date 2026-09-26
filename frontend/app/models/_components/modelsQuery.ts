@@ -3,7 +3,7 @@ import { CATALOG_MODELS } from './modelsData';
 /**
  * The /models URL contract: `?provider=<key>` opens the page already filtered.
  *
- * This exists because the public footer's Models column names eight families and
+ * This exists because the public footer's Models column names model families and
  * every one of them used to land on the same unfiltered page. Clicking "Grok"
  * should show Grok. The key is the catalogue's own provider key (`xai`, not
  * "Grok"), so the link and the filter chip agree by construction.

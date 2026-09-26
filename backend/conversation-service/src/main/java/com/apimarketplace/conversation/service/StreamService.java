@@ -194,7 +194,8 @@ public class StreamService {
             Stream stream = streamOpt.get();
             stream.markAsError(errorMessage);
             streamRepository.save(stream);
-            log.error("❌ [STREAM SERVICE] Marked stream {} as error: {}", streamId, errorMessage);
+            // DEBUG: a state transition. Every caller logs the failure itself.
+            log.debug("[STREAM SERVICE] Marked stream {} as error: {}", streamId, errorMessage);
         }
     }
     

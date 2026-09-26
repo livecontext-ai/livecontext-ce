@@ -38,3 +38,11 @@ export function cloudWebUrl(pathOrUrl: string): string {
     return pathOrUrl;
   }
 }
+
+/**
+ * The cloud pricing page, where a CE install whose cloud link was refused for
+ * CLOUD_LINK_PLAN_REQUIRED sends its admin to choose a paid plan. Absolute on
+ * purpose: the CE's own /app/settings/pricing is the local page, not the
+ * cloud account's.
+ */
+export const CLOUD_PRICING_URL = `${CLOUD_WEB_BASE_URL}/app/settings/pricing`;

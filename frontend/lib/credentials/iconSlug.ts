@@ -37,6 +37,35 @@ export function normalizeIconSlug(input: string | null | undefined): string {
 }
 
 /**
+ * The normalized icon slug of a credential template: the key that identifies WHICH integration
+ * a template is, for anything that has to match it against a credential the user has connected.
+ *
+ * <p>The column first, because that is where the catalog's own `iconSlug` is stored and it is
+ * unique per API by contract; the icon URL and then the name as fallbacks for a template that
+ * carries neither. Normalized through {@link normalizeIconSlug}, which is what
+ * {@code hasExactIntegrationMatch} applies to the other side of the comparison: a caller that
+ * normalizes differently gets a screen that disagrees with the rest of the app about whether an
+ * account is connected.
+ *
+ * <p>Two older private copies of this idea remain, deliberately untouched: the one in
+ * {@code CredentialWizard} also feeds the `integration` value WRITTEN onto a new credential, so
+ * changing how it resolves would change stored data rather than a comparison, and the one in the
+ * credentials settings page feeds analytics whose historical values would split. Anything that
+ * READS a template to decide what it is should use this.
+ */
+export function credentialTemplateIconSlug(template: {
+  icon_slug?: string;
+  icon_url?: string;
+  credential_name?: string;
+  display_name?: string;
+}): string {
+  if (template.icon_slug) return normalizeIconSlug(template.icon_slug);
+  const fromUrl = template.icon_url?.match(/\/([^/]+)\.svg$/)?.[1];
+  if (fromUrl) return normalizeIconSlug(fromUrl);
+  return normalizeIconSlug(template.credential_name || template.display_name || '');
+}
+
+/**
  * Sentinel the catalog substitutes when an API has no icon of its own: every
  * `WorkflowInspectorService` query selects `COALESCE(a.icon_slug, 'mcp')`.
  *

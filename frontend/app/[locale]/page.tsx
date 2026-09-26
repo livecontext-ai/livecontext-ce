@@ -53,7 +53,7 @@ import { IS_CE as IS_CE_DEPLOY } from '@/lib/edition';
 import { NODE_ICON_REGISTRY } from '@/app/workflows/builder/data/nodeVisuals';
 import LandingThemeProvider from '@/components/landing/LandingThemeProvider';
 import JsonLd from '@/components/seo/JsonLd';
-import { homeAlternates, homeHref, ogAlternateLocales, ogLocale } from '@/lib/seo/siteUrl';
+import { homeAlternates, homeHref, landingOgImage, ogAlternateLocales, ogLocale } from '@/lib/seo/siteUrl';
 import { LANDING_FAQ_KEYS, landingJsonLd, type Copy } from '@/lib/seo/landingJsonLd';
 import Link from 'next/link';
 
@@ -111,13 +111,13 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
       description: t('description'),
       locale: ogLocale(locale),
       alternateLocale: ogAlternateLocales(locale),
-      images: [{ url: '/og-image.jpg', width: 1200, height: 630, alt: t('title') }],
+      images: [{ url: landingOgImage(locale), width: 1200, height: 630, alt: t('title') }],
     },
     twitter: {
       card: 'summary_large_image',
       title: t('title'),
       description: t('description'),
-      images: ['/og-image.jpg'],
+      images: [landingOgImage(locale)],
     },
     // Each locale is now its OWN canonical, inside one hreflang cluster.
     //
@@ -284,7 +284,7 @@ async function Hero({ locale }: { locale: string }) {
             {t.rich('titleLineTwo', { u: underlined })}
           </h1>
           <p className="mt-6 text-lg max-w-2xl mx-auto leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-            {t('lead', { integrations: CATALOG_INTEGRATIONS_CLAIM })}
+            {t('lead')}
           </p>
           <div className="mt-7 flex flex-wrap justify-center gap-3">
             <SignInButton

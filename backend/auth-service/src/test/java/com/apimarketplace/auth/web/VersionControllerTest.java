@@ -156,6 +156,34 @@ class VersionControllerTest {
     }
 
     @Test
+    @DisplayName("reportedVersion is the release tag or dev, never a sha or the Maven version")
+    void reportedVersionIsTagOrDev() {
+        // The update check reports this value and the cloud counts installs by it. A sha would
+        // fingerprint a fork; the Maven version is the never-bumped POM's and would be counted as
+        // an old release (it read 0.1.6 through the whole v0.3 line).
+        assertThat(VersionInfo.reportedVersion("v0.3.1")).isEqualTo("v0.3.1");
+        assertThat(VersionInfo.reportedVersion("  v0.3.1 ")).isEqualTo("v0.3.1");
+        assertThat(VersionInfo.reportedVersion("0.3.1")).isEqualTo("0.3.1");
+        assertThat(VersionInfo.reportedVersion("   ")).isEqualTo("dev");
+        assertThat(VersionInfo.reportedVersion(null)).isEqualTo("dev");
+        // A from-source build that stamps its own APP_VERSION (the build compose suggests
+        // dev-<sha>) must not put that sha on the wire.
+        assertThat(VersionInfo.reportedVersion("dev-4a55253")).isEqualTo("dev");
+        assertThat(VersionInfo.reportedVersion("my-fork")).isEqualTo("dev");
+    }
+
+    @Test
+    @DisplayName("on an unstamped build the display falls back to the Maven version but the report stays dev")
+    void reportedVersionIgnoresTheMavenFallback() {
+        GitProperties withoutSha = gitProperties("0.1.6", "", "2026-06-25T10:30:00Z");
+
+        // The same build, two answers: the Settings card may show the POM version, the fleet
+        // ledger must not count it as a release (the POM read 0.1.6 through the whole v0.3 line).
+        assertThat(VersionInfo.resolveVersion(withoutSha, null)).isEqualTo("0.1.6");
+        assertThat(VersionInfo.reportedVersion(null)).isEqualTo("dev");
+    }
+
+    @Test
     @DisplayName("resolveVersion precedence: release tag, else dev-<sha>, else build.version, else dev")
     void resolveVersionPrecedence() {
         GitProperties withSha = gitProperties("0.1.0-SNAPSHOT", "abc1234", "2026-06-25T10:30:00Z");

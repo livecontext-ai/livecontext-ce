@@ -51,7 +51,6 @@ const ToolCategoryGroup: React.FC<ToolCategoryGroupProps> = ({
   const [selectedLanguages, setSelectedLanguages] = useState<Record<string, string>>({});
   const [activeTabs, setActiveTabs] = useState<Record<string, string>>({});
   const [editingDescriptions, setEditingDescriptions] = useState<Record<string, boolean>>({});
-  const [showTabInfo, setShowTabInfo] = useState<Record<string, boolean>>({});
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [toolToDelete, setToolToDelete] = useState<McpTool | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -274,12 +273,6 @@ const ToolCategoryGroup: React.FC<ToolCategoryGroupProps> = ({
     }
   };
 
-  // Tab info toggle
-  const toggleTabInfo = (toolKey: string, tabName: string) => {
-    const key = `${toolKey}-${tabName}`;
-    setShowTabInfo(prev => ({ ...prev, [key]: !prev[key] }));
-  };
-
   // Path params info text
   const pathParamsInfoText = (
     <>
@@ -393,8 +386,6 @@ const ToolCategoryGroup: React.FC<ToolCategoryGroupProps> = ({
                             parameterType="pathParameters"
                             title={t('toolCategory.pathParameters')}
                             infoText={pathParamsInfoText}
-                            showTabInfo={showTabInfo[`${toolKey}-pathParams`] || false}
-                            onToggleTabInfo={() => toggleTabInfo(toolKey, 'pathParams')}
                           />
                         )}
 
@@ -407,8 +398,6 @@ const ToolCategoryGroup: React.FC<ToolCategoryGroupProps> = ({
                             parameterType="queryParameters"
                             title={t('toolCategory.queryParameters')}
                             infoText={queryParamsInfoText}
-                            showTabInfo={showTabInfo[`${toolKey}-queryParams`] || false}
-                            onToggleTabInfo={() => toggleTabInfo(toolKey, 'queryParams')}
                           />
                         )}
 
@@ -420,8 +409,6 @@ const ToolCategoryGroup: React.FC<ToolCategoryGroupProps> = ({
                             onToolUpdate={updateToolWithTestReset}
                             parameterType="headers"
                             title={t('toolCategory.headers')}
-                            showTabInfo={false}
-                            onToggleTabInfo={() => {}}
                           />
                         )}
 
@@ -433,8 +420,6 @@ const ToolCategoryGroup: React.FC<ToolCategoryGroupProps> = ({
                             onToolUpdate={updateToolWithTestReset}
                             parameterType="bodyParams"
                             title={t('toolCategory.bodyParameters')}
-                            showTabInfo={false}
-                            onToggleTabInfo={() => {}}
                           />
                         )}
 

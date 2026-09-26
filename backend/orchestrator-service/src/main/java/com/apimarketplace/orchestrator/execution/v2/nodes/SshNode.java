@@ -49,13 +49,32 @@ public class SshNode extends BaseNode {
         this.credentialClient = registry.getCredentialClient();
     }
 
+    /** A templated port / timeout is reported through the workspace-variable rule. */
+    private void reportDeferred(Map<String, Object> resolvedParams, String field, Object value) {
+        String template = deferredScalar("ssh", field);
+        if (template != null) {
+            resolvedParams.put(field,
+                com.apimarketplace.orchestrator.services.template.ReportedParams.valueFrom(template, value));
+        }
+    }
+
     @Override
     public NodeExecutionResult execute(ExecutionContext context) {
         long startTime = System.currentTimeMillis();
 
-        if (config == null) {
+        if (this.config == null) {
             return NodeExecutionResult.failureWithOutput(nodeId,
                 "SSH configuration is required.",
+                Map.of("node_type", "SSH", "resolved_params", Map.of()),
+                System.currentTimeMillis() - startTime);
+        }
+        // This execution's config: a {{...}} port or timeout resolved now, never the default.
+        // A local, not the field: the node is shared by concurrent items.
+        Core.SshConfig config;
+        try {
+            config = withDeferredScalars("ssh", this.config, Core.SshConfig.class, context);
+        } catch (IllegalStateException e) {
+            return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(),
                 Map.of("node_type", "SSH", "resolved_params", Map.of()),
                 System.currentTimeMillis() - startTime);
         }
@@ -68,6 +87,16 @@ public class SshNode extends BaseNode {
         if (credentialId != null && credentialClient != null) {
             Optional<CredentialSummaryDto> cred = credentialClient.getCredentialById(context.tenantId(), credentialId);
             if (cred.isEmpty()) {
+                String credentialTemplate = deferredScalar("ssh", "credentialId");
+                if (credentialTemplate != null) {
+                    // A credential chosen by a {{...}} reference is never swapped for the default:
+                    // upstream data picked it, and running on another account would hide that.
+                    return NodeExecutionResult.failureWithOutput(nodeId,
+                        "ssh.credentialId '" + credentialTemplate + "' resolved to credential " + credentialId
+                            + ", which is not available. No other credential was used.",
+                        Map.of("node_type", "SSH", "resolved_params", Map.of()),
+                        System.currentTimeMillis() - startTime);
+                }
                 logger.warn("SSH credential {} not found, falling back to default", credentialId);
                 cred = credentialClient.getDefaultCredential(context.tenantId(), SSH_INTEGRATION);
             }
@@ -109,6 +138,8 @@ public class SshNode extends BaseNode {
         resolvedParams.put("authMethod", authMethod);
         resolvedParams.put("command", command);
         resolvedParams.put("timeout", timeout);
+        reportDeferred(resolvedParams, "port", port);
+        reportDeferred(resolvedParams, "timeout", timeout);
 
 
         logger.info("SSH node executing: nodeId={}, host={}, port={}, username={}, command={}, itemId={}",

@@ -4,6 +4,8 @@ import com.apimarketplace.agent.domain.CatalogBundleEntity;
 import com.apimarketplace.agent.domain.CatalogBundleSyncStatusEntity;
 import com.apimarketplace.agent.repository.CatalogBundleSyncStatusRepository;
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
+import com.apimarketplace.common.plan.CeLinkRefusal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -204,7 +206,7 @@ class CatalogBundleControllerTest {
     @Test
     @DisplayName("CE /latest returns the active signed bundle payload when the caller owns an active cloud link")
     void latestReturnsSignedBundle() {
-        when(authClient.userOwnsActiveCeLink(CLOUD_USER, INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess(CLOUD_USER, INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         SignedBundle sb = new SignedBundle(1L, 1, "cs", "sig", "k1", "cloud", 10, 1000, "cGF5bG9hZA==");
         when(service.getActiveSignedBundle()).thenReturn(Optional.of(sb));
 
@@ -217,7 +219,7 @@ class CatalogBundleControllerTest {
     @Test
     @DisplayName("CE /latest 404 when nothing active (caller is linked)")
     void latest404() {
-        when(authClient.userOwnsActiveCeLink(CLOUD_USER, INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess(CLOUD_USER, INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(service.getActiveSignedBundle()).thenReturn(Optional.empty());
         ResponseEntity<?> resp = controller.latestSignedBundle(CLOUD_USER, INSTALL_ID);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
@@ -237,7 +239,7 @@ class CatalogBundleControllerTest {
     @Test
     @DisplayName("CE /latest → 403 when the install is not a linked, active cloud install (anti-abuse: no link, no updates)")
     void latestForbiddenWhenInstallNotLinked() {
-        when(authClient.userOwnsActiveCeLink(CLOUD_USER, "install-unlinked")).thenReturn(false);
+        when(authClient.ceLinkAccess(CLOUD_USER, "install-unlinked")).thenReturn(CeLinkAccessResult.notLinked());
         ResponseEntity<?> resp = controller.latestSignedBundle(CLOUD_USER, "install-unlinked");
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(resp.getBody()).isEqualTo(Map.of("error", "CE_LINK_NOT_ACTIVE"));
@@ -246,9 +248,25 @@ class CatalogBundleControllerTest {
     }
 
     @Test
+    @DisplayName("CE /latest and /{version} -> 403 CLOUD_LINK_PLAN_REQUIRED when the linked account is not on a paid plan")
+    void bundleDownloadsRefusedWhenPlanRequired() {
+        when(authClient.ceLinkAccess(CLOUD_USER, INSTALL_ID)).thenReturn(CeLinkAccessResult.planRequired("FREE"));
+
+        ResponseEntity<?> latest = controller.latestSignedBundle(CLOUD_USER, INSTALL_ID);
+        ResponseEntity<?> byVersion = controller.signedBundleByVersion(CLOUD_USER, INSTALL_ID, 42L);
+
+        assertThat(latest.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(latest.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
+        assertThat(byVersion.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(byVersion.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
+        verify(service, never()).getActiveSignedBundle();
+        verify(service, never()).getSignedBundleByVersion(anyLong());
+    }
+
+    @Test
     @DisplayName("CE /{version} returns the requested version, 404 when unknown (caller is linked)")
     void byVersion() {
-        when(authClient.userOwnsActiveCeLink(CLOUD_USER, INSTALL_ID)).thenReturn(true);
+        when(authClient.ceLinkAccess(CLOUD_USER, INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         SignedBundle sb = new SignedBundle(42L, 1, "cs", "sig", "k", "c", 1, 100, "cA==");
         when(service.getSignedBundleByVersion(42L)).thenReturn(Optional.of(sb));
         when(service.getSignedBundleByVersion(43L)).thenReturn(Optional.empty());
@@ -260,7 +278,7 @@ class CatalogBundleControllerTest {
     @Test
     @DisplayName("CE /{version} → 403 when the install is not linked (same gate as /latest)")
     void byVersionForbiddenWhenInstallNotLinked() {
-        when(authClient.userOwnsActiveCeLink(CLOUD_USER, "install-unlinked")).thenReturn(false);
+        when(authClient.ceLinkAccess(CLOUD_USER, "install-unlinked")).thenReturn(CeLinkAccessResult.notLinked());
         ResponseEntity<?> resp = controller.signedBundleByVersion(CLOUD_USER, "install-unlinked", 42L);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         verify(service, never()).getSignedBundleByVersion(anyLong());

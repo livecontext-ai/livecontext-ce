@@ -109,6 +109,23 @@ class AgentAsyncCompletionServiceForkMergeRaceTest {
     }
 
     @Test
+    @DisplayName("The epoch close runs while this delivery still counts as local in-flight work (drain must not see it finished)")
+    void epochCloseRunsWhileDeliveryStillCountedLocally() {
+        // Only the Redis entry is removed early (for the sibling check); the local count the
+        // shutdown drain waits on is released by the delivery's outer finally, AFTER the
+        // epoch close. Pre-fix, clear() released it here, before performDeferredReset ran.
+        when(registry.hasPendingFor(RUN_ID, TRIGGER_ID, EPOCH)).thenReturn(false);
+        when(inFlightStore.hasOtherInFlightForEpoch(RUN_ID, TRIGGER_ID, EPOCH, DELIVERING_CID))
+            .thenReturn(false);
+
+        service.triggerDeferredResetIfDrained(RUN_ID, TRIGGER_ID, EPOCH, DELIVERING_CID);
+
+        verify(inFlightStore).deleteStagedEntry(DELIVERING_CID);
+        verify(inFlightStore, never()).clear(DELIVERING_CID);
+        verify(signalResumeService).performDeferredReset(eq(RUN_ID), eq(TRIGGER_ID), eq(EPOCH), eq(DELIVERING_CID));
+    }
+
+    @Test
     @DisplayName("clearsOwnEntryBeforeTheSiblingCheckSoASymmetricDoubleDeferIsImpossible")
     void clearsOwnEntryBeforeTheSiblingCheck() {
         // The load-bearing ordering: clear(self) STRICTLY BEFORE hasOtherInFlightForEpoch.
@@ -123,7 +140,7 @@ class AgentAsyncCompletionServiceForkMergeRaceTest {
         service.triggerDeferredResetIfDrained(RUN_ID, TRIGGER_ID, EPOCH, DELIVERING_CID);
 
         InOrder order = inOrder(inFlightStore);
-        order.verify(inFlightStore).clear(DELIVERING_CID);
+        order.verify(inFlightStore).deleteStagedEntry(DELIVERING_CID);
         order.verify(inFlightStore).hasOtherInFlightForEpoch(RUN_ID, TRIGGER_ID, EPOCH, DELIVERING_CID);
     }
 
@@ -137,7 +154,7 @@ class AgentAsyncCompletionServiceForkMergeRaceTest {
         verify(signalResumeService, never()).performDeferredReset(anyString(), anyString(), anyInt(), any());
         // Own entry is still cleared up-front (idempotent with the outer finally),
         // but the sibling consult is never reached.
-        verify(inFlightStore).clear(DELIVERING_CID);
+        verify(inFlightStore).deleteStagedEntry(DELIVERING_CID);
         verify(inFlightStore, never()).hasOtherInFlightForEpoch(anyString(), anyString(), anyInt(), anyString());
     }
 

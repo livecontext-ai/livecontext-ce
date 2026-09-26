@@ -1,1 +1,8 @@
-<svg fill="#8B5CF6" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><title>getimg.ai</title><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm-2 6h4v4h4v4h-4v4H10v-4H6v-4h4V6z"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" fill="none"><metadata><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"><rdf:Description><dc:creator>RealFaviconGenerator</dc:creator><dc:source>https://realfavicongenerator.net</dc:source></rdf:Description></rdf:RDF></metadata><rect width="1000" height="1000" rx="225" fill="white"></rect><g clip-path="url(#clip0_63_77)">
+<path d="M354.197 789.931H651.174C678.811 789.931 701.299 812.403 701.299 840.035V875.007H783.007V840.035C783.007 767.375 723.864 708.264 651.181 708.264H354.197C326.561 708.264 304.079 685.771 304.079 658.125V623.153H222.372V658.125C222.372 730.806 281.507 789.931 354.197 789.931Z" fill="black"></path>
+<path d="M390.907 597.75H589.1C696.019 597.75 783.007 510.785 783.007 403.896C783.007 353.937 763.825 306.396 728.991 270.042L726.581 267.528L729.374 265.451C763.45 240.125 783 201.674 783 159.972V125H701.293V159.972C701.293 187.597 678.811 210.076 651.168 210.076H390.9C283.987 210.069 197 297.021 197 403.896C197 510.771 283.987 597.75 390.907 597.75ZM390.907 291.743H589.1C650.966 291.743 701.299 342.056 701.299 403.896C701.299 465.736 650.966 516.076 589.1 516.076H390.907C329.041 516.076 278.708 465.75 278.708 403.896C278.708 342.042 329.041 291.743 390.907 291.743Z" fill="black"></path>
+</g><defs>
+<clipPath id="clip0_63_77">
+<rect width="586" height="750" fill="white" transform="translate(197 125)"></rect>
+</clipPath>
+</defs></svg>

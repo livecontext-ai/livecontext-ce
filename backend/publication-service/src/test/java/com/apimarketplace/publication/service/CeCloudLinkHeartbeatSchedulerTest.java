@@ -84,8 +84,10 @@ class CeCloudLinkHeartbeatSchedulerTest {
             CeCloudLinkEntity revoked = buildLink(5L);
             CeCloudLinkEntity notFound = buildLink(6L);
             CeCloudLinkEntity transientFailure = buildLink(7L);
+            CeCloudLinkEntity planRequired = buildLink(8L);
             when(cloudLinkRepository.findAll()).thenReturn(
-                    List.of(ok, registered, pendingRegister, tokenUnavailable, revoked, notFound, transientFailure));
+                    List.of(ok, registered, pendingRegister, tokenUnavailable, revoked, notFound, transientFailure,
+                            planRequired));
             when(cloudLinkService.sendHeartbeat(ok)).thenReturn(CloudLinkService.HeartbeatOutcome.OK);
             when(cloudLinkService.sendHeartbeat(registered)).thenReturn(CloudLinkService.HeartbeatOutcome.REGISTERED);
             when(cloudLinkService.sendHeartbeat(pendingRegister)).thenReturn(CloudLinkService.HeartbeatOutcome.PENDING_REGISTER);
@@ -93,12 +95,13 @@ class CeCloudLinkHeartbeatSchedulerTest {
             when(cloudLinkService.sendHeartbeat(revoked)).thenReturn(CloudLinkService.HeartbeatOutcome.REVOKED);
             when(cloudLinkService.sendHeartbeat(notFound)).thenReturn(CloudLinkService.HeartbeatOutcome.NOT_FOUND);
             when(cloudLinkService.sendHeartbeat(transientFailure)).thenReturn(CloudLinkService.HeartbeatOutcome.TRANSIENT_FAILURE);
+            when(cloudLinkService.sendHeartbeat(planRequired)).thenReturn(CloudLinkService.HeartbeatOutcome.PLAN_REQUIRED);
 
             scheduler.sweepLinkedTenants();
 
             // Every outcome (ok/registered, revoked/not-found, default-error) is consumed and
             // each tenant is still pinged exactly once.
-            verify(cloudLinkService, times(7)).sendHeartbeat(any());
+            verify(cloudLinkService, times(8)).sendHeartbeat(any());
         }
 
         @Test

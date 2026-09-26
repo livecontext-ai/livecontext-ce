@@ -79,6 +79,15 @@ public class HttpExecutionService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private io.micrometer.core.instrument.MeterRegistry meterRegistry;
 
+    /**
+     * Whether the OAuth scope preflight REFUSES a call, or merely logs what it would
+     * refuse. Defaults to observe-only: the guard has never run against real traffic
+     * (0 firings in production), so arming it silently would put 814 unverified scope
+     * declarations in the path of calls that work today.
+     */
+    @org.springframework.beans.factory.annotation.Value("${catalog.scope-preflight.enforce:false}")
+    private boolean scopePreflightEnforce;
+
     // Typed-execution refactor (Phases 8/9/10) - strategies for binary, multipart, async.
     // Optional so tests using the legacy 6-arg constructor still compile.
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -278,14 +287,31 @@ public class HttpExecutionService {
         // An ordinary list passes through untouched, so this repairs the old rows without a
         // migration and without a detection step. See GrantedScopes.
         Set<String> missing = GrantedScopes.missingFrom(required, resp.getScopes());
-        if (!missing.isEmpty()) {
-            throw new InsufficientScopesException(
-                    tool.getToolNameId(),
-                    api.getId(),
-                    credentialName,
-                    api.getPlatformCredentialName(),
-                    missing);
+        if (missing.isEmpty()) {
+            return;
         }
+        if (!scopePreflightEnforce) {
+            // SHADOW MODE, and the default on purpose. This guard resolved the wrong
+            // credential until now and so never fired once: measured in production, 0
+            // throws against 91 provider refusals for the very scope gap it screens for.
+            // Fixing the resolution therefore arms a check that has never run against any
+            // real traffic, over 814 declarations nobody has been able to verify at
+            // runtime. A single wrong declaration would turn a working call into a refused
+            // one, which is a worse failure than the one being fixed, because it breaks
+            // something that works today.
+            //
+            // So it observes first. Flip catalog.scope-preflight.enforce to true once these
+            // lines have been read and every hit is a genuine gap.
+            log.warn("[scope-preflight][shadow] would block tool={} api={} credential={} missing={}",
+                    tool.getToolNameId(), api.getId(), credentialName, missing);
+            return;
+        }
+        throw new InsufficientScopesException(
+                tool.getToolNameId(),
+                api.getId(),
+                credentialName,
+                api.getPlatformCredentialName(),
+                missing);
     }
 
     private Optional<CredentialScopesDto> getCredentialScopesForUserSelection(String userId, String credentialName) {
@@ -314,6 +340,10 @@ public class HttpExecutionService {
             Optional<AccessTokenResult> byId = userCredentialService.getAccessTokenInfoById(userId, selectedCredentialId);
             if (byId.isPresent()) {
                 return byId;
+            }
+            if (strictSelectionHoldsAnotherKey(userId, selectedCredentialId)) {
+                // No access token, but the chosen account is there: its key is read through its data map.
+                return Optional.empty();
             }
             refuseSubstitutionIfStrict(selectedCredentialId, credentialName);
             // Pinned credential deleted → fall back to the integration default.
@@ -489,6 +519,34 @@ public class HttpExecutionService {
         /** Derive it from the choice: a name refusal is about names, an id refusal is not. */
         FROM_THE_CHOICE
     }
+
+    /**
+     * Under strict selection, whether the chosen credential is really there with a key of another
+     * kind than an access token.
+     *
+     * <p>The access-token lookup only knows {@code access_token}, {@code api_key}, {@code api_token}
+     * and {@code bearer_token}. A credential whose key lives under another field (Telegram's
+     * {@code token}, which {@code bot_token_in_url} injects into the URL) answers nothing there,
+     * which the strict refusal read as "unusable" and so refused every such call on an account the
+     * person had explicitly chosen (every Telegram chat channel, for one). Its data map is the
+     * proof it exists: when that is not empty, the call goes on with THIS credential, read through
+     * its data map by the field-aware injection, and never with the integration default.
+     */
+    private boolean strictSelectionHoldsAnotherKey(String userId, Long selectedCredentialId) {
+        if (!CredentialModeContext.isSelectionStrict() || userCredentialService == null) {
+            return false;
+        }
+        // OAuth material alone (a client id and secret, an expired or refresh token) is not a key of
+        // another kind: an authorisation that never completed still refuses, as it always did.
+        return userCredentialService.getCredentialDataMapById(userId, selectedCredentialId).entrySet().stream()
+                .anyMatch(e -> e.getValue() != null && !e.getValue().isBlank()
+                        && !OAUTH_MATERIAL_FIELDS.contains(e.getKey()));
+    }
+
+    /** Fields of an OAuth credential; none of them is a key the call can be made with by itself. */
+    private static final Set<String> OAUTH_MATERIAL_FIELDS = Set.of(
+            "client_id", "client_secret", "oauth_client_id", "oauth_client_secret", "refresh_token",
+            "access_token", "expires_at", "expires_in", "token_type", "scope", "scopes", "id_token");
 
     /**
      * Refuses the substitution each fall-through above would otherwise make.
@@ -750,11 +808,11 @@ public class HttpExecutionService {
      */
     public Map<String, Object> executeHttpCall(ApiEntity api, ApiToolEntity tool, JsonNode parameters, Set<String> allowedParamNames) {
         try {
-            log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Parameters before filtering: {}", tool.getId(), parameters);
+            log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Parameters before filtering: {}", tool.getId(), LoggedShape.of(parameters));
 
             // Filter parameters to keep only those defined in api_tool_parameters
             JsonNode filteredParameters = filterParametersByToolDefinition(tool, parameters, allowedParamNames);
-            log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Parameters after filtering: {}", tool.getId(), filteredParameters);
+            log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Parameters after filtering: {}", tool.getId(), LoggedShape.of(filteredParameters));
 
             String url = buildFullUrl(api, tool);
             log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Base URL: {}, Endpoint: {}, Full URL before path processing: {}",
@@ -775,7 +833,7 @@ public class HttpExecutionService {
             HttpHeaders headers = prepareHeaders(api, tool);
             applyHeaderParameters(headers, tool, filteredParameters);
             Object body = prepareRequestBody(tool, filteredParameters);
-            log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Request body: {}", tool.getId(), body);
+            log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Request body: {}", tool.getId(), LoggedShape.of(body));
 
             // Check if URL still contains unexpanded variables
             if (url.contains("{") && url.contains("}")) {
@@ -789,6 +847,7 @@ public class HttpExecutionService {
                         tool.getId(), remainingVars);
             }
 
+            dropContentTypeWhenBodyless(headers, body);
             HttpEntity<Object> request = new HttpEntity<>(body, headers);
 
             log.info("[HttpExecutionService.executeHttpCall] Tool: {}, About to call REST with URL: {}, Method: {}",
@@ -857,6 +916,11 @@ public class HttpExecutionService {
         // billing dispatchers can distinguish BYOK (user key) from platform-cost
         // passthrough. Lower-cased ("user" / "platform") for ToolExecutionResponse.metadata.credentialSource.
         String resolvedCredentialSource = null;
+        // The request URL carries the credential once it is injected (path variable or query
+        // key), so logs and error text use safeUrl instead. See CredentialUrlScrubber.
+        String realUrl = null;
+        String safeUrl = null;
+        List<String> secrets = new ArrayList<>();
         try {
             log.info("[HttpExecutionService.executeHttpCallWithCredentials] Tool: {}, userId: {}, credentialName: {}",
                     tool.getId(), userId, credentialName);
@@ -897,6 +961,8 @@ public class HttpExecutionService {
             // swaps the base token for a resource-scoped sub-token when the tool declares the rule
             // AND the call carries the trigger param. Strict no-op for every other API/tool.
             credentialValue = resolveSubResourceToken(api, tool, filteredParameters, credentialValue, userId, credentialName);
+            credentialValue.ifPresent(secrets::add);
+            safeUrl = url;
 
             // Inject credential based on metadata configuration
             if (injection != null && credentialValue.isPresent()) {
@@ -906,6 +972,7 @@ public class HttpExecutionService {
                     // Add credential as query parameter
                     url += (url.contains("?") ? "&" : "?") + injection.key() + "=" +
                            URLEncoder.encode(value, StandardCharsets.UTF_8);
+                    safeUrl = CredentialUrlScrubber.withRedactedQueryParam(safeUrl, injection.key());
                     log.info("[HttpExecutionService.executeHttpCallWithCredentials] Injected credential as query parameter: {}", injection.key());
                 } else if ("header".equalsIgnoreCase(injection.type())) {
                     // Will be handled in prepareHeadersWithCredentials (pass injection metadata)
@@ -915,10 +982,11 @@ public class HttpExecutionService {
 
             // Replace URL template variables ({token}, {domain}, etc.) with credential data
             if (url.contains("{") && url.contains("}")) {
-                url = replaceUrlTemplateVariables(url, userId, credentialName, credentialValue.orElse(null));
+                url = replaceUrlTemplateVariables(url, userId, credentialName, credentialValue.orElse(null), secrets);
             }
+            realUrl = url;
 
-            log.info("[HttpExecutionService.executeHttpCallWithCredentials] Final URL: {}", url);
+            log.info("[HttpExecutionService.executeHttpCallWithCredentials] Final URL: {}", safeUrl);
 
             // Prepare headers with OAuth credentials if available
             HttpHeaders headers = prepareHeadersWithCredentials(api, tool, userId, credentialName, injection, credentialValue);
@@ -929,7 +997,9 @@ public class HttpExecutionService {
             // userId is the tenant whose storage an attached file lives in - the same
             // value ApiService hands the typed path as tenantId.
             Object body = prepareRequestBody(tool, filteredParameters, userId);
-            log.info("[HttpExecutionService.executeHttpCallWithCredentials] Request body: {}", body);
+            // Shape only: a body_field credential arrives here as an ordinary parameter value
+            // (a {{credential.x}} expression resolved upstream). See LoggedShape.
+            log.info("[HttpExecutionService.executeHttpCallWithCredentials] Request body: {}", LoggedShape.of(body));
 
             // AWS SigV4: sign *.amazonaws.com requests from access_key_id/secret_access_key.
             // Mirrors the typed path (executeTyped); without it the legacy sync/JSON path sent an
@@ -949,9 +1019,10 @@ public class HttpExecutionService {
                 log.error("[HttpExecutionService.executeHttpCallWithCredentials] URL still contains unexpanded variables: {}", remainingVars);
             }
 
+            dropContentTypeWhenBodyless(headers, body);
             HttpEntity<Object> request = new HttpEntity<>(body, headers);
 
-            log.info("[HttpExecutionService.executeHttpCallWithCredentials] Calling {} {}", tool.getMethod(), url);
+            log.info("[HttpExecutionService.executeHttpCallWithCredentials] Calling {} {}", tool.getMethod(), safeUrl);
 
             try {
                 // Retries the call while the provider says "rejected, come back later" (429, or
@@ -965,7 +1036,7 @@ public class HttpExecutionService {
                         HttpMethod.valueOf(tool.getMethod()),
                         request,
                         Object.class),
-                    requestUrl, tool, api);
+                    safeUrl, tool, api);
 
                 int statusCode = response.getStatusCode().value();
                 Map<String, Object> result = new HashMap<>();
@@ -1032,6 +1103,9 @@ public class HttpExecutionService {
 
                 if (newToken.isPresent()) {
                     log.info("[HttpExecutionService.executeHttpCallWithCredentials] Token refreshed, retrying request");
+                    // The refreshed token is a credential too; anything the retry fails with is
+                    // scrubbed of it as well.
+                    secrets.add(newToken.get());
 
                     // Stamp the source as PLATFORM if the retry uses the
                     // platform pool - otherwise downstream billing dispatchers
@@ -1051,6 +1125,7 @@ public class HttpExecutionService {
                     // (401 → refresh → retry - exactly the Google Ads case) would drop them and fail.
                     applyHeaderParameters(retryHeaders, tool, filteredParameters);
 
+                    dropContentTypeWhenBodyless(retryHeaders, body);
                     HttpEntity<Object> retryRequest = new HttpEntity<>(body, retryHeaders);
 
                     final String refreshedUrl = url;
@@ -1062,7 +1137,7 @@ public class HttpExecutionService {
                                 HttpMethod.valueOf(tool.getMethod()),
                                 retryRequest,
                                 Object.class),
-                            refreshedUrl, tool, api);
+                            safeUrl, tool, api);
                     } catch (org.springframework.web.client.HttpStatusCodeException afterRefresh) {
                         // This call sits INSIDE the Unauthorized catch, so anything it throws would
                         // otherwise skip the sibling catches and land in the generic Exception
@@ -1176,15 +1251,17 @@ public class HttpExecutionService {
             // account the workflow asked for.
             throw e;
         } catch (Exception e) {
-            // Non-HTTP error (network, etc.)
+            // Non-HTTP error (network, etc.). A transport failure is worded around the full
+            // request URL, credential included, and this text goes back to the caller.
+            String message = CredentialUrlScrubber.scrub(e.getMessage(), realUrl, safeUrl, secrets);
             Map<String, Object> result = new HashMap<>();
             result.put("success", false);
             result.put("status", 0);
-            result.put("httpStatus", buildHttpStatus(0, e.getMessage()));
+            result.put("httpStatus", buildHttpStatus(0, message));
             result.put("data", Map.of());
-            result.put("error", e.getMessage());
+            result.put("error", message);
 
-            log.error("[HttpExecutionService.executeHttpCallWithCredentials] Error: {}", e.getMessage());
+            log.error("[HttpExecutionService.executeHttpCallWithCredentials] Error: {}", message);
             return result;
         }
     }
@@ -1325,6 +1402,21 @@ public class HttpExecutionService {
      * to the retry log below: it does not undo the full-URL logging this service already does
      * elsewhere.
      */
+    /** Class names of {@code e} and its causes, outermost first: a diagnosis without their messages. */
+    private static String exceptionChain(Throwable e) {
+        StringBuilder sb = new StringBuilder();
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (sb.length() > 0) {
+                sb.append(" <- ");
+            }
+            sb.append(t.getClass().getName());
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return sb.toString();
+    }
+
     private static String stripQueryString(String url) {
         int q = url.indexOf('?');
         return q < 0 ? url : url.substring(0, q);
@@ -1456,6 +1548,29 @@ public class HttpExecutionService {
      * {@code customConfig.fields}, so this is a no-op for them. A primary-token field reuses
      * {@code primaryValue} (OAuth-refresh-safe); any other field is read from the decrypted data map.
      */
+    /**
+     * Whether the declared header fields still need applying, given what the PRIMARY
+     * injection already sent.
+     *
+     * <p>Extracted because it is the whole rule, and because getting it wrong is silent in
+     * both directions: too narrow and a credential header is never sent (Ghost, 9 production
+     * failures out of 9 calls), too wide and this loop overwrites a primary Authorization
+     * header that carried a prefix it knows nothing about.
+     *
+     * @param primaryType  the primary injection's type: header, query, url_variable, body_field
+     * @param headerFields how many header fields the variant declares
+     */
+    static boolean shouldApplyHeaderFields(String primaryType, int headerFields) {
+        if (headerFields <= 0) {
+            return false;
+        }
+        if (headerFields >= 2) {
+            return true;
+        }
+        // Exactly one, and it is only unsent when the primary slot went to something else.
+        return !"header".equalsIgnoreCase(primaryType);
+    }
+
     private void applyCustomFieldHeaderInjections(HttpHeaders headers, CredentialInjection injection,
                                                   String userId, String credentialName, Optional<String> primaryValue) {
         if (injection == null || injection.fields() == null) {
@@ -1464,7 +1579,20 @@ public class HttpExecutionService {
         List<CredentialInjection> headerFields = injection.fields().stream()
                 .filter(f -> "header".equalsIgnoreCase(f.type()) && f.key() != null)
                 .toList();
-        if (headerFields.size() < 2) {
+        if (headerFields.isEmpty()) {
+            return;
+        }
+        // A SINGLE header field is normally already sent as the primary injection, so this
+        // method used to skip it outright. That left a hole: when the primary slot is taken
+        // by a query or url_variable field, the lone header is sent by nobody at all. Ghost
+        // is the proof - its admin_api_key sits behind a url_variable primary, and production
+        // shows ghost-list-posts-admin failing 9 calls out of 9. Firebase, Looker, Snowflake
+        // and Stream Chat carry the same shape.
+        //
+        // Restricted to that exact case so no currently-working path changes: two or more
+        // header fields behave exactly as before, and a lone header whose primary IS a header
+        // is still left to the primary (which may carry a prefix this loop knows nothing of).
+        if (!shouldApplyHeaderFields(injection.type(), headerFields.size())) {
             return;
         }
         Map<String, String> dataMap = null;
@@ -2018,6 +2146,14 @@ public class HttpExecutionService {
                     Optional<String> v = selectedCredentialId != null
                             ? tryGetSelectedUserCredential(userId, credentialName)
                             : Optional.empty();
+                    if (v.isEmpty() && selectedCredentialId != null
+                            && strictSelectionHoldsAnotherKey(userId, selectedCredentialId)) {
+                        // The chosen account exists but keeps its key under a field that is not an
+                        // access token (Telegram's "token", injected into the URL). It is still THIS
+                        // account: its key is read later through its data map. Neither refused nor
+                        // swapped for the default.
+                        return Optional.empty();
+                    }
                     if (v.isEmpty()) {
                         // Pinned credential missing/deleted → fall back to the user's
                         // DEFAULT credential for this integration (take pinned, else
@@ -2082,6 +2218,17 @@ public class HttpExecutionService {
      * then to the primary credential value if no match is found.
      */
     private String replaceUrlTemplateVariables(String url, String userId, String credentialName, String credentialValue) {
+        return replaceUrlTemplateVariables(url, userId, credentialName, credentialValue, null);
+    }
+
+    /**
+     * Same, and records every value it substituted into {@code substituted} (when non-null).
+     * Those values are what put a credential IN the URL, and often not the primary one: a
+     * Telegram {@code {token}} comes from the credential's data map. The caller masks all of
+     * them in anything it logs or returns (see CredentialUrlScrubber).
+     */
+    private String replaceUrlTemplateVariables(String url, String userId, String credentialName, String credentialValue,
+                                               java.util.Collection<String> substituted) {
         // Load full credential data map for field-by-field matching
         Map<String, String> credentialDataMap = getCredentialDataMapForUserSelection(userId, credentialName);
 
@@ -2093,6 +2240,9 @@ public class HttpExecutionService {
             String replacement = resolveUrlVariable(varName, credentialDataMap, credentialValue);
             if (replacement != null) {
                 log.info("[HttpExecutionService] Replacing URL variable {{{}}} from credential data", varName);
+                if (substituted != null) {
+                    substituted.add(replacement);
+                }
                 matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
             } else {
                 log.warn("[HttpExecutionService] No value found for URL variable {{{}}}", varName);
@@ -2260,7 +2410,7 @@ public class HttpExecutionService {
                         }
                     } catch (Exception e) {
                         // Not valid JSON, treat as single value
-                        log.debug("[HttpExecutionService.convertToExpectedType] Could not parse '{}' as JSON array, wrapping as single element", strValue);
+                        log.debug("[HttpExecutionService.convertToExpectedType] Could not parse {} as JSON array, wrapping as single element", LoggedShape.of(strValue));
                     }
                 }
                 // A single JSON OBJECT written as a string (a FileRef that went
@@ -2276,7 +2426,7 @@ public class HttpExecutionService {
                             return List.of(extractJsonNodeValue(objectNode));
                         }
                     } catch (Exception e) {
-                        log.debug("[HttpExecutionService.convertToExpectedType] Could not parse '{}' as a JSON object, falling through", strValue);
+                        log.debug("[HttpExecutionService.convertToExpectedType] Could not parse {} as a JSON object, falling through", LoggedShape.of(strValue));
                     }
                 }
                 // CSV-string fallback for legacy plans (pre-2026-05-06): callers
@@ -2332,7 +2482,7 @@ public class HttpExecutionService {
                         }
                     } catch (Exception e) {
                         // Not valid JSON object, leave as-is
-                        log.debug("[HttpExecutionService.convertToExpectedType] Could not parse '{}' as JSON object, passing through", strValue);
+                        log.debug("[HttpExecutionService.convertToExpectedType] Could not parse {} as JSON object, passing through", LoggedShape.of(strValue));
                     }
                 }
             }
@@ -2645,7 +2795,7 @@ public class HttpExecutionService {
     public String processPathParameters(String url, ApiToolEntity tool, JsonNode parameters) {
         try {
             log.info("[HttpExecutionService.processPathParameters] Tool: {}, URL before processing: {}", tool.getId(), url);
-            log.info("[HttpExecutionService.processPathParameters] Tool: {}, Parameters JSON: {}", tool.getId(), parameters);
+            log.info("[HttpExecutionService.processPathParameters] Tool: {}, Parameters JSON: {}", tool.getId(), LoggedShape.of(parameters));
 
             // Extract expected path parameters from URL
             Pattern pattern = Pattern.compile("\\{([^}]+)\\}");
@@ -2667,11 +2817,11 @@ public class HttpExecutionService {
                     String value = valueNode.asText();
                     availableParams.put(paramName, value);
                     log.info("[HttpExecutionService.processPathParameters] Tool: {}, Available parameter: {} = {}",
-                            tool.getId(), paramName, value);
+                            tool.getId(), paramName, LoggedShape.of(value));
                 }
 
                 log.info("[HttpExecutionService.processPathParameters] Tool: {}, Available parameters map: {}",
-                        tool.getId(), availableParams);
+                        tool.getId(), LoggedShape.of(availableParams));
 
                 // Per-param metadata drives the encoding strategy below. Loaded once
                 // here (same DB source as processQueryParameters) so a param can opt
@@ -2724,7 +2874,7 @@ public class HttpExecutionService {
                         };
                         url = url.replace("{" + paramName + "}", value);
                         log.info("[HttpExecutionService.processPathParameters] Tool: {}, Replaced {{{}}} with {} (encoding={})",
-                                tool.getId(), paramName, value, encoding.isEmpty() ? "conservative" : encoding);
+                                tool.getId(), paramName, LoggedShape.of(value), encoding.isEmpty() ? "conservative" : encoding);
                     } else {
                         log.warn("[HttpExecutionService.processPathParameters] Tool: {}, Missing path parameter: {} in available params: {}",
                                 tool.getId(), paramName, availableParams.keySet());
@@ -2852,7 +3002,7 @@ public class HttpExecutionService {
                         } else {
                             String value = valueNode.asText();
                             queryParts.add(paramName + "=" + URLEncoder.encode(value, StandardCharsets.UTF_8));
-                            log.debug("[HttpExecutionService.processQueryParameters] Added query param: {}={}", paramName, value);
+                            log.debug("[HttpExecutionService.processQueryParameters] Added query param: {}={}", paramName, LoggedShape.of(value));
                         }
                     }
                 }
@@ -2874,11 +3024,52 @@ public class HttpExecutionService {
      * name appears here (it validates against this list UNION its own static-header skip list):
      * accepting a name that is then silently discarded here is exactly the failure this prevents.
      */
+    /**
+     * Header names {@link #prepareHeadersWithCredentials} PRESETS as a convenience default,
+     * and which a catalog-declared header default is therefore allowed to replace.
+     *
+     * <p>The preset is our guess at what the provider wants; a declaration in the API JSON is
+     * the provider's stated requirement, so the declaration outranks it. Without this, the
+     * preset {@code Accept: application/json} shadowed every declared {@code Accept}: Heroku
+     * answered 400 {@code missing_version} ("specify a version along with Heroku's API MIME
+     * type") on all 26 of its endpoints and Recurly answered 406 {@code invalid_api_version}
+     * on all 55 of its own, while the catalog carried the right value on every row.
+     *
+     * <p>Deliberately NOT including {@code Content-Type}: that one is owned by the body
+     * branches, which set it per {@code bodyType} after this method runs.
+     */
+    static final Set<String> PRESET_OVERRIDABLE_HEADERS = Set.of("accept");
+
     public static final Set<String> TRANSPORT_MANAGED_HEADERS = Set.of(
         // computed/transport headers
         "content-length", "host", "connection", "transfer-encoding", "expect", "upgrade",
         // hop-by-hop headers (RFC 7230 §6.1) - never carried end-to-end, never from a tool param
         "te", "trailer", "keep-alive", "proxy-authenticate", "proxy-authorization");
+
+    /**
+     * Removes {@code Content-Type} when the request carries no body.
+     *
+     * <p>{@link #prepareHeadersWithCredentials} presets it for the body branches, which all set
+     * it explicitly per {@code bodyType} anyway; what is left is a GET declaring a JSON body it
+     * does not have. RFC 9110 gives that no meaning, and some providers take it literally and
+     * try to parse the empty body: Tinybird answers 400 {@code "invalid JSON line 1, column 1"}
+     * where without the header it answers 403 {@code "invalid authentication token"}, and
+     * Browserless answers {@code "Couldn't parse JSON body"}.
+     *
+     * <p>Measured before shipping, since this touches every bodyless call the platform makes:
+     * 537 APIs probed both ways, 529 answered identically, 6 were unreachable, and the only
+     * real difference was Tinybird (the other was a 429 from asking twice in a row). So it
+     * fixes what it is for and changes nothing else.
+     *
+     * <p>Only a null body qualifies, which is exactly GET: {@code prepareRequestBody} returns
+     * null there and nowhere else. A DELETE with a body keeps its Content-Type, which 60
+     * catalog endpoints depend on.
+     */
+    static void dropContentTypeWhenBodyless(HttpHeaders headers, Object body) {
+        if (body == null) {
+            headers.remove(HttpHeaders.CONTENT_TYPE);
+        }
+    }
 
     /**
      * Applies parameters declared with {@code parameterType='header'} as HTTP request headers.
@@ -2929,7 +3120,16 @@ public class HttpExecutionService {
                     continue;
                 }
                 String headerName = entry.getKey();
-                if (headerName == null || headerName.isBlank() || headers.containsKey(headerName)) {
+                if (headerName == null || headerName.isBlank()) {
+                    continue;
+                }
+                // A name already on `headers` normally wins (auth headers, and anything the
+                // caller supplied in the loop above). The exception is a name we PRESET
+                // ourselves as a convenience default: the catalog declaration is the provider's
+                // requirement and outranks our guess. See PRESET_OVERRIDABLE_HEADERS.
+                if (headers.containsKey(headerName)
+                        && !PRESET_OVERRIDABLE_HEADERS.contains(
+                                headerName.toLowerCase(java.util.Locale.ROOT))) {
                     continue;
                 }
                 if (TRANSPORT_MANAGED_HEADERS.contains(headerName.toLowerCase(java.util.Locale.ROOT))) {
@@ -3083,11 +3283,11 @@ public class HttpExecutionService {
                         String bodyPath = (meta != null) ? meta.bodyPath() : null;
                         if (BodyPathParser.isStructuredPath(bodyPath)) {
                             setNestedValue(body, bodyPath, convertedValue);
-                            log.debug("[HttpExecutionService.prepareRequestBody] Added structured body param: {} -> {}={}", paramName, bodyPath, convertedValue);
+                            log.debug("[HttpExecutionService.prepareRequestBody] Added structured body param: {} -> {}={}", paramName, bodyPath, LoggedShape.of(convertedValue));
                         } else {
                             body.put(bodyPath != null ? bodyPath : paramName, convertedValue);
                             log.debug("[HttpExecutionService.prepareRequestBody] Added body param: {}={} (dataType={}, converted={})",
-                                paramName, rawValue, dataType, convertedValue);
+                                paramName, LoggedShape.of(rawValue), dataType, LoggedShape.of(convertedValue));
                         }
                     }
                 }
@@ -3646,6 +3846,10 @@ public class HttpExecutionService {
         // Captured early; injected into success result maps below for downstream
         // billing dispatch (see executeHttpCallWithCredentials for full rationale).
         String resolvedCredentialSource = null;
+        // Same rule as executeHttpCallWithCredentials: logs and error text use safeUrl.
+        String realUrl = null;
+        String safeUrl = null;
+        List<String> secrets = new ArrayList<>();
         try {
             log.info("[HttpExecutionService.executeTyped] Tool: {}, mode={}, userId={}",
                 tool.getId(), tool.getExecutionMode(), userId);
@@ -3692,13 +3896,17 @@ public class HttpExecutionService {
             // Generic sub-resource token resolution (e.g. Facebook Page token) - same hook as the
             // legacy path; no-op unless the tool declares the rule and the call carries the trigger.
             credentialValue = resolveSubResourceToken(api, tool, filteredParameters, credentialValue, userId, credentialName);
+            credentialValue.ifPresent(secrets::add);
+            safeUrl = url;
             if (injection != null && credentialValue.isPresent() && "query".equalsIgnoreCase(injection.type())) {
                 url += (url.contains("?") ? "&" : "?") + injection.key() + "=" +
                        URLEncoder.encode(credentialValue.get(), StandardCharsets.UTF_8);
+                safeUrl = CredentialUrlScrubber.withRedactedQueryParam(safeUrl, injection.key());
             }
             if (url.contains("{") && url.contains("}")) {
-                url = replaceUrlTemplateVariables(url, userId, credentialName, credentialValue.orElse(null));
+                url = replaceUrlTemplateVariables(url, userId, credentialName, credentialValue.orElse(null), secrets);
             }
+            realUrl = url;
 
             HttpHeaders headers = prepareHeadersWithCredentials(api, tool, userId, credentialName, injection, credentialValue);
             // Multi-field custom auth (≥2 header fields in customConfig) - apply every header.
@@ -3794,9 +4002,10 @@ public class HttpExecutionService {
             // uses credentials with the AWS field set (access_key_id + secret_access_key).
             maybeSignAws(tool, url, headers, body, userId, credentialName);
 
+            dropContentTypeWhenBodyless(headers, body);
             HttpEntity<Object> request = new HttpEntity<>(body, headers);
             log.info("[HttpExecutionService.executeTyped] {} {} (bodyType={}, responseType={}, mode={})",
-                tool.getMethod(), url, bodyType, responseType, mode);
+                tool.getMethod(), safeUrl, bodyType, responseType, mode);
 
             // 5a. Streaming mode: aggregate the SSE chunks via WebClient (separate transport
             // from the RestTemplate path because RestTemplate cannot consume SSE incrementally).
@@ -3811,6 +4020,13 @@ public class HttpExecutionService {
                         headers,
                         body
                 );
+                if (aggregated.get("error") instanceof String streamError) {
+                    aggregated = new HashMap<>(aggregated);
+                    String scrubbedError = CredentialUrlScrubber.scrub(streamError, realUrl, safeUrl, secrets);
+                    aggregated.put("error", scrubbedError);
+                    log.warn("[HttpExecutionService.executeTyped] {} {} streaming error: {}",
+                            tool.getMethod(), safeUrl, scrubbedError);
+                }
                 Map<String, Object> result = new HashMap<>();
                 result.put("success", aggregated.get("error") == null);
                 result.put("status", aggregated.get("error") == null ? 200 : 0);
@@ -3824,7 +4040,7 @@ public class HttpExecutionService {
 
             // 5b. Issue the request - branch on response type to pick the right Class<?>
             if ("binary".equals(responseType)) {
-                return executeBinaryResponse(url, tool, request, executionSpec, tenantId, resolvedCredentialSource, api);
+                return executeBinaryResponse(url, safeUrl, tool, request, executionSpec, tenantId, resolvedCredentialSource, api);
             }
 
             final String typedUrl = url;
@@ -3834,7 +4050,7 @@ public class HttpExecutionService {
                     HttpMethod.valueOf(tool.getMethod()),
                     request,
                     Object.class),
-                typedUrl, tool, api);
+                safeUrl, tool, api);
             int statusCode = response.getStatusCode().value();
             Object responseBody = response.getBody() != null ? response.getBody() : Map.of();
 
@@ -3859,7 +4075,7 @@ public class HttpExecutionService {
                     if (resolvedCredentialSource != null) result.put("credentialSource", resolvedCredentialSource);
                     return result;
                 } catch (com.apimarketplace.catalog.service.execution.AsyncPollExecutor.AsyncPollFailureException ape) {
-                    return failure(0, ape.getMessage(), tool);
+                    return failure(0, CredentialUrlScrubber.scrub(ape.getMessage(), realUrl, safeUrl, secrets), tool);
                 }
             }
 
@@ -3921,8 +4137,16 @@ public class HttpExecutionService {
             // instead of at the account name that did not match.
             throw e;
         } catch (Exception e) {
-            log.error("[HttpExecutionService.executeTyped] Error: {}", e.getMessage(), e);
-            return failure(0, e.getMessage() != null ? e.getMessage() : "Unknown error", tool);
+            // Worded around the full request URL on a transport failure, credential included,
+            // and the text goes back to the caller. The stack trace would print the raw message
+            // again, so it is dropped exactly when scrubbing changed something.
+            String message = CredentialUrlScrubber.scrub(e.getMessage(), realUrl, safeUrl, secrets);
+            if (java.util.Objects.equals(message, e.getMessage())) {
+                log.error("[HttpExecutionService.executeTyped] Error: {}", message, e);
+            } else {
+                log.error("[HttpExecutionService.executeTyped] Error: {} ({})", message, exceptionChain(e));
+            }
+            return failure(0, message != null ? message : "Unknown error", tool);
         }
     }
 
@@ -3931,6 +4155,7 @@ public class HttpExecutionService {
      * and uploads the bytes via {@link com.apimarketplace.catalog.service.execution.BinaryResponseHandler}.
      */
     private Map<String, Object> executeBinaryResponse(String url,
+                                                      String safeUrl,
                                                       ApiToolEntity tool,
                                                       HttpEntity<Object> request,
                                                       JsonNode executionSpec,
@@ -3951,7 +4176,7 @@ public class HttpExecutionService {
                 HttpMethod.valueOf(tool.getMethod()),
                 request,
                 byte[].class),
-            binaryUrl, tool, api);
+            safeUrl, tool, api);
         int statusCode = response.getStatusCode().value();
         byte[] bytes = response.getBody();
         String contentType = response.getHeaders().getFirst("Content-Type");

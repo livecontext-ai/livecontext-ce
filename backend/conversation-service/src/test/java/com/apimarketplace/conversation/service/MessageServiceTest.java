@@ -58,6 +58,9 @@ class MessageServiceTest {
     @Mock
     private StorageBreakdownService storageBreakdownService;
 
+    @Mock
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
     private final MessageMapper messageMapper = new MessageMapper();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -65,7 +68,7 @@ class MessageServiceTest {
 
     @BeforeEach
     void setUp() {
-        messageService = new MessageService(conversationRepository, messageRepository, messageAttachmentRepository, messageMapper, eventBus, objectMapper, storageBreakdownService, null);
+        messageService = new MessageService(conversationRepository, messageRepository, messageAttachmentRepository, messageMapper, eventBus, objectMapper, storageBreakdownService, null, transactionManager);
     }
 
     @Test
@@ -422,6 +425,40 @@ class MessageServiceTest {
             verify(messageRepository, org.mockito.Mockito.times(2)).save(any(Message.class));
         }
 
+        /**
+         * Regression (prod 2026-09-25): the two addMessage calls are self-invocations, so the
+         * method's own @Transactional never applied and each write ran with no session. The fix
+         * opens one REQUIRES_NEW transaction per message: pin both the count and the propagation,
+         * and that only the failing message is rolled back.
+         */
+        @Test
+        @DisplayName("each line runs in its OWN REQUIRES_NEW transaction; only the failing one is rolled back")
+        void eachLineGetsItsOwnRequiresNewTransaction() {
+            Conversation conv = new Conversation("user-1", "Title", "model", "provider");
+            conv.setId("conv-1");
+            conv.setOrganizationId("org-1");
+            when(conversationRepository.findById("conv-1")).thenReturn(Optional.of(conv));
+            when(messageRepository.save(any(Message.class)))
+                    .thenThrow(new RuntimeException("DB hiccup on user message"))
+                    .thenAnswer(inv -> inv.getArgument(0));
+            org.springframework.transaction.TransactionStatus userTx =
+                    org.mockito.Mockito.mock(org.springframework.transaction.TransactionStatus.class);
+            org.springframework.transaction.TransactionStatus errorTx =
+                    org.mockito.Mockito.mock(org.springframework.transaction.TransactionStatus.class);
+            when(transactionManager.getTransaction(any())).thenReturn(userTx, errorTx);
+
+            messageService.persistAttemptAndError("conv-1", "scheduled prompt", "[Error] Insufficient credits");
+
+            org.mockito.ArgumentCaptor<org.springframework.transaction.TransactionDefinition> defs =
+                    org.mockito.ArgumentCaptor.forClass(org.springframework.transaction.TransactionDefinition.class);
+            verify(transactionManager, org.mockito.Mockito.times(2)).getTransaction(defs.capture());
+            assertThat(defs.getAllValues()).allSatisfy(d -> assertThat(d.getPropagationBehavior())
+                    .isEqualTo(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW));
+            verify(transactionManager).rollback(userTx);
+            verify(transactionManager).commit(errorTx);
+            verify(transactionManager, never()).rollback(errorTx);
+        }
+
         @Test
         @DisplayName("Blank conversationId short-circuits - no repo calls, no exceptions")
         void blankConversationIdShortCircuits() {
@@ -462,7 +499,7 @@ class MessageServiceTest {
         private MessageService serviceWithTimeAwareMapper() {
             return new MessageService(conversationRepository, messageRepository,
                     messageAttachmentRepository, messageMapper, eventBus, timeAwareMapper,
-                    storageBreakdownService, null);
+                    storageBreakdownService, null, org.mockito.Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class));
         }
 
         @Test

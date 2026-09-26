@@ -135,6 +135,6 @@ class UserChangelogSeenMigrationParityTest {
         // this row for us. A forgotten account would leave its acknowledgement behind.
         assertThat(Files.readString(purge))
                 .as("deleting an account must delete its changelog acknowledgement")
-                .contains("DELETE FROM auth.user_changelog_seen WHERE user_id = ?1");
+                .contains("DELETE FROM auth.user_changelog_seen WHERE user_id = ?");
     }
 }

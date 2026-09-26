@@ -123,6 +123,99 @@ class CrossProviderEmailMergeReproTest {
         assertThat(resp.getProviderId()).isEqualTo(NEW_KC_SUB);
     }
 
+    private static final String SAML_ALIAS = "org-aaaaaaaabbbbccccddddeeeeeeeeeeee-saml";
+    private static final String SAML_SUB = "kc-sub-SAML-identity-4444";
+
+    @Test
+    @DisplayName("Workspace SAML login (same email as a password account) is DENIED, never merged onto it")
+    void samlLoginDoesNotTakeOverPasswordAccount() {
+        // The IdP behind a workspace SAML alias is configured by that workspace's admin and
+        // asserts any email it likes. Before SAML was its own provider, the alias fell through
+        // to KEYCLOAK, the SAME provider as a password account, so this login re-pointed the
+        // victim's account onto the SAML identity.
+        User passwordAccount = existingAccount(1L, PASSWORD_SUB, AuthProvider.KEYCLOAK);
+        String samlJwt = buildJwt(SAML_SUB, EMAIL, SAML_ALIAS);
+
+        when(userRepository.findByProviderId(SAML_SUB)).thenReturn(Optional.empty());
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(passwordAccount));
+
+        com.apimarketplace.auth.audit.AuthEventRecorder recorder =
+                org.mockito.Mockito.mock(com.apimarketplace.auth.audit.AuthEventRecorder.class);
+        ReflectionTestUtils.setField(service, "authEventRecorder", recorder);
+
+        UserResolutionResponse resp = service.resolveUser(SAML_SUB, samlJwt);
+
+        assertThat(resp).as("a SAML login must not land on a password account").isNull();
+        assertThat(passwordAccount.getProviderId()).isEqualTo(PASSWORD_SUB);
+        verify(userRepository, never()).save(any(User.class));
+        // Refused BY the cross-provider guard (not by some internal error), and counted as saml.
+        verify(recorder).recordLoginFailure("saml", "cross_provider_conflict");
+    }
+
+    @Test
+    @DisplayName("A pre-SAML account stored as KEYCLOAK is refused, not merged, when its Keycloak user is recreated")
+    void legacyKeycloakTaggedSamlAccountIsRefusedOnRecreation() {
+        // Deliberate and documented at resolveAuthProviderFromIdentityProvider: re-labelling by
+        // email is the very merge the guard forbids.
+        User legacy = existingAccount(11L, "old-sub", AuthProvider.KEYCLOAK);
+        when(userRepository.findByProviderId(NEW_KC_SUB)).thenReturn(Optional.empty());
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(legacy));
+
+        com.apimarketplace.auth.audit.AuthEventRecorder recorder =
+                org.mockito.Mockito.mock(com.apimarketplace.auth.audit.AuthEventRecorder.class);
+        ReflectionTestUtils.setField(service, "authEventRecorder", recorder);
+
+        UserResolutionResponse resp = service.resolveUser(NEW_KC_SUB, buildJwt(NEW_KC_SUB, EMAIL, SAML_ALIAS));
+
+        assertThat(resp).isNull();
+        assertThat(legacy.getProviderId()).isEqualTo("old-sub");
+        verify(userRepository, never()).save(any(User.class));
+        verify(recorder).recordLoginFailure("saml", "cross_provider_conflict");
+    }
+
+    @Test
+    @DisplayName("A first SAML login creates the account with provider SAML, not KEYCLOAK")
+    void firstSamlLoginRecordsSamlProvider() {
+        when(userRepository.findByProviderId(SAML_SUB)).thenReturn(Optional.empty());
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.empty());
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> {
+            User u = inv.getArgument(0);
+            if (u.getId() == null) {
+                u.setId(42L);
+            }
+            return u;
+        });
+        lenient().when(usernameValidator.buildUsernameFromProviderId(anyString())).thenReturn("sso");
+        lenient().when(usernameValidator.generateUniqueUsername(anyString())).thenReturn("sso");
+        lenient().when(onboardingService.needsOnboarding(anyString())).thenReturn(true);
+        lenient().when(organizationService.getDefaultMembership(anyLong())).thenReturn(Optional.empty());
+
+        service.resolveUser(SAML_SUB, buildJwt(SAML_SUB, EMAIL, SAML_ALIAS));
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        verify(userRepository, org.mockito.Mockito.atLeastOnce()).save(saved.capture());
+        assertThat(saved.getAllValues().get(0).getAuthProvider()).isEqualTo(AuthProvider.SAML);
+    }
+
+    @Test
+    @DisplayName("A SAML account whose Keycloak user was recreated (SAML again, new sub) is still re-pointed")
+    void samlUserRecreationStillRebinds() {
+        User existing = existingAccount(9L, "old-saml-sub", AuthProvider.SAML);
+        when(userRepository.findByProviderId(NEW_KC_SUB)).thenReturn(Optional.empty());
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(existing));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(subscriptionRepository.findActiveByUserId(9L)).thenReturn(Optional.empty());
+        lenient().when(planRepository.findByCode("FREE")).thenReturn(Optional.empty());
+        lenient().when(onboardingService.needsOnboarding(anyString())).thenReturn(false);
+        lenient().when(organizationService.getDefaultMembership(anyLong())).thenReturn(Optional.empty());
+
+        UserResolutionResponse resp = service.resolveUser(NEW_KC_SUB, buildJwt(NEW_KC_SUB, EMAIL, SAML_ALIAS));
+
+        assertThat(resp).isNotNull();
+        assertThat(resp.getUserId()).isEqualTo(9L);
+        assertThat(existing.getProviderId()).isEqualTo(NEW_KC_SUB);
+    }
+
     private User existingAccount(Long id, String providerId, AuthProvider provider) {
         User u = new User();
         u.setId(id);

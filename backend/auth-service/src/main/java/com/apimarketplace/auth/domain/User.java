@@ -114,6 +114,54 @@ public class User implements UserDetails {
     @Column(name = "age")
     private LocalDateTime age;
 
+    // ---- Lifecycle email context (V527). Written only through the targeted
+    // conditional updates in UserRepository, never through a whole-row save: every
+    // column is insertable = false, updatable = false, so the many whole-row
+    // userRepository.save(user) call sites (login bookkeeping, profile edits, ...)
+    // can never write back a stale copy and revert, e.g., a consent change made
+    // meanwhile. A new user gets the database defaults (V527). The setters below
+    // only shape in-memory objects (tests); they are NEVER persisted. ----
+
+    /** App locale (one of en fr es de pt zh); NULL until the app first reports it. */
+    @Column(name = "locale", length = 8, insertable = false, updatable = false)
+    private String locale;
+
+    /** True once the person picked a language in the UI: an implicit report never overwrites it. */
+    @org.hibernate.annotations.ColumnDefault("false")
+    @Column(name = "locale_explicit", nullable = false, insertable = false, updatable = false)
+    private boolean localeExplicit = false;
+
+    /** IANA zone id reported by the browser; last value wins. */
+    @Column(name = "time_zone", length = 64, insertable = false, updatable = false)
+    private String timeZone;
+
+    /** ISO-3166 alpha-2 from Cloudflare, write-once. */
+    @Column(name = "signup_country", length = 2, insertable = false, updatable = false)
+    private String signupCountry;
+
+    /** Abuse prevention only: never sent to a third party, nulled 12 months after capture. */
+    @Column(name = "signup_ip", length = 45, insertable = false, updatable = false)
+    private String signupIp;
+
+    @Column(name = "signup_ip_captured_at", insertable = false, updatable = false)
+    private java.time.Instant signupIpCapturedAt;
+
+    /** Opt-in for news and offers by email (gates checkout recovery, not service emails). Off by default. */
+    @org.hibernate.annotations.ColumnDefault("false")
+    @Column(name = "marketing_consent", nullable = false, insertable = false, updatable = false)
+    private boolean marketingConsent = false;
+
+    @Column(name = "marketing_consent_at", insertable = false, updatable = false)
+    private java.time.Instant marketingConsentAt;
+
+    /** First workflow created, set once. */
+    @Column(name = "activated_at", insertable = false, updatable = false)
+    private java.time.Instant activatedAt;
+
+    /** When user.signed_up was handed to the lifecycle emails, set once (V529). */
+    @Column(name = "lifecycle_signup_emitted_at", insertable = false, updatable = false)
+    private java.time.Instant lifecycleSignupEmittedAt;
+
     // Organization memberships (lazy loaded)
     @OneToMany(mappedBy = "user", fetch = FetchType.LAZY)
     private Set<OrganizationMember> memberships = new HashSet<>();
@@ -353,6 +401,35 @@ public class User implements UserDetails {
     public void setMemberships(Set<OrganizationMember> memberships) {
         this.memberships = memberships;
     }
+
+    public String getLocale() { return locale; }
+    public void setLocale(String locale) { this.locale = locale; }
+
+    public boolean isLocaleExplicit() { return localeExplicit; }
+    public void setLocaleExplicit(boolean localeExplicit) { this.localeExplicit = localeExplicit; }
+
+    public String getTimeZone() { return timeZone; }
+    public void setTimeZone(String timeZone) { this.timeZone = timeZone; }
+
+    public String getSignupCountry() { return signupCountry; }
+    public void setSignupCountry(String signupCountry) { this.signupCountry = signupCountry; }
+
+    public String getSignupIp() { return signupIp; }
+    public void setSignupIp(String signupIp) { this.signupIp = signupIp; }
+
+    public java.time.Instant getSignupIpCapturedAt() { return signupIpCapturedAt; }
+    public void setSignupIpCapturedAt(java.time.Instant signupIpCapturedAt) { this.signupIpCapturedAt = signupIpCapturedAt; }
+
+    public boolean isMarketingConsent() { return marketingConsent; }
+    public void setMarketingConsent(boolean marketingConsent) { this.marketingConsent = marketingConsent; }
+
+    public java.time.Instant getMarketingConsentAt() { return marketingConsentAt; }
+    public void setMarketingConsentAt(java.time.Instant marketingConsentAt) { this.marketingConsentAt = marketingConsentAt; }
+
+    public java.time.Instant getActivatedAt() { return activatedAt; }
+    public void setActivatedAt(java.time.Instant activatedAt) { this.activatedAt = activatedAt; }
+
+    public java.time.Instant getLifecycleSignupEmittedAt() { return lifecycleSignupEmittedAt; }
 
     @PreUpdate
     public void preUpdate() {

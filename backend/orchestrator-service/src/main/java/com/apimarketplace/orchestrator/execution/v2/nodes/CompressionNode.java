@@ -69,13 +69,18 @@ public class CompressionNode extends BaseNode {
         // the configured template there gave `value` one meaning on success and another on
         // failure, on the same node.
         String inputValue = null;
+        // Resolved once and used everywhere it names something (the zip entry, the upload) and
+        // in the report. It used to be read CONFIGURED, so `{{trigger:in.output.name}}.txt`
+        // named the file literally while `value` beside it resolved.
+        String filename = null;
 
         try {
+            filename = resolveExpression(config.filename(), context);
             inputValue = resolveExpression(config.value(), context);
 
             if (inputValue == null || inputValue.isEmpty()) {
                 logger.warn("Compression node received null/empty input: nodeId={}", nodeId);
-                Map<String, Object> result = buildOutput("", config.operation(), config.format(), true, context, inputValue);
+                Map<String, Object> result = buildOutput("", config.operation(), config.format(), true, context, inputValue, filename);
                 return NodeExecutionResult.success(nodeId, result);
             }
 
@@ -83,20 +88,20 @@ public class CompressionNode extends BaseNode {
             if ("decompress".equals(config.operation())) {
                 output = decompress(inputValue, config.format());
             } else {
-                output = compress(inputValue, config.format());
+                output = compress(inputValue, config.format(), filename);
             }
 
-            Map<String, Object> result = buildOutput(output, config.operation(), config.format(), true, context, inputValue);
+            Map<String, Object> result = buildOutput(output, config.operation(), config.format(), true, context, inputValue, filename);
 
             // Upload to S3 on compress only (non-fatal on failure)
             if ("compress".equals(config.operation()) && fileStorageService != null && output != null && !output.isEmpty()) {
                 try {
                     byte[] compressedBytes = Base64.getDecoder().decode(output);
-                    String filename = (config.filename() != null ? config.filename() : "compressed") + getCompressedExtension(config.format());
+                    String uploadName = (filename != null ? filename : "compressed") + getCompressedExtension(config.format());
                     String mimeType = getCompressedMimeType(config.format());
                     FileRef fileRef = fileStorageService.upload(
                         context.tenantId(), context.plan().getId(), context.runId(),
-                        nodeId, filename, mimeType, compressedBytes,
+                        nodeId, uploadName, mimeType, compressedBytes,
                         resolveStorageEpoch(context), context.spawn(), context.itemIndex(),
                         com.apimarketplace.common.storage.service.StorageSourceTypes.STEP_OUTPUT);
                     // Canonical FileRef only - frontend file-proxy injector and showcase
@@ -112,7 +117,7 @@ public class CompressionNode extends BaseNode {
 
         } catch (Exception e) {
             logger.error("Compression execution failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
-            Map<String, Object> result = buildOutput(null, config.operation(), config.format(), false, context, inputValue);
+            Map<String, Object> result = buildOutput(null, config.operation(), config.format(), false, context, inputValue, filename);
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), result, 0L);
         }
     }
@@ -120,7 +125,7 @@ public class CompressionNode extends BaseNode {
     /**
      * Compresses a string using the specified format, returning base64-encoded result.
      */
-    private String compress(String input, String format) throws Exception {
+    private String compress(String input, String format, String resolvedFilename) throws Exception {
         if ("base64".equals(format)) {
             return Base64.getEncoder().encodeToString(
                 input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -131,7 +136,7 @@ public class CompressionNode extends BaseNode {
 
         switch (format) {
             case "zip" -> {
-                String filename = config.filename() != null ? config.filename() : "data.txt";
+                String filename = resolvedFilename != null ? resolvedFilename : "data.txt";
                 try (ZipOutputStream zipOut = new ZipOutputStream(byteOut)) {
                     zipOut.putNextEntry(new ZipEntry(filename));
                     zipOut.write(inputBytes);
@@ -214,7 +219,7 @@ public class CompressionNode extends BaseNode {
         }
     }
 
-    private Map<String, Object> buildOutput(String result, String operation, String format, boolean success, ExecutionContext context, String resolvedValue) {
+    private Map<String, Object> buildOutput(String result, String operation, String format, boolean success, ExecutionContext context, String resolvedValue, String resolvedFilename) {
         Map<String, Object> output = new HashMap<>();
         output.put("result", result);
         output.put("operation", operation);
@@ -229,7 +234,7 @@ public class CompressionNode extends BaseNode {
         output.put("item_index", context.itemIndex());
         output.put("itemIndex", context.itemIndex());
         output.put("item_id", context.itemId());
-        output.put("resolved_params", buildInputDataMap(operation, format, resolvedValue));
+        output.put("resolved_params", buildInputDataMap(operation, format, resolvedValue, resolvedFilename));
         return output;
     }
 
@@ -237,8 +242,8 @@ public class CompressionNode extends BaseNode {
      * The node's configuration, as the node itself reads it.
      *
      * <p>Both of these used to be re-resolved for display only, and both answers were wrong.
-     * {@code filename} is used CONFIGURED by the zip entry and the S3 upload, so a resolved
-     * one named a file that does not exist. And {@code value} is the payload being
+     * {@code filename} is now resolved ONCE in {@link #execute} and that value names the zip
+     * entry, the upload and this report, so all three agree. And {@code value} is the payload being
      * compressed - re-resolving ran the expression a second time, and
      * {@code resolveTemplateString} coerced the result to a String, putting the whole
      * payload (or a base64 blob, on decompress) onto the step row of every item.
@@ -249,7 +254,8 @@ public class CompressionNode extends BaseNode {
      * catch), it is the configured expression, which is all there is to say. Either way it
      * is bounded: a payload worth compressing is too big for a column persisted per row.
      */
-    private Map<String, Object> buildInputDataMap(String operation, String format, String resolvedValue) {
+    private Map<String, Object> buildInputDataMap(String operation, String format, String resolvedValue,
+                                                  String resolvedFilename) {
         Map<String, Object> inputData = new LinkedHashMap<>();
         inputData.put("operation", operation);
         inputData.put("format", format);
@@ -258,7 +264,11 @@ public class CompressionNode extends BaseNode {
             if (reportedValue != null) {
                 inputData.put("value", ReportedParams.valueFrom(config.value(), reportedValue));
             }
-            if (config.filename() != null) inputData.put("filename", config.filename());
+            // Before resolution ran (a failure that early), the configured text is all there is.
+            Object reportedFilename = resolvedFilename != null ? resolvedFilename : config.filename();
+            if (reportedFilename != null) {
+                inputData.put("filename", ReportedParams.valueFrom(config.filename(), reportedFilename));
+            }
         }
         return ReportedParams.forReport(inputData);
     }
@@ -285,20 +295,9 @@ public class CompressionNode extends BaseNode {
         if (expression == null || expression.isBlank()) {
             return null;
         }
-
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object value = resolved.get("__expr__");
-                return value != null ? value.toString() : null;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression: {} - {}", expression, e.getMessage());
-                return expression;
-            }
-        }
-
-        return expression;
+        // One resolver for every field of every node: typed, JSON for a structure, never the
+        // configured template in place of a value (BaseNode#resolveTemplateValue).
+        return resolveTemplateString(expression, context);
     }
 
     public Core.CompressionConfig getConfig() {

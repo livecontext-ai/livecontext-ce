@@ -12,13 +12,18 @@ import com.apimarketplace.orchestrator.services.events.SignalsCancelledEvent;
 import com.apimarketplace.orchestrator.services.events.WorkflowApprovalPendingEvent;
 import com.apimarketplace.orchestrator.services.events.WorkflowBudgetReachedEvent;
 import com.apimarketplace.orchestrator.services.events.WorkflowEpochFailedEvent;
+import com.apimarketplace.orchestrator.services.events.WorkflowEpochSucceededEvent;
 import com.apimarketplace.orchestrator.services.events.WorkflowRunTerminatedEvent;
+import com.apimarketplace.orchestrator.services.notification.delivery.NotificationCreatedEvent;
+import com.apimarketplace.orchestrator.services.notification.delivery.NotificationDeliveryService;
 import com.apimarketplace.orchestrator.services.streaming.redis.WorkflowRedisPublisher;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.stereotype.Component;
@@ -129,6 +134,23 @@ public class NotificationEmitter {
     @PersistenceContext
     private EntityManager entityManager;
 
+    /**
+     * Optional, so the many tests that build this emitter by hand keep working:
+     * without them the bell behaves exactly as before and nothing leaves the app.
+     */
+    private ApplicationEventPublisher eventPublisher;
+    private NotificationDeliveryService deliveryService;
+
+    @Autowired(required = false)
+    public void setEventPublisher(ApplicationEventPublisher eventPublisher) {
+        this.eventPublisher = eventPublisher;
+    }
+
+    @Autowired(required = false)
+    public void setDeliveryService(NotificationDeliveryService deliveryService) {
+        this.deliveryService = deliveryService;
+    }
+
     public NotificationEmitter(WorkflowRepository workflowRepository,
                                 WorkflowRunRepository workflowRunRepository,
                                 WorkflowRedisPublisher redisPublisher,
@@ -202,6 +224,10 @@ public class NotificationEmitter {
 
     private void handle(WorkflowRunTerminatedEvent event) {
         RunStatus status = event.status();
+        if (status == RunStatus.COMPLETED) {
+            onProductionSuccess(event.workflowId(), event.runId(), event.planVersion());
+            return;
+        }
         if (status == null || !status.isFailure()) {
             return;
         }
@@ -294,6 +320,8 @@ public class NotificationEmitter {
             // recovery replayed). Idempotent no-op.
             return;
         }
+        publishCreated(inserted, tenantId, run.getOrgId(), CATEGORY_RUN_FAILED, workflowId,
+                run.getRunIdPublic(), payload, occurredAt);
 
         try {
             Map<String, Object> wsPayload = Map.of("category", CATEGORY_RUN_FAILED, "severity", SEVERITY_ERROR);
@@ -403,6 +431,8 @@ public class NotificationEmitter {
         if (inserted.isEmpty()) {
             return;
         }
+        publishCreated(inserted, tenantId, run.getOrgId(), CATEGORY_RUN_FAILED, workflowId,
+                (String) payload.get("runIdPublic"), payload, occurredAt);
 
         try {
             Map<String, Object> wsPayload = Map.of("category", CATEGORY_RUN_FAILED, "severity", SEVERITY_ERROR);
@@ -414,6 +444,59 @@ public class NotificationEmitter {
             meterRegistry.counter("notification.emitter.errors",
                     "type", "RedisPublish").increment();
         }
+    }
+
+    /**
+     * The success twin of {@link #onEpochFailed}: a reusable-trigger epoch closed
+     * with no failure. Only matters when the workflow has an open incident, which
+     * {@link #onProductionSuccess} probes for before any other read.
+     *
+     * <p>No transaction of its own: it only reads, and the delivery it may start
+     * runs on the delivery pool.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onEpochSucceeded(WorkflowEpochSucceededEvent event) {
+        try {
+            onProductionSuccess(event.workflowId(), event.runId(), event.planVersion());
+        } catch (DataAccessException | PersistenceException ex) {
+            meterRegistry.counter("notification.emitter.errors",
+                    "type", ex.getClass().getSimpleName()).increment();
+            logger.warn("[notification-emitter] swallowed epoch-succeeded for run {} epoch {}: {}",
+                    event.runId(), event.epoch(), ex.getMessage());
+        }
+    }
+
+    /**
+     * A run or epoch of the workflow succeeded: if it was a PRODUCTION one (the
+     * same filter a failure has to pass to be reported), the workflow's open
+     * incidents close and each person is told it recovered. An editor test run
+     * that happens to pass must not announce that production is fixed.
+     */
+    private void onProductionSuccess(UUID workflowId, UUID runId, Integer planVersion) {
+        if (deliveryService == null || workflowId == null || runId == null) return;
+        if (!deliveryService.hasOpenIncident(workflowId)) return;
+
+        WorkflowEntity workflow = workflowRepository.findById(workflowId).orElse(null);
+        if (workflow == null) return;
+        Integer pinned = workflow.getPinnedVersion();
+        if (pinned == null || planVersion == null || !pinned.equals(planVersion)) return;
+        WorkflowRunEntity run = workflowRunRepository.findById(runId).orElse(null);
+        if (run == null || isExcludedRun(run, workflow)) return;
+
+        deliveryService.onProductionSuccess(workflowId);
+    }
+
+    /**
+     * Hands a freshly inserted row to delivery. Called ONLY on the insert-winner
+     * path, so a replayed or raced emit can never send twice.
+     */
+    private void publishCreated(List<Object> inserted, String tenantId, String orgId, String category,
+                                UUID subjectId, String runIdPublic, Map<String, Object> payload,
+                                Instant occurredAt) {
+        if (eventPublisher == null || inserted.isEmpty()) return;
+        long id = ((Number) inserted.get(0)).longValue();
+        eventPublisher.publishEvent(new NotificationCreatedEvent(id, tenantId, orgId, category,
+                SUBJECT_TYPE_WORKFLOW, subjectId, runIdPublic, payload, occurredAt));
     }
 
     // ========================================================================
@@ -538,6 +621,8 @@ public class NotificationEmitter {
                 .getResultList();
 
         if (inserted.isEmpty()) return;
+        publishCreated(inserted, tenantId, run.getOrgId(), CATEGORY_BUDGET_REACHED, event.workflowId(),
+                run.getRunIdPublic(), payload, occurredAt);
 
         try {
             Map<String, Object> wsPayload = Map.of("category", CATEGORY_BUDGET_REACHED, "severity", SEVERITY_WARNING);

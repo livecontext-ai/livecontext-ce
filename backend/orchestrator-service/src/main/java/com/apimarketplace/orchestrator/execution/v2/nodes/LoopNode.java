@@ -57,6 +57,9 @@ public class LoopNode extends BaseNode {
 
     @Override
     public NodeExecutionResult execute(ExecutionContext context) {
+        // The configured cap, or its {{...}} template resolved for this run (the parser sets a
+        // template aside, and the builder then gave the loop the default 10 without a word).
+        int maxIterations = effectiveMaxIterations(context);
         logger.debug("Loop node executing: nodeId={}, condition={}, maxIterations={}, itemId={}",
             nodeId, loopCondition, maxIterations, context.itemId());
 
@@ -65,7 +68,7 @@ public class LoopNode extends BaseNode {
         // condition that decided its path - not the expression, not what it resolved
         // to, not the answer. "Why did my loop exit immediately" had no evidence.
         ConditionOutcome outcome = maxIterations > 0
-            ? evaluateConditionDetailed(context)
+            ? evaluateConditionDetailed(context, maxIterations)
             : ConditionOutcome.notEvaluated("maxIterations is " + maxIterations);
         boolean enterBody = outcome.result();
 
@@ -81,7 +84,10 @@ public class LoopNode extends BaseNode {
         // "(none)" while Output said "(no condition)" is a smaller version of exactly the
         // two-panel disagreement this work removes.
         resolvedParams.put("loopCondition", hasCondition() ? outcome.resolved() : "(no condition)");
-        resolvedParams.put("maxIterations", maxIterations);
+        String capTemplate = deferredScalar("loop", "maxIterations");
+        resolvedParams.put("maxIterations", capTemplate != null
+            ? com.apimarketplace.orchestrator.services.template.ReportedParams.valueFrom(capTemplate, maxIterations)
+            : maxIterations);
 
         // Build output
         Map<String, Object> output = new LinkedHashMap<>();
@@ -229,7 +235,43 @@ public class LoopNode extends BaseNode {
         }
     }
 
-    private ConditionOutcome evaluateConditionDetailed(ExecutionContext context) {
+    /**
+     * The iteration cap this execution uses: the configured one, or the plan's {@code {{...}}}
+     * resolved against the run, which must be a positive whole number or the node fails.
+     */
+    private int effectiveMaxIterations(ExecutionContext context) {
+        String template = deferredScalar("loop", "maxIterations");
+        if (template == null) {
+            return maxIterations;
+        }
+        long cap = templateEngine != null
+            ? wholeNumber(template, templateEngine.evaluateTemplateWithMap(
+                template, EvalContextBuilder.buildStandardEvalContext(context)))
+            : resolveDeferredLong("loop", "maxIterations", template, context);
+        if (cap <= 0 || cap > Integer.MAX_VALUE) {
+            throw new IllegalStateException("loop.maxIterations '" + template + "' resolved to " + cap
+                + ": it must be a positive whole number");
+        }
+        return (int) cap;
+    }
+
+    private static long wholeNumber(String template, Object value) {
+        if (value instanceof String text) {
+            value = text.trim();
+        }
+        if (value == null || (value instanceof String text && text.isEmpty())) {
+            throw new IllegalStateException("loop.maxIterations '" + template
+                + "' resolved to nothing. Check that the referenced node ran and that the path exists.");
+        }
+        try {
+            return new java.math.BigDecimal(String.valueOf(value)).longValueExact();
+        } catch (ArithmeticException | NumberFormatException e) {
+            throw new IllegalStateException("loop.maxIterations '" + template
+                + "' must resolve to a whole number, got '" + value + "'");
+        }
+    }
+
+    private ConditionOutcome evaluateConditionDetailed(ExecutionContext context, int maxIterations) {
         // No condition or blank means always enter body (controlled by maxIterations only)
         if (!hasCondition()) {
             return new ConditionOutcome(true, "(no condition)", null, List.of());

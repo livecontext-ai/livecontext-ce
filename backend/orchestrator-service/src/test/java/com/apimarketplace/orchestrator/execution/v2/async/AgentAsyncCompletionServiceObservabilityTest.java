@@ -723,6 +723,35 @@ class AgentAsyncCompletionServiceObservabilityTest {
     }
 
     @Test
+    @DisplayName("agent (queued path): modelReplaced on the worker metrics reaches the row with the disabled model id")
+    void agentModelReplacementOnMetricsReachesTheRow() throws Exception {
+        Agent planAgent = regularPlanAgent();
+        WorkflowExecution exec = executionWith(planAgent, "00000000-0000-0000-0000-000000000019");
+        PendingAgent p = pending("agent:writer", "agent");
+
+        Map<String, Object> metrics = new HashMap<>();
+        metrics.put("modelReplaced", true);
+        metrics.put("replacedModel", "old-model");
+        Map<String, Object> resultMap = new HashMap<>();
+        resultMap.put("success", true);
+        resultMap.put("totalUsage", Map.of("promptTokens", 1, "completionTokens", 1));
+        resultMap.put("iterations", 1);
+        resultMap.put("metrics", metrics);
+        resultMap.put("durationMs", 10L);
+
+        AgentResultMessage msg = new AgentResultMessage(
+            "corr-1", p.runId(), p.nodeId(), resultMap, true, null, "agent", Instant.now());
+        StepExecutionResult stepResult = StepExecutionResult.success(p.nodeId(), resultMap, 10L);
+
+        invokeRecordAsyncObservability(exec, p, msg, stepResult);
+
+        ArgumentCaptor<AgentObservabilityRequest> captor = ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+        verify(agentClient).recordObservability(captor.capture());
+        assertThat(captor.getValue().getModelReplaced()).isTrue();
+        assertThat(captor.getValue().getReplacedModel()).isEqualTo("old-model");
+    }
+
+    @Test
     @DisplayName("agent: metrics without a key route (pre-route worker, or a blank stamp) leave the row unpinned rather than inventing one")
     void agentWithoutKeyRouteLeavesTheRowUnpinned() throws Exception {
         Agent planAgent = regularPlanAgent();

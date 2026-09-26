@@ -94,6 +94,14 @@ public interface ExecutionQueue {
     int getAvailableWorkers();
 
     /**
+     * Number of trigger executions running on THIS instance right now (not queued, not on
+     * another replica). The shutdown drain waits on it, so it must never answer for the cluster.
+     */
+    default int getLocalActiveExecutions() {
+        return 0;
+    }
+
+    /**
      * Returns whether the queue can accept new work right now.
      */
     default boolean isReadyForEnqueue() {

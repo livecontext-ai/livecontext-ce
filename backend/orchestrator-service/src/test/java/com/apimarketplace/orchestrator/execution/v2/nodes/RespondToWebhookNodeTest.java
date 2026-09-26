@@ -170,8 +170,7 @@ class RespondToWebhookNodeTest {
             node.setWebhookResponseRegistry(webhookResponseRegistry);
             node.setTemplateAdapter(templateAdapter);
 
-            Map<String, Object> resolved = Map.of("__expr__", "{\"resolved\":\"data\"}");
-            when(templateAdapter.resolveTemplates(any(), eq(context))).thenReturn(resolved);
+            when(templateAdapter.resolveTemplates(any(), eq(context))).thenAnswer(TemplateResolutionStubs.every("{\"resolved\":\"data\"}"));
             when(webhookResponseRegistry.resolve(eq("run-1"), any(ResponseEntity.class))).thenReturn(true);
 
             NodeExecutionResult result = node.execute(context);
@@ -482,5 +481,97 @@ class RespondToWebhookNodeTest {
         // An empty map in the column reads as "I configured headers", which is the
         // same lie as a null-valued key.
         assertFalse(params.containsKey("headers"));
+    }
+
+    @Test
+    @DisplayName("resolves a header VALUE reference; it used to be sent as the literal {{...}} while the body resolved")
+    @SuppressWarnings("unchecked")
+    void resolvesHeaderValueReferences() {
+        Core.RespondToWebhookConfig config = new Core.RespondToWebhookConfig(
+            200, "{{core:build.output.body}}", "application/json",
+            Map.of("X-Request-Id", "{{core:build.output.request_id}}"));
+        RespondToWebhookNode node = new RespondToWebhookNode("core:respond", config);
+        node.setWebhookResponseRegistry(webhookResponseRegistry);
+        node.setTemplateAdapter(templateAdapter);
+        Map<String, Object> values = new HashMap<>();
+        values.put("{{core:build.output.body}}", Map.of("ok", true));
+        values.put("{{core:build.output.request_id}}", "req-42");
+        when(templateAdapter.resolveTemplates(any(), any())).thenAnswer(TemplateResolutionStubs.resolving(values));
+        when(webhookResponseRegistry.resolve(eq("run-1"), any(ResponseEntity.class))).thenReturn(true);
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertTrue(result.isSuccess());
+        ArgumentCaptor<ResponseEntity<?>> captor = ArgumentCaptor.forClass(ResponseEntity.class);
+        verify(webhookResponseRegistry).resolve(eq("run-1"), captor.capture());
+        assertEquals("req-42", captor.getValue().getHeaders().getFirst("X-Request-Id"));
+        // A whole-reference body that is an object is sent as its JSON, never as Java's {ok=true}.
+        assertEquals("{\"ok\":true}", captor.getValue().getBody());
+        Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+        assertEquals(Map.of("X-Request-Id", "req-42"), params.get("headers"));
+    }
+
+    @Test
+    @DisplayName("a header value pulled from a workspace variable is sent, but withheld in Params")
+    @SuppressWarnings("unchecked")
+    void workspaceVariableHeaderValueIsWithheld() {
+        // "X-Tier" names nothing the credential word rules can read.
+        Core.RespondToWebhookConfig config = new Core.RespondToWebhookConfig(
+            200, "ok", "text/plain", Map.of("X-Tier", "{{$vars.tier_secret}}"));
+        RespondToWebhookNode node = new RespondToWebhookNode("core:respond", config);
+        node.setWebhookResponseRegistry(webhookResponseRegistry);
+        node.setTemplateAdapter(templateAdapter);
+        when(templateAdapter.resolveTemplates(any(), any()))
+            .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{$vars.tier_secret}}", "s3cr3t")));
+        when(webhookResponseRegistry.resolve(eq("run-1"), any(ResponseEntity.class))).thenReturn(true);
+
+        NodeExecutionResult result = node.execute(context);
+
+        ArgumentCaptor<ResponseEntity<?>> captor = ArgumentCaptor.forClass(ResponseEntity.class);
+        verify(webhookResponseRegistry).resolve(eq("run-1"), captor.capture());
+        assertEquals("s3cr3t", captor.getValue().getHeaders().getFirst("X-Tier"));
+        Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+        assertEquals(Map.of("X-Tier", com.apimarketplace.orchestrator.services.template.ReportedParams.WITHHELD_WORKSPACE_VARIABLE),
+            params.get("headers"));
+    }
+
+    @Test
+    @DisplayName("regression: a {{...}} statusCode is resolved and sent; it used to drop the whole respondToWebhook config")
+    @SuppressWarnings("unchecked")
+    void templatedStatusCodeIsResolved() {
+        Core.RespondToWebhookConfig config = new Core.RespondToWebhookConfig(200, "ok", "text/plain", Map.of());
+        RespondToWebhookNode node = new RespondToWebhookNode("core:respond", config);
+        node.setWebhookResponseRegistry(webhookResponseRegistry);
+        node.setTemplateAdapter(templateAdapter);
+        node.setDeferredScalars(Map.of("respondToWebhook", Map.of("statusCode", "{{core:x.output.code}}")));
+        when(templateAdapter.resolveTemplates(any(), any()))
+            .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:x.output.code}}", 201)));
+        when(webhookResponseRegistry.resolve(eq("run-1"), any(ResponseEntity.class))).thenReturn(true);
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+        ArgumentCaptor<ResponseEntity<?>> captor = ArgumentCaptor.forClass(ResponseEntity.class);
+        verify(webhookResponseRegistry).resolve(eq("run-1"), captor.capture());
+        assertEquals(201, captor.getValue().getStatusCode().value());
+        Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+        assertEquals(201, params.get("statusCode"));
+    }
+
+    @Test
+    @DisplayName("a {{...}} statusCode resolving to a non-number fails, naming the config")
+    void templatedStatusCodeNotANumberFails() {
+        Core.RespondToWebhookConfig config = new Core.RespondToWebhookConfig(200, "ok", "text/plain", Map.of());
+        RespondToWebhookNode node = new RespondToWebhookNode("core:respond", config);
+        node.setWebhookResponseRegistry(webhookResponseRegistry);
+        node.setTemplateAdapter(templateAdapter);
+        node.setDeferredScalars(Map.of("respondToWebhook", Map.of("statusCode", "{{core:x.output.code}}")));
+        when(templateAdapter.resolveTemplates(any(), any()))
+            .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:x.output.code}}", "created")));
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.errorMessage().orElse("").contains("respondToWebhook"), result.errorMessage().orElse(""));
     }
 }

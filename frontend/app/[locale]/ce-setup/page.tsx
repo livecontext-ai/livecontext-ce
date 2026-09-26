@@ -54,6 +54,12 @@ import type {
   CreatePlatformCredentialRequest,
   BridgeStatusResponse,
 } from '@/lib/api/orchestrator/types';
+import { ServiceLogo } from '@/components/ui/service-logo';
+import { CloudLinkPlanRequiredBanner } from '@/components/cloud-link/CloudLinkPlanRequiredBanner';
+import {
+  CloudLinkExpiredNotice,
+  useCloudLinkExpired,
+} from '@/components/cloud-link/CloudLinkExpiredNotice';
 
 // Map between the camelCase CLI ids the bridge uses and the local CE-setup state.
 const CLI_BACKEND_ID: Record<'claudeCode' | 'codex' | 'geminiCli' | 'mistralVibe', 'claudeCode' | 'codex' | 'geminiCli' | 'mistralVibe'> = {
@@ -261,7 +267,7 @@ function SetupProviderCard({
       >
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-9 h-9 bg-theme-tertiary rounded-lg flex items-center justify-center flex-shrink-0">
-            <img
+            <ServiceLogo
               src={`/icons/services/${definition.providerName}.svg`}
               alt={definition.displayName}
               className="w-5 h-5"
@@ -597,6 +603,8 @@ export default function CeSetupPage() {
   const [cloudLinkStatus, setCloudLinkStatus] = useState<CloudLinkStatus | null>(null);
   const [cloudLinkConnecting, setCloudLinkConnecting] = useState(false);
   const [cloudLinkError, setCloudLinkError] = useState<string | null>(null);
+  // ?cloud_link_error=expired: the backend no longer knew the OAuth state of the callback.
+  const cloudLinkExpired = useCloudLinkExpired();
   const processedCloudCallbackRef = useRef(false);
   // A TLS-intercepting antivirus/proxy can block the cloud token exchange with an
   // untrusted CA. When detected we surface a one-click "trust this proxy" card.
@@ -892,8 +900,7 @@ export default function CeSetupPage() {
     setCloudLinkConnecting(true);
     setCloudLinkError(null);
     try {
-      const { authUrl } = await cloudLinkService.getAuthUrl(`/${locale}/ce-setup`);
-      window.location.href = authUrl;
+      window.location.href = await cloudLinkService.getConnectUrl(`/${locale}/ce-setup`);
     } catch (err: unknown) {
       setCloudLinkError(getErrorMessage(err, t('cloudLinkConnectError')));
       setCloudLinkConnecting(false);
@@ -1020,14 +1027,17 @@ export default function CeSetupPage() {
               </ul>
 
               {cloudLinkStatus?.linked ? (
-                <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400">
-                  <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-                  <span>
-                    {t('cloudLinkConnected', {
-                      username: cloudLinkStatus.cloudUsername || t('cloudLinkCloudUser'),
-                    })}
-                  </span>
-                </div>
+                <>
+                  <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+                    <span>
+                      {t('cloudLinkConnected', {
+                        username: cloudLinkStatus.cloudUsername || t('cloudLinkCloudUser'),
+                      })}
+                    </span>
+                  </div>
+                  {cloudLinkStatus.planRequired && <CloudLinkPlanRequiredBanner />}
+                </>
               ) : (
                 <>
                   {tlsIntercept?.intercepted ? (
@@ -1072,6 +1082,8 @@ export default function CeSetupPage() {
                       <AlertCircle className="h-4 w-4 flex-shrink-0" />
                       <span>{cloudLinkError}</span>
                     </div>
+                  ) : cloudLinkExpired ? (
+                    <CloudLinkExpiredNotice />
                   ) : null}
                   <div className="space-y-2 pt-1">
                     <Button
@@ -1178,7 +1190,7 @@ export default function CeSetupPage() {
                         : 'bg-theme-secondary/50 border-theme text-theme-secondary hover:text-theme-primary'
                     )}
                   >
-                    <img src={cli.icon} alt={cli.alt} className="w-4 h-4" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                    <ServiceLogo src={cli.icon} alt={cli.alt} className="w-4 h-4" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                     {cli.label}
                   </button>
                 ))}
@@ -1358,7 +1370,7 @@ export default function CeSetupPage() {
                   {configuredProviders.map((def) => (
                     <div key={def.providerName} className="flex items-center justify-between px-3 py-2 rounded-lg bg-theme-secondary/50">
                       <div className="flex items-center gap-2">
-                        <img
+                        <ServiceLogo
                           src={`/icons/services/${def.providerName}.svg`}
                           alt={def.displayName}
                           className="w-4 h-4"
@@ -1393,7 +1405,7 @@ export default function CeSetupPage() {
                         className="flex items-center justify-between px-3 py-2 rounded-lg bg-theme-secondary/50"
                       >
                         <div className="flex items-center gap-2 min-w-0">
-                          <img src={cli.icon} alt="" className="w-4 h-4 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                          <ServiceLogo src={cli.icon} alt="" className="w-4 h-4 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                           <span className="text-sm text-theme-primary">{cli.label}</span>
                           {loginRequired ? (
                             <span className="text-xs text-amber-600 dark:text-amber-400 truncate">· {tProviders('bridge.loginRequired')}</span>
@@ -1427,7 +1439,7 @@ export default function CeSetupPage() {
                   {configuredProviders.length === 0 && PROVIDER_DEFINITIONS.map((def) => (
                     <div key={def.providerName} className="flex items-center justify-between px-3 py-2 rounded-lg bg-theme-secondary/50">
                       <div className="flex items-center gap-2">
-                        <img
+                        <ServiceLogo
                           src={`/icons/services/${def.providerName}.svg`}
                           alt={def.displayName}
                           className="w-4 h-4"

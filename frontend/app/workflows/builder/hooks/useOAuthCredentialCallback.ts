@@ -2,6 +2,7 @@ import * as React from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { samePageUrl, showSamePageUrl } from '@/lib/navigation/showSamePageUrl';
+import { invalidateCredentialCaches } from '@/lib/credentials/invalidateCredentialCaches';
 
 interface OAuthCallbackToast {
   type: 'success' | 'error';
@@ -59,6 +60,12 @@ export function useOAuthCredentialCallback({
   const oauthHandledRef = React.useRef(false);
 
   React.useEffect(() => {
+    // useSearchParams can answer null (a page rendered outside the app router's request, and
+    // every test that mocks navigation without it). No parameters means no OAuth return to
+    // handle, not a crash that takes the whole page down with it.
+    if (!searchParams) {
+      return;
+    }
     const success = searchParams.get('success');
     const errorParam = searchParams.get('error');
     if (!success && !errorParam) {
@@ -75,14 +82,14 @@ export function useOAuthCredentialCallback({
         message: tCredentials('toasts.credentialConfigured'),
         duration: 5000,
       });
-      // One-time forced refresh of every credentials cache entry (inspector's
-      // plain key + the org-scoped validator key). Predicate, not a queryKey
-      // prefix - see the doc comment above for why. type:'all' so inactive
-      // queries (no mounted observer on OAuth return) are refetched too.
-      queryClient.refetchQueries({
-        predicate: (query) => query.queryKey.includes('user-credentials'),
-        type: 'all',
-      });
+      // One-time forced refresh of every credentials cache entry. Through the shared helper,
+      // which matches by PREFIX: this used to test `queryKey.includes('user-credentials')`,
+      // an exact element match that covers the inspector and the org-scoped validator and
+      // silently misses `['user-credentials-all']`, the entry useCredentialCheck reads. Any
+      // screen answering "is this connected?" through that hook kept the pre-connect answer.
+      // The helper's own doc already named all three shapes and said it mirrored this hook;
+      // it did not.
+      invalidateCredentialCaches(queryClient);
     } else if (errorParam) {
       addToast({
         type: 'error',

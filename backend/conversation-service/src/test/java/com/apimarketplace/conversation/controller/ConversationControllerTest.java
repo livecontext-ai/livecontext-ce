@@ -241,6 +241,80 @@ class ConversationControllerTest {
     }
 
     @Test
+    void approveToolAuthorizationScopesTheGrantToTheAskWhenOneIsGiven() throws Exception {
+        ConversationDto dto = new ConversationDto();
+        dto.setId("conv-1");
+        dto.setUserId("user-1");
+        when(conversationQueryService.getConversationById("conv-1", "user-1", null))
+                .thenReturn(Optional.of(dto));
+        // The park ended long ago: this is a button pressed in a chat, hours later.
+        when(toolApprovalGateResolver.resolve("conv-1", "call-9", true)).thenReturn(false);
+
+        mockMvc.perform(post("/api/conversations/{conversationId}/tool-authorization/approve", "conv-1")
+                        .header("X-User-ID", "user-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "rule", "workflow:execute",
+                                "remember", false,
+                                "toolCallId", "call-9",
+                                "askFingerprint", "ask-abc"))))
+                .andExpect(status().isOk());
+
+        // The grant is spent by a turn the person is not watching, possibly a scheduled one.
+        // Recorded against the rule it would authorize whatever call of that rule came first;
+        // recorded against the ask it authorizes the one they were shown.
+        verify(toolAuthorizationApprovalService).approve("conv-1", "workflow:execute#ask-abc", false);
+        verify(toolAuthorizationApprovalService, never()).approve("conv-1", "workflow:execute", false);
+    }
+
+    @Test
+    void approveToolAuthorizationKeepsTheRuleWideGrantForTheInAppCard() throws Exception {
+        ConversationDto dto = new ConversationDto();
+        dto.setId("conv-1");
+        dto.setUserId("user-1");
+        when(conversationQueryService.getConversationById("conv-1", "user-1", null))
+                .thenReturn(Optional.of(dto));
+        when(toolApprovalGateResolver.resolve("conv-1", "call-9", true)).thenReturn(false);
+
+        mockMvc.perform(post("/api/conversations/{conversationId}/tool-authorization/approve", "conv-1")
+                        .header("X-User-ID", "user-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "rule", "workflow:execute",
+                                "remember", false,
+                                "toolCallId", "call-9"))))
+                .andExpect(status().isOk());
+
+        // The card sends no ask. Narrowing its grant would change a behaviour nobody
+        // complained about, on the path where the person is looking at the screen.
+        verify(toolAuthorizationApprovalService).approve("conv-1", "workflow:execute", false);
+    }
+
+    @Test
+    void approveToolAuthorizationNeverNarrowsAnAlwaysAllow() throws Exception {
+        ConversationDto dto = new ConversationDto();
+        dto.setId("conv-1");
+        dto.setUserId("user-1");
+        when(conversationQueryService.getConversationById("conv-1", "user-1", null))
+                .thenReturn(Optional.of(dto));
+        when(toolApprovalGateResolver.resolve("conv-1", "call-9", true)).thenReturn(false);
+
+        mockMvc.perform(post("/api/conversations/{conversationId}/tool-authorization/approve", "conv-1")
+                        .header("X-User-ID", "user-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "rule", "workflow:execute",
+                                "remember", true,
+                                "toolCallId", "call-9",
+                                "askFingerprint", "ask-abc"))))
+                .andExpect(status().isOk());
+
+        // "Always allow" is a standing choice about the RULE. Scoping it to one ask would
+        // silently make it a single-shot grant wearing a permanent label.
+        verify(toolAuthorizationApprovalService).approve("conv-1", "workflow:execute", true);
+    }
+
+    @Test
     void approveToolAuthorizationPersistsAlwaysEvenWhenTheParkedCallWasReleased() throws Exception {
         ConversationDto dto = new ConversationDto();
         dto.setId("conv-1");

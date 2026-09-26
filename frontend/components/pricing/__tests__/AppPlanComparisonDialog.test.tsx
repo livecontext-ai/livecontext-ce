@@ -13,10 +13,8 @@ import { render, cleanup } from '@testing-library/react';
 const subscription = vi.hoisted(() => ({ value: null as unknown }));
 const cloudLink = vi.hoisted(() => ({ value: null as unknown }));
 const edition = vi.hoisted(() => ({ isCe: false }));
-const plans = vi.hoisted(() => ({ value: undefined as unknown }));
 const received = vi.hoisted(() => ({
   planCode: undefined as string | null | undefined,
-  freeAiCredits: undefined as number | undefined,
 }));
 const opened = vi.hoisted(() => ({ calls: [] as unknown[] }));
 
@@ -26,7 +24,6 @@ vi.mock('@/lib/billing/plan-comparison-open', () => ({
 
 vi.mock('@/lib/hooks/smart-hooks-complete', () => ({
   useSubscription: () => ({ subscription: subscription.value }),
-  usePlans: () => ({ plans: plans.value }),
 }));
 
 vi.mock('@/hooks/useCeCloudLinkStatus', () => ({
@@ -40,30 +37,20 @@ vi.mock('@/lib/edition', () => ({
 }));
 
 vi.mock('../PlanComparisonDialog', () => ({
-  default: ({
-    currentPlanCode,
-    freeAiCredits,
-  }: {
-    currentPlanCode?: string | null;
-    freeAiCredits?: number;
-  }) => {
+  default: ({ currentPlanCode }: { currentPlanCode?: string | null }) => {
     received.planCode = currentPlanCode;
-    received.freeAiCredits = freeAiCredits;
     return null;
   },
 }));
 
 import AppPlanComparisonDialog from '../AppPlanComparisonDialog';
-import { FREE_AI_CREDITS } from '@/lib/billing/pricing-constants';
 import { armWelcomeGift } from '@/lib/onboarding/welcomeGiftHandoff';
 
 beforeEach(() => {
   subscription.value = null;
   cloudLink.value = null;
   edition.isCe = false;
-  plans.value = undefined;
   received.planCode = undefined;
-  received.freeAiCredits = undefined;
   opened.calls = [];
   sessionStorage.clear();
 });
@@ -154,21 +141,3 @@ describe('AppPlanComparisonDialog (it is not an opener)', () => {
   });
 });
 
-describe('AppPlanComparisonDialog (the Free AI allowance)', () => {
-  it('hands the dialog the allowance an admin configured', () => {
-    // The dialog itself cannot read this: it also mounts on the public landing,
-    // which has no query client. Resolving it here is what keeps the pricing
-    // card and this table from quoting two different numbers on one screen.
-    plans.value = [{ code: 'FREE', includedAiCredits: 250 }];
-
-    render(<AppPlanComparisonDialog />);
-
-    expect(received.freeAiCredits).toBe(250);
-  });
-
-  it('passes the seeded figure while the plans request is still in flight', () => {
-    render(<AppPlanComparisonDialog />);
-
-    expect(received.freeAiCredits).toBe(FREE_AI_CREDITS);
-  });
-});

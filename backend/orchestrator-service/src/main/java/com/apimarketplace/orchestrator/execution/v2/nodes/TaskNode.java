@@ -1,5 +1,7 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
+
 import com.apimarketplace.agent.client.AgentClient;
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
@@ -85,7 +87,7 @@ public class TaskNode extends BaseNode {
                     ". Valid: create_task, get_task, update_task, delete_task, list_tasks");
             };
 
-            result.put("resolved_params", earlyInputData);
+            result.put("resolved_params", ReportedParams.forReport(earlyInputData));
             logger.info("Task node completed: nodeId={}, operation={}, success={}",
                 nodeId, operation, result.get("success"));
             return successWithMetadata(result, context);
@@ -94,9 +96,29 @@ public class TaskNode extends BaseNode {
             logger.error("Task node failed: nodeId={}, operation={}, error={}",
                 nodeId, operation, e.getMessage(), e);
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(),
-                Map.of("resolved_params", earlyInputData),
+                Map.of("resolved_params", ReportedParams.forReport(earlyInputData)),
                 System.currentTimeMillis() - startTime);
         }
+    }
+
+    /**
+     * A task's title or instructions as reported: whole (they are what the assigned agent
+     * reads), with every workspace variable withheld. They used to be reported resolved and
+     * outside the report gate, so a {{$vars.x}} in them was published in clear, at any length.
+     */
+    private Object reportedText(String template, String resolved, ExecutionContext context) {
+        if (resolved == null) {
+            return null;
+        }
+        String reported = resolved;
+        if (ReportedParams.referencesAnyWorkspaceVariable(template)) {
+            try {
+                reported = resolveTemplateString(ReportedParams.maskWorkspaceReferences(template), context);
+            } catch (RuntimeException e) {
+                reported = ReportedParams.WITHHELD_WORKSPACE_VARIABLE;
+            }
+        }
+        return new ReportedParams.ModelInput(reported);
     }
 
     private Map<String, Object> executeCreate(ExecutionContext context, String tenantId,
@@ -107,10 +129,10 @@ public class TaskNode extends BaseNode {
         String reviewerStr = resolveTemplateString(config.reviewerAgentId(), context);
         String priority = config.priority();
 
-        inputData.put("title", title);
-        inputData.put("instructions", instructions);
-        inputData.put("agentId", agentIdStr);
-        inputData.put("reviewerAgentId", reviewerStr);
+        inputData.put("title", reportedText(config.title(), title, context));
+        inputData.put("instructions", reportedText(config.instructions(), instructions, context));
+        inputData.put("agentId", ReportedParams.valueFrom(config.agentId(), agentIdStr));
+        inputData.put("reviewerAgentId", ReportedParams.valueFrom(config.reviewerAgentId(), reviewerStr));
         inputData.put("priority", priority);
 
         if (title == null || title.isBlank()) {
@@ -124,17 +146,21 @@ public class TaskNode extends BaseNode {
         if (agentIdStr != null && !agentIdStr.isBlank()) request.put("agentId", agentIdStr);
         if (reviewerStr != null && !reviewerStr.isBlank()) request.put("reviewerAgentId", reviewerStr);
         if (config.taskContext() != null && !config.taskContext().isEmpty()) {
-            // Resolve template expressions inside taskContext values
+            // Resolve template expressions inside taskContext values, at every depth and keeping
+            // their type: a value that is one whole reference to an object stays that object.
+            // Only top-level strings used to be resolved, so a nested {"order": {"id":
+            // "{{...}}"}} reached the task with the template in it, and a top-level reference to
+            // an object reached it as Java's "{a=1}".
             Map<String, Object> resolvedCtx = new LinkedHashMap<>();
             for (Map.Entry<String, Object> e : config.taskContext().entrySet()) {
-                if (e.getValue() instanceof String s) {
-                    resolvedCtx.put(e.getKey(), resolveTemplateString(s, context));
-                } else {
-                    resolvedCtx.put(e.getKey(), e.getValue());
-                }
+                resolvedCtx.put(e.getKey(), resolveTemplateValue(e.getValue(), context));
             }
             request.put("taskContext", resolvedCtx);
-            inputData.put("taskContext", resolvedCtx);
+            // Reported entry by entry through the workspace-variable rule; the task gets the values.
+            Map<String, Object> reportedCtx = new LinkedHashMap<>();
+            config.taskContext().forEach((key, configured) -> reportedCtx.put(key,
+                ReportedParams.valueFromConfigured(configured, resolvedCtx.get(key))));
+            inputData.put("taskContext", reportedCtx);
         }
 
         Map<String, Object> response = agentClient.createTaskForWorkflow(tenantId, request);
@@ -153,7 +179,7 @@ public class TaskNode extends BaseNode {
     private Map<String, Object> executeGet(ExecutionContext context, String tenantId,
                                             Map<String, Object> inputData) {
         String taskIdStr = resolveTemplateString(config.taskId(), context);
-        inputData.put("taskId", taskIdStr);
+        inputData.put("taskId", ReportedParams.valueFrom(config.taskId(), taskIdStr));
 
         if (taskIdStr == null || taskIdStr.isBlank()) {
             throw new IllegalArgumentException("'taskId' is required for get_task operation.");
@@ -182,12 +208,12 @@ public class TaskNode extends BaseNode {
         String priority = config.priority();
         String status = config.status();
 
-        inputData.put("taskId", taskIdStr);
-        inputData.put("title", title);
-        inputData.put("instructions", instructions);
+        inputData.put("taskId", ReportedParams.valueFrom(config.taskId(), taskIdStr));
+        inputData.put("title", reportedText(config.title(), title, context));
+        inputData.put("instructions", reportedText(config.instructions(), instructions, context));
         inputData.put("priority", priority);
         inputData.put("status", status);
-        inputData.put("agentId", agentIdStr);
+        inputData.put("agentId", ReportedParams.valueFrom(config.agentId(), agentIdStr));
 
         if (taskIdStr == null || taskIdStr.isBlank()) {
             throw new IllegalArgumentException("'taskId' is required for update_task operation.");
@@ -217,7 +243,7 @@ public class TaskNode extends BaseNode {
     private Map<String, Object> executeDelete(ExecutionContext context, String tenantId,
                                                Map<String, Object> inputData) {
         String taskIdStr = resolveTemplateString(config.taskId(), context);
-        inputData.put("taskId", taskIdStr);
+        inputData.put("taskId", ReportedParams.valueFrom(config.taskId(), taskIdStr));
 
         if (taskIdStr == null || taskIdStr.isBlank()) {
             throw new IllegalArgumentException("'taskId' is required for delete_task operation.");
@@ -243,13 +269,16 @@ public class TaskNode extends BaseNode {
         String priority = config.priority();
         String agentIdStr = resolveTemplateString(config.agentId(), context);
         String search = resolveTemplateString(config.search(), context);
-        int limit = config.limit() != null ? config.limit() : 50;
+        // This execution's config: a {{...}} limit resolved now, never the default in its place.
+        Core.TaskConfig effective = withDeferredScalars("task", config, Core.TaskConfig.class, context);
+        int limit = effective.limit() != null ? effective.limit() : 50;
+        String limitTemplate = deferredScalar("task", "limit");
 
         inputData.put("status", status);
         inputData.put("priority", priority);
-        inputData.put("agentId", agentIdStr);
-        inputData.put("search", search);
-        inputData.put("limit", limit);
+        inputData.put("agentId", ReportedParams.valueFrom(config.agentId(), agentIdStr));
+        inputData.put("search", ReportedParams.valueFrom(config.search(), search));
+        inputData.put("limit", limitTemplate != null ? ReportedParams.valueFrom(limitTemplate, limit) : limit);
 
         Map<String, String> filters = new LinkedHashMap<>();
         if (status != null && !status.isBlank()) filters.put("status", status);

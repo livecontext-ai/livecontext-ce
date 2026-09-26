@@ -4,6 +4,7 @@ import { getMessages, setRequestLocale } from 'next-intl/server';
 import { resolveRequestLocale } from '@/i18n/resolveRequestLocale';
 import CeCloudCreditModal from '@/components/billing/CeCloudCreditModal';
 import ModelNotManagedModal from '@/components/billing/ModelNotManagedModal';
+import CloudLinkPlanRequiredModal from '@/components/billing/CloudLinkPlanRequiredModal';
 import AgentErrorModal from '@/components/billing/AgentErrorModal';
 import InsufficientCreditsModal from '@/components/billing/InsufficientCreditsModal';
 import AccountRestoreModal from '@/components/auth/AccountRestoreModal';
@@ -40,6 +41,7 @@ export default async function WorkflowsLayout({
             during a builder test-run would dispatch its event with no listener. */}
         <CeCloudCreditModal />
         <ModelNotManagedModal />
+        <CloudLinkPlanRequiredModal />
         <AgentErrorModal />
         {/* Same reason again, and this one was already firing into nothing:
             `useWorkflowExecution` calls showInsufficientCreditsModal() when a

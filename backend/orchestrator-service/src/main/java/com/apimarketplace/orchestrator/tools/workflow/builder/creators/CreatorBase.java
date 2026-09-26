@@ -830,7 +830,7 @@ public abstract class CreatorBase {
 
             if (datasourceId != null) {
                 Long dsId = Long.parseLong(datasourceId);
-                DataSourceDto ds = dataSourceClient.getDataSource(dsId, tenantId);
+                DataSourceDto ds = dataSourceClient.getDataSource(dsId, tenantId, session.getOrgId());
                 if (ds != null && ds.mappingSpec() != null && !ds.mappingSpec().isEmpty()) {
                     List<String> freshColumns = new ArrayList<>();
                     // Always include 'id' for datasource triggers

@@ -59,6 +59,7 @@ public final class SourceIdBuilder {
     public static final String MARKUP_DEBIT_PREFIX = "platform-markup";
     public static final String WEB_SEARCH_PREFIX = "web-search";
     public static final String WEB_FETCH_PREFIX = "web-fetch";
+    public static final String MARKETPLACE_PURCHASE_PREFIX = "marketplace-purchase";
 
     private SourceIdBuilder() {
     }
@@ -207,6 +208,34 @@ public final class SourceIdBuilder {
 
     public static boolean isWebFetchDebit(String sourceId) {
         return sourceId != null && sourceId.startsWith(WEB_FETCH_PREFIX + ":");
+    }
+
+    /**
+     * Marketplace purchase debit key. Format:
+     * {@code marketplace-purchase:<buyerOrganizationId>:<publicationId>}.
+     *
+     * <p>One key per PURCHASE, and "a purchase" is exactly what the publication receipt makes
+     * unique: one {@code (organization_id, publication_id)} pair. Keying the charge on the
+     * publication id alone made the ledger's global {@code source_id} unique index refuse every
+     * buyer after the first (HTTP 500, purchase failed). Keying it on the receipt's own pair
+     * keeps a retry of the SAME purchase on the same key, so the ledger answers it as an
+     * idempotent replay instead of charging it twice, including a retry after a charge whose
+     * response was lost (the receipt is rolled back and re-created, the key does not change).
+     */
+    public static String marketplacePurchase(String buyerOrganizationId, String publicationId) {
+        if (buyerOrganizationId == null || buyerOrganizationId.isBlank()) {
+            throw new IllegalArgumentException("buyerOrganizationId is required: without it every buyer "
+                    + "of a publication keys the same ledger row and only the first can be charged");
+        }
+        if (publicationId == null || publicationId.isBlank()) {
+            throw new IllegalArgumentException("publicationId is required");
+        }
+        return MARKETPLACE_PURCHASE_PREFIX + ":" + buyerOrganizationId + ":" + publicationId;
+    }
+
+    /** True for a per-purchase key built by {@link #marketplacePurchase}. */
+    public static boolean isMarketplacePurchase(String sourceId) {
+        return sourceId != null && sourceId.startsWith(MARKETPLACE_PURCHASE_PREFIX + ":");
     }
 
 }

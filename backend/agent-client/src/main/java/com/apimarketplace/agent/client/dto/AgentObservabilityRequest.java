@@ -54,6 +54,14 @@ public class AgentObservabilityRequest {
      * Decided once per execution by agent-service and carried here to the debit.
      */
     private String keyRoute;
+    /**
+     * Whether the model the run was configured with had been DISABLED by an admin and was
+     * swapped for its replacement before the run (V515). {@code null} = unknown (the producer
+     * did not run the resolution, or predates this field): never read as false.
+     */
+    private Boolean modelReplaced;
+    /** The disabled model id the run was configured with; set only when {@code modelReplaced}. */
+    private String replacedModel;
     private Double temperature;
     private Integer maxTokensConfig;
     private Integer maxIterationsConfig;
@@ -173,6 +181,10 @@ public class AgentObservabilityRequest {
     public void setBudgetScope(String budgetScope) { this.budgetScope = budgetScope; }
     public String getKeyRoute() { return keyRoute; }
     public void setKeyRoute(String keyRoute) { this.keyRoute = keyRoute; }
+    public Boolean getModelReplaced() { return modelReplaced; }
+    public void setModelReplaced(Boolean modelReplaced) { this.modelReplaced = modelReplaced; }
+    public String getReplacedModel() { return replacedModel; }
+    public void setReplacedModel(String replacedModel) { this.replacedModel = replacedModel; }
 
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }

@@ -152,6 +152,36 @@ public final class ReportedParams {
     }
 
     /**
+     * What a MODEL received: reported whole, up to {@link #MODEL_INPUT_CEILING}, and outside
+     * the map budget.
+     *
+     * <p>The inline budget exists for values with no ceiling at all: a split's dataset, a
+     * request body, a page of rows. A prompt is not one of those. It is bounded by the
+     * model's context window and paid for by the token, and it is the one thing the reader of
+     * an agent, classify or guardrail node opens the panel to read: the question a
+     * classification was asked is the explanation of its answer. Describing it as
+     * {@code "Classify this incoming email… (5044 chars)"} left the panel showing everything
+     * except what the model saw, and the same string is what {@code {{core:<label>.input.prompt}}}
+     * and an agent reading the run got back.
+     *
+     * <p>A wrapper, like {@link PreGated}, so only a node that holds the type can claim the
+     * exemption. Credential-named keys inside it are still masked, at every depth.
+     */
+    public record ModelInput(Object value) {
+    }
+
+    /**
+     * How much of ONE {@link ModelInput} is reported. Far above a real prompt, so in practice
+     * nothing is cut; it exists so a pathological value cannot write megabytes to the row of
+     * every item. Past it the text says how much more the model received.
+     *
+     * <p>Kept BELOW the 128 KB per-string cap the agent-facing run reader applies
+     * ({@code ToolResultSizeCap.MAX_STRING_BYTES}), so the panel and an agent reading the run
+     * always see the same text and the same stated cut, never one here and another there.
+     */
+    static final int MODEL_INPUT_CEILING = 120_000;
+
+    /**
      * A suffix that turns even an ABSOLUTE credential word into a description of one.
      * Narrower than {@link #DESCRIBES_RATHER_THAN_HOLDS} on purpose: {@code
      * signatureAlgorithm} is "RS256" and belongs on the row, while {@code passwordSource}
@@ -221,6 +251,13 @@ public final class ReportedParams {
         long total = 0;
         int dropped = 0;
         for (Map.Entry<String, Object> entry : redacted.entrySet()) {
+            if (params.get(entry.getKey()) instanceof ModelInput) {
+                // Bounded by its own ceiling, and neither counted against the map budget nor
+                // dropped by it: a long prompt must not push the node's model and temperature
+                // off the row, and must not itself be the entry the cut removes.
+                reported.put(entry.getKey(), entry.getValue());
+                continue;
+            }
             if (dropped > 0) {
                 dropped++;
                 continue;
@@ -325,6 +362,101 @@ public final class ReportedParams {
     public static final String WITHHELD_WORKSPACE_VARIABLE = "<withheld: workspace variable>";
 
     /**
+     * The internal spelling {@code vars.name}, which the engine resolves as readily as the two
+     * author forms but which {@link #referencesWorkspaceVariable} cannot see, since normalising
+     * leaves it unchanged. Matched only where it starts a path, so {@code core:x.output.vars.y}
+     * and {@code envvars.y} are not read as one.
+     */
+    private static final java.util.regex.Pattern INTERNAL_VARS_FORM =
+        java.util.regex.Pattern.compile("(?<![\\w:$.])vars\\.(?=[a-zA-Z_])");
+
+    /**
+     * The template with every {@code {{...}}} that pulls a workspace variable replaced by
+     * {@link #WITHHELD_WORKSPACE_VARIABLE}, the rest untouched; the template itself when it
+     * references none.
+     *
+     * <p>For a TEXT a node reports resolved, such as a prompt. Withholding the whole prompt
+     * because one sentence of it reads {@code {{$vars.api_key}}} would hide exactly what the
+     * reader opened the panel for; reporting it resolved publishes the variable, which may be
+     * declared secret. Resolving this masked template instead reports every other reference as
+     * the model received it and the variable as withheld. The references are found with the
+     * engine's own {@code TemplateEngine.EXPRESSION_PATTERN}, so what is masked is exactly what
+     * the engine would resolve; a {@code $vars.x} written in prose outside one is text and stays.
+     * All three spellings count ({@code $vars.x}, {@code vars:x}, {@code vars.x}); a false
+     * positive only withholds one reference more, the safe direction.
+     */
+    public static String maskWorkspaceReferences(String template) {
+        if (template == null || !pullsWorkspaceVariable(template)) {
+            return template;
+        }
+        java.util.regex.Matcher matcher =
+            com.apimarketplace.orchestrator.services.TemplateEngine.EXPRESSION_PATTERN.matcher(template);
+        StringBuilder masked = new StringBuilder(template.length());
+        while (matcher.find()) {
+            String reference = matcher.group();
+            matcher.appendReplacement(masked, java.util.regex.Matcher.quoteReplacement(
+                pullsWorkspaceVariable(reference) ? WITHHELD_WORKSPACE_VARIABLE : reference));
+        }
+        matcher.appendTail(masked);
+        // Fail CLOSED: a reference the pattern did not isolate (the engine evaluates a template
+        // that is ONE expression without it, e.g. {{ $vars.x | default('}') }}) is withheld
+        // whole rather than resolved in clear. Looked for only in what the pattern did NOT
+        // consume: the references it kept are fine, and a $vars.x in prose after one of them
+        // (a prompt documenting the syntax) is text, not a reason to hide the prompt.
+        String result = masked.toString();
+        String residual = com.apimarketplace.orchestrator.services.TemplateEngine.EXPRESSION_PATTERN
+            .matcher(result).replaceAll("");
+        int open = residual.indexOf("{{");
+        return open >= 0 && pullsWorkspaceVariable(residual.substring(open)) ? WITHHELD_WORKSPACE_VARIABLE : result;
+    }
+
+    /**
+     * Whether a text references a workspace variable in ANY spelling the engine resolves
+     * ({@code $vars.x}, {@code vars:x}, {@code vars.x}); {@link #referencesWorkspaceVariable}
+     * sees only the first two.
+     */
+    public static boolean referencesAnyWorkspaceVariable(String text) {
+        return text != null && pullsWorkspaceVariable(text);
+    }
+
+    /**
+     * Every OTHER way an expression reaches the workspace-variable map, which the engine puts
+     * whole into the evaluation context: {@code vars['x']}, {@code vars?.x}, the bare map
+     * {@code vars}. Looked for only INSIDE a {@code {{...}}} reference, where the word is an
+     * identifier; in prose it is a word.
+     */
+    private static final java.util.regex.Pattern BARE_VARS_IDENTIFIER =
+        java.util.regex.Pattern.compile("(?<![\\w:$.])vars(?![\\w:])");
+
+    /**
+     * The two author spellings anywhere (as {@link #referencesWorkspaceVariable} always read
+     * them), plus the spellings that are only identifiers INSIDE a reference: {@code vars.x},
+     * {@code vars['x']}, {@code vars?.x}, the bare {@code vars}. Outside a reference those are
+     * words ("vars.x is deprecated"), and reading them there withheld plain author text.
+     */
+    private static boolean pullsWorkspaceVariable(String text) {
+        if (text == null) {
+            return false;
+        }
+        if (referencesWorkspaceVariable(text)) {
+            return true;
+        }
+        java.util.regex.Matcher reference =
+            com.apimarketplace.orchestrator.services.TemplateEngine.EXPRESSION_PATTERN.matcher(text);
+        while (reference.find()) {
+            String inside = reference.group(1);
+            if (INTERNAL_VARS_FORM.matcher(inside).find() || BARE_VARS_IDENTIFIER.matcher(inside).find()) {
+                return true;
+            }
+        }
+        // An unclosed or unisolated {{ ...: the engine may still evaluate what follows it.
+        int open = text.indexOf("{{");
+        return open >= 0 && !com.apimarketplace.orchestrator.services.TemplateEngine.EXPRESSION_PATTERN
+                .matcher(text.substring(open)).lookingAt()
+            && INTERNAL_VARS_FORM.matcher(text.substring(open)).find();
+    }
+
+    /**
      * Whether an expression references a WORKSPACE variable, asked of the engine's own
      * normalizer rather than modelled here: it knows both author forms ({@code $vars.name},
      * {@code vars:name}) and it leaves an occurrence inside a string literal alone, which is
@@ -355,7 +487,7 @@ public final class ReportedParams {
      * built here and never passed to {@link #forReport}.
      */
     public static Object valueFrom(String expression, Object value) {
-        if (value == null || !referencesWorkspaceVariable(expression)) {
+        if (value == null || !pullsWorkspaceVariable(expression)) {
             return reportValue(value);
         }
         // A scalar is withheld outright. Anything structured reports its SHAPE - a size, a
@@ -365,6 +497,39 @@ public final class ReportedParams {
         return withholdsWorkspaceScalar(expression, value)
             ? WITHHELD_WORKSPACE_VARIABLE
             : ResolvedValuePreview.describe(value);
+    }
+
+    /**
+     * {@link #valueFrom} for a CONFIGURED value that is a structure (a JWT payload, a task
+     * context): withheld, or described by shape, when ANY of its leaves pulls a workspace
+     * variable. Reading it as one text would not work: the configured JSON puts each
+     * {@code {{$vars.x}}} inside quotes, and a reference inside a string literal is data to the
+     * normalizer.
+     */
+    public static Object valueFromConfigured(Object configured, Object value) {
+        if (configured instanceof String expression) {
+            return valueFrom(expression, value);
+        }
+        if (value != null && anyLeafReferencesWorkspaceVariable(configured)) {
+            return value instanceof Map<?, ?> || value instanceof java.util.Collection<?>
+                ? ResolvedValuePreview.describe(value)
+                : WITHHELD_WORKSPACE_VARIABLE;
+        }
+        return reportValue(value);
+    }
+
+    private static boolean anyLeafReferencesWorkspaceVariable(Object configured) {
+        if (configured instanceof String s) {
+            // All three spellings the engine resolves, $vars.x, vars:x and vars.x.
+            return pullsWorkspaceVariable(s);
+        }
+        if (configured instanceof Map<?, ?> map) {
+            return map.values().stream().anyMatch(ReportedParams::anyLeafReferencesWorkspaceVariable);
+        }
+        if (configured instanceof java.util.Collection<?> list) {
+            return list.stream().anyMatch(ReportedParams::anyLeafReferencesWorkspaceVariable);
+        }
+        return false;
     }
 
     /**
@@ -379,7 +544,7 @@ public final class ReportedParams {
      * only one of the two directions is visible to whoever breaks it.
      */
     public static boolean withholdsWorkspaceScalar(String expression, Object value) {
-        if (value == null || !referencesWorkspaceVariable(expression)) {
+        if (value == null || !pullsWorkspaceVariable(expression)) {
             return false;
         }
         return !(value instanceof Collection<?>)
@@ -534,6 +699,58 @@ public final class ReportedParams {
      * remove the single most diagnostic value an HTTP node has.
      */
     public static String maskUrlSecrets(String url) {
+        return maskUrlSecrets(url, java.util.Set.of());
+    }
+
+    /**
+     * {@code message} with {@code realUrl} rewritten to its {@link #maskUrlSecrets masked} form.
+     * For text built AROUND a request url that leaves the request: an error returned to the
+     * caller, a log line. See {@link #scrubUrl(String, String, String)}.
+     */
+    public static String scrubUrl(String message, String realUrl) {
+        return scrubUrl(message, realUrl, null);
+    }
+
+    /**
+     * {@code message} with {@code realUrl} replaced by {@code safeUrl} (or by its
+     * {@link #maskUrlSecrets masked} form when {@code safeUrl} is null), both whole and without
+     * the query string: RestTemplate words an I/O failure around the url MINUS its query, and
+     * WebClient around the whole url. Null-safe; a null or blank message is returned as is.
+     *
+     * <p>Why it exists: an HTTP client's own exception text carries the url it called, and that
+     * text used to be logged and handed back as the step's error. A presigned download url
+     * carries its signature in the query; a url resolved from a workspace variable (a Slack or
+     * Discord incoming-webhook url is one) carries its secret in the path, and only the
+     * configured expression, not the resolved url, may be printed.
+     */
+    public static String scrubUrl(String message, String realUrl, String safeUrl) {
+        if (message == null || message.isBlank() || realUrl == null || realUrl.isBlank()) {
+            return message;
+        }
+        String safe = safeUrl != null ? safeUrl : maskUrlSecrets(realUrl);
+        String out = message.replace(realUrl, safe);
+        String realPath = withoutQuery(realUrl);
+        String safePath = withoutQuery(safe);
+        if (!realPath.isEmpty() && !realPath.equals(safePath)) {
+            out = out.replace(realPath, safePath);
+        }
+        return out;
+    }
+
+    private static String withoutQuery(String url) {
+        int q = url.indexOf('?');
+        return q < 0 ? url : url.substring(0, q);
+    }
+
+    /**
+     * {@link #maskUrlSecrets(String)}, also withholding the value of every query parameter named
+     * in {@code workspaceVariableParams}: parameters whose configured value pulled a workspace
+     * variable. Their NAME says nothing ({@code ?tier=}), so the credential word rules cannot
+     * see them, and the resolved url would otherwise print a declared secret.
+     *
+     * @param workspaceVariableParams query parameter names exactly as they appear in the url
+     */
+    public static String maskUrlSecrets(String url, java.util.Set<String> workspaceVariableParams) {
         if (url == null || url.isBlank()) {
             return url;
         }
@@ -559,6 +776,8 @@ public final class ReportedParams {
             int eq = pair.indexOf('=');
             if (eq > 0 && isCredentialQueryParam(pair.substring(0, eq))) {
                 masked.append(pair, 0, eq + 1).append(WITHHELD_CREDENTIAL);
+            } else if (eq > 0 && workspaceVariableParams.contains(pair.substring(0, eq))) {
+                masked.append(pair, 0, eq + 1).append(WITHHELD_WORKSPACE_VARIABLE);
             } else {
                 masked.append(pair);
             }
@@ -574,6 +793,12 @@ public final class ReportedParams {
             // completed tool call into a failed one. A reporting gate must not be able to
             // fail the thing it reports on.
             String key = String.valueOf(entry.getKey());
+            if (entry.getValue() instanceof ModelInput modelInput) {
+                // The name rule still wins: a model input is never a reason to publish a key
+                // that says it holds a credential.
+                reported.put(key, isCredentialKey(key) ? WITHHELD_CREDENTIAL : boundModelInput(modelInput.value()));
+                continue;
+            }
             if (entry.getValue() instanceof PreGated preGated) {
                 // Bounded, never masked by name, at any depth: only a node that holds the
                 // wrapper type can put one here, so there is no name for a caller to guess.
@@ -680,6 +905,9 @@ public final class ReportedParams {
             // the one thing a reporting gate must never do to the node it reports on.
             return null;
         }
+        if (value instanceof ModelInput modelInput) {
+            return boundModelInput(modelInput.value());
+        }
         if (value instanceof PreGated preGated) {
             // Nested rather than at the top of the map. No producer does this today; the
             // branch exists so that if one ever does, the wrapper is unwrapped rather than
@@ -718,6 +946,82 @@ public final class ReportedParams {
             return redactItems(items, length, depth);
         }
         return value(value);
+    }
+
+    /**
+     * A {@link ModelInput}'s value, whole, until {@link #MODEL_INPUT_CEILING} characters of
+     * text have been reported across all of it. Structure is kept as it is (a category list
+     * stays a list of maps), credential-named keys are masked, and a text that reaches the
+     * ceiling ends with a note saying how long it really was, so a cut is never silent.
+     */
+    private static Object boundModelInput(Object value) {
+        return walkModelInput(value, 0, new int[] {MODEL_INPUT_CEILING});
+    }
+
+    private static Object walkModelInput(Object value, int depth, int[] budget) {
+        if (value == null || value instanceof Boolean || value instanceof Number) {
+            return value;
+        }
+        if (value instanceof CharSequence text) {
+            return clipModelInput(text.toString(), budget);
+        }
+        if (value instanceof PreGated || value instanceof ModelInput) {
+            return redactValue(value, depth);
+        }
+        if (depth >= MAX_DEPTH) {
+            return ResolvedValuePreview.describe(value);
+        }
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> walked = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                walked.put(key, isCredentialKey(key)
+                    ? WITHHELD_CREDENTIAL
+                    : walkModelInput(entry.getValue(), depth + 1, budget));
+            }
+            return walked;
+        }
+        Iterable<?> items = null;
+        int size = 0;
+        if (value instanceof Collection<?> collection) {
+            items = collection;
+            size = collection.size();
+        } else if (value.getClass().isArray()) {
+            size = java.lang.reflect.Array.getLength(value);
+            List<Object> copy = new ArrayList<>(size);
+            for (int i = 0; i < size; i++) {
+                copy.add(java.lang.reflect.Array.get(value, i));
+            }
+            items = copy;
+        }
+        if (items != null) {
+            List<Object> walked = new ArrayList<>();
+            int index = 0;
+            for (Object item : items) {
+                if (budget[0] <= 0) {
+                    // Every element costs at least its slot: without this, a list of empty
+                    // strings would pass a text budget it never draws on.
+                    walked.add("… " + (size - index) + " more not shown");
+                    break;
+                }
+                budget[0]--;
+                walked.add(walkModelInput(item, depth + 1, budget));
+                index++;
+            }
+            return walked;
+        }
+        return clipModelInput(String.valueOf(value), budget);
+    }
+
+    private static String clipModelInput(String text, int[] budget) {
+        if (text.length() <= budget[0]) {
+            budget[0] -= text.length();
+            return text;
+        }
+        int kept = Math.max(0, budget[0]);
+        budget[0] = 0;
+        return text.substring(0, kept) + "… [" + (text.length() - kept)
+            + " more chars not shown in this report; the model received all " + text.length() + "]";
     }
 
     private static Object redactItems(Iterable<?> items, int size, int depth) {

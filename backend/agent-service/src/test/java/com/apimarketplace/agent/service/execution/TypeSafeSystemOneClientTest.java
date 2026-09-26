@@ -181,6 +181,25 @@ class TypeSafeSystemOneClientTest {
         }
 
         @Test
+        @DisplayName("BUG: a prompt equal to the content (no content configured) is the state, and NOT also the instructions")
+        void promptEqualToContentIsSentOnce() {
+            // The orchestrator sends the prompt in both fields when the node has no content of
+            // its own. Sending it as the instructions too put the whole email in front of the
+            // model twice, billed as input on every item of the split.
+            String email = "Classify this email. From: a@b.c | Subject: hi\nBody of the mail";
+            server.expect(requestTo(URL))
+                    .andExpect(jsonPath("$.state").value(email))
+                    .andExpect(jsonPath("$.questions.category.instructions")
+                            .value(TypeSafeSystemOneClient.DEFAULT_INSTRUCTIONS))
+                    .andRespond(withSuccess(answer("a", "{\"a\":1.0}", "1.0"), MediaType.APPLICATION_JSON));
+
+            client.classify(request(email, email, category("a", "A")),
+                    "typesafe", System.currentTimeMillis());
+
+            server.verify();
+        }
+
+        @Test
         @DisplayName("a category with no description sends null, not an empty criterion")
         void blankDescriptionBecomesNull() {
             server.expect(requestTo(URL))
@@ -860,6 +879,134 @@ class TypeSafeSystemOneClientTest {
 
             assertThat(result.success()).isFalse();
             assertThat(result.conversationMessages()).isNullOrEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("The trace records the whole request, not the instructions alone")
+    class TraceRecordsTheRequest {
+
+        @Test
+        @DisplayName("BUG: the USER turn carries the instructions, the state and every criterion, unshortened")
+        void successTraceCarriesTheWholeRequest() {
+            String body = "x".repeat(6_000);
+            server.expect(requestTo(URL)).andRespond(withSuccess(
+                    answer("urgent", "{\"urgent\":0.9,\"normal\":0.1}", "0.9"), MediaType.APPLICATION_JSON));
+
+            ClassifyResponseDto result = client.classify(
+                    request(body, "Route by urgency", category("urgent", "Needs action today"),
+                            category("normal", null)),
+                    "typesafe", System.currentTimeMillis());
+
+            assertThat(result.success()).isTrue();
+            assertThat(result.userPrompt())
+                    .contains("## instructions\nRoute by urgency")
+                    .contains("## state\n" + body)
+                    .contains("- urgent: Needs action today")
+                    .contains("- normal")
+                    .doesNotContain("- normal:");
+        }
+
+        @Test
+        @DisplayName("a failed call still records what was sent")
+        void failureTraceCarriesTheWholeRequest() {
+            server.expect(requestTo(URL)).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+
+            ClassifyResponseDto result = client.classify(
+                    request("the mail", null, category("a", "A")),
+                    "typesafe", System.currentTimeMillis());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.userPrompt())
+                    .contains("## instructions\n" + TypeSafeSystemOneClient.DEFAULT_INSTRUCTIONS)
+                    .contains("## state\nthe mail")
+                    .contains("- a: A");
+        }
+
+        @Test
+        @DisplayName("with the prompt standing in for the content, the trace shows the text once, as the state")
+        void promptOnlyTraceShowsTheTextOnce() {
+            String text = "Classify: hello there";
+            server.expect(requestTo(URL)).andRespond(withSuccess(
+                    answer("a", "{\"a\":1.0}", "1.0"), MediaType.APPLICATION_JSON));
+
+            ClassifyResponseDto result = client.classify(request(text, text, category("a", "A")),
+                    "typesafe", System.currentTimeMillis());
+
+            assertThat(result.userPrompt().indexOf(text)).isEqualTo(result.userPrompt().lastIndexOf(text));
+            assertThat(result.userPrompt()).contains("## state\n" + text);
+        }
+    }
+
+    @Nested
+    @DisplayName("The trace on a refusal before dispatch")
+    class TraceOnRefusal {
+
+        @Test
+        @DisplayName("a node with no categories is refused without a call, and the trace still says what was configured")
+        void refusalStillCarriesTheTrace() {
+            ClassifyResponseDto result = client.classify(
+                    new ClassifyRequestDto("the mail", "Route it", List.of(), "typesafe",
+                            "jev-latest", null, null, "tenant-1", "agent-1"),
+                    "typesafe", System.currentTimeMillis());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).contains("at least one category");
+            assertThat(result.userPrompt())
+                    .contains("## instructions\nRoute it")
+                    .contains("## state\nthe mail")
+                    .endsWith("## criteria");
+        }
+
+        @Test
+        @DisplayName("nothing to classify and a null category: refused, and building the trace does not throw")
+        void emptyRequestTraceDoesNotThrow() {
+            java.util.List<ClassifyRequestDto.CategoryDto> categories = new java.util.ArrayList<>();
+            categories.add(null);
+            categories.add(category("a", "A"));
+
+            ClassifyResponseDto result = client.classify(
+                    new ClassifyRequestDto(null, "  ", categories, "typesafe", "jev-latest", null, null,
+                            "tenant-1", "agent-1"),
+                    "typesafe", System.currentTimeMillis());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.userPrompt()).contains("## state\n\n").contains("- a: A");
+        }
+    }
+
+    @Nested
+    @DisplayName("distinctPrompt: when the prompt is an instruction of its own")
+    class DistinctPrompt {
+
+        private ClassifyRequestDto dto(String content, String prompt) {
+            return new ClassifyRequestDto(content, prompt, List.of(), "typesafe", "jev-latest", null, null, null, null);
+        }
+
+        @Test
+        @DisplayName("a prompt equal to the content is not one")
+        void equalIsNotDistinct() {
+            assertThat(dto("same text", "same text").distinctPrompt()).isNull();
+        }
+
+        @Test
+        @DisplayName("a blank or absent prompt is not one")
+        void blankIsNotDistinct() {
+            assertThat(dto("text", "   ").distinctPrompt()).isNull();
+            assertThat(dto("text", null).distinctPrompt()).isNull();
+        }
+
+        @Test
+        @DisplayName("a prompt with no content beside it, or a different one, is one")
+        void differentIsDistinct() {
+            assertThat(dto(null, "Route it").distinctPrompt()).isEqualTo("Route it");
+            assertThat(dto("the mail", "Route it").distinctPrompt()).isEqualTo("Route it");
+        }
+
+        @Test
+        @DisplayName("texts that differ only by surrounding whitespace are NOT merged: equality is exact")
+        void whitespaceDifferenceIsDistinct() {
+            assertThat(dto("text", "text ").distinctPrompt()).isEqualTo("text ");
         }
     }
 }

@@ -84,6 +84,18 @@ class StepNodeProviderRetryBudgetTest {
     }
 
     @Test
+    @DisplayName("a step's catalog call is marked as its OUTPUT, so the catalog keeps its text whole")
+    void marksTheCallAsStepOutput() {
+        lenient().when(plan.getNodePolicy("node-1")).thenReturn(NodePolicy.DEFAULT);
+
+        node().execute(context);
+
+        assertThat(markersSentToGateway())
+                .containsEntry(com.apimarketplace.orchestrator.services.impl.CatalogToolsGateway.STEP_OUTPUT_MARKER,
+                        Boolean.TRUE);
+    }
+
+    @Test
     @DisplayName("a node with no policy says nothing, so the platform's own budget applies")
     void noPolicySaysNothing() {
         // DEFAULT, not null: WorkflowPlan.getNodePolicy answers DEFAULT for a node without a block,

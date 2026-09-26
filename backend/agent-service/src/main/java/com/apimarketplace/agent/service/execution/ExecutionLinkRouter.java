@@ -51,6 +51,10 @@ public class ExecutionLinkRouter {
     @Autowired(required = false)
     private ModelExecutionLinkService executionLinkService;
 
+    /** Follows a disabled link TARGET to its explicit replacement (V515). Null in unit tests = no swap. */
+    @Autowired(required = false)
+    private com.apimarketplace.agent.service.ModelReplacementResolver modelReplacementResolver;
+
     private final BridgeLoopDispatcher bridgeDispatcher;
 
     /** Billed pairs already reported as "linked to an unwired bridge" - keeps the warn to one per pair. */
@@ -89,6 +93,7 @@ public class ExecutionLinkRouter {
         if (route == null) {
             return null;
         }
+        route = followTargetReplacement(billedProvider, billedModel, route);
         if (SubAgentBridgeClient.isBridgeProvider(route.executionProvider()) && !bridgeDispatcher.isAvailable()) {
             // Once per pair, not once per call: a misconfigured link inside a split loop
             // would otherwise write one line per item.
@@ -100,6 +105,30 @@ public class ExecutionLinkRouter {
             return null;
         }
         return route;
+    }
+
+    /**
+     * A link whose EXECUTION target an admin disabled AND gave a replacement runs on that
+     * replacement (V515). Only an explicit replacement moves it: a disabled target with none
+     * keeps running, because disabling a CLI bridge row to hide it from users while still
+     * routing a linked model onto it is a normal setup. The billed pair itself was already
+     * swapped by the caller (ModelReplacementResolver.substituteIfDisabled) before it asked.
+     */
+    private ModelExecutionLinkService.ExecutionRoute followTargetReplacement(
+            String billedProvider, String billedModel, ModelExecutionLinkService.ExecutionRoute route) {
+        if (modelReplacementResolver == null) {
+            return route;
+        }
+        var replacement = modelReplacementResolver
+            .explicitReplacementIfDisabled(route.executionProvider(), route.executionModel())
+            .orElse(null);
+        if (replacement == null) {
+            return route;
+        }
+        log.info("Execution link {}/{}: disabled target {}/{} replaced by {}/{}",
+            billedProvider, billedModel, route.executionProvider(), route.executionModel(),
+            replacement.provider(), replacement.model());
+        return new ModelExecutionLinkService.ExecutionRoute(replacement.provider(), replacement.model());
     }
 
     /** True when the route runs on a CLI bridge, which needs the restricted "API mode". */

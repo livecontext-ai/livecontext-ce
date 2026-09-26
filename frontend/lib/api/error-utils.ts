@@ -139,6 +139,19 @@ export function isModelNotSupportedError(error: unknown): boolean {
   return errorText(error).includes('MODEL_NOT_SUPPORTED');
 }
 
+/** Machine token the cloud answers (HTTP 403 body or NDJSON error event) when a CE link's cloud account is not on a paid plan. */
+export const CLOUD_LINK_PLAN_REQUIRED_CODE = 'CLOUD_LINK_PLAN_REQUIRED';
+
+/**
+ * CE cloud-relay: the linked cloud account is not on a paid plan, so the cloud refused a
+ * link-gated call (LLM relay, catalog relay, web search relay, bundle download). The CE
+ * surfaces the cloud body verbatim, so the token survives in every error shape, exactly like
+ * {@code INSUFFICIENT_CREDITS} and {@code MODEL_NOT_SUPPORTED}.
+ */
+export function isCloudLinkPlanRequiredError(error: unknown): boolean {
+  return errorText(error).includes(CLOUD_LINK_PLAN_REQUIRED_CODE);
+}
+
 /**
  * Detects if an error is an authentication error (401)
  */

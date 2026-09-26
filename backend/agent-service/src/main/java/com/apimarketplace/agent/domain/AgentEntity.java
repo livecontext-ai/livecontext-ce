@@ -223,6 +223,21 @@ public class AgentEntity implements OrgScopedEntity {
     private Boolean requireToolAuthorization = false;
 
     /**
+     * V523 - the workspace chat destination this agent's permission requests and questions go
+     * to. Null = the workspace default. Checked by the orchestrator at delivery, against the
+     * request's workspace (no cross-schema foreign key). Serialized as {@code chatChannelLinkId}.
+     */
+    @Column(name = "chat_channel_link_id")
+    private UUID chatChannelLinkId;
+
+    /**
+     * V524 - whether this agent reaches the person outside the app at all (the on/off card above
+     * the destination). false = nothing leaves the app. Serialized as {@code chatChannelEnabled}.
+     */
+    @Column(name = "chat_channel_enabled", nullable = false)
+    private Boolean chatChannelEnabled = true;
+
+    /**
      * V340 - opt-in participation in the shared task backlog (default false).
      * <p>
      * When false the agent is never served the workspace backlog on wake-up
@@ -620,6 +635,22 @@ public class AgentEntity implements OrgScopedEntity {
 
     public void setRequireToolAuthorization(Boolean requireToolAuthorization) {
         this.requireToolAuthorization = requireToolAuthorization != null && requireToolAuthorization;
+    }
+
+    public UUID getChatChannelLinkId() {
+        return chatChannelLinkId;
+    }
+
+    public void setChatChannelLinkId(UUID chatChannelLinkId) {
+        this.chatChannelLinkId = chatChannelLinkId;
+    }
+
+    public boolean isChatChannelEnabled() {
+        return chatChannelEnabled == null || chatChannelEnabled;
+    }
+
+    public void setChatChannelEnabled(Boolean chatChannelEnabled) {
+        this.chatChannelEnabled = chatChannelEnabled == null || chatChannelEnabled;
     }
 
     /** V340 - true when the agent opted into the shared backlog. Serialized as {@code backlogEnabled}. */

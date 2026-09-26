@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.zip.GZIPOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 
 /**
@@ -88,7 +89,7 @@ class ApiCatalogBundleApplierTxRegressionTest {
     @DisplayName("apply() records and activates the bundle row with NO surrounding transaction")
     void applyRecordsBundleRowOutsideCallerTransaction() throws Exception {
         ApiCatalogMergeService mergeService = Mockito.mock(ApiCatalogMergeService.class);
-        Mockito.when(mergeService.merge(anyList(), anyList())).thenReturn(
+        Mockito.when(mergeService.merge(any(), anyList())).thenReturn(
                 new ApiCatalogMergeService.MergeResult(1, 0, 0, 0, 0, 0, 0, List.of()));
         ApiCatalogBundleApplier applier = new ApiCatalogBundleApplier(
                 mergeService, Mockito.mock(ApiCatalogGenerationPriceApplier.class),

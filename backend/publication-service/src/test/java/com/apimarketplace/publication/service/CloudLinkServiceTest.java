@@ -282,7 +282,8 @@ class CloudLinkServiceTest {
         void shouldRejectExpiredPendingCallbackState() {
             String state = service.generateAuthUrl(TENANT_ID).get("state");
             service.receiveCallback("callback-code-123", state);
-            clock.advance(Duration.ofMinutes(31));
+            // Past the default pending-flow TTL (2 hours, sized for a cloud signup + checkout).
+            clock.advance(Duration.ofHours(2).plusMinutes(1));
 
             assertThatThrownBy(() -> service.linkAccount(TENANT_ID, state))
                     .isInstanceOf(IllegalArgumentException.class)

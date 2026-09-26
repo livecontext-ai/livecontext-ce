@@ -376,6 +376,61 @@ class ExtractFromFileNodeTest {
         }
 
         @Test
+        @DisplayName("a {{...}} sheetName is resolved before the sheet is looked up, and reported resolved")
+        @SuppressWarnings("unchecked")
+        void resolvesATemplatedSheetName() throws Exception {
+            // The sheet used to be looked up by the CONFIGURED text, so this failed with
+            // "Sheet not found: {{trigger:in.output.month}}" while `value` resolved fine.
+            String base64 = createXlsxBase64WithSheetName(
+                "March",
+                new String[]{"id", "value"},
+                new Object[][]{{1, "A"}});
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            org.mockito.Mockito.when(adapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.any(ExecutionContext.class)))
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo("March"));
+            Core.ExtractFromFileConfig config = new Core.ExtractFromFileConfig(
+                "xlsx", base64, null, "{{trigger:in.output.month}}", "yes", null, null, null, null, null, null);
+            ExtractFromFileNode node = new ExtractFromFileNode("core:extract", config);
+            node.setTemplateAdapter(adapter);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            assertEquals(1, ((List<Map<String, Object>>) result.output().get("items")).size());
+            assertEquals("March",
+                ((Map<String, Object>) result.output().get("resolved_params")).get("sheetName"));
+        }
+
+        @Test
+        @DisplayName("a {{$vars.sheet}} sheetName selects the sheet but is withheld in Params")
+        @SuppressWarnings("unchecked")
+        void workspaceVariableSheetNameIsWithheld() throws Exception {
+            String base64 = createXlsxBase64WithSheetName(
+                "S3cr3tSheet",
+                new String[]{"id", "value"},
+                new Object[][]{{1, "A"}});
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            org.mockito.Mockito.when(adapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.any(ExecutionContext.class)))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{$vars.sheet}}", "S3cr3tSheet")));
+            Core.ExtractFromFileConfig config = new Core.ExtractFromFileConfig(
+                "xlsx", base64, null, "{{$vars.sheet}}", "yes", null, null, null, null, null, null);
+            ExtractFromFileNode node = new ExtractFromFileNode("core:extract", config);
+            node.setTemplateAdapter(adapter);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            assertEquals(1, ((List<Map<String, Object>>) result.output().get("items")).size(),
+                "the sheet was found by the variable's real value");
+            assertEquals(com.apimarketplace.orchestrator.services.template.ReportedParams.WITHHELD_WORKSPACE_VARIABLE,
+                ((Map<String, Object>) result.output().get("resolved_params")).get("sheetName"));
+        }
+
+        @Test
         @DisplayName("Should parse XLSX with named sheet")
         void shouldParseXlsxWithNamedSheet() throws Exception {
             String base64 = createXlsxBase64WithSheetName(
@@ -774,7 +829,7 @@ class ExtractFromFileNodeTest {
             fileRefMap.put("size", 100L);
 
             when(templateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
-                .thenReturn(Map.of("__expr__", fileRefMap));
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo(fileRefMap));
 
             Core.ExtractFromFileConfig config = new Core.ExtractFromFileConfig(
                 "csv", "{{core:convert_to_file.output.file}}", ",", null, "yes", null, null, null, null, null, null);
@@ -808,7 +863,7 @@ class ExtractFromFileNodeTest {
             pathless.put("url", "/api/proxy/files/by-id/c7963596-ab99-46af-9cb5-fccb64461702/raw");
             pathless.put("name", "notes.csv");
             when(templateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
-                .thenReturn(Map.of("__expr__", pathless));
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo(pathless));
 
             Core.ExtractFromFileConfig config = new Core.ExtractFromFileConfig(
                 "csv", "{{table:queue.output.items[0].doc}}", ",", null, "yes", null, null, null, null, null, null);
@@ -831,7 +886,7 @@ class ExtractFromFileNodeTest {
             pathless.put("id", "c7963596-ab99-46af-9cb5-fccb64461702");
             pathless.put("name", "report.pdf");
             when(templateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
-                .thenReturn(Map.of("__expr__", pathless));
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo(pathless));
 
             Core.ExtractFromFileConfig config = new Core.ExtractFromFileConfig(
                 "pdf", "{{table:queue.output.items[0].doc}}", null, null, "yes", null, null, null, null, null, null);
@@ -873,7 +928,7 @@ class ExtractFromFileNodeTest {
             fileRefMap.put("name", "data.xlsx");
 
             when(templateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
-                .thenReturn(Map.of("__expr__", fileRefMap));
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo(fileRefMap));
 
             Core.ExtractFromFileConfig config = new Core.ExtractFromFileConfig(
                 "xlsx", "{{core:convert_to_file.output.file}}", null, null, "yes", null, null, null, null, null, null);
@@ -903,7 +958,7 @@ class ExtractFromFileNodeTest {
             fileRefMap.put("path", "path/data.json");
 
             when(templateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
-                .thenReturn(Map.of("__expr__", fileRefMap));
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo(fileRefMap));
 
             Core.ExtractFromFileConfig config = new Core.ExtractFromFileConfig(
                 "json", "{{upstream.output.file}}", null, null, "no", null, null, null, null, null, null);
@@ -922,7 +977,7 @@ class ExtractFromFileNodeTest {
         void shouldFallBackToStringInput() {
             // Template adapter returns a plain string, not a FileRef map
             when(templateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
-                .thenReturn(Map.of("__expr__", "name,age\nJohn,30"));
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo("name,age\nJohn,30"));
 
             Core.ExtractFromFileConfig config = new Core.ExtractFromFileConfig(
                 "csv", "{{some.expression}}", ",", null, "yes", null, null, null, null, null, null);
@@ -951,7 +1006,7 @@ class ExtractFromFileNodeTest {
             fileRefMap.put("path", "missing/path");
 
             when(templateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
-                .thenReturn(Map.of("__expr__", fileRefMap));
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo(fileRefMap));
 
             Core.ExtractFromFileConfig config = new Core.ExtractFromFileConfig(
                 "csv", "{{upstream.output.file}}", ",", null, "yes", null, null, null, null, null, null);
@@ -972,7 +1027,7 @@ class ExtractFromFileNodeTest {
             fileRefMap.put("path", "some/path");
 
             when(templateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
-                .thenReturn(Map.of("__expr__", fileRefMap));
+                .thenAnswer(TemplateResolutionStubs.templatesResolveTo(fileRefMap));
 
             Core.ExtractFromFileConfig config = new Core.ExtractFromFileConfig(
                 "csv", "{{upstream.output.file}}", ",", null, "yes", null, null, null, null, null, null);
@@ -1711,6 +1766,50 @@ class ExtractFromFileNodeTest {
             assertTrue(result.isSuccess());
             assertEquals("structured", result.output().get("mode"));
             assertEquals(1, result.output().get("rowCount"));
+        }
+    }
+
+    @Nested
+    @DisplayName("templated chunkSize")
+    class TemplatedChunkSize {
+
+        private ExtractFromFileNode templatedNode(Object resolvedSize) {
+            String text = "AAAAAAAAAA" + "BBBBBBBBBB" + "CCCCCCCCCC"; // 30 chars
+            Core.ExtractFromFileConfig config = new Core.ExtractFromFileConfig(
+                "txt", text, null, null, null,
+                "text", true, 500, 0, "fixed_size", null);
+            ExtractFromFileNode node = new ExtractFromFileNode("core:extract", config);
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            org.mockito.Mockito.when(adapter.resolveTemplates(org.mockito.ArgumentMatchers.anyMap(),
+                    org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{core:x.output.size}}", resolvedSize)));
+            node.setTemplateAdapter(adapter);
+            node.setDeferredScalars(Map.of("extractFromFile", Map.of("chunkSize", "{{core:x.output.size}}")));
+            return node;
+        }
+
+        @Test
+        @DisplayName("regression: a {{...}} chunkSize is resolved; it used to drop the whole extractFromFile config")
+        @SuppressWarnings("unchecked")
+        void templatedChunkSizeIsResolved() {
+            NodeExecutionResult result = templatedNode(10).execute(context);
+
+            assertTrue(result.isSuccess(), String.valueOf(result.errorMessage()));
+            List<Map<String, Object>> items = (List<Map<String, Object>>) result.output().get("items");
+            assertEquals(3, items.size(), "30 chars in chunks of the resolved 10, not the default 500");
+            assertEquals(10, result.output().get("chunk_size"));
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(10, params.get("chunkSize"));
+        }
+
+        @Test
+        @DisplayName("a {{...}} chunkSize resolving to a non-number fails, naming the config")
+        void templatedChunkSizeNotANumberFails() {
+            NodeExecutionResult result = templatedNode("big").execute(context);
+
+            assertFalse(result.isSuccess());
+            assertTrue(result.errorMessage().orElse("").contains("extractFromFile"), result.errorMessage().orElse(""));
         }
     }
 }

@@ -412,11 +412,30 @@ export function TriggerPanel({
   // the remount resets formDataByTrigger anyway, so the choice there is between the
   // template values and an empty form, never between the template and the user's
   // edits - those are already gone.
+  //
+  // The configs can still CHANGE SHAPE after the seed was applied: on the application
+  // page they are rebuilt from the canvas, and a form trigger can first arrive with no
+  // fields and get them a moment later. Seeding only once, against whatever fields
+  // existed at that instant, filled nothing and left the form empty until the user
+  // asked a SECOND time. So the seed is re-applied to a trigger whenever its field set
+  // (its shape signature) differs from the one it was seeded against, and never again
+  // for an unchanged shape - which is what keeps the user's typing safe.
   const triggerConfigsRef = React.useRef(triggerConfigs);
   triggerConfigsRef.current = triggerConfigs;
+  const configShapes = triggerConfigs
+    .map(c => `${c.triggerId}|${c.type}|${(c.fields ?? []).map(f => `${f.name}:${f.type}`).join(',')}`)
+    .join(';');
+  const seededShapesRef = React.useRef<{
+    source: Record<string, Record<string, unknown>> | null;
+    shapes: Record<string, string>;
+  }>({ source: null, shapes: {} });
   React.useEffect(() => {
     if (!prefillValues) return;
     const triggerConfigs = triggerConfigsRef.current;
+    if (seededShapesRef.current.source !== prefillValues) {
+      seededShapesRef.current = { source: prefillValues, shapes: {} };
+    }
+    const seededShapes = seededShapesRef.current.shapes;
 
     const formSeeds: Record<string, Record<string, any>> = {};
     const webhookSeeds: Record<string, WebhookDraft> = {};
@@ -425,6 +444,9 @@ export function TriggerPanel({
     for (const config of triggerConfigs) {
       const values = prefillValues[config.triggerId];
       if (!values || typeof values !== 'object') continue;
+      const shape = `${config.type}|${(config.fields ?? []).map(f => `${f.name}:${f.type}`).join(',')}`;
+      if (seededShapes[config.triggerId] === shape) continue;
+      seededShapes[config.triggerId] = shape;
 
       if (config.type === 'chat') {
         if (typeof values.message === 'string' && values.message.trim()) {
@@ -495,7 +517,7 @@ export function TriggerPanel({
     // webhookDataByTrigger is read to preserve the user's edited headers; re-running
     // on every header keystroke would re-seed the body, so it stays out of the deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefillValues]);
+  }, [prefillValues, configShapes]);
 
   // Load the EXISTING conversation for this chat trigger and its messages.
   // FIND-ONLY - never create here. Creating a conversation just because the

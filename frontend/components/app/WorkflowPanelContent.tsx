@@ -20,9 +20,10 @@ import { ModelSelectorDropdown, PROVIDER_ICON_MAP } from '@/components/chat/Mode
 import { modelFilterLabelsFrom } from '@/components/chat/modelFilterLabels';
 import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { UpgradeRequiredNotice } from '@/components/billing/UpgradeRequiredBadge';
-import { ComposerFreeTierBadge } from '@/components/billing/FreeTierBadge';
+import { FreeTierBadge } from '@/components/billing/FreeTierBadge';
 import { useMonthlyCreditsCannotPay } from '@/lib/hooks/useMonthlyCreditsCannotPay';
-import { resolveFreeTierPreferredModel } from '@/lib/hooks/usePreferFreeTierModel';
+import { resolveFreeTierPreferredModel } from '@/lib/models/freeTierModel';
+import { usePreferFreeTierModel } from '@/lib/hooks/usePreferFreeTierModel';
 import { TriggerTabContent } from '@/components/chat/TriggerTabContent';
 import { type ApplicationConfig, type ApplicationTemplateSource } from '@/components/chat/ApplicationTabContent';
 import { ApplicationCarousel } from '@/components/chat/ApplicationCarousel';
@@ -79,7 +80,7 @@ import { WorkflowPanelHostProvider } from '@/contexts/WorkflowPanelHostContext';
 // ── Constants ──
 
 const CHAT_TAB_ID = '__chat_ia__';
-const APP_TAB_ID = '__application__';
+export const APP_TAB_ID = '__application__';
 export const WORKFLOW_TAB_ID = '__workflow__';
 /** Run history + epochs + steps of the current run (run mode). */
 export const RUN_TAB_ID = '__run__';
@@ -131,6 +132,21 @@ function getCachedData(wfId: string): CachedPanelData {
 }
 
 const pendingActivateTabByWorkflow = new Map<string, string>();
+
+// ── Agent presentation requests (workflow(action='present', view='application')) ──
+// Module-level so a panel that mounts AFTER the request (panel closed, chat tab
+// being created) still finds it. Keyed per workflow: the latest request wins.
+const PRESENT_APPLICATION_EVENT = 'workflowPresentApplication';
+export const PRESENT_REQUEST_TTL_MS = 2 * 60 * 1000;
+const presentRequestByWorkflow = new Map<string, { runId: string; at: number }>();
+
+/** Ask the panel of `workflowId` to show the Application of `runId` once it has it. */
+export function requestPresentApplication(workflowId: string, runId: string) {
+  presentRequestByWorkflow.set(workflowId, { runId, at: Date.now() });
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(PRESENT_APPLICATION_EVENT, { detail: { workflowId } }));
+  }
+}
 
 export function setPendingActivateTab(tabId: string, workflowId?: string) {
   if (workflowId) {
@@ -207,9 +223,9 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   const setSelectedModel = appContext?.setSelectedModel ?? ((_: SelectedModel) => {});
   const appSelectedModel: SelectedModel = appContext?.state.selectedModel ?? EMPTY_SELECTED_MODEL;
 
-  // V494: a free-tier account opens on a model its allowance covers, when one
+  // A Free account opens on a model its monthly credits cover, when one
   // exists. Without this the composer opens on the admin's global #1 and the very
-  // first turn of a fresh signup can be refused - the moment the allowance is for.
+  // first turn of a fresh signup can be refused.
   const defaultAIModel: AIModel | undefined = useMemo(
     () => resolveFreeTierPreferredModel(
       models,
@@ -237,6 +253,10 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       setSelectedModel(effectiveDefault);
     }
   }, [isValidModel, effectiveDefault, appSelectedModel, setSelectedModel, appContext, verdictReady]);
+
+  // A Free account opens on the free tier's best-ranked model even when the browser
+  // restored another one (the stored selection is not scoped to the account).
+  usePreferFreeTierModel(models);
 
   const [showModelSelector, setShowModelSelector] = useState(false);
 
@@ -273,7 +293,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       freeTierForModel={freeTierForModel}
       prefersFreeTierModels={prefersFreeTierModels}
       upgradeNotice={<UpgradeRequiredNotice blocked={creditsCannotPay} />}
-      freeTierBadge={<ComposerFreeTierBadge />}
+      freeTierBadge={<FreeTierBadge covered />}
     />
   );
 
@@ -469,7 +489,6 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   useEffect(() => {
     setIsAppTabDismissed(hideAppTabByDefault);
   }, [currentOrgId, hideAppTabByDefault]);
-  const showAppTab = applicationConfigs.length > 0 && !isAppTabDismissed;
 
   // ── Run / Add Node sub-tabs ──
   // A run is bound (URL run, in-place run, sub-workflow run, frozen preview run)
@@ -477,6 +496,14 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   // are editing, so the node palette takes that slot instead. They are mutually
   // exclusive because the canvas is in exactly one of the two modes.
   const hasRun = runData.hasRunInfo || !!runData.runId;
+  // The Application shows a RUN's interfaces, so it never exists in edit mode.
+  // The configs alone cannot decide it: they are broadcast per workflowId, and
+  // another surface of the same workflow in run mode (a keepMounted run tab, the
+  // application side panel) keeps feeding them to this panel while it edits.
+  // A run this panel was OPENED on (prop or /run/ URL) counts before its bus snapshot
+  // lands; runs reported by broadcasts (triggerRunId) do not, they are the leak.
+  const appTabAllowed = hasRun || !!runIdProp || !!runIdFromPath || applicationFirst;
+  const showAppTab = appTabAllowed && applicationConfigs.length > 0 && !isAppTabDismissed;
   const showRunTab = hasRun;
   // The palette is an editing tool, so it follows the same permission as the Save
   // beside it: on a workflow the caller may not change (an installed application's
@@ -617,14 +644,16 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   // Without a canvas slot there's nothing to stay on, so we focus it.
   const prevAppConfigCount = useRef(0);
   useEffect(() => {
-    if (!hideAppTabByDefault && applicationConfigs.length > 0 && prevAppConfigCount.current === 0) {
+    if (appTabAllowed && !hideAppTabByDefault && applicationConfigs.length > 0 && prevAppConfigCount.current === 0) {
       setIsAppTabDismissed(false);
       // ...unless this panel was opened ON the application, where the canvas is
       // the secondary view and the interface is what the user asked for.
       if (!hasWorkflowSlot || applicationFirst) setActiveTabId(APP_TAB_ID);
     }
-    prevAppConfigCount.current = applicationConfigs.length;
-  }, [applicationConfigs.length, hideAppTabByDefault, hasWorkflowSlot, applicationFirst]);
+    // Counted only while allowed, so a run starting on configs already held in edit
+    // mode still reads as "interfaces just became available".
+    prevAppConfigCount.current = appTabAllowed ? applicationConfigs.length : 0;
+  }, [applicationConfigs.length, hideAppTabByDefault, hasWorkflowSlot, applicationFirst, appTabAllowed]);
 
   // Fall back to a still-available sub-tab when the active one disappears - a
   // trigger that vanished, an interface that is gone, the run that ended (Run
@@ -637,7 +666,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       activeTabId === CHAT_TAB_ID ||
       isTriggerTab ||
       (activeTabId === WORKFLOW_TAB_ID && hasWorkflowSlot) ||
-      (activeTabId === APP_TAB_ID && applicationConfigs.length > 0) ||
+      (activeTabId === APP_TAB_ID && appTabAllowed && applicationConfigs.length > 0) ||
       (activeTabId === RUN_TAB_ID && showRunTab) ||
       (activeTabId === LOGS_TAB_ID && !!logsTarget) ||
       (activeTabId === NODE_CREATOR_TAB_ID && showNodeCreatorTab) ||
@@ -649,7 +678,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
         ? RUN_TAB_ID
         : applicationFirst && hasWorkflowSlot ? APP_TAB_ID : defaultTabId);
     }
-  }, [triggerConfigs, applicationConfigs.length, activeTabId, hasWorkflowSlot, showRunTab, showNodeCreatorTab, showInspectorTab, applicationFirst, defaultTabId, logsTarget]);
+  }, [triggerConfigs, applicationConfigs.length, appTabAllowed, activeTabId, hasWorkflowSlot, showRunTab, showNodeCreatorTab, showInspectorTab, applicationFirst, defaultTabId, logsTarget]);
 
   // Consume pending tab activation (set before panel was opened)
   useEffect(() => {
@@ -661,13 +690,13 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
           setActiveTabId(APP_TAB_ID);
           setTargetInterfaceId(interfaceId);
         }
-      } else {
+      } else if (pending !== APP_TAB_ID || appTabAllowed) {
         setActiveTabId(pending);
       }
       pendingActivateTabByWorkflow.delete(workflowId);
       pendingActivateTabByWorkflow.delete('__default__');
     }
-  }, [applicationConfigs, workflowId]);
+  }, [applicationConfigs, workflowId, appTabAllowed]);
 
   // Listen for trigger tab open requests from node shimmer buttons
   useEffect(() => {
@@ -703,11 +732,38 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       // honouring it would move the reader off their tab for a commit before the
       // availability effect took it back.
       if (event.detail.tabId === NODE_CREATOR_TAB_ID && !showNodeCreatorTab) return;
+      // Same for the Application in edit mode, where it does not exist.
+      if (event.detail.tabId === APP_TAB_ID && !appTabAllowed) return;
       selectPanelTab(event.detail.tabId);
     };
     window.addEventListener('workflowPanelActivateTab', handler as EventListener);
     return () => window.removeEventListener('workflowPanelActivateTab', handler as EventListener);
-  }, [workflowId, showNodeCreatorTab, selectPanelTab]);
+  }, [workflowId, showNodeCreatorTab, appTabAllowed, selectPanelTab]);
+
+  // workflow(action='present', view='application'): the agent shows a run's
+  // interfaces. Honoured only once THIS panel shows THAT run with its interfaces
+  // (the canvas may still be rebinding from another run), and dropped after a
+  // short wait so it can never yank the user onto the tab later.
+  const [presentTick, setPresentTick] = useState(0);
+  useEffect(() => {
+    const handler = (event: CustomEvent<{ workflowId: string }>) => {
+      if (event.detail.workflowId === workflowId) setPresentTick(t => t + 1);
+    };
+    window.addEventListener(PRESENT_APPLICATION_EVENT, handler as EventListener);
+    return () => window.removeEventListener(PRESENT_APPLICATION_EVENT, handler as EventListener);
+  }, [workflowId]);
+  useEffect(() => {
+    const request = presentRequestByWorkflow.get(workflowId);
+    if (!request) return;
+    if (Date.now() - request.at > PRESENT_REQUEST_TTL_MS) {
+      presentRequestByWorkflow.delete(workflowId);
+      return;
+    }
+    if (!appTabAllowed || applicationConfigs.length === 0 || currentRunId !== request.runId) return;
+    presentRequestByWorkflow.delete(workflowId);
+    setIsAppTabDismissed(false);
+    selectPanelTab(APP_TAB_ID);
+  }, [presentTick, workflowId, appTabAllowed, applicationConfigs.length, currentRunId, selectPanelTab]);
 
   // Listen for "open the Run tab" requests (canvas history button, version chip).
   // Scoped by workflowId so a sub-workflow tab and the main panel never steal
@@ -1215,8 +1271,11 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
           leadingControl={leadingControl}
           welcomeLayout
           welcomeTitle={<WelcomeTitle>{t('workflowBuilder.canvas.emptyTitle')}</WelcomeTitle>}
+          /* The workflow chat (useWorkflowChat) never has an agent, so it is always Orbi.
+             Compact: the panel is narrow. Covers the application view's AI chat tab too. */
+          showOrbi="compact"
         />
-      ) : activeTabId === APP_TAB_ID ? (
+      ) : activeTabId === APP_TAB_ID && appTabAllowed ? (
         <ApplicationCarousel
           configs={applicationConfigs}
           runId={currentRunId}

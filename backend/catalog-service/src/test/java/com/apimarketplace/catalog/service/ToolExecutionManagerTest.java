@@ -81,6 +81,48 @@ class ToolExecutionManagerTest {
     }
 
     @Nested
+    @DisplayName("executeTool - response shaping mode")
+    class ShapingModeSelection {
+
+        private ResponseShaper.Mode modeFor(String scopeKind, boolean stepOutput) {
+            UUID toolId = UUID.randomUUID();
+            UUID apiId = UUID.randomUUID();
+            ToolContextService.ToolContext context = createToolContext(toolId, apiId, "ModeTool", "/api/mode", "GET");
+            when(toolContextService.loadToolContext("mode-tool")).thenReturn(Optional.of(context));
+            when(apiService.executeApiTool(anyString(), anyString(), any(JsonNode.class), anySet(), anyString()))
+                .thenReturn(Map.of("success", true, "data", Map.of("body", "x")));
+            ToolExecutionRequest request = ToolExecutionRequest.builder().parameters(Map.of()).build();
+            request.setBillingScopeKind(scopeKind);
+            request.setStepOutput(stepOutput);
+
+            executionManager.executeTool("mode-tool", request, "user123", "org456", "req-mode");
+
+            org.mockito.ArgumentCaptor<ResponseShaper.Mode> mode =
+                org.mockito.ArgumentCaptor.forClass(ResponseShaper.Mode.class);
+            verify(responseShaper).shape(any(), any(), any(), mode.capture(), anyBoolean());
+            return mode.getValue();
+        }
+
+        @Test
+        @DisplayName("a workflow STEP's call is shaped as STEP_OUTPUT, so its text reaches downstream nodes whole")
+        void stepOutputCallIsShapedAsStepOutput() {
+            assertThat(modeFor("RUN", true)).isEqualTo(ResponseShaper.Mode.STEP_OUTPUT);
+        }
+
+        @Test
+        @DisplayName("an agent inside a workflow (scope RUN, no step marker) keeps the 4 KB WORKFLOW shaping")
+        void runScopedAgentCallStaysWorkflow() {
+            assertThat(modeFor("RUN", false)).isEqualTo(ResponseShaper.Mode.WORKFLOW);
+        }
+
+        @Test
+        @DisplayName("a chat call (scope STREAM) is AGENT even if a step marker is present")
+        void streamScopeWinsOverStepMarker() {
+            assertThat(modeFor("STREAM", true)).isEqualTo(ResponseShaper.Mode.AGENT);
+        }
+    }
+
+    @Nested
     @DisplayName("executeTool - Success Cases")
     class SuccessCases {
 

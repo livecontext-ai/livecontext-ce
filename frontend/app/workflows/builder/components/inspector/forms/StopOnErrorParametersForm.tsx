@@ -5,13 +5,9 @@ import { Info } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { useTranslations } from 'next-intl';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
 import type { BuilderNodeData } from '../../../types';
 import type { ConnectionProps } from '../ExpressionField';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 interface StopOnErrorParametersFormProps {
   node: Node<BuilderNodeData>;
@@ -50,19 +46,12 @@ export function StopOnErrorParametersForm({
         <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">
           {t('title')}
         </span>
-        <Popover>
-          <PopoverTrigger asChild>
-            <button className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-              <Info className="h-3.5 w-3.5" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-            <p className="font-semibold mb-1">{t('infoTitle')}</p>
-            <p className="text-slate-500 dark:text-slate-400 text-xs">
-              {t('infoDescription')}
-            </p>
-          </PopoverContent>
-        </Popover>
+        <InfoPopover label={t('title')} size="md" side="right" align="start">
+          <p className="font-semibold mb-1">{t('infoTitle')}</p>
+          <p className="text-slate-500 dark:text-slate-400 text-xs">
+            {t('infoDescription')}
+          </p>
+        </InfoPopover>
       </div>
 
       {/* Error Message */}

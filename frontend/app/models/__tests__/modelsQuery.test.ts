@@ -53,7 +53,7 @@ describe('providerHref', () => {
 
 describe('the footer Models column links somewhere real', () => {
   it('names only providers the page can filter on', () => {
-    // Each of the eight families in the footer deep-links into /models. A family
+    // Each family in the footer deep-links into /models. A family
     // whose provider key is not in the dataset would resolve to no filter and
     // silently open the full list: the link would still "work", which is exactly
     // why nothing would ever report it.

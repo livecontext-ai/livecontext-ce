@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.trigger;
 
+import com.apimarketplace.common.web.LogSafePath;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,7 +42,7 @@ public class PublicChatController {
         } catch (IllegalStateException e) {
             return ResponseEntity.status(409).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
-            logger.error("Error creating chat session for token {}: {}", token, e.getMessage());
+            logger.error("Error creating chat session for token {}: {}", LogSafePath.tokenPreview(token), LogSafePath.withoutToken(e.getMessage(), token));
             return ResponseEntity.status(500).body(Map.of("error", "Failed to create session"));
         }
     }
@@ -65,7 +66,7 @@ public class PublicChatController {
         } catch (ShareInvocationLimitExceededException e) {
             return ResponseEntity.status(429).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
-            logger.error("Error sending message for token {}: {}", token, e.getMessage());
+            logger.error("Error sending message for token {}: {}", LogSafePath.tokenPreview(token), LogSafePath.withoutToken(e.getMessage(), token));
             return ResponseEntity.status(500).body(Map.of("error", "Failed to send message"));
         }
     }
@@ -83,7 +84,7 @@ public class PublicChatController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(401).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
-            logger.error("Error fetching history for token {}: {}", token, e.getMessage());
+            logger.error("Error fetching history for token {}: {}", LogSafePath.tokenPreview(token), LogSafePath.withoutToken(e.getMessage(), token));
             return ResponseEntity.status(500).body(Map.of("error", "Failed to fetch history"));
         }
     }

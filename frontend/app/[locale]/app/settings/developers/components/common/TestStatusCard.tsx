@@ -1,6 +1,7 @@
 import React from 'react';
-import { Info, CheckCircle, XCircle, Clock, TestTube } from 'lucide-react';
-import { ActionButton, InfoBox } from './index';
+import { CheckCircle, XCircle, Clock, TestTube } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
+import { ActionButton } from './index';
 
 interface TestStatusCardProps {
   status?: 'success' | 'error' | 'pending';
@@ -9,8 +10,6 @@ interface TestStatusCardProps {
   errorCount: number;
   pendingCount: number;
   onTestAll: () => void;
-  showInfo: boolean;
-  onToggleInfo: () => void;
 }
 
 const TestStatusCard: React.FC<TestStatusCardProps> = ({
@@ -19,9 +18,7 @@ const TestStatusCard: React.FC<TestStatusCardProps> = ({
   successCount,
   errorCount,
   pendingCount,
-  onTestAll,
-  showInfo,
-  onToggleInfo
+  onTestAll
 }) => {
   const getStatusColor = () => {
     switch (status) {
@@ -71,13 +68,13 @@ const TestStatusCard: React.FC<TestStatusCardProps> = ({
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-2">
           <h4 className="font-medium text-theme-primary">Test Summary</h4>
-          <button
-            type="button"
-            onClick={onToggleInfo}
-            className="text-theme-muted hover:text-theme-primary transition-colors"
-          >
-            <Info className="w-4 h-4" />
-          </button>
+          <InfoPopover label="Mandatory validation" side="bottom" align="start" contentClassName="w-80">
+            <p>
+              <strong>Mandatory validation:</strong> All your endpoints must be tested successfully (code 200) before you can submit your API.
+              Use the "Test" buttons to the right of each tool or "Test all endpoints" to validate your tools.
+              The "Submit" button will only be available when all tools have a ✅ OK status.
+            </p>
+          </InfoPopover>
         </div>
         
         <div className="text-right">
@@ -94,21 +91,6 @@ const TestStatusCard: React.FC<TestStatusCardProps> = ({
           </button>
         </div>
       </div>
-
-      {/* Test information message */}
-      {showInfo && (
-        <InfoBox
-          type="info"
-          title="Mandatory validation"
-          className="mb-4"
-        >
-          <p className="mb-2">
-            <strong>Mandatory validation:</strong> All your endpoints must be tested successfully (code 200) before you can submit your API.
-            Use the "Test" buttons to the right of each tool or "Test all endpoints" to validate your tools.
-            The "Submit" button will only be available when all tools have a ✅ OK status.
-          </p>
-        </InfoBox>
-      )}
 
       {/* Validation indicator */}
       <div className="flex items-center space-x-2">

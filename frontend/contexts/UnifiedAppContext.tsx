@@ -47,6 +47,14 @@ interface UIState {
    */
   selectedModel: SelectedModel;
   /**
+   * True once the persisted UI preferences (the model among them) have been read back
+   * from localStorage, whether or not anything was stored. A writer that must win over
+   * the restored model (the Free plan's opening model) waits for it: the restore runs
+   * in this provider's mount effect, AFTER its children's effects, so a child writing
+   * earlier would be overwritten by the restored value.
+   */
+  selectionRestored: boolean;
+  /**
    * Per-conversation reasoning-effort override for CLI/bridge models
    * (minimal|low|medium|high|xhigh); "" = inherit (per-agent / per-model default).
    * Ephemeral - intentionally NOT persisted to localStorage.
@@ -111,6 +119,7 @@ const initialUIState: UIState = {
   showModelSelector: false,
   showToolSelector: false,
   selectedModel: EMPTY_SELECTED_MODEL,
+  selectionRestored: false,
   reasoningEffort: '',
   selectedTools: [],
   mode: 'auto',
@@ -149,7 +158,9 @@ export function UnifiedAppProvider({ children }: { children: ReactNode }) {
     isInitializedRef.current = true;
 
     const savedState = localStorage.getItem('unifiedAppState');
-    if (savedState) {
+    if (!savedState) {
+      setState(prev => ({ ...prev, selectionRestored: true }));
+    } else {
       try {
         const parsed = JSON.parse(savedState);
         // Only restore UI preferences, not ephemeral state. selectedModel may
@@ -165,9 +176,11 @@ export function UnifiedAppProvider({ children }: { children: ReactNode }) {
           mode: parsed.mode || prev.mode,
           selectedCategory: parsed.selectedCategory || prev.selectedCategory,
           // Don't restore: currentConversationId, isNavigatingToNewChat
+          selectionRestored: true,
         }));
       } catch (error) {
         console.error('[UnifiedAppContext] Error loading state from localStorage:', error);
+        setState(prev => ({ ...prev, selectionRestored: true }));
       }
     }
   }, []);
@@ -373,7 +386,8 @@ export function UnifiedAppProvider({ children }: { children: ReactNode }) {
 
   const resetState = useCallback(() => {
     console.log('[UnifiedAppContext] Resetting state');
-    setState(initialState);
+    // The restore happened once and will not happen again, so a reset keeps the flag.
+    setState(prev => ({ ...initialState, selectionRestored: prev.selectionRestored }));
   }, []);
 
   // ============== CONTEXT VALUE ==============

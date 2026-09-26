@@ -156,6 +156,30 @@ describe('ModelManagementPanel - header/row grid parity', () => {
     expect(name.parentElement?.className).toContain('min-w-0');
   });
 
+  it('keeps the model name out of the column grid so no column can squeeze it to zero', async () => {
+    // The 2026-09-23 regression: as a `1fr` grid column the name only got what the
+    // fixed columns, gaps, provider badge and tier/effort selects left over, and in
+    // the ~900px settings content width that was nothing on every CLI row (the only
+    // ones with an effort select): the name was not shown at all. The name now has a
+    // line of its own above the controls. jsdom computes no layout, so the fix is
+    // pinned structurally: the name is in the row, but in none of its grids.
+    mocks.getEffectiveModels.mockResolvedValue([
+      buildModel({ id: 'claude-opus-5-5', name: 'Opus 5.5', provider: 'claude-code', providerKind: 'bridge' }),
+    ]);
+
+    const { container } = render(<ModelManagementPanel t={t} />);
+    const name = await screen.findByTestId('model-name-claude-code-claude-opus-5-5');
+    const row = screen.getByTestId('model-row-claude-code-claude-opus-5-5');
+
+    expect(row).toContainElement(name);
+    for (const grid of tableGrids(container)) {
+      expect(grid.contains(name), 'the name must not live in a grid column').toBe(false);
+    }
+    // The renamed model's real id rides on the same line, also outside the grid.
+    const id = screen.getByTestId('model-id-claude-code-claude-opus-5-5');
+    expect(tableGrids(container).some((g) => g.contains(id))).toBe(false);
+  });
+
   it('keeps the whole name reachable once it is clipped', async () => {
     // Clipping is only acceptable because the full value is still readable on hover,
     // and the action the button performs moves to the accessible name rather than

@@ -80,6 +80,48 @@ public class InternalCredentialService {
      */
     public record AccessTokenInfo(String accessToken, String type) {}
 
+    /** What the scope preflight needs, and nothing of the credential itself. */
+    public record CredentialScopes(String type, List<String> scopes, String integration, String name) {}
+
+    /**
+     * The scopes of the credential this endpoint call will ACTUALLY use.
+     *
+     * <p>It exists because the scope preflight was resolving a different credential
+     * from the one the execution then used, and so never ran. The token path resolves
+     * "by name or integration, org-aware" ({@link #findCredential}); the scope path
+     * resolved by NAME only. A credential's name is free text the user typed, so in
+     * production the two Gmail credentials are called "Jaden" and "Gmail Credential"
+     * while the requirement is keyed on the integration `gmail`. The lookup found
+     * nothing, answered 404, the caller failed open, and the guard stayed silent:
+     * measured, it fired 0 times while the provider refused 91 calls for exactly the
+     * scope gap it exists to prevent.
+     *
+     * <p>So this deliberately reuses {@link #findCredential} rather than adding a
+     * third resolution: a preflight that inspects a DIFFERENT credential from the one
+     * about to be used is worse than no preflight, because it would block on scopes
+     * the call was never going to rely on.
+     *
+     * @return empty when no credential resolves, which keeps the caller's fail-open
+     *         contract: an absent credential is the ordinary "not connected" path and
+     *         is already handled upstream.
+     */
+    public Optional<CredentialScopes> getCredentialScopes(String userId, String credentialName, String organizationId) {
+        if (userId == null || credentialName == null) {
+            return Optional.empty();
+        }
+        String integrationName = credentialName.replaceAll("-credential$", "");
+        Credential cred = findCredential(userId, credentialName, integrationName, organizationId);
+        if (cred == null) {
+            return Optional.empty();
+        }
+        String type = cred.type() != null ? cred.type().name() : null;
+        // Only OAuth2 carries a meaningful scope set. Null (not an empty list) tells the
+        // caller "scopes do not apply here", which must not be read as "zero scopes granted".
+        boolean isOauth2 = type != null && "oauth2".equalsIgnoreCase(type);
+        return Optional.of(new CredentialScopes(
+                type, isOauth2 ? cred.scopes() : null, cred.integration(), cred.name()));
+    }
+
     /**
      * Get decrypted access token for a user credential.
      * Mirrors the logic in catalog's UserCredentialService.getAccessToken().

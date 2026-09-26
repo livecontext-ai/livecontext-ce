@@ -164,22 +164,35 @@ class UserServiceIntegrationTest {
         }
 
         @Test
-        @DisplayName("Should update OIDC data fields")
+        @DisplayName("Should update OIDC profile fields (picture, given and family name)")
         void shouldUpdateOidcData() {
             UserProfileUpdateRequest request = new UserProfileUpdateRequest();
-            request.setEmail("newemail@example.com");
             request.setPicture("https://example.com/pic.jpg");
             request.setGivenName("Given");
             request.setFamilyName("Family");
-            request.setEmailVerified(true);
 
             User updated = userService.updateProfile(testUser, request);
 
-            assertThat(updated.getEmail()).isEqualTo("newemail@example.com");
             assertThat(updated.getAvatarUrl()).isEqualTo("https://example.com/pic.jpg");
             assertThat(updated.getFirstName()).isEqualTo("Given");
             assertThat(updated.getLastName()).isEqualTo("Family");
-            assertThat(updated.isEmailVerified()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Refuses an email change and a self-verification, and persists neither")
+        void refusesIdentityChangesAndPersistsNothing() {
+            String originalEmail = testUser.getEmail();
+            boolean originalVerified = testUser.isEmailVerified();
+            UserProfileUpdateRequest request = new UserProfileUpdateRequest();
+            request.setEmail("someone-else@example.com");
+            request.setEmailVerified(!originalVerified);
+
+            assertThatThrownBy(() -> userService.updateProfile(testUser, request))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            User reloaded = userRepository.findById(testUser.getId()).orElseThrow();
+            assertThat(reloaded.getEmail()).isEqualTo(originalEmail);
+            assertThat(reloaded.isEmailVerified()).isEqualTo(originalVerified);
         }
 
         @Test

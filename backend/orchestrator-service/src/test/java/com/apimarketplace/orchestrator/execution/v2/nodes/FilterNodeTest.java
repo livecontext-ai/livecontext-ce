@@ -766,4 +766,108 @@ class FilterNodeTest {
             }
         };
     }
+
+    @Nested
+    @DisplayName("Condition values that are references")
+    class ConditionValueResolution {
+
+        @Test
+        @DisplayName("a {{...}} condition value is resolved before comparing, not compared as its own text")
+        @SuppressWarnings("unchecked")
+        void conditionValueReferenceIsResolved() {
+            List<Map<String, Object>> items = List.of(Map.of("score", 5), Map.of("score", 20));
+            when(mockTemplateAdapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.argThat(m -> m != null && m.containsKey("__input__")),
+                    any(ExecutionContext.class)))
+                .thenReturn(Map.of("__input__", items));
+            when(mockTemplateAdapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.argThat(m -> m != null && m.containsKey("__v__")),
+                    any(ExecutionContext.class)))
+                .thenReturn(Map.of("__v__", 10));
+
+            FilterNode node = buildNode(
+                List.of(new Core.FilterCondition("score", "greaterThan", "{{core:cfg.output.min}}")),
+                "and", "{{core:src.output.items}}");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isSuccess());
+            Map<String, Object> output = result.output();
+            assertEquals(1, output.get("count"));
+            Map<String, Object> params = (Map<String, Object>) output.get("resolved_params");
+            Map<String, Object> reported = ((List<Map<String, Object>>) params.get("conditions")).get(0);
+            assertEquals("10", reported.get("value"), "Params shows what was compared, not the template");
+        }
+
+        @Test
+        @DisplayName("regression: a condition value referencing NOTHING fails instead of keeping or dropping every row")
+        void conditionValueResolvingToNothingFails() {
+            // Compared as empty, `contains` kept every row and `notContains` dropped every row:
+            // a green run on a filter that never really ran.
+            List<Map<String, Object>> items = List.of(Map.of("name", "a"), Map.of("name", "b"));
+            when(mockTemplateAdapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.argThat(m -> m != null && m.containsKey("__input__")),
+                    any(ExecutionContext.class)))
+                .thenReturn(Map.of("__input__", items));
+            when(mockTemplateAdapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.argThat(m -> m != null && m.containsKey("__v__")),
+                    any(ExecutionContext.class)))
+                .thenAnswer(inv -> { Map<String, Object> out = new java.util.HashMap<>(); out.put("__v__", null); return out; });
+
+            FilterNode node = buildNode(
+                List.of(new Core.FilterCondition("name", "contains", "{{core:skipped.output.q}}")),
+                "and", "{{core:src.output.items}}");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.isSuccess());
+            assertTrue(result.errorMessage().orElse("").contains("resolved to nothing"),
+                result.errorMessage().orElse(""));
+            // The input had resolved before the failure: Params shows the rows, not {{...}}.
+            @SuppressWarnings("unchecked")
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(items, params.get("input"));
+        }
+
+        @Test
+        @DisplayName("a condition value pulled from a workspace variable filters on it but is withheld in Params")
+        @SuppressWarnings("unchecked")
+        void workspaceVariableConditionValueIsWithheld() {
+            List<Map<String, Object>> items = List.of(Map.of("score", 5), Map.of("score", 20));
+            when(mockTemplateAdapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.argThat(m -> m != null && m.containsKey("__input__")),
+                    any(ExecutionContext.class)))
+                .thenReturn(Map.of("__input__", items));
+            when(mockTemplateAdapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.argThat(m -> m != null && m.containsKey("__v__")),
+                    any(ExecutionContext.class)))
+                .thenReturn(Map.of("__v__", 10));
+
+            FilterNode node = buildNode(
+                List.of(new Core.FilterCondition("score", "greaterThan", "{{$vars.min_score}}")),
+                "and", "{{core:src.output.items}}");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals(1, result.output().get("count"), "the filter still ran on the variable's value");
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            Map<String, Object> reported = ((List<Map<String, Object>>) params.get("conditions")).get(0);
+            assertEquals(com.apimarketplace.orchestrator.services.template.ReportedParams.WITHHELD_WORKSPACE_VARIABLE,
+                reported.get("value"));
+        }
+
+        @Test
+        @DisplayName("a literal condition value never goes through the resolver")
+        void literalConditionValueIsNotResolved() {
+            mockResolvedItems(List.of(Map.of("status", "active"), Map.of("status", "off")));
+
+            FilterNode node = buildNode(
+                List.of(new Core.FilterCondition("status", "equals", "active")), "and", "{{core:src.output.items}}");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals(1, result.output().get("count"));
+            verify(mockTemplateAdapter, times(1)).resolveTemplates(anyMap(), any(ExecutionContext.class));
+        }
+    }
 }

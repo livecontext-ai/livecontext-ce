@@ -61,7 +61,7 @@ describe('LandingHome messages', () => {
     // A dropped placeholder does not fail: next-intl renders the sentence without the number,
     // so the page quietly claims nothing about how many integrations there are.
     const required: [string, RegExp][] = [
-      ['hero.lead', /\{integrations\}/], ['roles.cta', /\{role\}/],
+      ['roles.cta', /\{role\}/],
       ['faq.what.answer', /\{integrations\}/], ['jsonLd.softwareDescription', /\{integrations\}/],
     ];
     for (const locale of locales) {

@@ -670,4 +670,267 @@ class HttpRequestNodeTest {
             assertEquals(2, links.size(), "Both Link values must be exposed");
         }
     }
+
+    @Nested
+    @DisplayName("Template references are resolved in every field and reported resolved")
+    class TemplateResolutionReporting {
+
+        @Mock private com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter templateAdapter;
+
+        @Test
+        @DisplayName("reports the RESOLVED query param key/value and custom-header name; they used to show the configured {{...}}")
+        @SuppressWarnings("unchecked")
+        void reportsResolvedQueryParamsAndAuthNames() {
+            HttpRequestNode node = HttpRequestNode.builder()
+                .nodeId("core:http")
+                .urlExpression("http://example.com/api")
+                .method("GET")
+                .authType("custom-header")
+                .authConfig(new com.apimarketplace.orchestrator.domain.workflow.Core.HttpAuthConfig(
+                    null, null, null, null, null, null, "{{core:cfg.output.header}}", "secret-value"))
+                .queryParams(java.util.List.of(
+                    new com.apimarketplace.orchestrator.domain.workflow.Core.HttpParam(
+                        "p1", "page", "{{core:cfg.output.page}}")))
+                .build();
+            node.setRestTemplate(mockRestTemplate);
+            node.setTemplateAdapter(templateAdapter);
+            Map<String, Object> values = new java.util.HashMap<>();
+            values.put("{{core:cfg.output.page}}", 3);
+            values.put("{{core:cfg.output.header}}", "X-Tenant");
+            when(templateAdapter.resolveTemplates(any(), any())).thenAnswer(TemplateResolutionStubs.resolving(values));
+            when(mockRestTemplate.exchange(anyString(), any(), any(), eq(String.class)))
+                .thenReturn(new ResponseEntity<>("{}", HttpStatus.OK));
+
+            NodeExecutionResult result = node.execute(context);
+
+            ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
+            verify(mockRestTemplate).exchange(urlCaptor.capture(), any(), any(), eq(String.class));
+            assertTrue(urlCaptor.getValue().endsWith("?page=3"), urlCaptor.getValue());
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(Map.of("page", "3"), params.get("queryParams"));
+            assertEquals("X-Tenant", params.get("headerName"));
+        }
+
+        @Test
+        @DisplayName("a query value pulled from a workspace variable is sent, but withheld in queryParams AND in the url")
+        @SuppressWarnings("unchecked")
+        void workspaceVariableQueryValueIsWithheld() {
+            // `?tier=` names nothing a credential rule can read, and the reported url is the
+            // resolved one, so a {{$vars.x}} query value was printed in clear in two places.
+            HttpRequestNode node = HttpRequestNode.builder()
+                .nodeId("core:http")
+                .urlExpression("http://example.com/api")
+                .method("GET")
+                .queryParams(java.util.List.of(
+                    new com.apimarketplace.orchestrator.domain.workflow.Core.HttpParam(
+                        "p1", "tier", "{{$vars.secret_tier}}")))
+                .build();
+            node.setRestTemplate(mockRestTemplate);
+            node.setTemplateAdapter(templateAdapter);
+            when(templateAdapter.resolveTemplates(any(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{$vars.secret_tier}}", "s3cr3t")));
+            when(mockRestTemplate.exchange(anyString(), any(), any(), eq(String.class)))
+                .thenReturn(new ResponseEntity<>("{}", HttpStatus.OK));
+
+            NodeExecutionResult result = node.execute(context);
+
+            ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
+            verify(mockRestTemplate).exchange(urlCaptor.capture(), any(), any(), eq(String.class));
+            assertTrue(urlCaptor.getValue().endsWith("?tier=s3cr3t"), "the request carries the value");
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertFalse(String.valueOf(params).contains("s3cr3t"), "never reported: " + params);
+            assertEquals(com.apimarketplace.orchestrator.services.template.ReportedParams.WITHHELD_WORKSPACE_VARIABLE,
+                ((Map<String, Object>) params.get("queryParams")).get("tier"));
+        }
+
+        @Test
+        @DisplayName("a {{$vars.x}} custom header NAME is sent but withheld in Params")
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        void workspaceVariableAuthHeaderNameIsWithheld() {
+            HttpRequestNode node = HttpRequestNode.builder()
+                .nodeId("core:http")
+                .urlExpression("http://example.com/api")
+                .method("GET")
+                .authType("custom-header")
+                .authConfig(new com.apimarketplace.orchestrator.domain.workflow.Core.HttpAuthConfig(
+                    null, null, null, null, null, null, "{{$vars.hdr}}", "secret-value"))
+                .build();
+            node.setRestTemplate(mockRestTemplate);
+            node.setTemplateAdapter(templateAdapter);
+            when(templateAdapter.resolveTemplates(any(), any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(Map.of("{{$vars.hdr}}", "X-S3cr3t-Tenant")));
+            when(mockRestTemplate.exchange(anyString(), any(), any(), eq(String.class)))
+                .thenReturn(new ResponseEntity<>("{}", HttpStatus.OK));
+
+            NodeExecutionResult result = node.execute(context);
+
+            ArgumentCaptor<org.springframework.http.HttpEntity> entity =
+                ArgumentCaptor.forClass(org.springframework.http.HttpEntity.class);
+            verify(mockRestTemplate).exchange(anyString(), any(), entity.capture(), eq(String.class));
+            assertEquals("secret-value", entity.getValue().getHeaders().getFirst("X-S3cr3t-Tenant"),
+                "the request carries the header under its real name");
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(com.apimarketplace.orchestrator.services.template.ReportedParams.WITHHELD_WORKSPACE_VARIABLE,
+                params.get("headerName"));
+            assertFalse(String.valueOf(params).contains("X-S3cr3t-Tenant"), "never reported: " + params);
+        }
+
+        @Test
+        @DisplayName("a url expression pulling a workspace variable is called resolved but reported as its expression")
+        @SuppressWarnings("unchecked")
+        void workspaceVariableInUrlExpressionIsNotPrinted() {
+            HttpRequestNode node = HttpRequestNode.builder()
+                .nodeId("core:http")
+                .urlExpression("http://example.com/{{$vars.path_token}}/items")
+                .method("GET")
+                .build();
+            node.setRestTemplate(mockRestTemplate);
+            node.setTemplateAdapter(templateAdapter);
+            when(templateAdapter.resolveTemplates(any(), any())).thenAnswer(inv -> {
+                Map<String, Object> in = inv.getArgument(0);
+                Map<String, Object> out = new java.util.HashMap<>();
+                in.forEach((k, v) -> out.put(k, String.valueOf(v).replace("{{$vars.path_token}}", "s3cr3t")));
+                return out;
+            });
+            when(mockRestTemplate.exchange(anyString(), any(), any(), eq(String.class)))
+                .thenReturn(new ResponseEntity<>("{}", HttpStatus.OK));
+
+            NodeExecutionResult result = node.execute(context);
+
+            ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
+            verify(mockRestTemplate).exchange(urlCaptor.capture(), any(), any(), eq(String.class));
+            assertEquals("http://example.com/s3cr3t/items", urlCaptor.getValue());
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("http://example.com/{{$vars.path_token}}/items", params.get("url"));
+        }
+
+        @Test
+        @DisplayName("Regression 2026-09-25: a transport failure never prints the resolved workspace-variable url")
+        void transportFailureNeverPrintsResolvedWorkspaceVariableUrl() {
+            HttpRequestNode node = HttpRequestNode.builder()
+                .nodeId("core:http")
+                .urlExpression("http://example.com/{{$vars.path_token}}/items")
+                .method("GET")
+                .build();
+            node.setRestTemplate(mockRestTemplate);
+            node.setTemplateAdapter(templateAdapter);
+            when(templateAdapter.resolveTemplates(any(), any())).thenAnswer(inv -> {
+                Map<String, Object> in = inv.getArgument(0);
+                Map<String, Object> out = new java.util.HashMap<>();
+                in.forEach((k, v) -> out.put(k, String.valueOf(v).replace("{{$vars.path_token}}", "s3cr3t")));
+                return out;
+            });
+            // RestTemplate's own wording: the url it called, query dropped, path (and secret) kept.
+            when(mockRestTemplate.exchange(anyString(), any(), any(), eq(String.class)))
+                .thenThrow(new org.springframework.web.client.ResourceAccessException(
+                    "I/O error on GET request for \"http://example.com/s3cr3t/items\": Connection reset"));
+            ch.qos.logback.classic.Logger log = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(HttpRequestNode.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs =
+                new ch.qos.logback.core.read.ListAppender<>();
+            logs.start();
+            log.addAppender(logs);
+            try {
+                NodeExecutionResult result = node.execute(context);
+
+                assertFalse(result.isSuccess());
+                assertFalse(String.valueOf(result.errorMessage()).contains("s3cr3t"), "error: " + result.errorMessage());
+                assertTrue(String.valueOf(result.errorMessage()).contains("http://example.com/{{$vars.path_token}}/items"),
+                    "error names the configured expression: " + result.errorMessage());
+                logs.list.forEach(e -> {
+                    assertFalse(e.getFormattedMessage().contains("s3cr3t"), "logged: " + e.getFormattedMessage());
+                    assertNull(e.getThrowableProxy(), "a stack trace would print the raw message");
+                });
+            } finally {
+                log.detachAppender(logs);
+            }
+        }
+
+        @Test
+        @DisplayName("Regression 2026-09-25: a url the validator refuses never prints the resolved workspace variable")
+        void refusedUrlNeverPrintsResolvedWorkspaceVariable() {
+            HttpRequestNode node = HttpRequestNode.builder()
+                .nodeId("core:http")
+                .urlExpression("http://exa mple.com/{{$vars.path_token}}/items")
+                .method("GET")
+                .build();
+            node.setRestTemplate(mockRestTemplate);
+            node.setTemplateAdapter(templateAdapter);
+            when(templateAdapter.resolveTemplates(any(), any())).thenAnswer(inv -> {
+                Map<String, Object> in = inv.getArgument(0);
+                Map<String, Object> out = new java.util.HashMap<>();
+                in.forEach((k, v) -> out.put(k, String.valueOf(v).replace("{{$vars.path_token}}", "s3cr3t")));
+                return out;
+            });
+            ch.qos.logback.classic.Logger log = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(HttpRequestNode.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs =
+                new ch.qos.logback.core.read.ListAppender<>();
+            logs.start();
+            log.addAppender(logs);
+            try {
+                NodeExecutionResult result = node.execute(context);
+
+                assertFalse(result.isSuccess());
+                assertFalse(String.valueOf(result.errorMessage()).contains("s3cr3t"), "error: " + result.errorMessage());
+                logs.list.forEach(e -> assertFalse(e.getFormattedMessage().contains("s3cr3t"), "logged: " + e.getFormattedMessage()));
+                verify(mockRestTemplate, never()).exchange(anyString(), any(), any(), eq(String.class));
+            } finally {
+                log.detachAppender(logs);
+            }
+        }
+
+        @Test
+        @DisplayName("SECURITY: the internal spelling {{vars.x}} in a url is reported as its expression too, never resolved")
+        @SuppressWarnings("unchecked")
+        void internalSpellingInUrlExpressionIsNotPrinted() {
+            HttpRequestNode node = HttpRequestNode.builder()
+                .nodeId("core:http")
+                .urlExpression("http://example.com/{{vars.path_token}}/items")
+                .method("GET")
+                .build();
+            node.setRestTemplate(mockRestTemplate);
+            node.setTemplateAdapter(templateAdapter);
+            when(templateAdapter.resolveTemplates(any(), any())).thenAnswer(inv -> {
+                Map<String, Object> in = inv.getArgument(0);
+                Map<String, Object> out = new java.util.HashMap<>();
+                in.forEach((k, v) -> out.put(k, String.valueOf(v).replace("{{vars.path_token}}", "s3cr3t")));
+                return out;
+            });
+            when(mockRestTemplate.exchange(anyString(), any(), any(), eq(String.class)))
+                .thenReturn(new ResponseEntity<>("{}", HttpStatus.OK));
+
+            NodeExecutionResult result = node.execute(context);
+
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("http://example.com/{{vars.path_token}}/items", params.get("url"));
+            assertFalse(String.valueOf(params).contains("s3cr3t"));
+        }
+
+        @Test
+        @DisplayName("a JSON body that is one whole object reference is sent as that object, not as the string {a=1}")
+        void wholeObjectReferenceBodyIsSentAsJson() {
+            HttpRequestNode node = HttpRequestNode.builder()
+                .nodeId("core:http")
+                .urlExpression("http://example.com/api")
+                .method("POST")
+                .bodyType("json")
+                .bodyExpression("{{core:build.output.payload}}")
+                .build();
+            node.setRestTemplate(mockRestTemplate);
+            node.setTemplateAdapter(templateAdapter);
+            Map<String, Object> values = new java.util.HashMap<>();
+            values.put("{{core:build.output.payload}}", Map.of("a", 1));
+            when(templateAdapter.resolveTemplates(any(), any())).thenAnswer(TemplateResolutionStubs.resolving(values));
+            when(mockRestTemplate.exchange(anyString(), any(), any(), eq(String.class)))
+                .thenReturn(new ResponseEntity<>("{}", HttpStatus.OK));
+
+            node.execute(context);
+
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            ArgumentCaptor<HttpEntity> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+            verify(mockRestTemplate).exchange(anyString(), any(), entityCaptor.capture(), eq(String.class));
+            assertEquals(Map.of("a", 1), entityCaptor.getValue().getBody());
+        }
+    }
 }

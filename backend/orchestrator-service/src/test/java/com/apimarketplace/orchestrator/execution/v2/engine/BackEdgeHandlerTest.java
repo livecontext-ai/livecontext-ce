@@ -142,6 +142,66 @@ class BackEdgeHandlerTest {
         }
 
         @Test
+        @DisplayName("regression: a templated hub cap is resolved; the loop does not run on the default budget")
+        void templatedHubCapIsResolved() {
+            ExecutionNode node = mock(ExecutionNode.class);
+            when(node.getNodeId()).thenReturn("mcp:step_c");
+            WorkflowPlan plan = mock(WorkflowPlan.class);
+            Edge iterateEdge = createIterateEdge("mcp:step_c", "core:my_loop:iterate");
+            when(plan.getIterateEdgesForSource("mcp:step_c")).thenReturn(List.of(iterateEdge));
+            Core hub = createTemplatedCapLoopCore("my_loop", "{{core:cfg.output.passes}}");
+            when(plan.findLoopCoreForIterateEdge(iterateEdge)).thenReturn(Optional.of(hub));
+            when(plan.getCores()).thenReturn(List.of(hub));
+            // Resolves to 1: the body entry already used the only iteration, so no room is left.
+            // On the default budget (no condition) this answered true.
+            when(templateEngine.evaluateTemplateWithMap(eq("{{core:cfg.output.passes}}"), anyMap())).thenReturn(1);
+            ExecutionContext ctx = ExecutionContext.create("run-1", "wr-1", "tenant-1", "item-1", 0, Map.of(), plan);
+
+            assertFalse(handler.shouldContinue(node, ctx, plan));
+        }
+
+        @Test
+        @DisplayName("a bad templated cap on a back-edge the node did NOT route to is never evaluated")
+        void templatedCapOnUntakenBranchIsNotEvaluated() {
+            // The cap used to be resolved before the port check, so a decision that went forward
+            // still evaluated (and could fail on) the cap of the loop-back it did not take.
+            ExecutionNode node = mock(ExecutionNode.class);
+            when(node.getNodeId()).thenReturn("core:check");
+            when(node.isBranchingNode()).thenReturn(true);
+            when(node.getSelectedPort(any())).thenReturn("if");
+            WorkflowPlan plan = mock(WorkflowPlan.class);
+            Edge iterateEdge = createIterateEdge("core:check:else", "core:my_loop:iterate");
+            when(plan.getIterateEdgesForSource("core:check")).thenReturn(List.of(iterateEdge));
+            Core hub = createTemplatedCapLoopCore("my_loop", "{{core:cfg.output.passes}}");
+            org.mockito.Mockito.lenient().when(plan.findLoopCoreForIterateEdge(iterateEdge)).thenReturn(Optional.of(hub));
+            org.mockito.Mockito.lenient().when(plan.getCores()).thenReturn(List.of(hub));
+            org.mockito.Mockito.lenient().when(templateEngine.evaluateTemplateWithMap(anyString(), anyMap())).thenReturn(null);
+            ExecutionContext ctx = ExecutionContext.create("run-1", "wr-1", "tenant-1", "item-1", 0, Map.of(), plan);
+
+            assertDoesNotThrow(() -> assertFalse(handler.shouldContinue(node, ctx, plan)));
+            org.mockito.Mockito.verify(templateEngine, org.mockito.Mockito.never()).evaluateTemplateWithMap(anyString(), anyMap());
+        }
+
+        @Test
+        @DisplayName("a templated hub cap that resolves to nothing fails loudly")
+        void templatedHubCapResolvingToNothingFails() {
+            ExecutionNode node = mock(ExecutionNode.class);
+            when(node.getNodeId()).thenReturn("mcp:step_c");
+            WorkflowPlan plan = mock(WorkflowPlan.class);
+            Edge iterateEdge = createIterateEdge("mcp:step_c", "core:my_loop:iterate");
+            when(plan.getIterateEdgesForSource("mcp:step_c")).thenReturn(List.of(iterateEdge));
+            Core hub = createTemplatedCapLoopCore("my_loop", "{{core:cfg.output.passes}}");
+            when(plan.findLoopCoreForIterateEdge(iterateEdge)).thenReturn(Optional.of(hub));
+            when(plan.getCores()).thenReturn(List.of(hub));
+            when(templateEngine.evaluateTemplateWithMap(eq("{{core:cfg.output.passes}}"), anyMap())).thenReturn(null);
+            ExecutionContext ctx = ExecutionContext.create("run-1", "wr-1", "tenant-1", "item-1", 0, Map.of(), plan);
+
+            IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> handler.shouldContinue(node, ctx, plan));
+            assertTrue(e.getMessage().contains("loop.maxIterations"), e.getMessage());
+        }
+
+        @Test
         @DisplayName("Should return false when state is terminated")
         void shouldReturnFalseWhenTerminated() {
             ExecutionNode node = mock(ExecutionNode.class);
@@ -1092,6 +1152,63 @@ class BackEdgeHandlerTest {
             null,           // databaseConfig
             Map.of(),       // params
             null            // graphNodeId
+        );
+    }
+
+    /** A loop Core whose maxIterations the plan wrote as a {{...}} template. */
+    private Core createTemplatedCapLoopCore(String label, String template) {
+        return new Core(
+            label,          // id
+            "loop",         // type
+            Map.of(),       // position
+            label,          // label
+            null,           // decisionConditions
+            null,           // switchExpression
+            null,           // switchCases
+            null,           // loopCondition
+            null,           // maxIterations (set aside: it was a template)
+            null,           // strategy
+            null,           // list
+            null,           // maxItems
+            null,           // splitStrategy
+            null,           // forkOutputs
+            null,           // transformConfig
+            null,           // waitConfig
+            null,           // downloadConfig
+            null,           // responseConfig
+            null,           // aggregateConfig
+            null,           // optionChoices
+            null,           // httpRequestConfig
+            null,           // approvalConfig
+            null,           // dataInputConfig
+            null,           // filterConfig
+            null,           // sortConfig
+            null,           // limitConfig
+            null,           // removeDuplicatesConfig
+            null,           // summarizeConfig
+            null,           // dateTimeConfig
+            null,           // cryptoJwtConfig
+            null,           // xmlConfig
+            null,           // compressionConfig
+            null,           // rssConfig
+            null,           // convertToFileConfig
+            null,           // extractFromFileConfig
+            null,           // compareDatasetsConfig
+            null,           // subWorkflowConfig
+            null,           // respondToWebhookConfig
+            null,           // sendEmailConfig
+            null,           // emailInboxConfig
+            null,           // codeConfig
+            null,           // setConfig
+            null,           // htmlExtractConfig
+            null,           // taskConfig
+            null,           // stopOnErrorConfig
+            null,           // sshConfig
+            null,           // sftpConfig
+            null,           // databaseConfig
+            Map.of(),       // params
+            null,           // graphNodeId
+            Map.of("loop", Map.of("maxIterations", template))
         );
     }
 

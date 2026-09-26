@@ -77,7 +77,9 @@ public class MdcContextFilter implements Filter, Ordered {
             putIfPresent(MDC_ORG, organizationId);
             putIfPresent(MDC_ORG_ROLE, organizationRole);
             putIfPresent(MDC_REQUEST_ID, requestId);
-            putIfPresent(MDC_REQUEST_PATH, requestPath);
+            // Masked before it enters the MDC: every log line of the request carries it, and a
+            // capability token can live in the path (see LogSafePath).
+            putIfPresent(MDC_REQUEST_PATH, LogSafePath.of(requestPath));
             chain.doFilter(req, res);
         } finally {
             // On an async request (a StreamingResponseBody download, for one)
@@ -166,8 +168,12 @@ public class MdcContextFilter implements Filter, Ordered {
         }
         long durationMs = Math.max(0, (System.nanoTime() - startedAt) / 1_000_000);
         int status = res instanceof HttpServletResponse httpRes ? httpRes.getStatus() : 0;
+        // The matched handler pattern (set by Spring MVC during dispatch) names the token
+        // segments of this route; LogSafePath masks them, and known token prefixes besides.
+        Object pattern = req.getAttribute(LogSafePath.BEST_MATCHING_PATTERN_ATTRIBUTE);
         log.info("HTTP request completed method={} path={} status={} durationMs={} requestId={}",
-                req.getMethod(), path, status, durationMs, valueOrDash(requestId));
+                req.getMethod(), LogSafePath.of(path, pattern instanceof String p ? p : null),
+                status, durationMs, valueOrDash(requestId));
     }
 
     private static void putIfPresent(String key, String value) {

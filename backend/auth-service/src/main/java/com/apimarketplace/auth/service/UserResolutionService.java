@@ -27,6 +27,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Date;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -83,6 +84,20 @@ public class UserResolutionService {
     private io.micrometer.core.instrument.MeterRegistry meterRegistry;
 
     /**
+     * Lifecycle emails (Resend). Optional so hand-built test instances are untouched; a null
+     * field, like an inactive client, sends nothing.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails;
+
+    /** Sends user.signed_up at most once per account (write-once guard). Optional like the above. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.lifecycle.UserLifecycleContextService lifecycleContext;
+
+    /** A real login this long after the previous one is a return ({@code user.returned}). */
+    static final long RETURNED_AFTER_DAYS = 30L;
+
+    /**
      * How stale last_login_at ("last seen") has to be before we rewrite it.
      *
      * <p>Purely a write-throttle: resolveUser runs on every gateway request carrying a
@@ -131,6 +146,16 @@ public class UserResolutionService {
      * two reasons, so it needs no eviction.
      */
     private final Set<String> missingAuthTimeWarned = ConcurrentHashMap.newKeySet();
+
+    /**
+     * userId to the authentication instant whose SAML workspace refusal was already reported to
+     * analytics. A refused sign-in never records its authentication instant (the resolution
+     * fails first), so without this every retry of the same token would look like a new
+     * sign-in. Per JVM: several replicas can each report one sign-in once. Cleared wholesale
+     * past {@link #SAML_REJECTION_MEMO_MAX}, which at worst re-reports one refusal.
+     */
+    private final Map<Long, LocalDateTime> samlRejectionReported = new ConcurrentHashMap<>();
+    static final int SAML_REJECTION_MEMO_MAX = 10_000;
 
     @Autowired(required = false)
     private AuthEventRecorder authEventRecorder;
@@ -234,7 +259,13 @@ public class UserResolutionService {
 
             // 4b. Attribute credits if email is verified (idempotent)
             attributeCreditsSafely(user);
-            ensureSamlMembershipForBrokeredLogin(user, keycloakJwt);
+
+            // Read here (it only parses the token) so the SAML check below knows whether this
+            // resolution is a real sign-in: its refusal is reported once per sign-in, not once
+            // per request that re-resolves the same token.
+            LocalDateTime authenticatedAt = authenticationInstant(keycloakJwt, user);
+            ensureSamlMembershipForBrokeredLogin(user, keycloakJwt,
+                    isNewUser || isUnreportedNewAuthentication(user, authenticatedAt), authenticatedAt);
 
             // 5. "Last seen" bookkeeping. Throttled, and deliberately not a login signal.
             // Goes through the self-injected proxy so @Transactional applies, and through a
@@ -246,18 +277,39 @@ public class UserResolutionService {
             // its session's auth_time and matches nothing; a token with no auth_time at all
             // (an API key resolve, a self-hosted embedded token) is a non-interactive
             // principal and never claims to be a sign-in.
-            LocalDateTime authenticatedAt = authenticationInstant(keycloakJwt, user);
             boolean newAuthentication = authenticatedAt != null
                     && recordAuthenticationSafely(user, authenticatedAt);
             boolean realLogin = isNewUser || newAuthentication;
 
             // 5b. Record metrics + audit only on real login transitions.
             if (realLogin && authEventRecorder != null) {
-                String tag = authEventRecorder.providerTag(user.getAuthProvider());
+                String tag = loginMethodTag(user, keycloakJwt);
                 if (isNewUser) {
                     authEventRecorder.recordSignupAndLogin(user.getId(), tag, false);
                 } else {
                     authEventRecorder.recordLoginSuccess(user.getId(), tag);
+                }
+            }
+
+            // 5c. Lifecycle emails: the contact is created with its properties BEFORE the
+            // signup event, so the welcome automation branches on real values. An account
+            // created unverified gets both when its email is verified (EmailVerificationService),
+            // never here. isNewUser alone is not enough: the loser of a first-login creation
+            // race also sees lastLoginAt == null, so the write-once guard decides who sends.
+            if (isNewUser && user.isEmailVerified() && lifecycleContext != null) {
+                try {
+                    lifecycleContext.recordSignup(user.getId());
+                } catch (Exception e) {
+                    log.debug("user.signed_up not recorded for user {}: {}", user.getId(), e.toString());
+                }
+            }
+            // A welcome whose send failed gave its stamp back: the next real login of a still-new
+            // account re-attempts it, since the account-creating login above never comes again.
+            if (!isNewUser && newAuthentication && lifecycleContext != null) {
+                try {
+                    lifecycleContext.retrySignupIfUnsent(user);
+                } catch (Exception e) {
+                    log.debug("user.signed_up retry not recorded for user {}: {}", user.getId(), e.toString());
                 }
             }
 
@@ -287,8 +339,21 @@ public class UserResolutionService {
             String idp = SignedJWT.parse(jwt).getJWTClaimsSet().getStringClaim("identity_provider");
             if ("google".equals(idp)) return "google";
             if ("github".equals(idp)) return "github";
+            if (OrganizationSamlService.isOrganizationSamlAlias(idp)) return "saml";
         } catch (Exception ignored) {}
         return "keycloak";
+    }
+
+    /**
+     * The sign-in method of THIS authentication. A workspace SAML login is {@code saml}
+     * whatever the account was created with: Keycloak links a SAML identity provider to an
+     * existing account (a Google or password account) without touching its stored
+     * {@code authProvider}, so the stored value would name the wrong method. Every other
+     * login keeps the stored provider, as before.
+     */
+    private String loginMethodTag(User user, String jwt) {
+        if ("saml".equals(providerTagFromJwt(jwt))) return "saml";
+        return authEventRecorder.providerTag(user.getAuthProvider());
     }
 
     private Optional<User> findLocalUserByLegacyNumericSubject(String providerId, String jwt) {
@@ -362,26 +427,39 @@ public class UserResolutionService {
         }
     }
 
-    private void ensureSamlMembershipForBrokeredLogin(User user, String jwt) {
+    /**
+     * Whether this token's authentication is newer than the one recorded for the account (the
+     * same comparison {@code recordAuthenticationIfNewer} makes, read-only) and its SAML refusal
+     * has not been reported yet. A token with no authentication instant is never a sign-in.
+     */
+    private boolean isUnreportedNewAuthentication(User user, LocalDateTime authenticatedAt) {
+        if (authenticatedAt == null) return false;
+        LocalDateTime recorded = user.getLastAuthenticatedAt();
+        if (recorded != null && !recorded.isBefore(authenticatedAt)) return false;
+        return !authenticatedAt.equals(samlRejectionReported.get(user.getId()));
+    }
+
+    private void ensureSamlMembershipForBrokeredLogin(User user, String jwt, boolean realSignIn,
+                                                      LocalDateTime authenticatedAt) {
         if (samlLoginService == null || jwt == null || jwt.isBlank()) {
             return;
         }
         String identityProvider = null;
         try {
             identityProvider = SignedJWT.parse(jwt).getJWTClaimsSet().getStringClaim("identity_provider");
-            samlLoginService.ensureMembershipForIdentityProvider(user, identityProvider);
+            samlLoginService.ensureMembershipForIdentityProvider(user, identityProvider, realSignIn);
         } catch (SamlMembershipException e) {
+            if (realSignIn && authenticatedAt != null && user.getId() != null) {
+                if (samlRejectionReported.size() >= SAML_REJECTION_MEMO_MAX) samlRejectionReported.clear();
+                samlRejectionReported.put(user.getId(), authenticatedAt);
+            }
             throw e;
         } catch (Exception e) {
-            if (isOrganizationSamlAlias(identityProvider)) {
+            if (OrganizationSamlService.isOrganizationSamlAlias(identityProvider)) {
                 throw new SamlMembershipException("Could not join SAML workspace", e);
             }
             log.warn("Could not ensure SAML organization membership for user {}: {}", user.getId(), e.getMessage());
         }
-    }
-
-    private boolean isOrganizationSamlAlias(String alias) {
-        return alias != null && alias.matches("^org-[0-9a-fA-F]{32}-saml$");
     }
 
     /**
@@ -485,7 +563,16 @@ public class UserResolutionService {
 
     /**
      * Maps the Keycloak {@code identity_provider} claim to our AuthProvider.
-     * Absent claim (direct Keycloak password login) → KEYCLOAK.
+     * Absent claim (direct Keycloak password login) → KEYCLOAK. A workspace SAML
+     * alias is its own provider: the email it asserts comes from an IdP a workspace
+     * admin configured, so it must never be treated as the same sign-in method as a
+     * password account (the cross-provider guard below compares providers).
+     *
+     * <p>Accounts created by a SAML login before SAML existed here are stored as KEYCLOAK.
+     * Their ordinary logins match on the Keycloak subject and never reach the guard; only a
+     * recreated Keycloak user (new subject) would, and it is then refused as a cross-provider
+     * login. That is deliberate: re-labelling them by email is exactly the merge the guard
+     * forbids. When this shipped, production held no such account.
      */
     private AuthProvider resolveAuthProviderFromIdentityProvider(String identityProvider) {
         if ("google".equals(identityProvider)) {
@@ -493,6 +580,9 @@ public class UserResolutionService {
         }
         if ("github".equals(identityProvider)) {
             return AuthProvider.GITHUB;
+        }
+        if (OrganizationSamlService.isOrganizationSamlAlias(identityProvider)) {
+            return AuthProvider.SAML;
         }
         return AuthProvider.KEYCLOAK;
     }
@@ -756,12 +846,35 @@ public class UserResolutionService {
      */
     @Transactional
     public boolean recordAuthenticationAtomic(User user, LocalDateTime authenticatedAt) {
+        // Read BEFORE the write: once the row (and the entity) advance, how long the person
+        // was away is gone.
+        LocalDateTime previous = user.getLastAuthenticatedAt();
         int rows = userRepository.recordAuthenticationIfNewer(user.getId(), authenticatedAt);
         if (rows > 0) {
             user.setLastAuthenticatedAt(authenticatedAt); // keep in-memory entity consistent
+            emitReturnedIfLongAway(user.getId(), previous, authenticatedAt);
             return true;
         }
         return false;
+    }
+
+    /**
+     * {@code user.returned} when this real login comes {@link #RETURNED_AFTER_DAYS} days or
+     * more after the previous one. Only reached on the single resolve that won the atomic
+     * advance, so racing resolves of one sign-in emit it once. Never throws: a lifecycle
+     * email must never cost a sign-in.
+     */
+    void emitReturnedIfLongAway(Long userId, LocalDateTime previous, LocalDateTime authenticatedAt) {
+        if (lifecycleEmails == null || previous == null || authenticatedAt == null) return;
+        try {
+            long daysAway = java.time.Duration.between(previous, authenticatedAt).toDays();
+            if (daysAway >= RETURNED_AFTER_DAYS) {
+                lifecycleEmails.emit(userId, com.apimarketplace.auth.lifecycle.LifecycleEvents.USER_RETURNED,
+                        java.util.Map.of("days_away", daysAway));
+            }
+        } catch (Exception e) {
+            log.debug("user.returned not emitted for user {}: {}", userId, e.toString());
+        }
     }
 
     /**

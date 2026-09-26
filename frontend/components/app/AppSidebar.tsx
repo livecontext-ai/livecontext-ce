@@ -18,6 +18,8 @@ import { useSidebarSafe } from '@/contexts/SidebarContext';
 import { useCurrentView } from '@/hooks/useCurrentView';
 import { useUnifiedApp } from '@/contexts/UnifiedAppContext';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
+import { useMobileDetection } from '@/hooks/useMobileDetection';
+import { useSwipeToDismiss } from '@/hooks/useSwipeToDismiss';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { useSubscription, useCreditBalance } from '@/lib/hooks/smart-hooks-complete';
 import { useAuth } from '@/lib/providers/smart-providers';
@@ -27,6 +29,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { WorkspaceUpgradeModal } from '@/components/organization/WorkspaceUpgradeModal';
 import { OwnerOnlyGateModal } from '@/components/organization/OwnerOnlyGateModal';
 import { WorkspaceAvatar } from '@/components/organization/WorkspaceAvatar';
+import { SetupChecklist } from '@/components/app/SetupChecklist';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
 import CreateWorkspaceModal from '@/components/organization/CreateWorkspaceModal';
 import { Conversation, conversationRoute } from '@/lib/api/conversationApi';
@@ -37,7 +40,9 @@ import { triggerSidebarNavigation } from '@/components/NavigationLoader';
 import { memo } from 'react';
 import { LucideIcon } from 'lucide-react';
 import { IS_CE } from '@/lib/edition';
+import { reportExplicitLocaleChoice } from '@/lib/lifecycle/localeChoice';
 import { cloudLinkService, CLOUD_NO_SUBSCRIPTION } from '@/lib/api/cloud-link.service';
+import { CLOUD_PRICING_URL } from '@/lib/edition/cloudWebUrl';
 import { NavIconButton } from '@/components/app/NavIconButton';
 import { SidebarNavigation } from '@/components/app/SidebarNavigation';
 
@@ -59,6 +64,27 @@ const NOOP = () => {};
 interface AppSidebarProps {
   onConversationCreated?: (conversationId: string, title: string | null, isTemporary: boolean) => void;
   onTitleUpdated?: (conversationId: string, title: string, isTemporary: boolean) => void;
+}
+
+// Sidebar container classes.
+// Mobile: an off-canvas drawer that is ALWAYS rendered and slides on its transform,
+// like the right side panel animates its width. It used to be `hidden` while closed,
+// and `display` cannot transition, so the drawer popped in and out with no motion.
+// Tailwind v4 writes `translate-x-*` to the CSS `translate` property while the swipe drag
+// writes `transform` inline, so both are transitioned. `invisible` rides the same
+// transition (visibility flips at its END when closing), so the off-screen drawer stays
+// out of the tab order and the accessibility tree.
+// Desktop (md:) is unchanged: static rail/expanded column animated on its width.
+// `touch-pan-y` hands horizontal moves to the swipe-to-close gesture; pinch-zoom stays allowed.
+// Note: `translate-x-0` still computes to a non-`none` translate, which makes this column the
+// containing block of any `position: fixed` child. Overlays opened from it must stay portalled.
+export function appSidebarClasses(sidebarOpen: boolean, sidebarCollapsed: boolean): string {
+  const baseClasses = 'bg-theme-secondary flex-shrink-0 overflow-hidden w-64 transition-[translate,transform,visibility] duration-300 ease-out md:transition-all md:duration-700 md:ease-in-out md:translate-x-0 md:visible touch-pan-y touch-pinch-zoom md:touch-auto';
+  const collapsedWidthClasses = sidebarCollapsed ? 'md:w-16' : 'md:w-64';
+  const positionClasses = sidebarOpen
+    ? 'absolute inset-y-0 left-0 translate-x-0 z-[60] md:relative md:inset-auto md:h-full'
+    : 'absolute inset-y-0 left-0 -translate-x-full invisible z-[60] md:static md:inset-auto md:z-auto';
+  return `${collapsedWidthClasses} ${baseClasses} ${positionClasses}`;
 }
 
 export const AppSidebar = memo(function AppSidebar({
@@ -213,6 +239,12 @@ export const AppSidebar = memo(function AppSidebar({
     setSidebarOpen(!sidebarOpen);
   }, [sidebarOpen, setSidebarOpen]);
 
+  // A checklist task is a plain link: on mobile the drawer has to close itself, as every other
+  // navigation from the sidebar does, or it keeps covering the page the link just opened.
+  const handleChecklistNavigate = useCallback(() => {
+    if (sidebarOpen) setSidebarOpen(false);
+  }, [sidebarOpen, setSidebarOpen]);
+
   // Memoized like every other callback handed to the conversation sidebar: that
   // component is memo()'d, and one inline arrow here would give it a new prop on
   // every render of this shell and redraw the whole list for nothing.
@@ -233,18 +265,22 @@ export const AppSidebar = memo(function AppSidebar({
   // list anyway. Same for handleNavigate and handleOpenSearch.
   const handleNewChat = useCallback(() => handleConversationSelect(null), [handleConversationSelect]);
 
-  // Sidebar container classes
-  const sidebarClasses = useMemo(() => {
-    const baseClasses = 'bg-theme-secondary transition-all duration-700 ease-in-out flex-shrink-0 overflow-hidden';
-    const widthClasses = sidebarOpen ? 'w-64' : 'w-0';
-    const collapsedWidthClasses = sidebarCollapsed ? 'md:w-16' : 'md:w-64';
-    const positionClasses = sidebarOpen ? 'absolute md:relative z-[60] h-full' : 'hidden md:block';
-    return `${widthClasses} ${collapsedWidthClasses} ${baseClasses} ${positionClasses}`;
-  }, [sidebarOpen, sidebarCollapsed]);
+  const sidebarClasses = useMemo(() => appSidebarClasses(sidebarOpen, sidebarCollapsed), [sidebarOpen, sidebarCollapsed]);
+
+  const isMobile = useMobileDetection();
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const closeSidebar = useCallback(() => setSidebarOpen(false), [setSidebarOpen]);
+  const swipeHandlers = useSwipeToDismiss({
+    enabled: isMobile && sidebarOpen,
+    panelRef: drawerRef,
+    backdropRef,
+    onDismiss: closeSidebar,
+  });
 
   return (
     <>
-      <div className={sidebarClasses}>
+      <div ref={drawerRef} data-testid="app-sidebar" className={sidebarClasses} {...swipeHandlers}>
         <div className="h-full flex flex-col">
           {/* Fixed Header Section */}
           <div className="flex-shrink-0">
@@ -375,6 +411,9 @@ export const AppSidebar = memo(function AppSidebar({
                 </div>
               )
             ) : isAuthenticated ? (
+              <>
+              {/* What a new account still has to do: always in sight, right above the user. Self-hides. */}
+              <SetupChecklist variant={sidebarCollapsed && !sidebarOpen ? 'rail' : 'panel'} onNavigate={handleChecklistNavigate} />
               <UserSection
                 sidebarCollapsed={sidebarCollapsed && !sidebarOpen}
                 user={user}
@@ -393,6 +432,7 @@ export const AppSidebar = memo(function AppSidebar({
                 creditPaygBalance={IS_CE ? null : creditPaygBalance}
                 isCreditBalanceLoading={IS_CE ? false : isCreditBalanceLoading}
               />
+              </>
             ) : (
               <SignInSection
                 sidebarCollapsed={sidebarCollapsed && !sidebarOpen}
@@ -403,13 +443,15 @@ export const AppSidebar = memo(function AppSidebar({
         </div>
       </div>
 
-      {/* Mobile Sidebar Overlay */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/60 z-40 md:hidden"
-          onClick={handleSidebarToggle}
-        />
-      )}
+      {/* Mobile Sidebar Overlay: always mounted so it fades with the slide; swiping on it closes too. */}
+      <div
+        ref={backdropRef}
+        data-testid="app-sidebar-backdrop"
+        aria-hidden="true"
+        className={`fixed inset-0 bg-black/60 z-40 md:hidden transition-opacity duration-300 ease-out ${sidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+        onClick={sidebarOpen ? closeSidebar : undefined}
+        {...swipeHandlers}
+      />
 
       {/* Search Conversation Modal */}
       <SearchConversationModal
@@ -469,6 +511,7 @@ export const UserSection = memo(function UserSection({
   isCreditBalanceLoading,
 }: UserSectionProps) {
   const t = useTranslations('sidebar');
+  const tCloudPlan = useTranslations('ceCloudLink.planRequired');
   const locale = useLocale();
   const router = useRouter();
   const pathname = usePathname();
@@ -588,6 +631,14 @@ export const UserSection = memo(function UserSection({
   // its upsell is "link this install to the cloud", so this badge stays the only
   // home for it there.
   const showUpgrade = IS_CE && !isInstallCloudLinked;
+  // CE ONLY: the linked cloud account is not on a paid plan, so the cloud refuses every
+  // link-gated call (the link is kept and comes back by itself once the account pays). The
+  // badge takes the Upgrade CTA's place (a linked install never shows that one) and opens the
+  // CLOUD pricing page, in a new tab, since that is where the plan is chosen.
+  const showCloudPlanRequired = IS_CE && ceLinkStatus?.planRequired === true;
+  const openCloudPricing = useCallback(() => {
+    window.open(CLOUD_PRICING_URL, '_blank', 'noopener,noreferrer');
+  }, []);
   // Never surface a "paused" (dormant) or soft-deleted org as the active workspace - the
   // owner downgraded below TEAM (paused) or it's pending purge (gateway rejects entering
   // both). Prefer current → default → any active, then anything.
@@ -688,6 +739,8 @@ export const UserSection = memo(function UserSection({
 
   const handleLanguageChange = (langCode: string) => {
     document.cookie = `NEXT_LOCALE=${langCode}; path=/; max-age=31536000; SameSite=Lax`;
+    // Best-effort, never awaited: the switch must not wait on or fail because of it.
+    reportExplicitLocaleChoice(langCode);
     router.push(pathname, { locale: langCode });
     setShowMenu(false);
     setShowLanguageSubmenu(false);
@@ -1181,6 +1234,24 @@ export const UserSection = memo(function UserSection({
                             className="text-xs px-2 py-0.5 rounded-md bg-[var(--accent-primary)] text-[var(--accent-foreground)] hover:bg-[var(--accent-hover)] font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg-primary)]"
                           >
                             {t('upgrade')}
+                          </span>
+                        )}
+                        {showCloudPlanRequired && (
+                          <span
+                            role="link"
+                            tabIndex={0}
+                            data-testid="sidebar-cloud-plan-required"
+                            title={tCloudPlan('title')}
+                            onClick={(e) => { e.stopPropagation(); openCloudPricing(); }}
+                            onKeyDown={(e) => {
+                              if (e.key !== 'Enter' && e.key !== ' ') return;
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openCloudPricing();
+                            }}
+                            className="text-xs px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25 font-medium transition-colors cursor-pointer truncate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg-primary)]"
+                          >
+                            {tCloudPlan('sidebarBadge')}
                           </span>
                         )}
                       </>

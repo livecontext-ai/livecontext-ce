@@ -11,6 +11,7 @@ import com.apimarketplace.auth.dto.CeLinkEntitlements;
 import com.apimarketplace.auth.service.CreditConsumptionDeadLetterService;
 import com.apimarketplace.auth.service.CeLinkEntitlementsService;
 import com.apimarketplace.auth.service.CeLinkService;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
 import com.apimarketplace.auth.service.ModelPricingService;
 import com.apimarketplace.auth.service.OnboardingService;
 import com.apimarketplace.auth.service.OrgRestrictionQueryService;
@@ -166,16 +167,28 @@ public class InternalAuthController {
         return ResponseEntity.ok(body);
     }
 
+    /**
+     * "Linked AND paid" probe behind every CE-link-gated cloud relay (auth-client
+     * {@code ceLinkAccess} / {@code userOwnsActiveCeLink}). Always 200:
+     * {@code {"active": bool, "reason": "PLAN_REQUIRED" | "NOT_LINKED" | null, "planCode": string|null}}.
+     * {@code active} is true ONLY when {@code reason} is null, so a caller that reads
+     * {@code active} alone (older auth-client) stays fail-closed on a suspended link.
+     */
     @GetMapping("/ce-link/{installId}/active")
     public ResponseEntity<Map<String, Object>> hasActiveCeLink(
             @RequestHeader("X-User-ID") Long userId,
             @PathVariable UUID installId) {
         // Cloud-only: in CE (auth.mode=embedded) CeLinkService is absent → no cloud link exists.
         CeLinkService ceLinkService = ceLinkServiceProvider.getIfAvailable();
-        boolean active = ceLinkService != null && ceLinkService.userOwnsActiveLink(userId, installId);
-        return ResponseEntity.ok(Map.of(
-                "active", active,
-                "installId", installId.toString()));
+        CeLinkAccessResult access = ceLinkService != null
+                ? ceLinkService.linkAccess(userId, installId)
+                : CeLinkAccessResult.notLinked();
+        Map<String, Object> body = new HashMap<>();
+        body.put("active", access.isActive());
+        body.put("reason", access.isActive() ? null : access.access().name());
+        body.put("planCode", access.planCode());
+        body.put("installId", installId.toString());
+        return ResponseEntity.ok(body);
     }
 
     /**

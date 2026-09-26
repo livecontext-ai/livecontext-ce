@@ -82,6 +82,22 @@ class BackEdgeSpecsTest {
         }
 
         @Test
+        @DisplayName("regression: a templated maxIterations on the marker is kept for run time, not dropped")
+        void templatedMarkerCapIsKept() {
+            // An Integer cannot hold "{{...}}": it used to become null and the loop ran on the
+            // run's default cap as if nothing had been written.
+            WorkflowPlan plan = planOf(List.of(Map.of(
+                "from", "core:check:else",
+                "to", "mcp:fetch",
+                "backEdge", Map.of("maxIterations", "{{core:cfg.output.passes}}")
+            )), List.of());
+
+            Edge parsed = plan.getEdges().get(0);
+            assertNull(parsed.backEdge().maxIterations());
+            assertEquals("{{core:cfg.output.passes}}", parsed.backEdge().maxIterationsTemplate());
+        }
+
+        @Test
         @DisplayName("regression: the legacy params-based marker is migrated and stripped")
         void legacyParamsMarkerIsMigratedAndStripped() {
             // Workflows saved by an earlier builder carry the marker inside params. They must

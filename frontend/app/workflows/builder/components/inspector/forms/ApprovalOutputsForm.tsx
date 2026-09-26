@@ -1,14 +1,13 @@
 'use client';
 
 import * as React from 'react';
-import { Info } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
 import type { ApprovalContinuationMode, ApprovalDelegation } from '../../../types';
 import { ApprovalDelegationSection } from './ApprovalDelegationSection';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 /** Syntax example for the approval context (code/syntax token, intentionally not translated). */
 const CONTEXT_TEMPLATE_PLACEHOLDER =
@@ -82,27 +81,17 @@ export function ApprovalOutputsForm({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('approval.contextLabel')}</span>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-                >
-                  <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                  <p className="font-semibold text-slate-900 dark:text-slate-100">{t('approval.contextInfoTitle')}</p>
-                  <p>{t('approval.contextInfoBody')}</p>
-                  <p>{t('approval.contextInfoVariables')}</p>
-                  <code className="block text-xs bg-slate-100 dark:bg-slate-800 rounded px-2 py-1 break-words">
-                    {CONTEXT_TEMPLATE_PLACEHOLDER}
-                  </code>
-                  <p className="text-xs">{t('approval.contextInfoOptional')}</p>
-                </div>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label={t('approval.contextLabel')} size="sm" side="right" align="start">
+              <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                <p className="font-semibold text-slate-900 dark:text-slate-100">{t('approval.contextInfoTitle')}</p>
+                <p>{t('approval.contextInfoBody')}</p>
+                <p>{t('approval.contextInfoVariables')}</p>
+                <code className="block text-xs bg-slate-100 dark:bg-slate-800 rounded px-2 py-1 break-words">
+                  {CONTEXT_TEMPLATE_PLACEHOLDER}
+                </code>
+                <p className="text-xs">{t('approval.contextInfoOptional')}</p>
+              </div>
+            </InfoPopover>
           </div>
         </div>
         <ExpressionEditor
@@ -120,27 +109,17 @@ export function ApprovalOutputsForm({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">Timeout (milliseconds)</span>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-                >
-                  <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-                <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                  <p className="font-semibold text-slate-900 dark:text-slate-100">Approval Timeout</p>
-                  <p>Maximum time to wait for user approval before the timeout path is taken.</p>
-                  <ul className="list-disc list-inside space-y-1 text-xs">
-                    <li>Duration is specified in milliseconds</li>
-                    <li>Leave empty for no timeout (wait indefinitely)</li>
-                    <li>Use presets for common durations</li>
-                  </ul>
-                </div>
-              </PopoverContent>
-            </Popover>
+            <InfoPopover label="Timeout (milliseconds)" size="sm" side="right" align="start">
+              <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                <p className="font-semibold text-slate-900 dark:text-slate-100">Approval Timeout</p>
+                <p>Maximum time to wait for user approval before the timeout path is taken.</p>
+                <ul className="list-disc list-inside space-y-1 text-xs">
+                  <li>Duration is specified in milliseconds</li>
+                  <li>Leave empty for no timeout (wait indefinitely)</li>
+                  <li>Use presets for common durations</li>
+                </ul>
+              </div>
+            </InfoPopover>
           </div>
           <span className="text-sm text-slate-500 dark:text-slate-400">Optional</span>
         </div>
@@ -196,23 +175,13 @@ export function ApprovalOutputsForm({
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-1.5">
           <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('approval.continuationLabel')}</span>
-          <Popover>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-              >
-                <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-              <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                <p className="font-semibold text-slate-900 dark:text-slate-100">{t('approval.continuationInfoTitle')}</p>
-                <p>{t('approval.continuationInfoBody')}</p>
-                <p className="text-xs">{t('approval.continuationInfoScope')}</p>
-              </div>
-            </PopoverContent>
-          </Popover>
+          <InfoPopover label={t('approval.continuationLabel')} size="sm" side="right" align="start">
+            <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+              <p className="font-semibold text-slate-900 dark:text-slate-100">{t('approval.continuationInfoTitle')}</p>
+              <p>{t('approval.continuationInfoBody')}</p>
+              <p className="text-xs">{t('approval.continuationInfoScope')}</p>
+            </div>
+          </InfoPopover>
         </div>
         <Select
           value={approvalContinuationMode ?? 'all_items'}

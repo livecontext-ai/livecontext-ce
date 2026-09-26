@@ -16,6 +16,7 @@ import {
   type ModelExecutionLink,
   type ModelExecutionLinkScope,
 } from "@/lib/api/model-config.service";
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 interface ModelExecutionLinkCellProps {
   model: ModelConfigEntry;
@@ -292,7 +293,7 @@ export default function ModelExecutionLinkCell({
             tooltip is what identifies it. */}
         {targetIcon && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={targetIcon} alt="" className="h-3 w-3 object-contain" />
+          <ServiceLogo src={targetIcon} alt="" className="h-3 w-3 object-contain" />
         )}
         {/* Only meaningful when surfaces are routed one by one: with ALL active every
             surface runs on it, so a count would just be "how many rows exist". */}

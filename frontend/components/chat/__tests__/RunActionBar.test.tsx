@@ -41,6 +41,8 @@ vi.mock('next-intl', () => ({
     return tpl.replace(/\{(\w+)\}/g, (_m, k: string) => String(values?.[k] ?? ''));
   },
 }));
+const track = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/analytics/analytics', () => ({ track: (...a: unknown[]) => track(...a) }));
 vi.mock('@/components/LoadingSpinner', () => ({ default: () => <span data-testid="spinner" /> }));
 
 import { RunActionBar } from '../RunActionBar';
@@ -71,6 +73,7 @@ function renderBar(blockers: RunBlocker[], extra: Record<string, unknown> = {}) 
 }
 
 beforeEach(() => {
+  track.mockReset();
   onContinue = vi.fn<() => void>();
   onResolveApproval = vi.fn<ResolveApproval>().mockResolvedValue(undefined);
 });
@@ -150,6 +153,30 @@ describe('RunActionBar', () => {
     renderBar([blocker]);
     fireEvent.click(screen.getByTestId('application-run-action-reject'));
     await waitFor(() => expect(onResolveApproval).toHaveBeenCalledWith(blocker, 'REJECTED'));
+  });
+
+  it('reports a resolved approval only once the server accepted it', async () => {
+    renderBar([approval(7)]);
+    fireEvent.click(screen.getByTestId('application-run-action-reject'));
+    await waitFor(() => expect(track).toHaveBeenCalledWith('run_blocker_resolved', {
+      blocker_kind: 'approval', resolution: 'rejected',
+    }));
+
+    cleanup();
+    track.mockReset();
+    onResolveApproval = vi.fn<ResolveApproval>().mockRejectedValue(new Error('409'));
+    renderBar([approval(8)]);
+    fireEvent.click(screen.getByTestId('application-run-action-approve'));
+    await waitFor(() => expect(onResolveApproval).toHaveBeenCalled());
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  it('reports a Continue click on the interface on screen', () => {
+    renderBar([cont()]);
+    fireEvent.click(screen.getByTestId('application-run-action-continue'));
+    expect(track).toHaveBeenCalledWith('run_blocker_resolved', {
+      blocker_kind: 'interface_continue', resolution: 'continued',
+    });
   });
 
   it('asks about ONE blocker and counts the rest, instead of covering the app', () => {

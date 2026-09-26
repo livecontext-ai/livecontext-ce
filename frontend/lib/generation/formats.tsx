@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { Image as ImageIcon, Music, Film, Mic, AudioWaveform, Sparkles } from 'lucide-react';
+import { ServiceLogo } from '@/components/ui/service-logo';
 
 /**
  * The formats a generation can produce, and how each is drawn.
@@ -53,7 +54,7 @@ export function ProviderIcon({ slug, className }: { slug?: string | null; classN
   if (!slug || failed) return null;
   return (
     // eslint-disable-next-line @next/next/no-img-element
-    <img
+    <ServiceLogo
       src={`/icons/services/${slug}.svg`}
       alt=""
       aria-hidden="true"

@@ -60,15 +60,23 @@ public class ConvertToFileNode extends BaseNode {
     @Override
     public NodeExecutionResult execute(ExecutionContext context) {
         String format = convertToFileConfig != null ? convertToFileConfig.format() : "csv";
-        String filename = convertToFileConfig != null ? convertToFileConfig.filename() : "export";
+        String configuredFilename = convertToFileConfig != null ? convertToFileConfig.filename() : "export";
         logger.info("ConvertToFile node executing: nodeId={}, format={}, filename={}, itemId={}",
-            nodeId, format, filename, context.itemId());
+            nodeId, format, configuredFilename, context.itemId());
 
         // Captured outside the try so failure paths still surface the resolved inputs
         // to the inspector "Resolved parameters" panel.
         Map<String, Object> inputData = buildInputDataMap(context);
 
         try {
+            // Resolved once: this is the name the file carries AND the name reported. It used to
+            // be read configured, so `{{trigger:in.output.client}}-invoices` named the file
+            // literally while `value` beside it resolved.
+            String resolvedFilename = com.apimarketplace.orchestrator.services.TemplateEngine.asText(
+                resolveExpression(configuredFilename, context));
+            String filename = resolvedFilename == null || resolvedFilename.isBlank() ? "export" : resolvedFilename;
+            inputData.put("filename", ReportedParams.valueFrom(configuredFilename, filename));
+
             // Resolve the input value expression
             Object inputValue = resolveExpression(
                 convertToFileConfig != null ? convertToFileConfig.value() : null, context);
@@ -375,27 +383,17 @@ public class ConvertToFileNode extends BaseNode {
         if (expression == null || expression.isBlank()) {
             return null;
         }
-
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__expr__", expression);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                return resolved.getOrDefault("__expr__", expression);
-            } catch (Exception e) {
-                logger.warn("Failed to resolve expression '{}': {}", expression, e.getMessage());
-                return expression;
-            }
-        }
-
-        return expression;
+        // Typed (the rows stay a list), and never the configured text in place of a value.
+        return resolveTemplateValue(expression, context);
     }
 
     /**
      * The node's configuration, as the node itself reads it.
      *
      * <p>It used to re-resolve two of these for display only, and both answers were wrong.
-     * {@code filename} was reported RESOLVED while {@link #execute} names the file from the
-     * configured string - so the panel showed a name no file ever carried. And {@code value}
+     * {@code filename} was reported RESOLVED while {@link #execute} named the file from the
+     * configured string - so the panel showed a name no file ever carried. Both now use the one
+     * resolution in {@link #execute}, which overwrites the configured name reported here. And {@code value}
      * is the DATA being written (the rows of a CSV): re-resolving it ran the expression a
      * second time and {@code resolveTemplateString} coerced the result to a String, so a
      * 500-row dataset was reported as one flattened line and copied onto the step row of

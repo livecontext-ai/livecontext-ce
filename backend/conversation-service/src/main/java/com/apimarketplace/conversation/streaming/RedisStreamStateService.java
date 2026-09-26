@@ -64,7 +64,11 @@ public class RedisStreamStateService implements StreamStateService {
                 .then(indexByUserId(userId, streamId))
                 .thenReturn(metadata)
                 .doOnSuccess(m -> log.info("✅ [STREAM] Created stream: {} for conversation: {}", m.streamId(), conversationId))
-                .doOnError(e -> log.error("❌ [STREAM] Failed to create stream: {}", e.getMessage()));
+                // WARN, not ERROR: this is ONE attempt. The caller retries a transient failure
+                // and logs the ERROR itself once it gives up, so an attempt that a retry then
+                // absorbs is not reported as an incident.
+                .doOnError(e -> log.warn("[STREAM] Stream create attempt failed for conversation {}: {}",
+                        conversationId, e.getMessage()));
     }
 
     @Override
@@ -190,7 +194,10 @@ public class RedisStreamStateService implements StreamStateService {
         return updateState(streamId, StreamState.ERROR)
                 .flatMap(success -> redisTemplate.opsForHash()
                         .put(key, "errorMessage", errorMessage != null ? errorMessage : "Unknown error"))
-                .doOnSuccess(s -> log.error("❌ [STREAM] Error: {} - {}", streamId, errorMessage))
+                // DEBUG: a state transition, not the incident. Every caller logs the cause
+                // itself (the chat loop, the streaming output, the internal finalize), so an
+                // ERROR here reported each failure a second time with no new information.
+                .doOnSuccess(s -> log.debug("[STREAM] Marked {} as ERROR: {}", streamId, errorMessage))
                 // Schedule cleanup after 30 seconds
                 .flatMap(success -> scheduleCleanup(streamId, Duration.ofSeconds(30)).thenReturn(success));
     }

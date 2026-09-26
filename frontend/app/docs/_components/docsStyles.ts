@@ -634,4 +634,151 @@ export const docsStyles = `
     font-size: 0.9375rem;
     color: var(--text-primary);
   }
+
+  /* ---- Accessibility ----------------------------------------------------- */
+  /* Muted text in the docs must stay readable (WCAG 1.4.3, 4.5:1). The shared
+     landing muted tone measures 4.19:1 on the light tertiary surface and 2.91:1
+     to 3.62:1 on the dark surfaces, so the docs tree uses a stronger tone:
+     light #5b6270 = 5.31:1 on #eceff3; dark #9a958c = 4.89:1 on #2a2925.
+     Scoped to the whole .landing-root (header and footer included): these styles
+     are only injected on docs pages, so the marketing site is unaffected, and the
+     shared footer's muted links (4.47:1 on #f5f6f8 before) pass too. */
+  .landing-root {
+    --text-muted: #5b6270;
+    --docs-tip: #047857;
+    --docs-warn: #b45309;
+  }
+
+  .landing-root.dark {
+    --text-muted: #9a958c;
+    --docs-tip: #34d399;
+    --docs-warn: #fbbf24;
+  }
+
+  .landing-root .docs-callout-tip { border-left-color: var(--docs-tip); }
+  .landing-root .docs-callout-tip > svg { color: var(--docs-tip); }
+  .landing-root .docs-callout-warn { border-left-color: var(--docs-warn); }
+  .landing-root .docs-callout-warn > svg { color: var(--docs-warn); }
+
+  .landing-root .docs-callout-label {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.2rem;
+  }
+
+  .landing-root .docs-article:focus {
+    outline: none;
+  }
+
+  /* One visible focus ring for every interactive element in the docs (WCAG 2.4.7). */
+  .landing-root .docs-layout a:focus-visible,
+  .landing-root .docs-layout button:focus-visible,
+  .landing-root .docs-layout input:focus-visible,
+  .landing-root .docs-layout [tabindex="0"]:focus-visible {
+    outline: 2px solid var(--expression-color);
+    outline-offset: 2px;
+  }
+
+  .landing-root .docs-drawer-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 0.5rem;
+    color: var(--text-muted);
+  }
+
+  .landing-root .docs-drawer-close:focus-visible {
+    outline: 2px solid var(--expression-color);
+    outline-offset: 2px;
+  }
+
+  /* Every link in the article is underlined, so links are never told apart by colour
+     alone (WCAG 1.4.1: the link colour is only 1.13:1 to 1.23:1 against body text).
+     Only self-evident controls opt out: cards and the glossary letter chips. */
+  .landing-root .docs-prose a {
+    text-decoration: underline;
+    text-underline-offset: 0.18em;
+    text-decoration-thickness: 1px;
+  }
+
+  .landing-root .docs-prose a.docs-card,
+  .landing-root .docs-prose .docs-glossary-letters a {
+    text-decoration: none;
+  }
+
+  /* Long identifiers in inline code wrap instead of overflowing on phones (WCAG 1.4.10). */
+  .landing-root .docs-prose :not(pre) > code {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .landing-root .docs-prose ol.docs-steps,
+  .landing-root ol.docs-steps {
+    list-style: none;
+    padding-left: 0;
+  }
+
+  .landing-root .docs-prose .docs-steps li + li {
+    margin-top: 0;
+  }
+
+  .landing-root .docs-table-wrap th[scope="row"] {
+    background: transparent;
+    white-space: normal;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  /* ---- Glossary ---------------------------------------------------------- */
+  .landing-root .docs-prose .docs-glossary-letters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+    list-style: none;
+    padding-left: 0;
+  }
+
+  .landing-root .docs-prose .docs-glossary-letters li + li {
+    margin-top: 0;
+  }
+
+  .landing-root .docs-prose .docs-glossary-letters a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.25rem;
+    height: 2.25rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    text-decoration: none;
+    color: var(--text-primary);
+  }
+
+  .landing-root .docs-glossary > div {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .landing-root .docs-glossary dt {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .landing-root .docs-glossary dd {
+    margin: 0.25rem 0 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .landing-root .docs-card,
+    .landing-root .docs-prevnext-link,
+    .landing-root .docs-nav-link,
+    .landing-root .docs-toc-link {
+      transition: none;
+    }
+    .landing-root a.docs-card:hover,
+    .landing-root .docs-prevnext-link:hover {
+      transform: none;
+    }
+  }
 `;

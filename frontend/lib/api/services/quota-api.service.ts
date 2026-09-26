@@ -23,14 +23,6 @@ export interface CreditBalance {
    */
   paygBalance?: number;
   /**
-   * V494+: the monthly AI allowance left. A THIRD bucket, and deliberately not
-   * part of {@code balance}: it can only pay for chat and agent turns on the
-   * models opened to the free tier, so summing it into the headline figure would
-   * claim spending power the wallet does not have. Absent on CE and on plans with
-   * no allowance (every paid one).
-   */
-  aiBalance?: number;
-  /**
    * V148+: account delinquency flag. True when the last platform tool-call
    * commit ran into a partial-charge or floored state. While true, the
    * delinquent gate refuses fresh chat reservations and workflow run-init
@@ -40,9 +32,10 @@ export interface CreditBalance {
    */
   delinquent?: boolean;
   /**
-   * True when this account's monthly grant funds workflow-node runs and
-   * nothing else, so a platform-key purchase (a generation, a chat, a web
-   * search) has to draw the top-up bucket instead.
+   * True when this account's monthly credits are scoped (the Free plan): they
+   * fund workflow-node runs and chat/agent turns on the models opened to the
+   * free tier, and nothing else, so any other platform-key purchase (a turn on
+   * another model, a generation, a web search) has to draw the top-up bucket.
    *
    * <p>The server's ANSWER, not the facts it is derived from. A surface that
    * read "monthly balance, no top-up" and concluded the credits cannot pay
@@ -114,11 +107,25 @@ export interface DailyUsageEntry {
   tokens: number;
 }
 
+/** Spend of one (provider, model, type) over a window; provider and model are null off LLM calls. */
+export interface ModelUsageEntry {
+  provider: string | null;
+  model: string | null;
+  sourceType: string;
+  credits: number;
+  count: number;
+  tokens: number;
+}
+
 export interface UsageAnalytics {
   dailyUsage: DailyUsageEntry[];
   providers: string[];
   models: string[];
   sourceTypes: string[];
+  /** The period shown, by model. Absent from an older backend. */
+  modelUsage?: ModelUsageEntry[];
+  /** The period of the same length just before, by model, for the comparison. */
+  previousModelUsage?: ModelUsageEntry[];
 }
 
 /**

@@ -206,19 +206,24 @@ public class InternalCredentialController {
     @GetMapping("/scopes")
     public ResponseEntity<Map<String, Object>> getCredentialScopes(
             @RequestParam String userId,
-            @RequestParam String name) {
-        // Filtered lookup: `name` is the requirement slug, so a credential merely LABELLED
-        // with it (but belonging to another provider) must not answer the scope preflight -
-        // it would compare one provider's granted scopes against another's requirement.
-        return userCredentialService.findByNameIdentifyingIntegration(userId, name)
+            @RequestParam String name,
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+        // Resolves the credential the EXECUTION will use, through the same path as
+        // /access-token above. It used to resolve by NAME alone, which is free text the
+        // user typed: in production the two Gmail credentials are named "Jaden" and
+        // "Gmail Credential" while the requirement is keyed on the integration `gmail`,
+        // so the lookup found nothing, answered 404, and the caller failed open. Measured
+        // on that data, the preflight fired 0 times while the provider refused 91 calls
+        // for exactly the scope gap it exists to prevent.
+        //
+        // Resolving anything OTHER than the credential about to be used would be worse
+        // than not resolving at all, since the preflight would then block on scopes the
+        // call never relied on. Hence the shared resolution rather than a third one.
+        return credentialService.getCredentialScopes(userId, name, organizationId)
                 .<ResponseEntity<Map<String, Object>>>map(c -> {
                     Map<String, Object> body = new LinkedHashMap<>();
-                    body.put("type", c.type() != null ? c.type().name() : null);
-                    // Only OAuth2 credentials have a meaningful scope set. For other types we
-                    // return null so the catalog-side caller can no-op without misinterpreting
-                    // an empty array as "credential has zero scopes."
-                    boolean isOauth2 = c.type() != null && "oauth2".equalsIgnoreCase(c.type().name());
-                    body.put("scopes", isOauth2 ? c.scopes() : null);
+                    body.put("type", c.type());
+                    body.put("scopes", c.scopes());
                     // WHICH credential this is, carrying nothing OF it. Lets a
                     // caller check that a pinned credential belongs to the
                     // endpoint it is about to be sent to without pulling the
@@ -894,38 +899,8 @@ public class InternalCredentialController {
         String createdBy = origin
                 + (request.bundleVersion() == null ? "" : " v" + request.bundleVersion());
 
-        Map<String, List<PriceSpec>> byIntegration = new LinkedHashMap<>();
-        for (BundlePriceEntry e : request.prices()) {
-            if (e == null || e.integrationName() == null || e.integrationName().isBlank()) continue;
-            UUID toolId = parseToolId(e.apiToolId());
-            if (toolId == null) continue;
-            // A unit this build does not know means a NEWER cloud, not a typo:
-            // the payload is signed, so nobody hand-wrote it. That reading is
-            // right, and the conclusion drawn from it was not.
-            //
-            // Degrading the row to a flat 'call' price KEEPS unitCredits while
-            // discarding what it counts, so a per-second row at 60 bills 60
-            // for a ten second clip instead of 600, always in the undercharging
-            // direction, and validateUnitChange accepts "-> CALL"
-            // unconditionally so the degraded row REPLACES the correct live one.
-            // The choice was framed as "degrade or drop the whole integration's
-            // prices", which is a false pair: dropping THIS ROW alone leaves
-            // every sibling published and lets carry-forward keep the row's own
-            // last known-good price, which is the outcome the signed payload
-            // deserves.
-            String unit = normalisedBundleUnit(e.priceUnit());
-            if (unit == null) {
-                log.warn("Skipping bundle price for tool {} (integration {}): price unit '{}' is not one "
-                                + "this build understands, so its previous price is kept rather than "
-                                + "republished at a flat rate.",
-                        toolId, e.integrationName().trim(), e.priceUnit());
-                continue;
-            }
-            byIntegration.computeIfAbsent(e.integrationName().trim(), k -> new java.util.ArrayList<>())
-                    .add(new PriceSpec(toolId, e.modelId(), unit,
-                            e.baseCredits(), e.unitCredits(), e.minCredits(), e.maxCredits(),
-                            com.apimarketplace.auth.credential.domain.PriceSource.BUNDLE));
-        }
+        Map<String, List<PriceSpec>> byIntegration = groupByIntegration(
+                request.prices(), com.apimarketplace.auth.credential.domain.PriceSource.BUNDLE);
 
         int publishedCredentials = 0;
         int applied = 0;
@@ -958,6 +933,107 @@ public class InternalCredentialController {
         }
         return ResponseEntity.ok(
                 applyResponse(publishedCredentials, applied, preserved, skipped, failures));
+    }
+
+    /**
+     * Catalog price rows grouped by the integration they hang off, each stamped
+     * with {@code source}. Rows with no integration, no endpoint id, or a unit
+     * this build cannot measure are dropped one by one, never the whole list.
+     */
+    private Map<String, List<PriceSpec>> groupByIntegration(
+            List<BundlePriceEntry> entries,
+            com.apimarketplace.auth.credential.domain.PriceSource source) {
+        Map<String, List<PriceSpec>> byIntegration = new LinkedHashMap<>();
+        for (BundlePriceEntry e : entries) {
+            if (e == null || e.integrationName() == null || e.integrationName().isBlank()) continue;
+            UUID toolId = parseToolId(e.apiToolId());
+            if (toolId == null) continue;
+            // A unit this build does not know means a NEWER cloud, not a typo:
+            // the payload is signed, so nobody hand-wrote it. That reading is
+            // right, and the conclusion drawn from it was not.
+            //
+            // Degrading the row to a flat 'call' price KEEPS unitCredits while
+            // discarding what it counts, so a per-second row at 60 bills 60
+            // for a ten second clip instead of 600, always in the undercharging
+            // direction, and validateUnitChange accepts "-> CALL"
+            // unconditionally so the degraded row REPLACES the correct live one.
+            // The choice was framed as "degrade or drop the whole integration's
+            // prices", which is a false pair: dropping THIS ROW alone leaves
+            // every sibling published and lets carry-forward keep the row's own
+            // last known-good price, which is the outcome the signed payload
+            // deserves.
+            String unit = normalisedBundleUnit(e.priceUnit());
+            if (unit == null) {
+                log.warn("Skipping bundle price for tool {} (integration {}): price unit '{}' is not one "
+                                + "this build understands, so its previous price is kept rather than "
+                                + "republished at a flat rate.",
+                        toolId, e.integrationName().trim(), e.priceUnit());
+                continue;
+            }
+            byIntegration.computeIfAbsent(e.integrationName().trim(), k -> new java.util.ArrayList<>())
+                    .add(new PriceSpec(toolId, e.modelId(), unit,
+                            e.baseCredits(), e.unitCredits(), e.minCredits(), e.maxCredits(),
+                            source));
+        }
+
+        return byIntegration;
+    }
+
+    /**
+     * Cloud gap-filler: publish the catalog's starting price for every
+     * generation model a platform credential has NEVER priced.
+     *
+     * <p>Same row shape as {@link #applyCatalogBundlePrices}, opposite rule:
+     * that one keeps a cloud-carried price current, this one only ever ADDS a
+     * row no version of the credential has held, so a live price and a price
+     * an administrator deliberately removed are both left alone
+     * ({@code PlatformCredentialPricingService.addNeverPricedPrices}). The rows
+     * are stamped {@code admin}, like the importer's seeded v1.
+     *
+     * <p>Idempotent, and an integration with no platform key is skipped, so the
+     * caller re-offers the whole catalog on every tick: that is what prices a
+     * model added after the first import, and a key pasted after it.
+     */
+    @PostMapping("/pricing-versions/add-never-priced")
+    public ResponseEntity<Map<String, Object>> addNeverPricedCatalogPrices(
+            @RequestBody ApplyBundlePricesRequest request) {
+        if (request == null || request.prices() == null || request.prices().isEmpty()) {
+            return ResponseEntity.ok(applyResponse(0, 0, 0, 0, List.of()));
+        }
+        String createdBy = request.origin() == null || request.origin().isBlank()
+                ? "catalog-starting-price"
+                : request.origin().trim();
+        Map<String, List<PriceSpec>> byIntegration = groupByIntegration(
+                request.prices(), com.apimarketplace.auth.credential.domain.PriceSource.ADMIN);
+
+        int publishedCredentials = 0;
+        int added = 0;
+        int alreadyDecided = 0;
+        int skipped = 0;
+        List<String> failures = new java.util.ArrayList<>();
+        for (var entry : byIntegration.entrySet()) {
+            Optional<com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential>
+                    credential = platformCredentialService.getRawCredential(entry.getKey());
+            if (credential.isEmpty()) {
+                skipped++;
+                log.debug("Catalog starting prices: no platform credential '{}' - {} price(s) not published",
+                        entry.getKey(), entry.getValue().size());
+                continue;
+            }
+            try {
+                var result = pricingService.addNeverPricedPrices(
+                        credential.get().id(), entry.getValue(), createdBy);
+                if (result.published()) publishedCredentials++;
+                added += result.applied();
+                alreadyDecided += result.preserved();
+            } catch (IllegalArgumentException ex) {
+                failures.add(entry.getKey() + ": " + ex.getMessage());
+                log.warn("Catalog starting prices rejected for integration '{}': {}",
+                        entry.getKey(), ex.getMessage());
+            }
+        }
+        return ResponseEntity.ok(
+                applyResponse(publishedCredentials, added, alreadyDecided, skipped, failures));
     }
 
     private static Map<String, Object> applyResponse(int publishedCredentials, int applied,

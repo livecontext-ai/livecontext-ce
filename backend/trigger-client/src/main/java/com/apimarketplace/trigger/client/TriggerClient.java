@@ -1,5 +1,6 @@
 package com.apimarketplace.trigger.client;
 
+import com.apimarketplace.common.web.LogSafePath;
 import com.apimarketplace.trigger.client.dto.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,7 +49,7 @@ public class TriggerClient {
                     url, HttpMethod.GET, new HttpEntity<>(buildHeaders(null)), WebhookTokenDto.class);
             return response.getBody();
         } catch (Exception e) {
-            log.debug("Token not found: {}", e.getMessage());
+            log.debug("Token not found: {}", LogSafePath.withoutToken(e.getMessage(), token));
             return null;
         }
     }
@@ -298,7 +299,7 @@ public class TriggerClient {
                     url, HttpMethod.GET, new HttpEntity<>(buildHeaders(null)), StandaloneWebhookDto.class);
             return response.getBody();
         } catch (Exception e) {
-            log.debug("Standalone webhook not found for token: {}", e.getMessage());
+            log.debug("Standalone webhook not found for token: {}", LogSafePath.withoutToken(e.getMessage(), token));
             return null;
         }
     }
@@ -1377,7 +1378,7 @@ public class TriggerClient {
                     url, HttpMethod.GET, new HttpEntity<>(buildHeaders(null)), StandaloneChatEndpointDto.class);
             return response.getBody();
         } catch (Exception e) {
-            log.debug("Chat endpoint not found for token: {}", e.getMessage());
+            log.debug("Chat endpoint not found for token: {}", LogSafePath.withoutToken(e.getMessage(), token));
             return null;
         }
     }
@@ -1613,7 +1614,7 @@ public class TriggerClient {
                     url, HttpMethod.GET, new HttpEntity<>(buildHeaders(null)), StandaloneFormEndpointDto.class);
             return response.getBody();
         } catch (Exception e) {
-            log.debug("Form endpoint not found for token: {}", e.getMessage());
+            log.debug("Form endpoint not found for token: {}", LogSafePath.withoutToken(e.getMessage(), token));
             return null;
         }
     }

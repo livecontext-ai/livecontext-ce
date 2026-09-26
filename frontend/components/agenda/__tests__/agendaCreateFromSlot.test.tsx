@@ -147,6 +147,8 @@ describe('creating a scheduled workflow from an empty slot', () => {
     await createFromFirstSlot('Nightly report');
 
     expect(rememberWorkflowName).toHaveBeenCalledWith('server-id-42', 'Nightly report');
+    // The empty slot click itself, with the view it was made in.
+    expect(track).toHaveBeenCalledWith('agenda_slot_opened', { view: 'day' });
     expect(track).toHaveBeenCalledWith('workflow_created', expect.objectContaining({
       workflow_id: 'server-id-42', source: 'agenda_slot',
     }));

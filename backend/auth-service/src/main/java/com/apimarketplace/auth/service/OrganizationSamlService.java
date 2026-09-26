@@ -142,7 +142,8 @@ public class OrganizationSamlService {
         }
     }
 
-    private void authorizeOwnerOrAdmin(UUID orgId, Long userId) {
+    /** Shared with {@link OrganizationSsoDomainService}: the same people manage the IdP and its domains. */
+    void authorizeOwnerOrAdmin(UUID orgId, Long userId) {
         if (userId == null) {
             throw new SecurityException("X-User-ID header required");
         }
@@ -154,7 +155,7 @@ public class OrganizationSamlService {
         }
     }
 
-    private void enforcePlanSupportsSso(UUID orgId) {
+    void enforcePlanSupportsSso(UUID orgId) {
         OrganizationMemberService.TeamStatus status = memberService.getTeamStatus(orgId);
         if (!status.supportsTeam()) {
             throw new UnsupportedOperationException("SAML SSO requires a Team or Enterprise plan");
@@ -202,6 +203,11 @@ public class OrganizationSamlService {
 
     public static String aliasFor(UUID orgId) {
         return "org-" + orgId.toString().replace("-", "") + "-saml";
+    }
+
+    /** True for a Keycloak alias produced by {@link #aliasFor(UUID)}. */
+    public static boolean isOrganizationSamlAlias(String alias) {
+        return alias != null && alias.matches("^org-[0-9a-fA-F]{32}-saml$");
     }
 
     private static String requiredTrimmed(String value, String field) {

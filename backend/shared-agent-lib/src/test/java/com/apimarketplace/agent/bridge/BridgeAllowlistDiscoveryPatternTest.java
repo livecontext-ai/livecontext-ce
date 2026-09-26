@@ -27,9 +27,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("BridgeAllowlist discovery patterns")
 class BridgeAllowlistDiscoveryPatternTest {
 
-    // codex is intentionally NOT here: OpenAI's Codex-routable set is irregular
-    // (codenamed gpt-5.6 tiers + unroutable bare gpt-5.x in the feed), so codex
-    // is curated-only like mistral-vibe - see codexHasNoDiscoveryPattern().
+    // codex is NOT here: only its CODENAMED curated ids match its pattern. Its
+    // pre-codename numeric ids (gpt-5.5, gpt-5.4*, ...) stay on the curated floor
+    // because no pattern can tell them from the bare ids Codex refuses - see
+    // codexCodenamedCuratedIdsMatchItsPattern().
     private static final Set<String> PATTERN_BRIDGES =
             Set.of("claude-code", "gemini-cli");
 
@@ -55,20 +56,67 @@ class BridgeAllowlistDiscoveryPatternTest {
     }
 
     @Test
-    @DisplayName("codex is curated-only - no discovery pattern, and the phantom bare gpt-5.6 is never auto-derived")
-    void codexHasNoDiscoveryPattern() {
-        // Regression for the prod bug: a codex discovery pattern
-        // (^gpt-5\.\d+(-mini|-codex)?$) auto-derived a phantom codex/gpt-5.6 that
-        // Codex with a ChatGPT account cannot route (typed 400). OpenAI's
-        // Codex-routable set is irregular, so codex now ships fully curated.
-        assertThat(BridgeAllowlist.DISCOVERY_PATTERNS).doesNotContainKey("codex");
-        // The bare gpt-5.6 (a real openai API id, but not codex-routable) and
-        // any other feed gpt-5.x must never be auto-discovered under codex.
+    @DisplayName("codex discovers the GPT-6 Sol and Luna tiers without a code change - regression for the 2026-09 gap")
+    void codexDiscoversNewCodenamedTiers() {
+        // The prod gap: OpenAI shipped gpt-6-sol and gpt-6-luna on 2026-09-22, the
+        // openai rows appeared on the next sync, and codex stayed without them because
+        // it was curated-only. Neither id is in MODELS, so only the pattern can carry them.
+        assertThat(BridgeAllowlist.MODELS.get("codex")).doesNotContain("gpt-6-sol", "gpt-6-luna");
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-6-sol")).isTrue();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-6-luna")).isTrue();
+        // A tier that does not exist yet is picked up the day it reaches the feed.
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-6-terra")).isTrue();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-6.1-sol")).isTrue();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-7-astra")).isTrue();
+    }
+
+    @Test
+    @DisplayName("codex never discovers a bare generation id - regression for the phantom codex/gpt-5.6")
+    void codexNeverDiscoversBareGenerationIds() {
+        // e399615a4/V399: a numeric codex pattern auto-derived codex/gpt-5.6, a real
+        // openai API id that Codex with a ChatGPT account refuses (typed 400). The
+        // codename pattern must keep every bare id out, for this generation and the next.
         assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.6")).isFalse();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-6")).isFalse();
         assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.5")).isFalse();
-        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.6-sol")).isFalse();
-        // Even its curated ids are not discoverable - they ship via MODELS + migration.
         assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.4")).isFalse();
+    }
+
+    @Test
+    @DisplayName("codex rejects non-codename suffixes, -pro variants and dated pins")
+    void codexRejectsOtherSuffixes() {
+        // gpt-5.6-cyber is in the openai feed and is not a Codex model.
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.6-cyber")).isFalse();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-6-sol-pro")).isFalse();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-6-sol-2026-09-22")).isFalse();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.4-mini")).isFalse();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.3-codex")).isFalse();
+        // A codename without the gpt generation prefix is not an openai model id.
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "sol")).isFalse();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "openai/gpt-6-sol")).isFalse();
+    }
+
+    /**
+     * Pre-codename codex ids: the only ones that legitimately live on the curated
+     * floor alone. A new curated id must either match the codex pattern or be
+     * added here on purpose, so a new codename cannot slip in unnoticed.
+     */
+    private static final Set<String> CODEX_NUMERIC_FLOOR = Set.of(
+            "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5.2");
+
+    @Test
+    @DisplayName("Every curated codex id matches the codex pattern or is a known pre-codename numeric id")
+    void everyCuratedCodexIdIsPatternCoveredOrKnownNumeric() {
+        for (String id : BridgeAllowlist.MODELS.get("codex")) {
+            boolean covered = BridgeAllowlist.matchesDiscoveryPattern("codex", id);
+            assertThat(covered || CODEX_NUMERIC_FLOOR.contains(id))
+                    .as("codex id %s matches neither the pattern nor the numeric floor: a new codename"
+                            + " needs adding to the pattern alternation", id)
+                    .isTrue();
+            assertThat(covered && CODEX_NUMERIC_FLOOR.contains(id))
+                    .as("%s is in the numeric floor list but also matches the pattern", id)
+                    .isFalse();
+        }
     }
 
     @Test
@@ -123,6 +171,8 @@ class BridgeAllowlistDiscoveryPatternTest {
         // Cross-bridge: a claude id must not match codex/gemini and vice-versa.
         assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "claude-opus-4-8")).isFalse();
         assertThat(BridgeAllowlist.matchesDiscoveryPattern("gemini-cli", "gpt-5.5")).isFalse();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("claude-code", "gpt-6-sol")).isFalse();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("gemini-cli", "gpt-6-luna")).isFalse();
         assertThat(BridgeAllowlist.matchesDiscoveryPattern("claude-code", "gemini-3.2-pro")).isFalse();
     }
 

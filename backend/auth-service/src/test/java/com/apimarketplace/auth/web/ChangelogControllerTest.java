@@ -2,6 +2,7 @@ package com.apimarketplace.auth.web;
 
 import com.apimarketplace.auth.service.ChangelogSeenService;
 import com.apimarketplace.auth.service.ChangelogSeenService.ChangelogState;
+import com.apimarketplace.auth.service.ChangelogSeenService.SeenOutcome;
 import com.apimarketplace.auth.web.ChangelogController.ChangelogStateResponse;
 import com.apimarketplace.auth.web.ChangelogController.SeenRequest;
 import com.apimarketplace.auth.web.ChangelogController.SeenResponse;
@@ -119,7 +120,7 @@ class ChangelogControllerTest {
     @Test
     @DisplayName("seen: a valid key is acknowledged and echoed back")
     void seenAcknowledgesAValidKey() {
-        when(service.markSeen(42L, "2026-09-entry")).thenReturn(true);
+        when(service.markSeen(42L, "2026-09-entry")).thenReturn(SeenOutcome.RECORDED);
 
         ResponseEntity<?> response = controller.markSeen("42", new SeenRequest("2026-09-entry"));
 
@@ -161,7 +162,7 @@ class ChangelogControllerTest {
     @Test
     @DisplayName("seen: a disabled deployment answers 200 with enabled=false rather than an error")
     void seenOnADisabledDeploymentIsNotAnError() {
-        when(service.markSeen(42L, "2026-09-entry")).thenReturn(false);
+        when(service.markSeen(42L, "2026-09-entry")).thenReturn(SeenOutcome.DISABLED);
 
         ResponseEntity<?> response = controller.markSeen("42", new SeenRequest("2026-09-entry"));
 
@@ -169,5 +170,20 @@ class ChangelogControllerTest {
         // `enabled` and stops announcing, which is what a switched-off feature looks like.
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isEqualTo(new SeenResponse(false, null));
+    }
+
+    @Test
+    @DisplayName("seen for a deleted user answers 404, not 500 and not 401")
+    void changelogSeenForDeletedUserAnswers404() {
+        // Prod 2026-09-22: 5 x HTTP 500 from a session whose account no longer existed. 404 and not
+        // 401: the web client turns a 401 into a token refresh and then a forced login redirect,
+        // and a background acknowledgement must not be what logs someone out.
+        when(service.markSeen(404L, "2026-09-entry")).thenReturn(SeenOutcome.UNKNOWN_USER);
+
+        ResponseEntity<?> response = controller.markSeen("404", new SeenRequest("2026-09-entry"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).isEqualTo(Map.of("error", "user not found"));
+        verify(service).markSeen(404L, "2026-09-entry");
     }
 }

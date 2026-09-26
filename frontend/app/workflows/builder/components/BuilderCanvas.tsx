@@ -27,10 +27,10 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
-import { Plus, Info, AlertTriangle } from 'lucide-react';
+import { Plus, AlertTriangle, Info } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { canvasChromePrimaryButtonClass } from '@/components/ui/canvas-chrome';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { useValidationOptional } from '../contexts/ValidationContext';
 import { useTheme } from '@/components/ThemeProvider';
 import { EdgeActionsProvider } from './EdgeActionsContext';
@@ -75,7 +75,11 @@ import { CanvasToolbar } from './CanvasToolbar';
 import { CanvasSettingsPanel } from './CanvasSettingsPanel';
 import { nodeMatchesStep } from '../services/nodeMatcher';
 import { resolveFollowFrame } from '../services/runFollowBounds';
-import { WORKFLOW_FOLLOW_NODES_EVENT, FOLLOW_TRANSITION_MS } from '../services/runFollowEvent';
+import {
+  WORKFLOW_FOLLOW_NODES_EVENT,
+  FOLLOW_TRANSITION_MS,
+  type FollowNodesEventDetail,
+} from '../services/runFollowEvent';
 
 import { nodeRegistry } from '../registry/nodeRegistry';
 import { NodeIcon, getIconSlug } from './nodes/shared';
@@ -156,6 +160,7 @@ function ValidationIndicator({ nodes, onFocusNode }: {
   nodes: Node<BuilderNodeData>[];
   onFocusNode?: (nodeId: string) => void;
 }) {
+  const t = useTranslations('workflowBuilder.canvas');
   const validation = useValidationOptional();
   if (!validation) return null;
 
@@ -215,68 +220,73 @@ function ValidationIndicator({ nodes, onFocusNode }: {
   }
 
   const hasErrors = errorCount > 0;
+  const summary = t('validationSummary', { errors: errorCount, warnings: warningCount });
 
   return (
-    <Popover>
-      <PopoverTrigger asChild>
+    // A status list (each row focuses its node), shown through the shared click "i" so it
+    // opens the same way and on the same layer as every other one. It brings its own trigger
+    // to keep the count in a native `title`: the icon alone does not say how many.
+    <InfoPopover
+      label={summary}
+      side="bottom"
+      align="end"
+      trigger={
         <button
           type="button"
+          aria-label={summary}
+          title={summary}
+          onClick={(e) => e.stopPropagation()}
           className="relative flex items-center justify-center w-8 h-8"
-          title={`${errorCount} error${errorCount !== 1 ? 's' : ''}, ${warningCount} warning${warningCount !== 1 ? 's' : ''}`}
         >
           <Info className={`w-5 h-5 ${hasErrors ? 'text-red-500' : 'text-amber-500'}`} />
         </button>
-      </PopoverTrigger>
-      <PopoverContent
-        className="w-[min(320px,calc(100vw-32px))] max-h-[400px] overflow-y-auto p-0 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl shadow-none z-[99999]"
-        side="bottom"
-        align="end"
-      >
-        <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">
-          <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-            {errorCount > 0 && <span className="text-red-500">{errorCount} error{errorCount !== 1 ? 's' : ''}</span>}
-            {errorCount > 0 && warningCount > 0 && <span className="text-slate-400 mx-1">&middot;</span>}
-            {warningCount > 0 && <span className="text-amber-500">{warningCount} warning{warningCount !== 1 ? 's' : ''}</span>}
-          </p>
-        </div>
-        <div className="divide-y divide-gray-100 dark:divide-gray-800">
-          {issuesByNode.map((item, idx) => {
-            const dataId = item.nodeData?.id || '';
-            const nodeClass = dataId ? findNodeClassById(dataId) : undefined;
-            const iconSlug = item.nodeData ? getIconSlug(item.nodeData) : undefined;
-            const nodeKind = item.nodeData?.kind || item.nodeData?.agentType;
-            const nodeFamily = nodeClass?.family;
-            return (
-              <div
-                key={idx}
-                className={`px-3 py-2 ${item.nodeId ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50' : ''}`}
-                onClick={() => { if (item.nodeId && onFocusNode) onFocusNode(item.nodeId); }}
-              >
-                <div className="flex items-center gap-1.5 mb-1">
-                  {item.nodeData && (
-                    <NodeIcon
-                      iconSlug={iconSlug}
-                      nodeId={dataId}
-                      nodeKind={nodeKind as any}
-                      nodeFamily={nodeFamily}
-                      size="xs"
-                      alt={item.label}
-                    />
-                  )}
-                  <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 truncate">{item.label}</p>
-                </div>
-                {item.errors.map((msg, i) => (
-                  <p key={`e-${i}`} className="text-xs text-red-600 dark:text-red-400 pl-5 py-0.5">{msg}</p>
-                ))}
-                {item.warnings.map((msg, i) => (
-                  <p key={`w-${i}`} className="text-xs text-amber-600 dark:text-amber-400 pl-5 py-0.5">{msg}</p>
-                ))}
+      }
+      contentClassName="w-[min(320px,calc(100vw-32px))] max-h-[400px] p-0 text-theme-primary leading-normal"
+    >
+      <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">
+        <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+          {errorCount > 0 && <span className="text-red-500">{errorCount} error{errorCount !== 1 ? 's' : ''}</span>}
+          {errorCount > 0 && warningCount > 0 && <span className="text-slate-400 mx-1">&middot;</span>}
+          {warningCount > 0 && <span className="text-amber-500">{warningCount} warning{warningCount !== 1 ? 's' : ''}</span>}
+        </p>
+      </div>
+      <div className="divide-y divide-gray-100 dark:divide-gray-800">
+        {issuesByNode.map((item, idx) => {
+          const dataId = item.nodeData?.id || '';
+          const nodeClass = dataId ? findNodeClassById(dataId) : undefined;
+          const iconSlug = item.nodeData ? getIconSlug(item.nodeData) : undefined;
+          const nodeKind = item.nodeData?.kind || item.nodeData?.agentType;
+          const nodeFamily = nodeClass?.family;
+          return (
+            <div
+              key={idx}
+              className={`px-3 py-2 ${item.nodeId ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50' : ''}`}
+              onClick={() => { if (item.nodeId && onFocusNode) onFocusNode(item.nodeId); }}
+            >
+              <div className="flex items-center gap-1.5 mb-1">
+                {item.nodeData && (
+                  <NodeIcon
+                    iconSlug={iconSlug}
+                    nodeId={dataId}
+                    nodeKind={nodeKind as any}
+                    nodeFamily={nodeFamily}
+                    size="xs"
+                    alt={item.label}
+                  />
+                )}
+                <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 truncate">{item.label}</p>
               </div>
-            );
-          })}
-        </div>
-      </PopoverContent>
-    </Popover>
+              {item.errors.map((msg, i) => (
+                <p key={`e-${i}`} className="text-xs text-red-600 dark:text-red-400 pl-5 py-0.5">{msg}</p>
+              ))}
+              {item.warnings.map((msg, i) => (
+                <p key={`w-${i}`} className="text-xs text-amber-600 dark:text-amber-400 pl-5 py-0.5">{msg}</p>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </InfoPopover>
   );
 }
 
@@ -609,35 +619,65 @@ export function BuilderCanvas({
     followInstanceRef.current = instance;
   });
 
-  React.useEffect(() => {
-    const handleFollowNodes = (event: CustomEvent<{ workflowId?: string; nodeIds: string[] }>) => {
-      const inst = followInstanceRef.current;
-      if (!inst) return;
-      // Ignores an event belonging to another canvas, and returns null when nothing
-      // resolves. Kept pure and out of here so both rules are tested.
-      const bounds = resolveFollowFrame(followNodesRef.current, event.detail, workflowId, {
-        pad: FOLLOW_PAD_UNITS,
-        fallbackWidth: FOLLOW_FALLBACK_NODE_WIDTH,
-        fallbackHeight: FOLLOW_FALLBACK_NODE_HEIGHT,
-      });
-      if (!bounds) return;
+  /**
+   * A follow this canvas could not frame YET because its nodes are not rendered: an
+   * agent's plan sync is imported inside a transition, so the event can land before
+   * the new nodes commit. Retried on the next node changes, for a short while only, so
+   * a stale request never yanks the camera long after the fact.
+   */
+  const pendingFollowRef = React.useRef<{ detail: FollowNodesEventDetail; expiresAt: number } | null>(null);
 
-      try {
-        // fitBounds does the viewport arithmetic itself and clamps to this canvas's
-        // min/max zoom. Measuring the DOM instead would be wrong: several <ReactFlow>
-        // instances can be mounted, so there is no single element to measure. It adds
-        // its own small padding on top of FOLLOW_PAD_UNITS.
-        inst.fitBounds(bounds, { duration: FOLLOW_TRANSITION_MS });
-      } catch {
-        // A camera move must never break the canvas it is decorating.
+  const applyFollow = React.useCallback((detail: FollowNodesEventDetail): boolean => {
+    const inst = followInstanceRef.current;
+    if (!inst) return false;
+    // Ignores an event belonging to another canvas, and returns null when nothing
+    // resolves. Kept pure and out of here so both rules are tested.
+    const bounds = resolveFollowFrame(followNodesRef.current, detail, workflowId, {
+      pad: FOLLOW_PAD_UNITS,
+      fallbackWidth: FOLLOW_FALLBACK_NODE_WIDTH,
+      fallbackHeight: FOLLOW_FALLBACK_NODE_HEIGHT,
+    });
+    if (!bounds) return false;
+
+    try {
+      // fitBounds does the viewport arithmetic itself and clamps to this canvas's
+      // min/max zoom. Measuring the DOM instead would be wrong: several <ReactFlow>
+      // instances can be mounted, so there is no single element to measure. It adds
+      // its own small padding on top of FOLLOW_PAD_UNITS.
+      inst.fitBounds(bounds, { duration: FOLLOW_TRANSITION_MS });
+    } catch {
+      // A camera move must never break the canvas it is decorating.
+    }
+    return true;
+  }, [workflowId]);
+
+  React.useEffect(() => {
+    const handleFollowNodes = (event: CustomEvent<FollowNodesEventDetail>) => {
+      const detail = event.detail;
+      // Only a request addressed to THIS canvas is worth keeping for a retry.
+      if (!detail || !workflowId || detail.workflowId !== workflowId) return;
+      if (applyFollow(detail)) {
+        pendingFollowRef.current = null;
+        return;
       }
+      pendingFollowRef.current = { detail, expiresAt: performance.now() + FOLLOW_PENDING_TTL_MS };
     };
 
     window.addEventListener(WORKFLOW_FOLLOW_NODES_EVENT, handleFollowNodes as EventListener);
     return () => {
       window.removeEventListener(WORKFLOW_FOLLOW_NODES_EVENT, handleFollowNodes as EventListener);
+      pendingFollowRef.current = null;
     };
-  }, [workflowId]);
+  }, [workflowId, applyFollow]);
+
+  // Declared after the ref-sync effect above, so it reads the nodes of this commit.
+  React.useEffect(() => {
+    const pending = pendingFollowRef.current;
+    if (!pending) return;
+    if (performance.now() > pending.expiresAt || applyFollow(pending.detail)) {
+      pendingFollowRef.current = null;
+    }
+  }, [nodes, applyFollow]);
 
   // Listen for focus-node requests (e.g. from run info panel step clicks)
   React.useEffect(() => {
@@ -1241,7 +1281,9 @@ export function BuilderCanvas({
             // on, only the visible subset re-renders on scroll/zoom - ~70% UX win
             // confirmed by the audit, single-line change.
             onlyRenderVisibleElements
-            nodesDraggable={isInteractive && !isSelecting}
+            // Locked wherever the canvas cannot save a move (run mode, read-only preview):
+            // a dragged node looked moved and silently snapped back on the next edit load.
+            nodesDraggable={isInteractive && !isSelecting && !isLocked}
             nodesConnectable={isInteractive && !isLocked}
             elementsSelectable={false}
             onNodesChange={guardedOnNodesChange}
@@ -1547,6 +1589,8 @@ export function BuilderCanvas({
 /** Breathing room around the running nodes, in flow units. ReactFlow's fitBounds
  *  clamps the resulting zoom to this canvas's own minZoom 0.3 / maxZoom 1.5. */
 const FOLLOW_PAD_UNITS = 260;
+/** How long a follow whose nodes are not rendered yet keeps being retried, in ms. */
+const FOLLOW_PENDING_TTL_MS = 2000;
 /** Used only before ReactFlow has measured a node. */
 const FOLLOW_FALLBACK_NODE_WIDTH = 240;
 const FOLLOW_FALLBACK_NODE_HEIGHT = 80;

@@ -7,6 +7,7 @@ import com.apimarketplace.catalog.domain.dto.ToolExecutionResponse;
 import com.apimarketplace.catalog.repository.ApiRepository;
 import com.apimarketplace.catalog.repository.ToolNextHintRepository;
 import com.apimarketplace.catalog.service.billing.CatalogToolBillingService;
+import com.apimarketplace.catalog.service.http.LoggedShape;
 import com.apimarketplace.catalog.service.generation.GenerationSpec;
 import com.apimarketplace.catalog.service.generation.RelayedGenerationMeasurement;
 import com.apimarketplace.catalog.service.exception.InsufficientCreditsException;
@@ -161,8 +162,9 @@ public class ToolExecutionManager {
                     : Map.of();
             
             // Log détaillé des paramètres reçus
-            log.info("[ToolExecutionManager] Tool: {}, API: {}, Received parameters map: {}", 
-                    context.getToolName(), apiId, parameters);
+            // Shape only, never values: a parameter can carry a resolved {{credential.x}}.
+            log.info("[ToolExecutionManager] Tool: {}, API: {}, Received parameters map: {}",
+                    context.getToolName(), apiId, LoggedShape.of(parameters));
             log.info("[ToolExecutionManager] Tool: {}, API: {}, Parameters count: {}, Keys: {}", 
                     context.getToolName(), apiId, parameters.size(), parameters.keySet());
             
@@ -182,7 +184,7 @@ public class ToolExecutionManager {
                 paramObj.put(entry.getKey(), entry.getValue());
                 parametersList.add(paramObj);
                 log.debug("[ToolExecutionManager] Parameter: {} = {} (type: {})",
-                        entry.getKey(), entry.getValue(),
+                        entry.getKey(), LoggedShape.of(entry.getValue()),
                         entry.getValue().getClass().getSimpleName());
             }
             JsonNode parametersJson = objectMapper.valueToTree(parametersList);
@@ -377,8 +379,9 @@ public class ToolExecutionManager {
                 fromCache = true;
             } else {
                 // Cache miss - execute API call
-                log.info("[ToolExecutionManager] Executing tool {} (API: {}) with {} parameters for userId={}, JSON: {}",
-                        context.getToolName(), apiId, parameters.size(), userId, parametersJson);
+                log.info("[ToolExecutionManager] Executing tool {} (API: {}) with {} parameters for userId={}, shape: {}",
+                        context.getToolName(), apiId, parameters.size(), userId,
+                        LoggedShape.of(parameters));
 
                 executionResult = apiService.executeApiTool(
                         apiId.toString(),
@@ -509,9 +512,13 @@ public class ToolExecutionManager {
             List<String> expandPaths = request != null ? request.getExpand() : null;
             Integer maxItems = request != null ? request.getMaxItems() : null;
             String scopeKind = request != null ? request.getBillingScopeKind() : null;
+            // STEP_OUTPUT only on the caller's explicit word that this result IS a workflow
+            // step's output: never inferred from scope RUN, which an agent inside a run sends too.
             ResponseShaper.Mode shapingMode = "STREAM".equalsIgnoreCase(scopeKind)
                     ? ResponseShaper.Mode.AGENT
-                    : ResponseShaper.Mode.WORKFLOW;
+                    : request != null && request.isStepOutput()
+                        ? ResponseShaper.Mode.STEP_OUTPUT
+                        : ResponseShaper.Mode.WORKFLOW;
             // An expand set survives the SIZE passes only on a generation call.
             // The signal is the generation model id, which is @JsonIgnore and
             // populated solely from the X-Lc-Generation-Model header this

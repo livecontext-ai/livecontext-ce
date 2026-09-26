@@ -76,4 +76,13 @@ describe('oidcConfig.onSigninCallback - loop-breaker key contract', () => {
     // ...and the redirect-loop counter was cleared through the shared key.
     expect(sessionStorage.getItem(LOGIN_REDIRECT_LOG_KEY)).toBeNull();
   });
+
+  it('keeps the page own query (?tab=security) and drops the authorization response', () => {
+    // Coming back from a Keycloak action launched on the settings Security tab.
+    window.history.replaceState({}, '', '/app/settings/overview?tab=security&kc_action_status=success&state=s1&session_state=x&code=c1');
+
+    oidcConfig.onSigninCallback();
+
+    expect(window.location.pathname + window.location.search).toBe('/app/settings/overview?tab=security');
+  });
 });

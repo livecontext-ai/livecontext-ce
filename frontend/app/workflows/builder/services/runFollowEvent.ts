@@ -29,6 +29,17 @@ export const FOLLOW_DEBOUNCE_MS = 260;
  */
 export const FOLLOW_MIN_GAP_MS = FOLLOW_TRANSITION_MS;
 
+/**
+ * How long nothing may run before the camera frames the nodes WAITING on a signal (an
+ * interface page, an approval), in ms.
+ *
+ * "Nothing running" is also the ordinary gap between two steps, and a non-blocking
+ * interface keeps waiting while the steps after it run: framing it on every gap would
+ * bounce the camera back to it between each pair of steps. Step gaps are scheduling
+ * latency, well under this; a real wait lasts until a person acts.
+ */
+export const FOLLOW_WAITING_SETTLE_MS = 1200;
+
 export interface FollowNodesEventDetail {
   /** The canvas this move is for. Several are mounted at once. */
   workflowId?: string;

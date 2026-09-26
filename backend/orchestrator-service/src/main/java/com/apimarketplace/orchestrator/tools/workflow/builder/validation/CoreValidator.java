@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.tools.workflow.builder.validation;
 
+import com.apimarketplace.orchestrator.services.channel.ChatChannelConnectorRegistry;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderSession;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderValidator.ValidationResult;
 import lombok.extern.slf4j.Slf4j;
@@ -269,6 +270,15 @@ public class CoreValidator implements WorkflowValidator {
      * never reach any external channel); missing credential/chatId and multi-approval
      * thresholds are WARNINGs (the run still proceeds, in-app resolution always works).
      */
+    private static boolean isUuid(String value) {
+        try {
+            java.util.UUID.fromString(value);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
     private void validateApprovalDelegation(Map<String, Object> cn, String nodeId, String label,
                                             ValidationResult result) {
         Object approval = cn.get("approval");
@@ -277,13 +287,75 @@ public class CoreValidator implements WorkflowValidator {
         if (!(delegationObj instanceof Map<?, ?> delegation)) return;
 
         String channel = delegation.get("channel") instanceof String s ? s.trim().toLowerCase() : "";
+        String linkId = delegation.get("linkId") instanceof String l ? l.trim() : "";
+        if (!linkId.isBlank()) {
+            // A destination picked like a credential: it decides service, account and chat.
+            if (!"default".equalsIgnoreCase(linkId) && !isUuid(linkId)) {
+                result.addError("APPROVAL_DELEGATION_INVALID_DESTINATION", nodeId,
+                        "Approval '" + label + "' names destination '" + linkId + "', which is not a destination "
+                        + "id. Use a linkId from channel(action='list'), or 'default' for the workspace default. "
+                        + "Fix: workflow(action='modify', node='" + label + "', params={delegation: {linkId: 'default'}}).");
+                return;
+            }
+            boolean namesChat = delegation.get("chatId") instanceof String c && !c.isBlank();
+            if (namesChat || delegation.get("credentialId") != null) {
+                result.addWarning("APPROVAL_DELEGATION_DESTINATION_OVERRIDES", nodeId,
+                        "Approval '" + label + "' picks a destination (linkId) and also gives a chatId or "
+                        + "credentialId. The destination decides the account and the chat, so those are ignored. "
+                        + "Remove them, or remove linkId to name the chat yourself.");
+            }
+            Object threshold = approvalMap.get("requiredApprovals");
+            if (threshold instanceof Number t && t.intValue() > 1) {
+                result.addWarning("APPROVAL_DELEGATION_MULTI_APPROVALS", nodeId,
+                        "Approval '" + label + "' delegates to a chat destination with requiredApprovals > 1. A " +
+                        "button press counts as a single decision; multi-approver thresholds are only tracked " +
+                        "for in-app approvals. Consider requiredApprovals: 1 when delegating.");
+            }
+            return;
+        }
         if (channel.isBlank()) return; // Section left unconfigured - nothing delegated, nothing to check.
 
-        if (!"telegram".equals(channel)) {
+        if (!ChatChannelConnectorRegistry.KNOWN_CHANNELS.contains(channel)) {
             result.addError("APPROVAL_DELEGATION_UNKNOWN_CHANNEL", nodeId,
                     "Approval '" + label + "' delegates to unknown channel '" + channel + "'. " +
-                    "Only 'telegram' is supported. Fix: workflow(action='modify', node='" + label + "', " +
-                    "params={delegation: {channel: 'telegram', chatId: '<chat id>'}}).");
+                    "Supported: " + String.join(", ", ChatChannelConnectorRegistry.KNOWN_CHANNELS) + ". " +
+                    "Fix: workflow(action='modify', node='" + label + "', " +
+                    "params={delegation: {channel: 'slack'}}).");
+            return;
+        }
+        if (!"telegram".equals(channel)) {
+            // With no credential or destination given, the approval goes to the destination
+            // connected on that provider, so neither is worth a warning. Only a malformed
+            // credential id is.
+            Object pinned = delegation.get("credentialId");
+            if (pinned != null && !isNumericId(pinned)) {
+                result.addWarning("APPROVAL_DELEGATION_INVALID_CREDENTIAL", nodeId,
+                        "Approval '" + label + "' delegates to " + channel + " with a non-numeric credentialId ('" +
+                        pinned + "'). Remove it to use the " + channel + " account connected in this workspace.");
+            }
+            if ("slack".equals(channel) && delegation.get("chatId") instanceof String named
+                    && (named.trim().startsWith("#") || named.trim().startsWith("@"))) {
+                result.addWarning("APPROVAL_DELEGATION_CHAT_NAME", nodeId,
+                        "Approval '" + label + "' names a Slack channel by name ('" + named + "'). A press comes "
+                        + "back with the channel ID, so give the ID instead (it starts with C, G or D; "
+                        + "channel(action='list') shows the connected ones), or leave chatId empty to use the "
+                        + "connected destination.");
+            }
+            if ("teams".equals(channel) && delegation.get("allowedUserIds") instanceof java.util.List<?> allowed
+                    && !allowed.isEmpty()) {
+                result.addWarning("APPROVAL_DELEGATION_ALLOWLIST_UNENFORCEABLE", nodeId,
+                        "Approval '" + label + "' delegates to Teams with allowedUserIds. A Teams approval is " +
+                        "decided from a link, which does not say who opened it, so every press would be " +
+                        "refused. Fix: workflow(action='modify', node='" + label + "', " +
+                        "params={delegation: {channel: 'teams', allowedUserIds: []}}).");
+            }
+            Object threshold = approvalMap.get("requiredApprovals");
+            if (threshold instanceof Number n && n.intValue() > 1) {
+                result.addWarning("APPROVAL_DELEGATION_MULTI_APPROVALS", nodeId,
+                        "Approval '" + label + "' delegates to " + channel + " with requiredApprovals > 1. A channel " +
+                        "button press counts as a single decision; multi-approver thresholds are only tracked " +
+                        "for in-app approvals. Consider requiredApprovals: 1 when delegating.");
+            }
             return;
         }
         // credentialId is OPTIONAL: absent means the send uses the user's own Telegram
@@ -298,12 +370,9 @@ public class CoreValidator implements WorkflowValidator {
                     "own Telegram credential. Set a numeric credential id to pin a specific bot, or " +
                     "remove the field to use the default.");
         }
-        if (!(delegation.get("chatId") instanceof String cid) || cid.isBlank()) {
-            result.addWarning("APPROVAL_DELEGATION_NO_CHAT_ID", nodeId,
-                    "Approval '" + label + "' delegates to Telegram without a chatId (destination chat, " +
-                    "{{...}} templates allowed). Without it no Telegram message is sent; the approval " +
-                    "stays resolvable in-app and via workflow(action='resolve_approval').");
-        }
+        // No chatId is not flagged: the message then goes to the Telegram destination connected in the
+        // workspace, exactly as on the other services. A workspace with none records the failure on
+        // the delivery, and the approval stays decidable in-app.
         Object required = approvalMap.get("requiredApprovals");
         if (required instanceof Number n && n.intValue() > 1) {
             result.addWarning("APPROVAL_DELEGATION_MULTI_APPROVALS", nodeId,

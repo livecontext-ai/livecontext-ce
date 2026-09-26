@@ -282,6 +282,7 @@ class CeCatalogCloudRelayTest {
                 "SUBSCRIPTION_REQUIRED|active subscription on the linked cloud account",
                 "INSUFFICIENT_CREDITS|top up the linked cloud account",
                 "CE_LINK_NOT_ACTIVE|reconnect the cloud account in settings",
+                "CLOUD_LINK_PLAN_REQUIRED|CLOUD_LINK_PLAN_REQUIRED: the LiveContext Cloud account linked to this install is not on a paid plan",
                 "OAUTH_NOT_RELAYABLE|locally configured OAuth credential",
                 "PLATFORM_NOT_AVAILABLE|not offered for this integration",
                 "TOOL_NOT_FOUND|not available for platform-credential execution",

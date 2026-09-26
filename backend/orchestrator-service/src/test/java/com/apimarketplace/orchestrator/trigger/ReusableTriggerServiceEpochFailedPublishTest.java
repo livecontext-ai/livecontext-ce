@@ -12,6 +12,7 @@ import com.apimarketplace.orchestrator.services.WorkflowExecutionService;
 import com.apimarketplace.orchestrator.services.WorkflowStreamingService;
 import com.apimarketplace.orchestrator.services.credit.CreditBudgetService;
 import com.apimarketplace.orchestrator.services.events.WorkflowEpochFailedEvent;
+import com.apimarketplace.orchestrator.services.events.WorkflowEpochSucceededEvent;
 import com.apimarketplace.orchestrator.services.state.StateSnapshotService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -142,8 +143,8 @@ class ReusableTriggerServiceEpochFailedPublishTest {
     }
 
     @Test
-    @DisplayName("hasFailures=false → does NOT publish (the negative gate)")
-    void hasFailuresFalseSkipsPublish() {
+    @DisplayName("hasFailures=false → no FAILED event; exactly one SUCCEEDED event, the recovery signal (V528)")
+    void hasFailuresFalsePublishesSuccessOnly() {
         WorkflowRunEntity run = makeRun(RunStatus.RUNNING);
         when(runRepository.findByRunIdPublicForUpdate(RUN_ID_PUBLIC)).thenReturn(Optional.of(run));
         when(runRepository.save(org.mockito.ArgumentMatchers.any())).thenReturn(run);
@@ -151,7 +152,26 @@ class ReusableTriggerServiceEpochFailedPublishTest {
         service.resetForNextCycle(run, null, null, RUN_ID_PUBLIC, null,
                 TRIGGER_ID, false, EPOCH);
 
-        verify(eventPublisher, never()).publishEvent(org.mockito.ArgumentMatchers.any());
+        verify(eventPublisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(WorkflowEpochFailedEvent.class));
+        ArgumentCaptor<WorkflowEpochSucceededEvent> captor = ArgumentCaptor.forClass(WorkflowEpochSucceededEvent.class);
+        verify(eventPublisher, times(1)).publishEvent(captor.capture());
+        assertThat(captor.getValue().runId()).isEqualTo(RUN_DB_ID);
+        assertThat(captor.getValue().workflowId()).isEqualTo(WORKFLOW_DB_ID);
+        assertThat(captor.getValue().epoch()).isEqualTo(EPOCH);
+        assertThat(captor.getValue().planVersion()).isEqualTo(PLAN_VERSION);
+    }
+
+    @Test
+    @DisplayName("hasFailures=true → the SUCCEEDED event is NOT published alongside the failure")
+    void hasFailuresTrueDoesNotPublishSuccess() {
+        WorkflowRunEntity run = makeRun(RunStatus.RUNNING);
+        when(runRepository.findByRunIdPublicForUpdate(RUN_ID_PUBLIC)).thenReturn(Optional.of(run));
+        when(runRepository.save(org.mockito.ArgumentMatchers.any())).thenReturn(run);
+
+        service.resetForNextCycle(run, null, null, RUN_ID_PUBLIC, null,
+                TRIGGER_ID, true, EPOCH);
+
+        verify(eventPublisher, never()).publishEvent(org.mockito.ArgumentMatchers.any(WorkflowEpochSucceededEvent.class));
     }
 
     @Test

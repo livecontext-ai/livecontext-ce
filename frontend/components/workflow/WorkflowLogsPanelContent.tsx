@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, FileText, ListTree, Table2 } from 'lucide-react';
+import { ArrowLeft, ListTree, Play, Table2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { WorkflowLogsExplorer } from './WorkflowLogsExplorer';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/breadcrumb';
@@ -82,8 +82,8 @@ export function WorkflowLogsPanelContent({
               aria-label={t('workflow.logs.backToRun')}
             >
               <ArrowLeft className="h-3.5 w-3.5 flex-shrink-0" />
-              <FileText className="h-3.5 w-3.5 flex-shrink-0" />
-              <span className="truncate">{t('actions.logs')}</span>
+              <Play className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="truncate">{t('sidePanel.runTab')}</span>
             </button>
           )}
         />

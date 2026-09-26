@@ -70,7 +70,9 @@ public class StreamingResponseHandler {
                                        HttpMethod method,
                                        HttpHeaders headers,
                                        Object requestBody) {
-        log.info("[StreamingResponseHandler] {} {} (streaming)", method, url);
+        // Host only: the URL arrives with the credential already in it (a path variable or a
+        // query key), and the caller has logged the redacted form of it just before.
+        log.info("[StreamingResponseHandler] {} {} (streaming)", method, hostOf(url));
 
         SseAggregatedResponse aggregated = sseStreamConsumer.consume(
                 url,
@@ -87,8 +89,10 @@ public class StreamingResponseHandler {
         result.put("truncated", aggregated.truncated());
         if (aggregated.hasError()) {
             result.put("error", aggregated.error());
-            log.warn("[StreamingResponseHandler] upstream error after {} chunks: {}",
-                    aggregated.chunkCount(), aggregated.error());
+            // The error text is not logged here: it can be worded around the request URL, which
+            // carries the credential. HttpExecutionService logs it once scrubbed.
+            log.warn("[StreamingResponseHandler] upstream error after {} chunks",
+                    aggregated.chunkCount());
         }
         return result;
     }
@@ -153,5 +157,15 @@ public class StreamingResponseHandler {
         if (node.isDouble() || node.isFloat()) return node.doubleValue();
         if (node.isBoolean()) return node.booleanValue();
         return node.asText();
+    }
+
+    /** The host of {@code url}, or a fixed marker when it does not parse. Never the path or query. */
+    public static String hostOf(String url) {
+        try {
+            String host = java.net.URI.create(url).getHost();
+            return host != null ? host : "<unparseable url>";
+        } catch (RuntimeException e) {
+            return "<unparseable url>";
+        }
     }
 }

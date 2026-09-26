@@ -102,17 +102,21 @@ vi.mock('@/components/chat/ApplicationCarousel', () => ({
   ApplicationCarousel: (p: {
     mediaMuted?: boolean;
     onToggleMediaMuted?: () => void;
+    settingsControl?: React.ReactNode;
   }) => {
     carouselProps.mediaMuted = p.mediaMuted;
     carouselProps.toggleSound = p.onToggleMediaMuted ?? null;
     return (
-      <button
-        type="button"
-        data-testid="toolbar-sound"
-        onClick={p.onToggleMediaMuted}
-      >
-        carousel
-      </button>
+      <>
+        <button
+          type="button"
+          data-testid="toolbar-sound"
+          onClick={p.onToggleMediaMuted}
+        >
+          carousel
+        </button>
+        {p.settingsControl}
+      </>
     );
   },
 }));

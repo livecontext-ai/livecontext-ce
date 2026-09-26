@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { existsSync } from 'fs';
+import path from 'path';
 import { DOCS_NAV, DOCS_PAGES, cleanDocsPathname, getAdjacentPages, isActiveDocPath } from '../_nav';
 
 describe('docs IA - DOCS_NAV / DOCS_PAGES', () => {
@@ -13,30 +15,47 @@ describe('docs IA - DOCS_NAV / DOCS_PAGES', () => {
     }
   });
 
-  it('exposes all 22 live pages across the six sections', () => {
+  it('exposes all 33 live pages across the eight sections', () => {
     expect(DOCS_NAV.map((s) => s.title)).toEqual([
       'Get started',
       'Build',
       'AI',
       'Data',
+      'Work & collaborate',
       'Share & host',
+      'Account & billing',
       'Reference',
     ]);
-    expect(DOCS_PAGES).toHaveLength(22);
-    // The nine subjects added in the docs rebuild all resolve to a live href.
+    expect(DOCS_PAGES).toHaveLength(33);
+    // The pages added in the 2026-09 platform refresh all resolve to a live href.
     const hrefs = new Set(DOCS_PAGES.map((p) => p.href));
     for (const href of [
-      '/runs',
-      '/models',
-      '/browser-agent',
-      '/skills',
-      '/files',
-      '/organizations',
-      '/billing',
-      '/expressions',
-      '/rest-api',
+      '/workspace',
+      '/glossary',
+      '/studio',
+      '/board',
+      '/agenda',
+      '/notifications',
+      '/channels',
+      '/public-access',
+      '/admin',
+      '/account',
+      '/mcp-server',
     ]) {
       expect(hrefs.has(href)).toBe(true);
+    }
+  });
+
+  it('backs every nav link with a real page file, so the sidebar never links to a 404', () => {
+    for (const { href } of DOCS_PAGES) {
+      const file = href === '/' ? 'page.tsx' : `${href.slice(1)}/page.tsx`;
+      expect(existsSync(path.resolve(__dirname, '..', file)), `missing app/docs/${file}`).toBe(true);
+    }
+  });
+
+  it('gives every page search keywords for the sidebar filter', () => {
+    for (const item of DOCS_NAV.flatMap((s) => s.items)) {
+      expect(item.keywords?.length ?? 0, item.title).toBeGreaterThan(0);
     }
   });
 

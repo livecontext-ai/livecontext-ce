@@ -50,10 +50,10 @@ public class InternalNotificationController {
 
     private static final Logger logger = LoggerFactory.getLogger(InternalNotificationController.class);
 
-    /** Mirrors the DB check {@code chk_notif_subject_type_v1} (V176, widened by V232 + V459). */
+    /** Mirrors the DB check {@code chk_notif_subject_type_v1} (V176, widened by V232 + V459 + V518 + V528). */
     private static final Set<String> SUBJECT_TYPES = Set.of(
             "WORKFLOW", "APPLICATION", "AGENT_TASK", "CREDENTIAL", "TRIGGER", "ORG_INVITATION",
-            "BADGE");
+            "BADGE", "AGENT", "BILLING");
 
     private static final Set<String> SEVERITIES = Set.of("info", "warning", "error");
 
@@ -62,6 +62,14 @@ public class InternalNotificationController {
 
     @PersistenceContext
     private EntityManager entityManager;
+
+    /** Optional: without it the row is still written, it just never leaves the bell. */
+    private org.springframework.context.ApplicationEventPublisher eventPublisher;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setEventPublisher(org.springframework.context.ApplicationEventPublisher eventPublisher) {
+        this.eventPublisher = eventPublisher;
+    }
 
     public InternalNotificationController(WorkflowRedisPublisher redisPublisher,
                                           MeterRegistry meterRegistry) {
@@ -141,6 +149,15 @@ public class InternalNotificationController {
             }
 
             Long id = ((Number) inserted.get(0)).longValue();
+
+            // Delivery (email / chat channel) runs after THIS transaction commits,
+            // and only on the insert-winner path, so a retried emit never sends twice.
+            if (eventPublisher != null) {
+                eventPublisher.publishEvent(new com.apimarketplace.orchestrator.services.notification.delivery
+                        .NotificationCreatedEvent(id, req.getTenantId(), orgId, req.getCategory(),
+                        req.getSubjectType(), req.getSubjectId(), req.getRunIdPublic(), req.getPayload(),
+                        occurredAt));
+            }
 
             try {
                 redisPublisher.publishNotification(req.getTenantId(), "notification.created",

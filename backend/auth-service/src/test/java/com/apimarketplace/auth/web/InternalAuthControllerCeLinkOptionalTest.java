@@ -8,6 +8,7 @@ import com.apimarketplace.auth.service.CreditConsumptionDeadLetterService;
 import com.apimarketplace.auth.service.ModelPricingService;
 import com.apimarketplace.auth.service.OrgRestrictionQueryService;
 import com.apimarketplace.auth.service.PlanLimitService;
+import com.apimarketplace.common.plan.CeLinkAccessResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -78,30 +79,52 @@ class InternalAuthControllerCeLinkOptionalTest {
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(response.getBody())
                 .containsEntry("active", false)
+                .containsEntry("reason", "NOT_LINKED")
                 .containsEntry("installId", installId.toString());
     }
 
     @Test
-    @DisplayName("Cloud (bean present, user owns link) - delegates to CeLinkService.userOwnsActiveLink → active=true")
+    @DisplayName("Cloud, linked and paid - delegates to CeLinkService.linkAccess -> active=true, no reason, plan echoed")
     void cloudDelegatesToCeLinkService() {
         UUID installId = UUID.randomUUID();
         when(ceLinkServiceProvider.getIfAvailable()).thenReturn(ceLinkService);
-        when(ceLinkService.userOwnsActiveLink(7L, installId)).thenReturn(true);
+        when(ceLinkService.linkAccess(7L, installId)).thenReturn(CeLinkAccessResult.active("PRO"));
 
         ResponseEntity<Map<String, Object>> response = controller.hasActiveCeLink(7L, installId);
 
-        assertThat(response.getBody()).containsEntry("active", true);
+        assertThat(response.getBody())
+                .containsEntry("active", true)
+                .containsEntry("reason", null)
+                .containsEntry("planCode", "PRO");
     }
 
     @Test
-    @DisplayName("Cloud, user does not own the link - active=false")
+    @DisplayName("Cloud, user does not own the link - active=false, reason NOT_LINKED")
     void cloudInactiveWhenUserDoesNotOwnLink() {
         UUID installId = UUID.randomUUID();
         when(ceLinkServiceProvider.getIfAvailable()).thenReturn(ceLinkService);
-        when(ceLinkService.userOwnsActiveLink(7L, installId)).thenReturn(false);
+        when(ceLinkService.linkAccess(7L, installId)).thenReturn(CeLinkAccessResult.notLinked());
 
         ResponseEntity<Map<String, Object>> response = controller.hasActiveCeLink(7L, installId);
 
-        assertThat(response.getBody()).containsEntry("active", false);
+        assertThat(response.getBody())
+                .containsEntry("active", false)
+                .containsEntry("reason", "NOT_LINKED")
+                .containsEntry("planCode", null);
+    }
+
+    @Test
+    @DisplayName("regression: Cloud, linked but the plan is not paid - active=false (old callers stay closed), reason PLAN_REQUIRED")
+    void cloudSuspendedLinkIsNotActive() {
+        UUID installId = UUID.randomUUID();
+        when(ceLinkServiceProvider.getIfAvailable()).thenReturn(ceLinkService);
+        when(ceLinkService.linkAccess(7L, installId)).thenReturn(CeLinkAccessResult.planRequired("FREE"));
+
+        ResponseEntity<Map<String, Object>> response = controller.hasActiveCeLink(7L, installId);
+
+        assertThat(response.getBody())
+                .containsEntry("active", false)
+                .containsEntry("reason", "PLAN_REQUIRED")
+                .containsEntry("planCode", "FREE");
     }
 }

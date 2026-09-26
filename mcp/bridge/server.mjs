@@ -528,6 +528,18 @@ app.post('/api/bridge/execute', async (req, res) => {
       enabledModules,
       restrictedToolset,
       approvedToolActions: (credentials && credentials.__approvedToolActions__) || [],
+      // What kind of run this is, said by the dispatcher that knows. Lost here, every tool call
+      // of the session looked like a person watching the chat: an unattended task's ask_user
+      // waited on a screen nobody had open instead of going to the connected chat channel.
+      taskId: (credentials && credentials.__taskId__) || null,
+      unattendedRun: isTrue(credentials && credentials.__unattendedRun__),
+      requireToolAuthorization: isTrue(credentials && credentials.__requireToolAuthorization__),
+      // A sub-agent is not the person's chat: nobody reads its conversation, and its parent is
+      // waiting on it. Reset to 0 at the session, its ask_user parked on a card nobody could see.
+      agentDepth: depthOf(credentials && credentials.__agent_depth__),
+      // A workflow agent node: its conversation cannot be re-entered by a reply that arrives
+      // later, so it must not put a question to a channel either (same rule as the direct route).
+      workflowRunId: workflowRunId || null,
     });
 
     const durationMs = Date.now() - startTime;
@@ -636,7 +648,18 @@ app.post('/api/bridge/execute', async (req, res) => {
  * Spawn CLI with adapter-specific args and MCP config.
  * Parses NDJSON lines from stdout, publishes events to Redis.
  */
-async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeoutMs, inactivityMs, tenantId, publisher, attachments, isNewConversation, adapter, budgetGuard, provider, reasoningEffort, agentEntityId, effectiveOrgId, effectiveOrgRole, executionId, enabledModules, restrictedToolset, approvedToolActions }) {
+/** The sub-agent depth as the Java side writes it (a number or its string form); 0 when absent. */
+function depthOf(value) {
+  const depth = Number(value);
+  return Number.isInteger(depth) && depth > 0 ? depth : 0;
+}
+
+/** A credential flag as the Java side writes it: a boolean, or its string form. */
+function isTrue(value) {
+  return value === true || value === 'true';
+}
+
+async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeoutMs, inactivityMs, tenantId, publisher, attachments, isNewConversation, adapter, budgetGuard, provider, reasoningEffort, agentEntityId, effectiveOrgId, effectiveOrgRole, executionId, enabledModules, restrictedToolset, approvedToolActions, taskId, unattendedRun, requireToolAuthorization, agentDepth, workflowRunId }) {
   // State tracking
   let fullContent = '';
   let numTurns = 0;
@@ -710,6 +733,14 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
       // forwarded so CliAgentService injects __approvedToolActions__ → the gate skips
       // re-prompting on the resume turn (parity with the remote AgentLoopService path).
       APPROVED_TOOL_ACTIONS: JSON.stringify(approvedToolActions || []),
+      // The run's kind, forwarded into the session so its tool calls are judged like the same
+      // run on the direct route: a task (or a schedule, a webhook) has nobody in front of it,
+      // so a question goes to the connected chat channel, and an armed agent asks permission.
+      TASK_ID: taskId || '',
+      UNATTENDED_RUN: unattendedRun ? 'true' : '',
+      REQUIRE_TOOL_AUTHORIZATION: requireToolAuthorization ? 'true' : '',
+      AGENT_DEPTH: agentDepth > 0 ? String(agentDepth) : '',
+      WORKFLOW_RUN_ID: workflowRunId || '',
       // The watchdog window THIS run was armed with. agent-cli-server forwards it into the
       // session so the server-side approval gate can size a park that fits inside it and
       // still leaves time to run the tool once the user answers. Without it the gate falls

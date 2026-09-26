@@ -10,7 +10,7 @@
  * ways out, mirroring the ce-setup wizard's ordering:
  *
  *  - PRIMARY: "Connect to LiveContext Cloud" - one-click OAuth kickoff via
- *    {@link cloudLinkService.getAuthUrl}. No returnPath is passed on purpose:
+ *    {@link cloudLinkService.getConnectUrl}. No returnPath is passed on purpose:
  *    the backend only whitelists pages that HANDLE the ?cloud_link_callback
  *    (ce-setup / marketplace / settings cloud-account), so the flow lands on
  *    the cloud-account settings page which completes the link and shows the
@@ -64,8 +64,7 @@ export function NoProviderCta({ variant = 'form', className }: NoProviderCtaProp
     try {
       // Default returnPath: the settings cloud-account page, which handles the
       // ?cloud_link_callback and clears the models cache once linked.
-      const { authUrl } = await cloudLinkService.getAuthUrl();
-      window.location.href = authUrl;
+      window.location.href = await cloudLinkService.getConnectUrl();
     } catch {
       setError(true);
       setConnecting(false);

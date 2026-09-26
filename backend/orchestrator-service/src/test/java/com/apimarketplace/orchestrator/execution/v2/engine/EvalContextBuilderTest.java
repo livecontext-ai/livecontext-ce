@@ -520,4 +520,65 @@ class EvalContextBuilderTest {
             assertFalse(result.containsKey("vars"));
         }
     }
+
+    @Nested
+    @DisplayName("parity with the template adapter")
+    class AdapterParityTests {
+
+        @Test
+        @DisplayName("regression: {{current_item}} inside a split body is the split item, as every other node reads it")
+        @SuppressWarnings("unchecked")
+        void currentItemInSplitIsTheSplitItem() {
+            ExecutionContext ctx = baseContext
+                .withGlobalData("item", Map.of("name", "Alice"))
+                .withGlobalData("index", 3);
+
+            Map<String, Object> result = EvalContextBuilder.buildStandardEvalContext(ctx);
+
+            assertEquals("Alice", ((Map<String, Object>) result.get("current_item")).get("name"));
+            assertEquals(3, result.get("current_index"));
+        }
+
+        @Test
+        @DisplayName("regression: {{current_item.data.x}} outside a split is the trigger payload, in its legacy shape")
+        @SuppressWarnings("unchecked")
+        void currentItemOutsideSplitIsLegacyPayload() {
+            Map<String, Object> result = EvalContextBuilder.buildStandardEvalContext(baseContext);
+
+            Map<String, Object> currentItem = (Map<String, Object>) result.get("current_item");
+            assertEquals(42, currentItem.get("user_id"));
+            assertEquals(42, ((Map<String, Object>) currentItem.get("data")).get("user_id"));
+        }
+
+        @Test
+        @DisplayName("regression: {{iterations}} / {{loop_results}} come from the loop globals, in both builders")
+        void loopGlobalsAreExposed() {
+            ExecutionContext ctx = baseContext
+                .withGlobalData("iterations", 4)
+                .withGlobalData("loop_results", java.util.List.of("a"));
+
+            assertEquals(4, EvalContextBuilder.buildStandardEvalContext(ctx).get("iterations"));
+            assertEquals(java.util.List.of("a"), EvalContextBuilder.buildStandardEvalContext(ctx).get("loop_results"));
+            assertEquals(4, EvalContextBuilder.buildAggregateEvalContext(ctx).get("iterations"));
+        }
+
+        @Test
+        @DisplayName("a trigger field already named like one of these keys is never overwritten")
+        void existingKeyWins() {
+            ExecutionContext ctx = ExecutionContext.create("run-1", "workflow-run-1", "tenant-1", "item-1", 0,
+                new HashMap<>(Map.of("iterations", "from-trigger")), mockPlan)
+                .withGlobalData("iterations", 4);
+
+            assertEquals("from-trigger", EvalContextBuilder.buildStandardEvalContext(ctx).get("iterations"));
+        }
+
+        @Test
+        @DisplayName("legacyCurrentItem keeps a payload that already carries `data` as it is, and null for none")
+        void legacyCurrentItemShapes() {
+            Map<String, Object> withData = Map.of("data", Map.of("a", 1), "b", 2);
+            assertEquals(withData, EvalContextBuilder.legacyCurrentItem(withData));
+            assertNull(EvalContextBuilder.legacyCurrentItem(Map.of()));
+            assertNull(EvalContextBuilder.legacyCurrentItem(null));
+        }
+    }
 }

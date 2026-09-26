@@ -363,4 +363,21 @@ class NodeDescriptionBuilderTest {
             assertThat(result.warning()).isNull();
         }
     }
+
+    @Test
+    @DisplayName("CRUD step description reads the table with the workspace org, so a teammate's table is ACTIVE, not missing")
+    void crudStepTableLookupCarriesOrg() {
+        Map<String, Object> node = new HashMap<>();
+        node.put("label", "Insert Row");
+        node.put("id", "crud/insert");
+        node.put("dataSourceId", 42L);
+        org.mockito.Mockito.when(dataSourceService.getDataSource(42L, "tenant-1", "org-1")).thenReturn(
+            new com.apimarketplace.datasource.client.dto.DataSourceDto(42L, "tenant-2", "Leads", null, null, null,
+                null, null, null, null, null, null, null, null, null, "org-1"));
+
+        NodeDescriptionBuilder.DescriptionResult result =
+            builder.buildDescription("mcp:insert_row", node, "tenant-1", "org-1");
+
+        assertThat(result.config()).containsEntry("table_name", "Leads").containsEntry("table_status", "ACTIVE");
+    }
 }

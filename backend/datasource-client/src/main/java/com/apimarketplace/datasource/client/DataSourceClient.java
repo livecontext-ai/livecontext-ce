@@ -61,16 +61,26 @@ public class DataSourceClient {
     // ========== CRUD operations (via internal endpoints, no HMAC needed) ==========
 
     /**
-     * Get a datasource by ID (tenant-scoped).
+     * Get a datasource by ID (tenant-scoped, org header only when a request or an async org
+     * scope forwards one). Prefer {@link #getDataSource(Long, String, String)}.
      */
     public DataSourceDto getDataSource(Long id, String tenantId) {
+        return getDataSource(id, tenantId, null);
+    }
+
+    /**
+     * Get a datasource by ID in an explicit workspace scope. Use it whenever the caller holds
+     * an organization id: off a request thread nothing forwards X-Organization-ID, and the
+     * tenant-only scope reads a table created by another member of the workspace as missing.
+     */
+    public DataSourceDto getDataSource(Long id, String tenantId, String organizationId) {
         String url = baseUrl + "/api/internal/datasource/" + id + "/get";
-        HttpEntity<Void> entity = new HttpEntity<>(buildHeaders(tenantId));
+        HttpEntity<Void> entity = new HttpEntity<>(buildHeaders(tenantId, organizationId));
         try {
             ResponseEntity<DataSourceDto> response = restTemplate.exchange(url, HttpMethod.GET, entity, DataSourceDto.class);
             return response.getBody();
         } catch (Exception e) {
-            log.error("Failed to get datasource id={}: {}", id, e.getMessage());
+            logLookupFailure(e, "get datasource id=" + id + " tenant=" + tenantId + " org=" + organizationId);
             return null;
         }
     }
@@ -309,7 +319,7 @@ public class DataSourceClient {
             ResponseEntity<DataSourceDto> response = restTemplate.exchange(url, HttpMethod.GET, entity, DataSourceDto.class);
             return response.getBody();
         } catch (Exception e) {
-            log.error("Failed to find datasource id={} tenant={} org={}: {}", id, tenantId, organizationId, e.getMessage());
+            logLookupFailure(e, "find datasource id=" + id + " tenant=" + tenantId + " org=" + organizationId);
             return null;
         }
     }
@@ -620,6 +630,20 @@ public class DataSourceClient {
     }
 
     // ========== Helpers ==========
+
+    /**
+     * A single-table lookup answered 404 is the service saying "no such table in this scope",
+     * a normal answer the caller turns into its own not-found result (null). Logging it at
+     * ERROR buried real failures under routine validation misses, so 404 is WARN and only a
+     * real failure (5xx, any other 4xx, I/O, timeout) stays ERROR.
+     */
+    private static void logLookupFailure(Exception e, String what) {
+        if (e instanceof org.springframework.web.client.HttpClientErrorException.NotFound) {
+            log.warn("Datasource not found ({}): {}", what, e.getMessage());
+        } else {
+            log.error("Failed to {}: {}", what, e.getMessage());
+        }
+    }
 
     private HttpHeaders buildHeaders(String tenantId) {
         return buildHeaders(tenantId, null);

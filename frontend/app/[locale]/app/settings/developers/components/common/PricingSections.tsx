@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslations } from 'next-intl';
-import { Zap, Gift, DollarSign, CreditCard, Info, MessageSquare, Code, AlertCircle } from 'lucide-react';
+import { Zap, Gift, DollarSign, CreditCard, MessageSquare, Code, AlertCircle } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { MonetizationConfig } from '../../types';
 import { FormSection, FormField, FormInput, FormSelect, InfoBox, FormGrid } from './index';
 import { ToggleGroup } from '@/components/ui/toggle-group';
@@ -11,12 +12,6 @@ interface PricingSectionsProps {
   monetizationConfig: MonetizationConfig;
   setMonetizationConfig: (config: MonetizationConfig) => void;
   mcpTools: Array<{ name: string; toolCategory: string; endpoint: string }>;
-  showRateLimitInfo: boolean;
-  setShowRateLimitInfo: (show: boolean) => void;
-  showPlansInfo: boolean;
-  setShowPlansInfo: (show: boolean) => void;
-  showFreeRequestsInfo: boolean;
-  setShowFreeRequestsInfo: (show: boolean) => void;
   sectionsExpanded: { [key: string]: boolean };
   toggleSection: (section: string) => void;
   rateLimitPeriodOptions: { value: string; label: string }[];
@@ -59,27 +54,15 @@ const PricingSections: React.FC<PricingSectionsProps> = (props) => {
             onToggle={() => props.toggleSection('rateLimit')}
           >
             <div className="flex items-center justify-between mb-4">
-              <button
-                type="button"
-                onClick={() => props.setShowRateLimitInfo(!props.showRateLimitInfo)}
-                className="text-theme-muted hover:text-theme-primary transition-colors"
-              >
-                <Info className="w-5 h-5" />
-              </button>
-            </div>
-
-            {props.showRateLimitInfo && (
-              <InfoBox
-                type="info"
-                title={t('rateLimiting.infoTitle')}
-              >
+              <InfoPopover label={t('rateLimiting.infoTitle')} size="lg" side="bottom" align="start" contentClassName="w-96">
+                <p className="mb-2 font-medium text-theme-primary">{t('rateLimiting.infoTitle')}</p>
                 <div className="space-y-2">
                   <p><strong>{t('rateLimiting.globalSettingLabel')}</strong> {t('rateLimiting.globalSettingText')}</p>
                   <p><strong>{t('rateLimiting.perToolSettingLabel')}</strong> {t('rateLimiting.perToolSettingText')}</p>
                   <p>{t('rateLimiting.limitReachedText')}</p>
                 </div>
-              </InfoBox>
-            )}
+              </InfoPopover>
+            </div>
 
             {/* Rate limiting configuration toggle - only if tools exist */}
             {props.mcpTools.length > 0 && (
@@ -308,26 +291,14 @@ const PricingSections: React.FC<PricingSectionsProps> = (props) => {
             onToggle={() => props.toggleSection('freeRequests')}
           >
             <div className="flex items-center justify-between mb-4">
-              <button
-                type="button"
-                onClick={() => props.setShowFreeRequestsInfo(!props.showFreeRequestsInfo)}
-                className="text-theme-muted hover:text-theme-primary transition-colors"
-              >
-                <Info className="w-5 h-5" />
-              </button>
-            </div>
-
-            {props.showFreeRequestsInfo && (
-              <InfoBox
-                type="info"
-                title={t('freeRequests.infoTitle')}
-              >
+              <InfoPopover label={t('freeRequests.infoTitle')} size="lg" side="bottom" align="start" contentClassName="w-96">
+                <p className="mb-2 font-medium text-theme-primary">{t('freeRequests.infoTitle')}</p>
                 <div className="space-y-2">
                   <p><strong>{t('freeRequests.betterRankingLabel')}</strong> {t('freeRequests.betterRankingText')}</p>
                   <p>{t('freeRequests.visibilityText')}</p>
                 </div>
-              </InfoBox>
-            )}
+              </InfoPopover>
+            </div>
 
             {/* Free requests/month configuration section - only if tools exist */}
             {props.mcpTools.length > 0 && (
@@ -755,7 +726,6 @@ const PricingSections: React.FC<PricingSectionsProps> = (props) => {
                     </div>
                   </div>
 
-
                   {Object.entries(
                     props.mcpTools.reduce((acc, tool) => {
                       if (!acc[tool.toolCategory]) acc[tool.toolCategory] = [];
@@ -914,37 +884,18 @@ const PricingSections: React.FC<PricingSectionsProps> = (props) => {
           >
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center space-x-2">
-                <button
-                  type="button"
-                  onClick={() => props.setShowPlansInfo(!props.showPlansInfo)}
-                  className="text-theme-muted hover:text-theme-primary transition-colors"
-                >
-                  <Info className="w-5 h-5" />
-                </button>
+                <InfoPopover label={t('plans.infoTitle')} size="lg" side="bottom" align="start" contentClassName="w-96">
+                  <p className="mb-2 font-medium text-theme-primary">{t('plans.infoTitle')}</p>
+                  <div className="space-y-2">
+                    <p><strong>{t('plans.customizableLabel')}</strong> {t('plans.customizableText')}</p>
+                    <p><strong>{t('plans.checkboxesLabel')}</strong> {t('plans.checkboxesText')}</p>
+                    <p><strong>{t('plans.defaultPricingLabel')}</strong> {t('plans.defaultPricingText')}</p>
+                    <p><strong>{t('plans.hardLimitLabel')}</strong> {t('plans.hardLimitText')}</p>
+                    <p><strong>{t('plans.rpsLabel')}</strong> {t('plans.rpsText')}</p>
+                  </div>
+                </InfoPopover>
               </div>
             </div>
-
-            {props.showPlansInfo && (
-              <div className="border border-blue-200 dark:border-blue-700 rounded-lg p-4 bg-blue-50 dark:bg-blue-900/20">
-                <div className="flex items-start space-x-3">
-                  <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
-                  <div className="flex-1">
-                    <h4 className="text-sm font-medium mb-1 text-blue-800 dark:text-blue-200">
-                      {t('plans.infoTitle')}
-                    </h4>
-                    <div className="text-sm text-blue-700 dark:text-blue-300">
-                      <div className="space-y-2">
-                        <p><strong>{t('plans.customizableLabel')}</strong> {t('plans.customizableText')}</p>
-                        <p><strong>{t('plans.checkboxesLabel')}</strong> {t('plans.checkboxesText')}</p>
-                        <p><strong>{t('plans.defaultPricingLabel')}</strong> {t('plans.defaultPricingText')}</p>
-                        <p><strong>{t('plans.hardLimitLabel')}</strong> {t('plans.hardLimitText')}</p>
-                        <p><strong>{t('plans.rpsLabel')}</strong> {t('plans.rpsText')}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
 
             <div className="space-y-6 mt-4">
               {Object.entries(props.monetizationConfig.selectedPlans).map(([plan, isSelected]) => {

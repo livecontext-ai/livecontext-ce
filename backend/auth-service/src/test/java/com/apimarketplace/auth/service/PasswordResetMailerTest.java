@@ -288,6 +288,41 @@ class PasswordResetMailerTest {
         release.countDown();
     }
 
+    @Test
+    @DisplayName("counts the abandoned mail even when the interrupted send finishes before shutdown reads the count")
+    void abandonedCountSurvivesTheInterruptedSendFinishingFirst() throws Exception {
+        // Regression: the count used to be read AFTER shutdownNow(). Interrupting the
+        // in-flight send runs its finally, which decrements the count; when that thread won
+        // the race the count read 0 and the ERROR reporting a lost mail stayed silent. The
+        // hook forces that interleaving every time: it waits until the interrupted send is
+        // done before shutdown goes on. With the old order this test fails on every run.
+        CountDownLatch inside = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            inside.countDown();
+            new CountDownLatch(1).await(10, TimeUnit.SECONDS);
+            return null;
+        }).when(mailSender).send(any(MimeMessage.class));
+
+        mailer.setDrainSecondsForTest(1);
+        mailer.setAfterShutdownNowForTest(() -> {
+            long deadline = System.currentTimeMillis() + 5000;
+            while (mailer.unsentCount() > 0 && System.currentTimeMillis() < deadline) {
+                Thread.onSpinWait();
+            }
+        });
+        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L);
+        assertThat(inside.await(5, TimeUnit.SECONDS)).isTrue();
+        logged.list.clear();
+
+        mailer.shutdown();
+
+        assertThat(mailer.unsentCount()).as("the interrupted send has finished").isZero();
+        assertThat(logged.list.stream()
+                .filter(e -> e.getLevel() == Level.ERROR)
+                .anyMatch(e -> e.getFormattedMessage().contains("1 password reset e-mail(s) unsent")))
+                .as("the lost mail is still reported").isTrue();
+    }
+
     /** The text/html alternative alone, so the plain part cannot satisfy an assertion about it. */
     private static String htmlPart(MimeMessage message) throws Exception {
         String found = firstOfType(message.getContent(), true);

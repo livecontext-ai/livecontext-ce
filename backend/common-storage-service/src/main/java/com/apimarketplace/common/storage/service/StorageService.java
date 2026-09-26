@@ -1126,10 +1126,15 @@ public class StorageService implements StorageOperations {
                 storage.setDataMapped(result.getPreview());
                 logger.info("Mapping resolu pour storage ID: {}", storage.getId());
             } else {
-                // F6: consistent ERROR level with the catch below - same operational
-                // signal (mapping unavailable), same triage routing.
+                // DEBUG, not ERROR: the common reason to land here is a tool with no response mapping,
+                // the NORMAL state of most tools. The resolver is the one place that can tell why no
+                // preview came back, so it owns the level: catalog unreachable or 5xx and an exception
+                // while applying the mapping are logged there at ERROR, a catalog anomaly (spec
+                // missing, unexpected refusal) at WARN, a plain absence at DEBUG. An exception thrown
+                // out of resolve() still lands in the catch below at ERROR. Logging this branch at
+                // ERROR put every storage write of an unmapped tool on the error dashboard.
                 String error = result != null ? result.getError() : "Resultat null";
-                logger.error("Mapping resolution returned no preview for toolId {}: {}", toolId, error);
+                logger.debug("No mapped preview for toolId {}: {}", toolId, error);
             }
         } catch (Exception e) {
             // F6: mapping failures upgraded from WARN to ERROR with exception

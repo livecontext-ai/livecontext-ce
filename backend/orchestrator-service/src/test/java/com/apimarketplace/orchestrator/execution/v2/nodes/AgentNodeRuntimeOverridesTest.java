@@ -136,6 +136,34 @@ class AgentNodeRuntimeOverridesTest {
     }
 
     @Test
+    @DisplayName("execute() does NOT carry the per-agent tool-authorization flag - a workflow node has nobody to ask")
+    void executeDoesNotForwardTheToolAuthorizationFlag() {
+        AgentNode node = newNode();
+        injectAgentClient(node);
+        node.setRuntimeOverrides(new AgentRuntimeOverrides(null, null, null, null, null, true));
+
+        when(mockAgentClient.executeAgent(any(AgentExecutionRequestDto.class)))
+            .thenReturn(successResponse());
+
+        node.execute(context);
+
+        ArgumentCaptor<AgentExecutionRequestDto> captor = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
+        verify(mockAgentClient).executeAgent(captor.capture());
+        // ToolAuthorizationScope.isCardRaised honours this credential and would force the card
+        // back on here. That is exactly the harm: an agent in a workflow node has no stream id,
+        // so parkForAuthorization returns at its streamId == null guard BEFORE the chat
+        // delivery, and every sensitive action would be refused while nobody was asked
+        // anywhere. Setting it is a one-line change that looks like finishing the feature and
+        // is a run stopped by a question that was never put.
+        //
+        // This becomes correct once a workflow-node execution has a conversation and a stream
+        // to park on. Delete this test then, with that change, not before.
+        org.assertj.core.api.Assertions.assertThat(captor.getValue().credentials())
+            .as("arming an agent must not reach a context that cannot ask anybody")
+            .doesNotContainKey("__requireToolAuthorization__");
+    }
+
+    @Test
     @DisplayName("execute() carries inactivityTimeout=0 (disabled) VERBATIM - 0 must not be dropped as falsy")
     void executeForwardsZeroInactivityVerbatim() {
         AgentNode node = newNode();

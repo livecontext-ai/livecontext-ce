@@ -49,8 +49,11 @@ describe('well-known models in the footer', () => {
     expect(providers.size).toBeGreaterThan(5);
   });
 
-  it('names eight families, the width of the integrations column beside it', () => {
-    expect(WELL_KNOWN_MODELS).toHaveLength(8);
+  it('names the four families the platform runs, and no provider the catalogue dropped', () => {
+    // Eight until 2026-09-25 (Grok, Mistral, Qwen and Kimi too). Those providers left the
+    // seed when it stopped carrying disabled models; re-adding one is only right once the
+    // catalogue enables it again, which the per-family check below enforces.
+    expect(WELL_KNOWN_MODELS).toHaveLength(4);
   });
 
   it.each(WELL_KNOWN_MODELS.map((m) => [m.label, m.provider]))(

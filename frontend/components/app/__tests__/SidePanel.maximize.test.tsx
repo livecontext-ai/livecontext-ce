@@ -271,6 +271,19 @@ describe('SidePanel - full screen', () => {
     expect(panelBox().getAttribute('data-side-panel-maximized')).toBeNull();
   });
 
+  it('marks the Escape it used as handled, so nothing else reacts to it', () => {
+    // A chat inside the panel also listens for Escape (to stop its answer). Leaving full
+    // screen must not be read as a second request by anything after the panel.
+    renderPanel();
+    click(maximizeButton()!);
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+
+    act(() => { window.dispatchEvent(ev); });
+
+    expect(panelBox().getAttribute('data-side-panel-maximized')).toBeNull();
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
   it('leaves an already-handled Escape alone', () => {
     renderPanel();
     click(maximizeButton()!);

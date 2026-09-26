@@ -203,6 +203,18 @@ describe('ResolvedParamsView', () => {
       expect(screen.getByText('Recipient')).toBeTruthy();
     });
 
+    it('keeps the FULL configured value on hover although the inline text is capped', () => {
+      // The inline list stops at 120 characters with no expand control, so a long expression
+      // was unreadable anywhere in run mode. The whole value rides on the title.
+      liveState.value = { liveState: null, pendingSignals: [] };
+      const long = `{{trigger:hook.output.email}} ${'x'.repeat(200)}`;
+      const node = toolNode();
+      (node.data as unknown as { paramExpressions: Record<string, string> }).paramExpressions.to = long;
+      renderView(node, [{ name: 'to', title: 'Recipient' }]);
+      const shown = screen.getByTitle(long);
+      expect(shown.textContent?.endsWith('…')).toBe(true);
+    });
+
     it('never renders a configured SECRET, in either branch of the fallback', () => {
       // The fallback reads the plan entry straight off the canvas, so it bypasses the
       // backend gate completely. `crypto_jwt` keeps its signing secret there and

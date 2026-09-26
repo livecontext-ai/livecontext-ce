@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/providers/smart-providers';
 import { unifiedApiService } from '@/lib/api/unified-api-service';
@@ -8,6 +8,16 @@ import CheckoutModal, { CheckoutModalType } from '@/components/CheckoutModal';
 import { usePlans } from '@/lib/hooks/smart-hooks-complete';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { useTranslations } from 'next-intl';
+import { getClientLocale } from '@/lib/utils/locale';
+import { assignLocation } from '@/lib/navigation/assignLocation';
+import {
+  ceLinkPricingPath,
+  continuePendingCeLink,
+  hasPendingCeLink,
+} from '@/lib/cloud-link/pendingCeLink';
+
+/** A PAYG top-up is credited by its webhook about a second after Stripe returns here. */
+const PAYG_SETTLE_MS = 2500;
 
 export default function BillingSuccessPage() {
   const router = useRouter();
@@ -15,6 +25,7 @@ export default function BillingSuccessPage() {
   const { isAuthenticated, isLoading, getAccessTokenSilently } = useAuth();
   const { plans: dbPlans } = usePlans();
   const t = useTranslations('billing');
+  const tCeLink = useTranslations('ceCloudLink.cloud');
   
   // Fonction pour mapper dynamiquement les planId vers les noms de plans
   const getPlanNameFromId = useCallback((planId: number) => {
@@ -57,7 +68,33 @@ export default function BillingSuccessPage() {
     return resolvedPlanName === 'UNKNOWN' ? planName : resolvedPlanName;
   })();
 
+  // Cloud only: a self-hosted install is waiting for this paid plan before its link can
+  // complete (lib/cloud-link/pendingCeLink.ts). Once the purchase is confirmed, re-check
+  // eligibility and hand the browser to Keycloak, which returns to the install.
+  const ceLinkStartedRef = useRef(false);
+  const [ceLinkContinuing, setCeLinkContinuing] = useState(false);
+  useEffect(() => {
+    if (modalType !== 'success' || ceLinkStartedRef.current || !hasPendingCeLink()) return;
+    ceLinkStartedRef.current = true;
+    setCeLinkContinuing(true);
+    const delay = searchParams.get('payg') ? PAYG_SETTLE_MS : 0;
+    // Not cleared on unmount, on purpose: the ref makes it run once, and its outcome is a
+    // full-page navigation either way.
+    setTimeout(() => {
+      continuePendingCeLink().then((outcome) => {
+        if (outcome === 'redirected') return;
+        setCeLinkContinuing(false);
+        if (outcome === 'plan_required' || outcome === 'error') {
+          assignLocation(ceLinkPricingPath(getClientLocale()));
+        }
+      });
+    }, delay);
+  }, [modalType, searchParams]);
+
   const displayedMessage = (() => {
+    if (ceLinkContinuing) {
+      return tCeLink('returning');
+    }
     if (modalType === 'success' && typeof subscriptionDetails?.planId === 'number') {
       return t('success.activated', { plan: displayedPlanName });
     }
@@ -101,9 +138,13 @@ export default function BillingSuccessPage() {
           setShowModal(true);
           // Webhook handlePaygTopup credits the bucket + fans out cache
           // invalidation; balance becomes visible within ~1s of the redirect.
-          setTimeout(() => {
-            router.push('/app/settings/overview');
-          }, 2500);
+          // A pending CE link continues from the success effect instead (it waits the same
+          // settle time before re-checking eligibility).
+          if (!hasPendingCeLink()) {
+            setTimeout(() => {
+              router.push('/app/settings/overview');
+            }, PAYG_SETTLE_MS);
+          }
           return;
         }
 

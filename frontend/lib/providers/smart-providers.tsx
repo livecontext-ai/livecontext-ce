@@ -1116,7 +1116,13 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
   // circuit breaker).
   // Public marketing/docs pages are never replaced by the blocking auth UI:
   // they must server-render their real content (see isPublicMarketingPath).
-  const publicMarketingPage = isPublicMarketingPath(pathname);
+  // The host matters on the docs subdomain (clean paths, see isPublicMarketingPath).
+  // Server and client agree: the server render sees the `/docs/...` route (public by
+  // prefix), the browser sees the docs host (public by host).
+  const publicMarketingPage = isPublicMarketingPath(
+    pathname,
+    typeof window === 'undefined' ? null : window.location.host,
+  );
 
   if (!publicMarketingPage && (effectiveSessionExpired || (!isAuthenticated && initializationComplete))) {
     // `effectiveSessionExpired` is the ONLY signal that a previously-valid session

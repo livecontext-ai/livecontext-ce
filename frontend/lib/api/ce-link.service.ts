@@ -27,7 +27,22 @@ export interface CeLinkPage {
   size: number;
 }
 
+/**
+ * GET /api/ce-link/eligibility. Linking a self-hosted install requires a PAID plan on the
+ * workspace the user currently acts in (every plan above FREE; unknown codes are not paid).
+ */
+export interface CeLinkEligibility {
+  eligible: boolean;
+  planCode: string | null;
+  reason: 'PLAN_REQUIRED' | null;
+}
+
 export class CeLinkService {
+  /** GET /api/ce-link/eligibility - may the caller link a self-hosted install right now. */
+  async eligibility(): Promise<CeLinkEligibility> {
+    return apiClient.get<CeLinkEligibility>('/ce-link/eligibility');
+  }
+
   /** GET /api/ce-link/mine - paginated list of caller's ACTIVE installs. */
   async mine(page = 0, size = 20): Promise<CeLinkPage> {
     return apiClient.get<CeLinkPage>('/ce-link/mine', {

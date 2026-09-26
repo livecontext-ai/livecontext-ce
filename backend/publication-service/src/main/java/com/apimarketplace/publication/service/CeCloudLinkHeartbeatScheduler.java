@@ -51,13 +51,15 @@ public class CeCloudLinkHeartbeatScheduler {
             logger.debug("CeCloudLinkHeartbeatScheduler: no linked tenants - skipping tick");
             return;
         }
-        int ok = 0, revoked = 0, errors = 0;
+        int ok = 0, revoked = 0, suspended = 0, errors = 0;
         for (CeCloudLinkEntity link : all) {
             try {
                 CloudLinkService.HeartbeatOutcome outcome = cloudLinkService.sendHeartbeat(link);
                 switch (outcome) {
                     case OK, REGISTERED -> ok++;
                     case REVOKED, NOT_FOUND -> revoked++;
+                    // Link kept, suspended until the cloud account is on a paid plan again.
+                    case PLAN_REQUIRED -> suspended++;
                     default -> errors++;
                 }
             } catch (RuntimeException unexpected) {
@@ -68,7 +70,7 @@ public class CeCloudLinkHeartbeatScheduler {
                         link.getTenantId(), unexpected.getMessage());
             }
         }
-        logger.debug("CeCloudLinkHeartbeatScheduler tick: ok={} revoked={} errors={} (total {})",
-                ok, revoked, errors, all.size());
+        logger.debug("CeCloudLinkHeartbeatScheduler tick: ok={} revoked={} planRequired={} errors={} (total {})",
+                ok, revoked, suspended, errors, all.size());
     }
 }

@@ -266,6 +266,10 @@ public class StepDataPersistenceService {
         );
 
         enrichEntityWithNodeTypeFields(entity, stepId, result);
+        // The mock marker otherwise survives only inside the payload, where no SQL reads it: the
+        // tool-health dashboard would count a mocked `error` step as a real failure of the tool.
+        entity.setMocked(com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys
+                .isMocked(result.output()));
         entity.setNormalizedKey(computeNormalizedKey(stepId, stepLabel, entity.getNodeType()));
         stampOrganizationId(entity, workflowRunId);
 

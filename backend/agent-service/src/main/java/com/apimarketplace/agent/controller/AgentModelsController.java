@@ -38,6 +38,7 @@ import java.util.Map;
 public class AgentModelsController {
 
     private final ModelCatalogService modelCatalogService;
+    private final com.apimarketplace.agent.service.ModelReplacementResolver modelReplacementResolver;
 
     @GetMapping("/api/internal/agent/models")
     public ResponseEntity<Map<String, Object>> getAvailableModels(
@@ -87,6 +88,29 @@ public class AgentModelsController {
             @RequestHeader(value = "X-User-ID", required = false) String tenantId) {
         validateCategory(category);
         return ResponseEntity.ok(modelCatalogService.listAvailableModels(category, tenantId));
+    }
+
+    /**
+     * The pair a run must use for {@code (provider, model)}: itself, or the model that
+     * replaces it while an admin has it disabled (V515). Consumed by conversation-service,
+     * whose CLI chat turns go to the bridge without passing through agent-service's own
+     * execution entry points. Always 200: {@code substituted=false} echoes the input.
+     */
+    @GetMapping("/api/internal/agent/models/effective")
+    public ResponseEntity<Map<String, Object>> getEffectiveModel(
+            @RequestParam("provider") String provider,
+            @RequestParam("model") String model) {
+        var sub = modelReplacementResolver.substituteIfDisabled(provider, model).orElse(null);
+        if (sub == null) {
+            return ResponseEntity.ok(Map.of("provider", provider, "model", model, "substituted", false));
+        }
+        return ResponseEntity.ok(Map.of(
+                "provider", sub.provider(),
+                "model", sub.model(),
+                "substituted", true,
+                "explicit", sub.explicit(),
+                "replacedProvider", sub.replacedProvider(),
+                "replacedModel", sub.replacedModel()));
     }
 
     private static void validateCategory(String category) {

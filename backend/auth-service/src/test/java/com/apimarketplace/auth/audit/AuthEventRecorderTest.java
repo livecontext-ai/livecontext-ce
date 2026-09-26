@@ -38,6 +38,7 @@ class AuthEventRecorderTest {
         assertThat(r.providerTag(AuthProvider.GITHUB)).isEqualTo("github");
         assertThat(r.providerTag(AuthProvider.LOCAL)).isEqualTo("local");
         assertThat(r.providerTag(AuthProvider.KEYCLOAK)).isEqualTo("keycloak");
+        assertThat(r.providerTag(AuthProvider.SAML)).isEqualTo("saml");
     }
 
     @Test

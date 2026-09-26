@@ -599,6 +599,10 @@ public class DecisionNodeCreator extends CreatorBase {
         approvalConfig.put("approverRoles", approverRoles);
         approvalConfig.put("requiredApprovals", requiredApprovals);
         approvalConfig.put("timeoutMs", timeoutMs);
+        // A {{...}} reference is kept as written and resolved by the node at run time.
+        UtilityNodeCreator.keepTemplate(approvalConfig, "requiredApprovals", parameters,
+            "required_approvals", "requiredApprovals");
+        UtilityNodeCreator.keepTemplate(approvalConfig, "timeoutMs", parameters, "timeout_ms", "timeoutMs", "timeout");
         if (contextTemplate != null) approvalConfig.put("contextTemplate", contextTemplate);
         if (delegation != null) approvalConfig.put("delegation", delegation);
         if (continuationMode != null) approvalConfig.put("continuationMode", continuationMode);

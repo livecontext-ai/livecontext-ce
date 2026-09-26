@@ -895,12 +895,31 @@ public class CreditAttributionService {
      * mapping is provably a no-op for every pre-existing subscription shape.
      */
     private static boolean grantsBasePack(Subscription subscription, int creditQuantity) {
-        boolean isPaidSubscription = !"internal".equalsIgnoreCase(subscription.getProvider());
+        String code = subscription.getPlan() != null ? subscription.getPlan().getCode() : null;
+        return grantsBasePack(subscription.getProvider(), code, creditQuantity);
+    }
+
+    private static boolean grantsBasePack(String provider, String planCode, int creditQuantity) {
+        boolean isPaidSubscription = !"internal".equalsIgnoreCase(provider);
         if (isPaidSubscription || creditQuantity > 0) {
             return true;
         }
-        String code = subscription.getPlan() != null ? subscription.getPlan().getCode() : null;
-        return code != null && COMP_BASE_PACK_PLANS.contains(code.toUpperCase());
+        return planCode != null && COMP_BASE_PACK_PLANS.contains(planCode.toUpperCase());
+    }
+
+    /**
+     * What one credit cycle grants a subscription, decided exactly as
+     * {@link #attributeOnSubscription} grants it: the tier pack when {@link #grantsBasePack}
+     * says so, otherwise the plan's included credits ({@code included_llm_tokens}, the column
+     * {@code grantPlanCredits} reads), otherwise nothing. The credit alerts use it as the base
+     * of their LOW threshold, so it must stay the one place this decision is written.
+     */
+    public static long cycleGrantCredits(String provider, String planCode, int creditQuantity,
+                                         Long includedLlmTokens) {
+        if (grantsBasePack(provider, planCode, creditQuantity)) {
+            return CreditTierConstants.getCreditAmount(CreditTierConstants.resolveTierIndex(creditQuantity, planCode));
+        }
+        return includedLlmTokens != null && includedLlmTokens > 0 ? includedLlmTokens : 0L;
     }
 
     /**

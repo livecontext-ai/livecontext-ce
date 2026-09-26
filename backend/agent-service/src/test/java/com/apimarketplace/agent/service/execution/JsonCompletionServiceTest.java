@@ -129,6 +129,24 @@ class JsonCompletionServiceTest {
         }
 
         @Test
+        @DisplayName("regression V515: a DISABLED requested model runs on its replacement, which is what the link is resolved for")
+        void disabledModelRunsOnReplacement() {
+            com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+                org.mockito.Mockito.mock(com.apimarketplace.agent.service.ModelReplacementResolver.class);
+            when(resolver.substituteIfDisabled(BILLED_PROVIDER, BILLED_MODEL)).thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelReplacementResolver.Substitution(
+                    "deepseek", "deepseek-chat", BILLED_PROVIDER, BILLED_MODEL, false)));
+            ReflectionTestUtils.setField(service, "modelReplacementResolver", resolver);
+            when(jsonInvoker.invokeWithUsage("deepseek", "deepseek-chat", SYSTEM, USER, TENANT)).thenReturn(result(JSON));
+
+            assertThat(service.complete(request(), null)).isEqualTo(JSON);
+
+            // Pre-fix the disabled pair itself was sent to the provider (and failed once retired).
+            verify(executionLinkRouter).runnableRoute("deepseek", "deepseek-chat", null);
+            verify(jsonInvoker, never()).invokeWithUsage(eq(BILLED_PROVIDER), eq(BILLED_MODEL), any(), any(), any());
+        }
+
+        @Test
         @DisplayName("an API-target link swaps the execution pair on the invoker")
         void apiLinkSwapsPair() {
             when(executionLinkRouter.runnableRoute(BILLED_PROVIDER, BILLED_MODEL, null)).thenReturn(API_ROUTE);
@@ -628,6 +646,68 @@ class JsonCompletionServiceTest {
                 BILLED_PROVIDER, BILLED_MODEL, SYSTEM, USER, null), null);
 
             verify(observability, org.mockito.Mockito.never()).recordFromRequest(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("model replacement reaches the observability record")
+    class ModelReplacementStamp {
+
+        private com.apimarketplace.agent.service.AgentObservabilityService observability;
+
+        @BeforeEach
+        void wire() {
+            observability = org.mockito.Mockito.mock(com.apimarketplace.agent.service.AgentObservabilityService.class);
+            ReflectionTestUtils.setField(service, "observabilityService", observability);
+        }
+
+        private com.apimarketplace.agent.client.dto.AgentObservabilityRequest recorded() {
+            var captor = ArgumentCaptor.forClass(com.apimarketplace.agent.client.dto.AgentObservabilityRequest.class);
+            verify(observability).recordFromRequest(captor.capture());
+            return captor.getValue();
+        }
+
+        private void usage(String provider, String model) {
+            when(jsonInvoker.invokeWithUsage(provider, model, SYSTEM, USER, TENANT))
+                .thenReturn(new ProviderLlmJsonInvoker.InvocationResult(JSON,
+                    com.apimarketplace.agent.domain.UsageInfo.builder()
+                        .promptTokens(10).completionTokens(5).totalTokens(15).build()));
+        }
+
+        @Test
+        @DisplayName("a disabled model swapped for its replacement is recorded as replaced, naming the disabled model")
+        void swapped() {
+            com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+                org.mockito.Mockito.mock(com.apimarketplace.agent.service.ModelReplacementResolver.class);
+            when(resolver.substituteIfDisabled(BILLED_PROVIDER, BILLED_MODEL)).thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelReplacementResolver.Substitution(
+                    "deepseek", "deepseek-chat", BILLED_PROVIDER, BILLED_MODEL, true)));
+            ReflectionTestUtils.setField(service, "modelReplacementResolver", resolver);
+            usage("deepseek", "deepseek-chat");
+
+            service.complete(request(), null);
+
+            assertThat(recorded().getModelReplaced()).isTrue();
+            assertThat(recorded().getReplacedModel()).isEqualTo(BILLED_MODEL);
+        }
+
+        @Test
+        @DisplayName("an enabled model is recorded as not replaced; without a resolver nothing is claimed")
+        void notSwappedOrUnknown() {
+            com.apimarketplace.agent.service.ModelReplacementResolver resolver =
+                org.mockito.Mockito.mock(com.apimarketplace.agent.service.ModelReplacementResolver.class);
+            when(resolver.substituteIfDisabled(BILLED_PROVIDER, BILLED_MODEL)).thenReturn(java.util.Optional.empty());
+            ReflectionTestUtils.setField(service, "modelReplacementResolver", resolver);
+            usage(BILLED_PROVIDER, BILLED_MODEL);
+
+            service.complete(request(), null);
+            assertThat(recorded().getModelReplaced()).isFalse();
+            assertThat(recorded().getReplacedModel()).isNull();
+
+            org.mockito.Mockito.clearInvocations(observability);
+            ReflectionTestUtils.setField(service, "modelReplacementResolver", null);
+            service.complete(request(), null);
+            assertThat(recorded().getModelReplaced()).isNull();
         }
     }
 }

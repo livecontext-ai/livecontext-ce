@@ -112,6 +112,8 @@ class InternalChatControllerSyncTest {
             request.setConversationId("conv-1");
             request.setMessage("scheduled prompt");
             request.setSource("SCHEDULE");
+            // A refused task run is still the run its task points at.
+            request.setExecutionId("6f7ccab2-d30e-42b7-a0e6-ff314726967a");
             request.setAgentId("agent-1");
             request.setProvider("claude-code");
             request.setModel("claude-opus-4-7");
@@ -125,7 +127,7 @@ class InternalChatControllerSyncTest {
                     eq("user-1"), eq("org-1"), eq("agent-1"), eq("SCHEDULE"), eq("conv-1"),
                     eq("BUDGET_EXHAUSTED"), eq("Insufficient credits"),
                     eq("scheduled prompt"), assistantCaptor.capture(),
-                    eq("claude-code"), eq("claude-opus-4-7"));
+                    eq("claude-code"), eq("claude-opus-4-7"), eq("6f7ccab2-d30e-42b7-a0e6-ff314726967a"));
             assertThat(assistantCaptor.getValue()).startsWith("[Error] Insufficient credits");
         }
 

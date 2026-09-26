@@ -908,6 +908,19 @@ class ConversationRedisStreamingCallbackTest {
             assertThat(json).contains("\"errorCode\":\"STREAM_ERROR\"");
             assertThat(json).contains("\"retryable\":true");
         }
+
+        @Test
+        @DisplayName("should finalize the stream as ERROR carrying the real error, not a placeholder")
+        void shouldFinalizeAsErrorWithItsReason() {
+            when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(1L);
+
+            var callback = callbackFactory.forExecution(STREAM_ID, CONVERSATION_ID);
+            callback.onError("LLM provider timeout");
+
+            // Regression: the finalize carried no reason, so conversation-service stored and
+            // logged a fixed "Agent execution error" while the cause lived only in this log.
+            verify(conversationClient).finalizeStream(STREAM_ID, "ERROR", "LLM provider timeout");
+        }
     }
 
     @Nested

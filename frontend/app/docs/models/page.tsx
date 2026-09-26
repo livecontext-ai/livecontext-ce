@@ -1,11 +1,11 @@
-import { Bot, Server, Workflow } from 'lucide-react';
+import { Bot, Server, Sparkles, Wallet } from 'lucide-react';
 import { docsMetadata } from '../_meta';
 import { DocsHero, DocsProse, DocsTable, Callout, CardGrid, Card } from '../_components';
 
 export const metadata = docsMetadata({
   title: 'Models & providers',
   description:
-    'How LiveContext sources and configures models: BYOK API-key providers, CLI bridge providers (Claude Code, Codex, Gemini CLI, Mistral Vibe), the six reasoning-effort levels and who honors them, the admin model catalog, model categories, cloud-only execution links, and the CE cloud-vs-BYOK toggle.',
+    'Where LiveContext models come from: platform API keys, your own provider key, CLI bridges, reasoning effort, the admin model catalog, and the self-hosted cloud relay.',
   path: '/docs/models',
 });
 
@@ -15,32 +15,46 @@ export default function ModelsPage() {
       <DocsHero
         eyebrow="AI"
         title="Models & providers"
-        lead="Every model that powers chat, standalone agents, and workflow agent nodes comes from one admin panel. This page covers where models come from, how reasoning effort works across providers, how the catalog is configured, and what's different on a self-hosted install."
+        lead="Every model that powers chat, agents, and workflow agent nodes is configured in one settings page. This page covers where models come from, running turns on your own provider key, reasoning effort, the admin model catalog, and what changes on a self-hosted install."
       />
 
       <DocsProse>
         <h2>Where models are configured</h2>
         <p>
-          Models live in <strong>Settings &rsaquo; AI Providers</strong>, an <strong>admin-only</strong>{' '}
-          page (non-admins see an unauthorized notice). It&apos;s organized as a row of tabs: <strong>API
-          Keys</strong>, one tab per CLI bridge (<strong>Claude Code</strong>, <strong>Codex</strong>,{' '}
-          <strong>Gemini CLI</strong>, <strong>Mistral Vibe</strong>), <strong>Models</strong>, and, on
-          cloud only, <strong>Execution Links</strong>.
-        </p>
-        <p>
-          Models come from three families: <strong>API-key providers</strong> you bring your own key
-          for (BYOK), <strong>CLI bridge providers</strong> that run a coding-agent CLI on a bridge
-          host, and, on cloud, a curated hosted catalog. The <strong>Models</strong> tab is the single
-          source of truth for every model the platform exposes, not just admin overrides on top of a
-          hidden default list.
-        </p>
-
-        <h2>API-key providers (BYOK)</h2>
-        <p>
-          Add a platform credential for any of these and its models become available wherever you pick
-          a model:
+          Models live in <strong>Settings &rsaquo; AI Providers</strong>. What you see there depends on
+          your role and edition:
         </p>
         <DocsTable
+          caption="What the AI Providers page shows, by role"
+          head={['Who', 'What the page shows']}
+          rowHeaders
+          rows={[
+            [
+              'Admin',
+              <>
+                A row of tabs: <strong>API Keys</strong>, one tab per CLI bridge (<strong>Claude Code</strong>,{' '}
+                <strong>Codex</strong>, <strong>Gemini CLI</strong>, <strong>Mistral Vibe</strong>),{' '}
+                <strong>Models</strong>, and on the cloud also <strong>Execution links</strong> and{' '}
+                <strong>Your keys</strong>.
+              </>,
+            ],
+            ['Non-admin, cloud', <>Only the <strong>Your keys</strong> panel, to run your own turns on your own provider key.</>],
+            ['Non-admin, self-hosted', 'An unauthorized notice. Only the administrator configures AI providers.'],
+          ]}
+        />
+        <p>
+          The <strong>Models</strong> tab is the single source of truth for every chat and agent model
+          the platform exposes. Generation models (image, video, sound, speech, music) are handled
+          separately, see <a href="/studio">Studio</a>.
+        </p>
+
+        <h2>Platform API-key providers</h2>
+        <p>
+          On the <strong>API Keys</strong> tab an admin saves one key per provider. Its models then
+          become available wherever a model is picked:
+        </p>
+        <DocsTable
+          caption="Platform API-key providers and their models"
           head={['Provider', 'Models']}
           rows={[
             ['Anthropic', 'Claude'],
@@ -50,338 +64,351 @@ export default function ModelsPage() {
             ['DeepSeek', 'DeepSeek'],
             ['xAI', 'Grok'],
             ['Perplexity', 'Sonar'],
-            ['Cohere', 'Command R+'],
+            ['Cohere', 'Command'],
             ['Z.AI', 'GLM'],
             ['OpenRouter', 'multi-provider aggregator'],
-            ['Qwen', 'Alibaba'],
-            ['Moonshot', 'Kimi'],
-            ['MiniMax', 'MiniMax M-series'],
+            ['Qwen (Alibaba)', 'Qwen'],
+            ['Moonshot (Kimi)', 'Kimi'],
+            ['MiniMax', 'MiniMax'],
+            ['TypeSafe (Jev)', 'Decision model for Classify nodes only, never offered in chat or agent pickers'],
           ]}
         />
         <p>
-          Saving a key stores it as a platform credential and immediately invalidates the model cache
-          for that provider, so newly enabled models show up right away.
+          A key saved here takes priority over the server&apos;s environment configuration; with no saved
+          key, the server falls back to its environment. Saving a key refreshes the model list right
+          away.
+        </p>
+
+        <h2>Run on your own provider key</h2>
+        <Callout title="Cloud only, from the Pro plan">
+          <p>
+            The <strong>Your keys</strong> tab exists on the cloud only. Below the Pro plan your saved
+            keys stay read-only and your agents keep running on the LiveContext key, with an
+            upgrade prompt. On a self-hosted install there is no plan gate: the
+            admin&apos;s keys on the <strong>API Keys</strong> tab are already your own.
+          </p>
+        </Callout>
+        <p>
+          In <strong>Your keys</strong>, paste a key for a provider and press <strong>Save key</strong>. The
+          provider checks the key when you save it, and a rejected key shows the provider&apos;s reason.
+          Then turn on <strong>Use my key</strong> for that provider. Each row states its route:{' '}
+          <strong>Runs on your key</strong>, <strong>Runs on the LiveContext key</strong>, or{' '}
+          <strong>Runs on the LiveContext key (yours is saved)</strong>. You can switch back at any time,
+          and your key stays saved. OpenRouter and Cohere are not offered here.
+        </p>
+        <p>
+          On your key, the provider bills you the tokens directly. LiveContext charges a flat fee per
+          agent turn, by the model&apos;s price band, and never more than the same turn would have cost
+          on the LiveContext key. These turns appear as <strong>Your key</strong> in your credit history.
+          Press <strong>See the price per turn</strong> in the panel to see the current fees.
+        </p>
+        <p>
+          The fee for each price band is listed under{' '}
+          <a href="/billing#own-key-fee">Own-key fee in Billing</a>.
         </p>
 
         <h2>CLI bridge providers</h2>
         <p>
-          The four bridge providers run a coding-agent CLI on a bridge host rather than calling an API
+          The four bridge providers run a coding-agent CLI on a bridge host instead of calling an API
           directly: <code>claude-code</code>, <code>codex</code>, <code>gemini-cli</code>, and{' '}
-          <code>mistral-vibe</code>. Each bridge tab has two panels: a <strong>setup panel</strong> to
-          install and authenticate the CLI on the bridge host, and an <strong>access panel</strong> to
-          control who may dispatch through it.
-        </p>
-        <p>
-          The distinction that matters: an <strong>API model</strong> is usable the moment its key is
-          saved. A <strong>CLI model</strong> additionally needs a live, authenticated CLI running on
-          the bridge host, a separate, external step from adding a key.
-        </p>
-        <Callout variant="info">
-          Bridge model turns are priced like any other model, at the underlying cloud model&apos;s
-          published list price, and debit ledger credits at the same per-token rate as the direct API
-          route. The CLI subscription itself is a cost the admin pays externally; it doesn&apos;t make
-          turns free inside LiveContext.
-        </Callout>
-        <p>
-          Because CLI providers are local bridges the cloud can never provide on your behalf, the
-          cloud-vs-BYOK source toggle (see the CE section below) is not shown on bridge tabs.
-        </p>
-
-        <h2>Reasoning effort</h2>
-        <p>
-          Reasoning effort is a single dial with six canonical levels, from lightest to most thorough:
+          <code>mistral-vibe</code>. Claude Code and Codex let you use a Claude or ChatGPT subscription
+          instead of an API key, Gemini CLI logs in with a Google account, and Mistral Vibe uses a
+          Mistral API key set on the bridge host. Each bridge tab has a setup panel (install the CLI,
+          log in, start the bridge, then <strong>Verify Connection</strong>) and an access panel titled{' '}
+          <strong>Who can use this bridge</strong>.
         </p>
         <DocsTable
-          head={['Level', 'Notes']}
+          caption="Bridge access modes"
+          head={['Access mode', 'Who can dispatch through the bridge']}
+          rowHeaders
           rows={[
-            ['minimal', 'Lightest reasoning pass.'],
-            ['low', ''],
-            ['medium', ''],
-            ['high', ''],
-            ['xhigh', ''],
-            ['max', 'Deepest reasoning pass, highest latency and cost.'],
+            ['Disabled', 'No one, not even the admin.'],
+            ['Admin only', 'Only users with the ADMIN role. This is the default.'],
+            ['Allowlist', <>Only the users you add with <strong>Grant access</strong>.</>],
+            ['All users', 'Every user of this instance. Pair it with a per-user daily quota.'],
           ]}
         />
         <p>
-          <strong>Only three providers actually honor it today: <code>claude-code</code>,{' '}
-          <code>codex</code>, and the direct <code>anthropic</code> API.</strong> Gemini CLI and
-          Mistral Vibe expose no usable effort knob and don&apos;t show the control at all. Effort
-          isn&apos;t a bridge-only idea either: anthropic is a regular BYOK/API provider and still
-          honors it, so the per-model effort-default column in the Models panel renders for these three
-          providers&apos; rows specifically, not for bridges as a category. Every other
-          provider&apos;s row shows an empty cell there.
+          <strong>Max requests per user per day</strong> caps each user (leave it empty for unlimited),
+          and <strong>Usage today</strong> lists the day&apos;s activity. Because the default is{' '}
+          <strong>Admin only</strong>, an admin testing a bridge model sees it work while every other
+          user is refused until the mode changes.
         </p>
-        <p>Each of the three maps the level to its own native knob:</p>
+        <p>
+          An API model is usable the moment its key is saved. A bridge model also needs the CLI to be{' '}
+          installed and logged in on the bridge host. Before a bridge provider is offered
+          in a model picker, the bridge is asked for its status (the answer is cached for 60 seconds). A
+          CLI that is missing or logged out is hidden, and if the bridge cannot be reached at all, every
+          bridge provider is hidden rather than guessed at. Regular API providers are never affected.
+        </p>
+
+        <h2>Reasoning effort</h2>
+        <p>Reasoning effort is one dial with six levels, from lightest to most thorough:</p>
+        <p>
+          <code>minimal</code>, <code>low</code>, <code>medium</code>, <code>high</code>,{' '}
+          <code>xhigh</code>, <code>max</code>.
+        </p>
+        <p>
+          Only three providers honor it: <code>claude-code</code>, <code>codex</code>, and the direct{' '}
+          <code>anthropic</code> API. Gemini CLI and Mistral Vibe expose no usable effort control, so the
+          selector is not shown for them, nor for any other provider. Each of the three maps the level to
+          its own setting:
+        </p>
         <DocsTable
-          head={['Provider', 'Native knob', 'Notes']}
+          caption="How each provider maps reasoning effort"
+          head={['Provider', 'Native setting', 'How levels map']}
           rows={[
             [
               'Claude Code',
               <code key="cc">CLAUDE_CODE_EFFORT_LEVEL</code>,
-              <>accepts low, medium, high, xhigh, max; <code>minimal</code> clamps to low.</>,
+              <>accepts low to max; <code>minimal</code> becomes low.</>,
             ],
             [
               'Codex',
               <code key="cx">-c model_reasoning_effort=&lt;level&gt;</code>,
               <>
-                accepts minimal, low, medium, high, xhigh (no <code>max</code>, so max clamps to
-                xhigh); xhigh and max additionally require a <code>codex-max</code> model, clamping
-                down to high on other models.
+                accepts minimal to xhigh, so <code>max</code> becomes xhigh. <code>xhigh</code> and{' '}
+                <code>max</code> need a <code>codex-max</code> model and drop to high on other models.
               </>,
             ],
-            [
-              'Anthropic (API)',
-              <code key="an">output_config.effort</code>,
-              'clamped per model, see below.',
-            ],
+            ['Anthropic (API)', <code key="an">output_config.effort</code>, 'depends on the model, see below.'],
           ]}
         />
-        <p>Anthropic&apos;s clamping is derived from the model id, with no live capability check:</p>
         <DocsTable
-          head={['Case', 'Rule']}
+          caption="Reasoning effort rules for Anthropic models"
+          head={['Anthropic case', 'Rule']}
           rows={[
-            [
-              'Effort support at all',
-              'Fable / Mythos, Opus 4.5 and above, or Sonnet 4.6 and above. Haiku (through 4.5) supports no effort control.',
-            ],
-            ['minimal', 'always maps to low; the API itself has no minimal level.'],
-            [
-              'xhigh',
-              'needs Fable / Opus 4.7+ or Sonnet 5+; otherwise falls back to high.',
-            ],
-            [
-              'max',
-              'needs Fable / Opus 4.6+ or Sonnet 4.6+; otherwise falls back to high.',
-            ],
+            ['Effort supported at all', 'Fable / Mythos, Opus 4.5 and above, or Sonnet 4.6 and above. Haiku (through 4.5) has no effort control.'],
+            ['minimal', 'always becomes low; the API has no minimal level.'],
+            ['xhigh', 'needs Fable / Opus 4.7+ or Sonnet 5+; otherwise high.'],
+            ['max', 'needs Fable / Opus 4.6+ or Sonnet 4.6+; otherwise high.'],
           ]}
         />
         <p>
-          Precedence when an agent or run actually executes: a <strong>per-conversation/run
-          override</strong> beats a <strong>per-agent setting</strong>, which beats the{' '}
-          <strong>per-model admin default</strong>. The first value that resolves to a known level
-          wins; if none is set, the provider&apos;s own default behavior applies (nothing is sent). The
-          per-model admin default itself is the lowest-precedence fallback, and its <code>-</code>{' '}
-          option means &ldquo;inherit, no default&rdquo;, letting the CLI or model decide.
+          Precedence when a run executes: a <strong>per-conversation or per-run override</strong> beats
+          the <strong>per-agent setting</strong>, which beats the <strong>per-model admin default</strong>{' '}
+          (the <strong>Effort</strong> column of the Models tab). If none is set, nothing is sent and the
+          provider&apos;s own default applies. In the Effort column, <code>-</code> means &ldquo;no
+          default, let the model decide&rdquo;.
         </p>
-        <Callout variant="info">
-          <code>supports_reasoning</code> in the catalog is a separate enrichment flag describing the
-          model, unrelated to whether the effort selector is shown. The selector is gated purely by
-          provider (<code>claude-code</code>, <code>codex</code>, <code>anthropic</code>), so a
-          non-Anthropic provider never shows it regardless of that flag.
-        </Callout>
+
+        <h2>Vision and attachments</h2>
+        <p>
+          Images and files you attach, and images returned by tools (for example a file an agent opens),
+          are sent inline to the model, and a vision-capable model can see the images. Inline content has a size cap per item:
+        </p>
+        <DocsTable
+          caption="Inline size cap per attachment type"
+          head={['Attachment', 'Inline cap']}
+          rowHeaders
+          rows={[
+            ['Image', '3.6 MB'],
+            ['Other binary or PDF', '256 KB'],
+          ]}
+        />
+        <p>
+          Past the cap, the model receives the file&apos;s extracted text when there is some, otherwise a
+          placeholder naming the file: it knows the file exists but cannot read its contents. Tool-result
+          images reach the model on both API providers and CLI bridges.
+        </p>
 
         <h2>The admin model catalog</h2>
         <p>
-          The <strong>Models</strong> tab is a sortable, per-row editable list. For each model an admin
-          can toggle it enabled, rename its display label, set its tier, set a reasoning-effort default
-          (only for the three effort-capable providers above), mark it recommended, edit pricing and
-          rate limits, and delete or reset the row.
+          The <strong>Models</strong> tab (<strong>Model Configuration</strong>) is a sortable, per-row
+          editable list. Its columns include <strong>Provider</strong>, <strong>Tier</strong>,{' '}
+          <strong>Effort</strong>, the <strong>Recommended</strong> star, <strong>Price ($/1M)</strong>{' '}
+          (USD per 1M input and output tokens), and global rate limits (<strong>TPM global</strong>,{' '}
+          <strong>RPM global</strong>).
         </p>
         <DocsTable
-          head={['Field', 'Detail']}
+          caption="Admin model catalog controls"
+          head={['Control', 'What it does']}
+          rowHeaders
           rows={[
-            ['Tier', <><code>top</code>, <code>high</code>, <code>mid</code>, <code>budget</code>; a new or custom model defaults to <code>mid</code>.</>],
-            ['Ranking', 'set by drag-and-drop; the chat tab writes the global ranking, the browser agent tab writes a per-category ranking.'],
-            [
-              'Pricing',
-              <>USD per 1M tokens, input and output. The credits columns shown alongside are
-              derived from price and markup and aren&apos;t directly editable.</>,
-            ],
-            [
-              'Rate limits',
-              'global tokens-per-minute and requests-per-minute are editable; per-tenant limit columns exist but stay hidden while the platform runs a global rate-limit strategy.',
-            ],
-            [
-              'Custom models',
-              <>added via a dialog: pick the provider, set a model id (required), optional display
-              name, tier, pricing, and global rate limits. A custom model is appended to the end of
-              the ranking.</>,
-            ],
+            ['Enabled toggle', 'Offers or withdraws the model everywhere a model is picked.'],
+            ['Display name', 'Click the name to rename it.'],
+            ['Tier', <><code>top</code>, <code>high</code>, <code>mid</code>, or <code>budget</code>. A new or custom model defaults to <code>mid</code>.</>],
+            ['Ranking', 'Drag to reorder. Each category tab keeps its own ranking.'],
+            ['Provider on', 'Switches a whole provider off without touching the setting of each model, so switching it back on restores your selection.'],
+            ['Filters and search', <><strong>State</strong>, provider, and <strong>Tier</strong> filters, plus <strong>Search a model</strong>.</>],
+            ['Bulk actions', <>Select rows, then <strong>Enable</strong>, <strong>Disable</strong>, or <strong>Set tier</strong>.</>],
+            ['Not configured', 'A key icon on a model whose provider has no key yet. It is listed so you can rank and price it, but it cannot run.'],
+            ['Add Model', <>A custom model: <strong>Provider</strong> and <strong>Model ID</strong> (required), an optional <strong>Display Name</strong>, tier, price, and rate limits. It is added at the end of the ranking.</>],
+            ['Reset / Reset All', 'Reverts admin changes to the catalog value. Offered only on non-custom rows that were changed.'],
           ]}
         />
         <p>
-          <strong>Reset</strong> reverts an admin override back to the synced catalog value and is only
-          offered for non-custom rows that actually have an override; <strong>Reset all</strong> does
-          the same across the board. Deleting a regular (non-custom) model simply disables it; deleting
-          a custom model removes it entirely, since it has no underlying catalog row to fall back to.
+          Deleting a regular model disables it. Deleting a custom model removes it, since there is no
+          catalog row to fall back to. Per-tenant rate-limit columns exist but stay hidden.
         </p>
+
+        <h3>When a model is disabled</h3>
         <p>
-          Additional fields ride along per model, mostly populated by the catalog sync: context window,
-          max output tokens, and support flags for tools, vision, prompt caching, reasoning, computer
-          use, response schema, and web search, plus its mode, batch and cache pricing, price floors,
-          and release/deprecation dates.
+          Disabling a model does not break the agents, workflow nodes, and chats that already use it. On
+          the <strong>Chat / Agent</strong> tab a disabled model shows a <strong>Replaced by</strong>{' '}
+          selector: while the model stays disabled, those runs use the chosen replacement instead (and are
+          billed for it). <strong>Platform default</strong> means the model the platform uses when none is
+          chosen.
+        </p>
+
+        <h3>Free-plan models (cloud)</h3>
+        <p>
+          On the cloud each row has a <strong>Free</strong> chip. It decides whether a Free-plan account
+          may spend its monthly credits on chat and agent turns with that model. It is off by default: a
+          Free account then needs a top-up to run the model. If no model on a tab is open to the Free
+          plan, the tab shows a warning, because Free accounts are then refused for that kind of turn.
+        </p>
+
+        <h3>What ships to self-hosted installs (cloud)</h3>
+        <p>
+          The cloud catalog also carries a <strong>CE: auto</strong> / <strong>CE: on</strong> /{' '}
+          <strong>CE: off</strong> chip per row. It decides what the model catalog bundle ships to
+          self-hosted installs, independently of the enabled toggle: auto follows it, on ships the model
+          enabled, off ships it disabled.
         </p>
 
         <h2>Model categories</h2>
-        <p>
-          The Models panel has one pill tab per category, and a model can be enabled in one category
-          while disabled in another:
-        </p>
+        <p>The Models tab has one pill tab per category, and a model can be enabled in one and disabled in the other:</p>
         <DocsTable
-          head={['Category', 'Accepts', 'Ranking scope']}
+          caption="Model categories and what uses them"
+          head={['Category', 'Used by']}
+          rowHeaders
           rows={[
-            ['chat', 'chat-capable models (mode unset or chat)', 'the legacy global list; this is also what other parts of the picker read.'],
-            ['browser_agent', 'chat-capable models', 'a per-category sidecar, independent of chat.'],
+            ['Chat / Agent', 'Chat, agents, and every other consumer of the global catalog. Its ranking is the default order.'],
+            ['Browser Agent', 'Browser Agent runs only. Disabling a model here removes it from those runs.'],
           ]}
         />
         <p>
-          Bridge (CLI) providers are hidden from the <code>browser_agent</code> tab, since re-ranking
-          or disabling them there would have no runtime effect; they still appear on the{' '}
-          <code>chat</code> tab because full CLI sessions do serve chat.
-        </p>
-        <p>
-          Generation models (image, video, sound, speech, music) are not listed here. A ranking has
-          nothing to say about them: the caller names its model, a video model is no substitute for a
-          voice one, and the price is per image or per second rather than per token. What decides
-          whether a generation model is available, and at what price, is the platform credential it
-          is published against, under Settings &gt; Platform Credentials.
+          Bridge (CLI) providers are hidden from the <strong>Browser Agent</strong> tab, where ranking or
+          disabling them would have no effect. They still appear on <strong>Chat / Agent</strong>.
         </p>
 
-        <h2>Model execution links (cloud only)</h2>
+        <h2>Model execution links</h2>
+        <Callout title="Cloud only">
+          <p>The <strong>Execution links</strong> tab and the route button on the Models tab do not exist on a self-hosted install.</p>
+        </Callout>
         <p>
-          An execution link decouples <strong>what you&apos;re billed for</strong> from{' '}
-          <strong>what actually runs</strong>. It maps a billed <code>(provider, model)</code> pair to a
-          different execution provider/model, which can be a CLI bridge or another regular API
-          provider. The billed identity is re-stamped onto the response, so credit consumption still
-          charges the billed price even though a different model actually did the work.
+          An execution link separates what you are billed for from{' '}
+          what actually runs. It maps a billed provider and model to a different
+          execution provider and model, a CLI bridge or another API provider. Credits are still charged
+          at the billed model&apos;s price. Leaving the execution model blank reuses the billed model id,
+          shown as <em>same as billed</em>.
         </p>
-        <p>
-          Leaving the execution model blank means &ldquo;reuse the billed model id verbatim&rdquo;, shown
-          in the UI as <em>same as billed</em>.
-        </p>
-        <p>A link is scoped to where it applies:</p>
         <DocsTable
+          caption="Model execution link scopes"
           head={['Scope', 'Applies to']}
           rows={[
-            ['ALL', 'the wildcard default, used when no more specific scope matches.'],
-            ['CHAT', 'chat conversations (CONVERSATION is an alias of this).'],
-            ['WORKFLOW', 'workflow node executions: the agent node, and the classify and guardrail nodes.'],
-            ['WEBHOOK', 'webhook-triggered runs.'],
-            ['WIDGET', 'embedded widget conversations.'],
-            ['SCHEDULE', 'schedule-triggered runs.'],
-            ['TASK', 'task executions.'],
-            ['TASK_REVIEW', 'task review executions.'],
+            ['ALL', 'The default, used when no more specific scope matches.'],
+            ['CHAT', 'Chat conversations.'],
+            ['WORKFLOW', 'Workflow agent, Classify, and Guardrail nodes.'],
+            ['WEBHOOK', 'Webhook-triggered runs.'],
+            ['WIDGET', 'Embedded widget conversations.'],
+            ['SCHEDULE', 'Schedule-triggered runs.'],
+            ['TASK', 'Task executions.'],
+            ['TASK_REVIEW', 'Task review executions.'],
           ]}
         />
         <p>
-          Resolution checks the exact surface first, then falls back to the <code>ALL</code> row.
-          Guardrail and Classify nodes resolve as <code>WORKFLOW</code>, like the agent node they sit
-          next to. The browser agent, avatar generation and single JSON completions carry no surface
-          at all, and a sub-agent run carries one (<code>SUB_AGENT</code>) that matches none, so in
-          every case only an <code>ALL</code> row reaches them. Disabling a surface-scoped
-          row does not park that surface on the billed model either: it reverts to the{' '}
-          <code>ALL</code> route when one exists. At most one link exists per billed pair and scope; the surface picker only offers
-          scopes not already linked for that pair, so you can stack <code>ALL</code> plus any subset of
-          specific surfaces, but never the same surface twice. Links can be individually enabled,
+          Resolution checks the exact scope first, then falls back to <code>ALL</code>. Sub-agent runs,
+          the browser agent, and other callers without a scope are reached only by an <code>ALL</code>{' '}
+          link. There is at most one link per billed model and scope, and each link can be enabled,
           disabled, or deleted.
         </p>
         <p>
-          The <strong>Models</strong> tab carries a shortcut for the most common link. A model whose
-          provider has a CLI counterpart that actually routes that exact model id (Anthropic to Claude
-          Code, OpenAI to Codex, Google to Gemini CLI, and Mistral to Mistral Vibe, though that last
-          one matches nothing in the standard catalog because the Vibe CLI names its models with
-          local aliases) shows a small route button: one click creates
-          the link to that CLI, on the same model id, scoped <code>ALL</code>. Once a model is routed,
-          the button becomes a badge carrying the execution target&apos;s icon (its name is in the
-          tooltip) and opens a surface picker.
-          Everything it writes is an ordinary link, editable from the Execution Links tab like any
-          other. A model whose CLI counterpart does not route it gets no route button, but it still
-          shows the badge once it is linked from the Execution Links tab, so the Models tab answers
-          &ldquo;is this model routed, and where&rdquo; for every model, not only the CLI-capable ones.
+          On the Models tab, a model whose exact id is also served by a CLI (Anthropic to Claude Code,
+          OpenAI to Codex, Google to Gemini CLI) has a route button that creates an <code>ALL</code> link
+          to that CLI in one click. Once routed, the button becomes a badge that opens a surface picker.
+          The button turns amber when that CLI cannot run on the bridge host (missing or logged out): runs
+          routed to it would fail until the CLI is fixed or the link is changed. Remember the bridge access
+          policy too: with the default <strong>Admin only</strong> mode, other users&apos; runs of a routed
+          model are refused.
         </p>
+
+        <h2>Self-hosted (CE)</h2>
+        <h3>LLM source: Cloud or API keys</h3>
         <p>
-          The picker mirrors how a route is resolved rather than showing eight independent switches.
-          While <code>All surfaces</code> is on it routes every surface, so the others are listed as
-          covered by it and are not clickable: a surface-scoped row could only send that surface
-          somewhere else, never switch it off. A surface already overridden onto another target is
-          frozen there too, and stays editable from the Execution Links tab. Turning <code>All surfaces</code> off
-          disables that row (it is not deleted, so the badge and this picker stay) and the surfaces
-          become individually routable.
+          On a self-hosted install the <strong>API Keys</strong> tab starts with an{' '}
+          <strong>LLM source</strong> switch:
         </p>
+        <DocsTable
+          caption="LLM source options on a self-hosted install"
+          head={['Source', 'Behavior']}
+          rowHeaders
+          rows={[
+            [
+              'Cloud',
+              'API model calls use your linked LiveContext Cloud account. Only the model completions are relayed to the cloud and billed in credits on that cloud account. Tools and traces still run locally. Requires a linked cloud account.',
+            ],
+            ['API keys', 'API model calls use the keys configured on this instance.'],
+          ]}
+        />
         <p>
-          <code>All surfaces</code> also covers the callers that carry no surface, and each lands on
-          a model of its own choosing: chat compaction summarises with the platform summariser
-          (unless a conversation or agent overrides it), avatar generation uses the tenant&apos;s
-          default model, and the browser agent uses the pair configured on it. Where the model they land on is the one
-          you routed to a CLI, the CLI cannot serve it: a single JSON completion fails outright,
-          avatar generation quietly switches to the platform utility model (and fails only if that
-          one is routed to a CLI too), and the browser agent keeps the billed model. So the rows to
-          think twice about are the platform summariser model and your tenant default.
+          CLI bridges have no such switch: they always run on your own bridge host. See{' '}
+          <a href="/self-host">Self-hosting</a> to link a cloud account.
         </p>
+
+        <h3>The model catalog on a self-hosted install</h3>
         <p>
-          The button turns amber when that CLI <strong>cannot run</strong> on the bridge host, which
-          means it is absent OR present but logged out. On an already-linked model it stays neutral
-          while nothing reaches that CLI (the model is routed elsewhere, or its routing is switched
-          off), since an unusable CLI cannot break what is not sent to it; on a model with no link
-          yet it is amber precisely because the click would send it there. That is worth heeding
-          before clicking: a
-          linked run falls back to the billed provider only when the bridge transport is entirely
-          unwired, so with the bridge up and the CLI unusable everything routed to it fails until the
-          CLI is fixed or the routing is changed.
+          Each release of the Community Edition ships with the cloud&apos;s signed model catalog of that
+          day, applied when the install starts. So a never-linked install still gets the models of its
+          release. A linked install also syncs the latest signed catalog on startup and about every 15
+          minutes, and the <strong>Model catalog bundle</strong> control (<strong>Update bundle</strong>)
+          syncs on demand. The signature is verified before anything is merged, and your own edits and
+          custom models are kept.
         </p>
-        <p>
-          Installed and logged in is not the only precondition, and it is the only one the badge can
-          see. Each CLI also has its own <strong>access policy</strong> on that CLI&apos;s tab, and it
-          ships as <strong>admin-only</strong>: an admin&apos;s own runs pass, so the person reading
-          this panel is the least likely to notice that every other user&apos;s run of that model is
-          denied with a typed error. On a shared model an <code>ALL</code>-scoped link makes that
-          everyone else&apos;s problem, and the badge stays neutral throughout. The third
-          precondition is the bridge transport being wired at all, and that is the one case that
-          degrades quietly: there the link is dropped and the billed model runs on its own provider.
-        </p>
-        <Callout variant="info">
-          Execution Links is a cloud-only tab and feature. On a self-hosted install this tab
-          doesn&apos;t appear, and neither does the route button on the Models tab.
+        <Callout variant="warn" title="Providers not available on self-hosted">
+          <p>
+            OpenRouter and Cohere are blocked on self-hosted installs and
+            do not appear in the provider list. The cloud offers every provider.
+          </p>
         </Callout>
 
-        <h2>Bridge availability filtering</h2>
-        <p>
-          Before a CLI bridge provider is offered anywhere a model is picked, it&apos;s checked against
-          the bridge host: it&apos;s kept only when the bridge reports the CLI both{' '}
-          <strong>installed and authenticated</strong>. Installed-but-not-authenticated is hidden,
-          since it would fail at run time asking you to log in.
-        </p>
-        <p>
-          For the user-facing picker this check is <strong>strict</strong>: if availability can&apos;t be
-          verified at all (the bridge is unreachable or its status can&apos;t be read), every bridge
-          provider is dropped rather than guessed at. Availability itself is cached briefly and
-          refreshed periodically. Regular API providers are never affected by this filter.
-        </p>
+        <h2>Troubleshooting</h2>
+        <DocsTable
+          caption="Common model problems"
+          rowHeaders
+          head={['Symptom', 'Cause', 'Fix']}
+          rows={[
+            [
+              'A model shows a key icon and cannot run',
+              'Its provider has no key yet (Not configured).',
+              'Save a key for that provider on the API Keys tab.',
+            ],
+            [
+              'A bridge model works for the admin but other users are refused',
+              'The bridge access mode is Admin only, the default.',
+              'In Who can use this bridge, choose Allowlist or All users, with a daily quota if needed.',
+            ],
+            [
+              'A bridge provider is missing from the model picker',
+              'Its CLI is not installed or is logged out on the bridge host, or the bridge cannot be reached. The status is cached for 60 seconds.',
+              'Fix the CLI, press Verify Connection on its tab, and wait a minute.',
+            ],
+            [
+              'Your key is saved but turns still run on the LiveContext key (cloud)',
+              'Use my key is off for that provider, or your plan is below Pro, where saved keys stay read-only.',
+              'Turn on Use my key, or upgrade to Pro.',
+            ],
+            [
+              'The model says it cannot read an attached PDF or file',
+              'The file is over the inline cap (256 KB for a PDF or other binary), so the model only got its extracted text or a placeholder.',
+              'Attach a smaller file, or send the part that matters as text.',
+            ],
+            [
+              'Switching the LLM source to Cloud fails with "Link a Cloud account before switching to Cloud." (self-hosted)',
+              'The install is not linked to a cloud account.',
+              <span key="f">
+                Link it in Settings &gt; Cloud first, see <a href="/self-host">Self-hosting</a>.
+              </span>,
+            ],
+          ]}
+        />
 
-        <h2>Self-hosted (CE): cloud vs BYOK, and the catalog bundle</h2>
-        <p>
-          On a self-hosted install, the API Keys tab shows a source toggle: <strong>CLOUD</strong> uses
-          the linked cloud account&apos;s default models (this requires an active cloud link), and{' '}
-          <strong>BYOK</strong> uses the admin&apos;s own API keys. Switching source clears the model cache
-          so the picker immediately reflects the new source; choosing CLOUD without a link surfaces a
-          &ldquo;link required&rdquo; message.
-        </p>
-        <p>
-          The model catalog itself arrives as a signed bundle from cloud: cloud is the single source of
-          truth and builds a signed, versioned bundle, and a linked CE install syncs it automatically
-          on a schedule (every 15 minutes) and on startup, verifying the signature offline before
-          merging it in. The merge preserves anything an admin has already edited locally and any
-          locally added custom models. An <strong>Update model catalog bundle</strong> control lets an
-          admin trigger a sync on demand; on an unlinked install it instead prompts to connect to
-          cloud first, since the sync itself requires the link.
-        </p>
-        <Callout variant="warn">
-          Two providers are blocked on CE and don&apos;t appear in the provider list at all:{' '}
-          <strong>OpenRouter</strong> and <strong>Cohere</strong>. Cloud keeps every provider; only
-          self-hosted installs have this restriction.
-        </Callout>
-        <p>
-          <strong>DeepSeek</strong> is handled differently: it isn&apos;t blocked, but it&apos;s not
-          shipped as a default platform provider on CE, so a fresh install is <strong>off by
-          default</strong> and exposes no DeepSeek key or model out of the box. An admin can still opt
-          in, either with the <code>DEEPSEEK_ENABLED</code> flag or by adding their own DeepSeek key
-          via the built-in BYOK credential. On cloud, DeepSeek is available as usual.
-        </p>
-
-        <h2>Where to go next</h2>
-        <CardGrid cols={3}>
-          <Card icon={Bot} title="Agents" href="/agents">Temperature, tool scope, and credit budgets per agent.</Card>
-          <Card icon={Workflow} title="Workflows" href="/workflows">Where agent nodes sit in the graph.</Card>
+        <h2>Related pages</h2>
+        <CardGrid cols={2}>
+          <Card icon={Bot} title="Agents" href="/agents">Model, reasoning effort, tools, and credit budgets per agent.</Card>
+          <Card icon={Sparkles} title="Studio" href="/studio">Generate images, video, and audio with generation models.</Card>
+          <Card icon={Wallet} title="Billing" href="/billing">How credits and plans work on the cloud.</Card>
           <Card icon={Server} title="Self-hosting" href="/self-host">Running LiveContext yourself, and what cloud-linking unlocks.</Card>
         </CardGrid>
       </DocsProse>

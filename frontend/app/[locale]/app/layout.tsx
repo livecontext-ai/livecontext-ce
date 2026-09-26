@@ -17,13 +17,16 @@ import AppPlanComparisonDialog from '@/components/pricing/AppPlanComparisonDialo
 import MissingApiKeyModal from '@/components/billing/MissingApiKeyModal';
 import CeCloudCreditModal from '@/components/billing/CeCloudCreditModal';
 import ModelNotManagedModal from '@/components/billing/ModelNotManagedModal';
+import CloudLinkPlanRequiredModal from '@/components/billing/CloudLinkPlanRequiredModal';
 import AgentErrorModal from '@/components/billing/AgentErrorModal';
 import SuggestedAppsModal from '@/components/billing/SuggestedAppsModal';
 import WelcomeGiftModal from '@/components/billing/WelcomeGiftModal';
 import AccountRestoreModal from '@/components/auth/AccountRestoreModal';
 import ChangelogModal from '@/components/changelog/ChangelogModal';
 import AppViewTracker from '@/components/analytics/AppViewTracker';
+import ProfileContextReporter from '@/components/lifecycle/ProfileContextReporter';
 import IncidentStrip from '@/components/app/IncidentStrip';
+import TwoFactorNudge from '@/components/app/TwoFactorNudge';
 import { IS_CE } from '@/lib/edition';
 
 /**
@@ -59,6 +62,10 @@ export default function AppLayout({
                         preference (right / bottom / bottom-full). */}
                     {/* CE (self-hosted) ships no product analytics/tracking. */}
                     {!IS_CE && <AppViewTracker />}
+                    {/* Locale, time zone and first-touch acquisition for the cloud
+                        lifecycle e-mails, once per session. Here, not in the root
+                        providers, so share, embed and public pages never send it. */}
+                    {!IS_CE && <ProfileContextReporter />}
                     <AppShell>{children}</AppShell>
                     {/* Ongoing-incident strip. Mounted here rather than inside
                         AppShell: AppShell renders two different arrangements and
@@ -66,6 +73,9 @@ export default function AppLayout({
                         (a running canvas, an SSE stream). Cloud-only, like the
                         rest of the status feature. */}
                     {!IS_CE && <IncidentStrip />}
+                    {/* Team owner without two-factor: a one-time, dismissible suggestion.
+                        Here for the same reason as the strip above. Cloud-only. */}
+                    {!IS_CE && <TwoFactorNudge />}
                     {/* The two modals onboarding arms, in the order it arms
                         them: what the new account already has, then what it can
                         start from. The ORDER on screen is the hand-off's doing,
@@ -89,6 +99,7 @@ export default function AppLayout({
                     <MissingApiKeyModal />
                     <CeCloudCreditModal />
                     <ModelNotManagedModal />
+                    <CloudLinkPlanRequiredModal />
                     <AgentErrorModal />
                     <AccountRestoreModal />
                     {/* One entry, the newest, once per user. Both editions: the announcement is

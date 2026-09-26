@@ -1,6 +1,7 @@
 package com.apimarketplace.trigger.service;
 
 
+import com.apimarketplace.common.web.LogSafePath;
 import com.apimarketplace.common.security.token.TokenAtRest;
 import com.apimarketplace.trigger.security.TriggerTokenAtRestBackfill;
 
@@ -312,7 +313,8 @@ public class StandaloneChatEndpointService {
             try {
                 publicationClient.unregisterSharedLink(token);
             } catch (Exception e) {
-                logger.warn("Failed to unregister shared link for token={}: {}", token, e.getMessage());
+                logger.warn("Failed to unregister shared link for token={}: {}", LogSafePath.tokenPreview(token),
+                        LogSafePath.withoutToken(e.getMessage(), token));
             }
         }
     }

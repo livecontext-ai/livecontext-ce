@@ -10,6 +10,7 @@ import com.apimarketplace.agent.domain.ToolParameter;
 import com.apimarketplace.agent.registry.AgentToolDefinition;
 import com.apimarketplace.agent.registry.ToolCategory;
 import com.apimarketplace.agent.service.execution.ApprovalCardExtractor;
+import com.apimarketplace.agent.service.execution.ChannelAuthorizationClient;
 import com.apimarketplace.agent.service.execution.ApprovalCardPublisher;
 import com.apimarketplace.agent.service.execution.ParkRequests;
 import com.apimarketplace.agent.service.execution.ToolApprovalGate;
@@ -47,11 +48,20 @@ import static com.apimarketplace.agent.registry.ToolSchemaGenerator.generateInpu
  * two-turn flow the approval cards had before the gate existed, so nothing here depends
  * on the park succeeding.
  *
- * <p><b>Scope.</b> Only an interactive chat has someone to ask
- * ({@link ToolAuthorizationScope#isUserPromptable}). A workflow node, a task or a
- * sub-agent gets {@code unavailable} at once, so an unattended run is never stalled on a
- * card nobody will see. A later channel (Telegram, Slack) plugs in where the card is
- * published today; the question and answer records are already channel-agnostic.
+ * <p><b>Scope.</b> {@link ToolAuthorizationScope#questionReach} decides the route. A run
+ * somebody is watching gets the card. A schedule, a webhook or a task, which nobody watches
+ * but whose conversation persists, puts the question in the workspace's connected chat and
+ * answers {@code pending_user} with where it went, or {@code unavailable} when there is no
+ * chat. A workflow node and a sub-agent get {@code unavailable} at once: an answer arriving
+ * later would have nowhere to land.
+ *
+ * <p>The route is NOT decided by {@code isUserPromptable}, which this gate used until
+ * 2026-09-22. A scheduled or webhook run carries a conversation AND a stream id, because the
+ * sync path mints one unconditionally, so it passes {@code isUserPromptable} exactly like
+ * somebody typing: such a run painted a card into a stream nobody reads, parked for the full
+ * 240 s, and handed the agent "the card is on screen". {@code AgentContextBuilder} marks those
+ * runs {@code __unattendedRun__}, said by the only code that knows, and {@code questionReach}
+ * reads it.
  *
  * <p>Executed locally by {@code RemoteToolExecutionService}, which adds the call's own id
  * and start time to the credentials ({@link #KEY_TOOL_CALL_ID},
@@ -73,6 +83,21 @@ public class AskUserToolsProvider implements ToolsProvider {
     /** The gate key a question park uses for a given tool call; see {@link UserQuestionGateKeys}. */
     public static String gateKeyFor(String toolCallId) {
         return UserQuestionGateKeys.forToolCall(toolCallId);
+    }
+
+    /**
+     * Reaches the person through a chat they read, for the runs where a card has nobody in
+     * front of it.
+     *
+     * <p>Optional like the gate collaborators: without it a run that cannot be asked in the app
+     * answers unavailable, which is exactly what it did before the channel existed.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ChannelAuthorizationClient channelClient;
+
+    /** Test seam: wire the channel without a Spring context. */
+    void configureChannelClientForTest(ChannelAuthorizationClient client) {
+        this.channelClient = client;
     }
 
     public static final String STATUS_ANSWERED = "answered";
@@ -139,8 +164,12 @@ public class AskUserToolsProvider implements ToolsProvider {
 
         Map<String, Object> credentials = context != null && context.credentials() != null
                 ? context.credentials() : Map.of();
-        if (!ToolAuthorizationScope.isUserPromptable(credentials)) {
-            return ToolExecutionResult.success(unavailable());
+        ToolAuthorizationScope.QuestionReach reach = ToolAuthorizationScope.questionReach(credentials);
+        if (reach == ToolAuthorizationScope.QuestionReach.CHANNEL) {
+            return askOnTheChannel(questions, credentials, context);
+        }
+        if (reach != ToolAuthorizationScope.QuestionReach.IN_APP) {
+            return ToolExecutionResult.success(unreachable(credentials));
         }
 
         String toolCallId = stringOf(credentials.get(KEY_TOOL_CALL_ID));
@@ -149,7 +178,8 @@ public class AskUserToolsProvider implements ToolsProvider {
         if (toolCallId == null || streamId == null) {
             // Without the call's id no card can be keyed, and without a stream none can be
             // shown: every consumer that would paint or persist the card requires both. The
-            // stream half is belt and braces (isUserPromptable already required one); the id
+            // stream half is belt and braces (the check above already required one, since an
+            // execution with no stream is never promptable and so never gets past it); the id
             // half is real, since only the local dispatch supplies it.
             // Saying "the card is on screen" here would leave the agent waiting for an
             // answer that can never come.
@@ -251,6 +281,109 @@ public class AskUserToolsProvider implements ToolsProvider {
         return ToolExecutionResult.success(out, metadata);
     }
 
+    /**
+     * Put the question in the chat the person reads, for a run nobody is watching.
+     *
+     * <p>No card is painted here. A card needs a stream, an unattended run's stream has no
+     * subscriber, and painting one anyway is exactly the behaviour this replaced: four minutes
+     * parked against a screen nobody was looking at.
+     *
+     * <p>The call is NOT parked either, even when a stream id happens to exist. An answer from
+     * a phone can arrive hours later, far past any gate budget, and it arrives as the person's
+     * next message in the conversation, which starts the following turn. Holding the call would
+     * only delay this turn's ending without changing when the answer lands.
+     */
+    private ToolExecutionResult askOnTheChannel(List<UserQuestion> questions,
+                                                Map<String, Object> credentials,
+                                                ToolExecutionContext context) {
+        if (channelClient == null) {
+            // Nothing wired to reach anybody. Same answer as a context that cannot ask at all,
+            // because from the agent's side that is exactly what this is.
+            return ToolExecutionResult.success(unavailable());
+        }
+        String toolCallId = stringOf(credentials.get(KEY_TOOL_CALL_ID));
+        String conversationId = ParkRequests.conversationIdOf(credentials);
+        if (toolCallId == null) {
+            // Only the local dispatch supplies it, and without it no answer could ever be
+            // matched back to this call.
+            log.warn("ask_user has no tool call id to key a channel question on - answering unavailable");
+            return ToolExecutionResult.success(unavailable());
+        }
+        ChannelAuthorizationClient.Delivery delivery = channelClient.askQuestions(
+                context != null ? context.tenantId() : null,
+                context != null ? context.orgId() : null,
+                conversationId, toolCallId, gateKeyFor(toolCallId),
+                stringOf(credentials.get(ToolAuthorizationScope.KEY_AGENT_ID)), questions);
+
+        return switch (delivery.status()) {
+            case SENT -> pendingOnChannel(delivery, false);
+            case ALREADY_PENDING -> pendingOnChannel(delivery, true);
+            case NO_CHANNEL -> ToolExecutionResult.success(noChannel());
+            case FAILED -> ToolExecutionResult.success(channelFailed());
+        };
+    }
+
+    /**
+     * The question is in front of somebody, somewhere the agent cannot see.
+     *
+     * <p>Carries WHERE, in both halves: the app to go and look in, and which conversation there,
+     * because a workspace whose bot sits in three rooms has three of those. Without it the agent
+     * says "I asked on telegram" to somebody who then has to guess where.
+     */
+    private ToolExecutionResult pendingOnChannel(ChannelAuthorizationClient.Delivery delivery,
+                                                 boolean alreadyAsked) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("status", STATUS_PENDING_USER);
+        out.put("via", delivery.channel());
+        out.put("destination", delivery.chatLabel());
+        if (alreadyAsked) {
+            out.put("reason", "already_asked");
+            out.put("message", "You ALREADY asked the user exactly this on " + placeOf(delivery)
+                    + (delivery.requestedAt() != null ? " (sent " + delivery.requestedAt() + ")" : "")
+                    + " and they have not answered yet. No new message was sent. Do NOT ask again: "
+                    + "while that question is waiting, repeating it is refused as a duplicate. Say in "
+                    + "one sentence that you are still waiting, then finish your turn.");
+        } else {
+            out.put("message", "Your question was sent to the user on " + placeOf(delivery)
+                    + " and has no answer yet. Do NOT ask it again and do NOT call ask_user again "
+                    + "for it. Say in one sentence that you are waiting for their answer, then finish "
+                    + "your turn: their answer arrives as their next message, and the run continues "
+                    + "from there.");
+        }
+        // Deliberately no card metadata: nothing was painted, and claiming otherwise would stop
+        // the result consumer painting the one card that could still be seen if somebody opened
+        // the conversation.
+        return ToolExecutionResult.success(out);
+    }
+
+    private Map<String, Object> noChannel() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("status", STATUS_UNAVAILABLE);
+        out.put("reason", "no_channel");
+        out.put("message", "Nobody is watching this run and this workspace has no connected chat to "
+                + "ask in, so the question cannot be put to anyone. Decide with the information you "
+                + "have and state the assumption you made in your reply. If you write a summary, say "
+                + "that connecting a chat would have let you ask instead of assuming.");
+        return out;
+    }
+
+    private Map<String, Object> channelFailed() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("status", STATUS_UNAVAILABLE);
+        out.put("reason", "channel_failed");
+        out.put("message", "The question could not be delivered to the user's chat, so nobody was "
+                + "asked. Decide with the information you have and state the assumption you made in "
+                + "your reply.");
+        return out;
+    }
+
+    /** "telegram (Ops room)" when the destination has a name, "telegram" when it does not. */
+    private static String placeOf(ChannelAuthorizationClient.Delivery delivery) {
+        String channel = delivery.channel() != null ? delivery.channel() : "the connected chat";
+        return delivery.chatLabel() != null && !delivery.chatLabel().isBlank()
+                ? channel + " (" + delivery.chatLabel() + ")" : channel;
+    }
+
     private ToolExecutionResult dismissed(String decision, String message) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("status", STATUS_DISMISSED);
@@ -262,7 +395,38 @@ public class AskUserToolsProvider implements ToolsProvider {
         return ToolExecutionResult.success(out, metadata);
     }
 
-    private Map<String, Object> unavailable() {
+    /**
+     * Why this run cannot put a question to the person, said so the agent does the one useful thing
+     * left. A sub-agent is being waited on by the agent that started it, which CAN ask: the question
+     * has to travel back in the reply. A workflow step cannot be re-entered by a late answer: the
+     * person decides through a User Approval step, which the agent can only point out.
+     */
+    static Map<String, Object> unreachable(Map<String, Object> credentials) {
+        if (ToolAuthorizationScope.agentDepth(credentials) >= 1) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("status", STATUS_UNAVAILABLE);
+            out.put("reason", "asked_by_caller");
+            out.put("message", "You were started by another agent, which is waiting for your reply: nobody "
+                    + "reads this conversation, so a question cannot be shown here. End your reply with the "
+                    + "question written out, with its options if it has any, and say it is for the person: "
+                    + "the agent that started you will put it to them and can run you again with the answer.");
+            return out;
+        }
+        if (ToolAuthorizationScope.isWorkflowRun(credentials)) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("status", STATUS_UNAVAILABLE);
+            out.put("reason", "workflow_step");
+            out.put("message", "You run as a step of a workflow: an answer could not come back to this step "
+                    + "once it has finished, so a question cannot be asked from here. Decide with the "
+                    + "information you have and state the assumption in your output. If the person must "
+                    + "decide, say so in your output: the workflow needs a User Approval step for it, which "
+                    + "asks them (in the app, or on their chat channel) and waits for the answer.");
+            return out;
+        }
+        return unavailable();
+    }
+
+    private static Map<String, Object> unavailable() {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("status", STATUS_UNAVAILABLE);
         out.put("reason", "no_live_chat");
@@ -319,11 +483,14 @@ public class AskUserToolsProvider implements ToolsProvider {
                         false, "object")
         );
 
-        String description = "Ask the person you are talking to a multiple-choice question and wait for their answer.\n"
-                + "- ask: shows a card with your question(s); returns status 'answered' with answers[] "
-                + "({header, selected[], freeText, custom}), or 'pending_user' when the card is on screen but "
-                + "not answered yet (then finish your turn in one sentence and stop; the answer arrives as their "
-                + "next message), or 'dismissed', or 'unavailable' when nobody is watching this conversation.\n"
+        String description = "Ask the person a multiple-choice question and wait for their answer.\n"
+                + "- ask: returns status 'answered' with answers[] ({header, selected[], freeText, custom}), "
+                + "or 'pending_user' when the question is in front of them but not answered yet (then finish "
+                + "your turn in one sentence and stop; the answer arrives as their next message), or "
+                + "'dismissed', or 'unavailable' when there is nobody to ask.\n"
+                + "- In a run nobody is watching, the question goes to the workspace's connected chat instead "
+                + "of the screen, and the result says where (via, destination). With no connected chat it "
+                + "answers unavailable: decide with what you have and state your assumption.\n"
                 + "- Use it when a choice changes what you do next and guessing would waste work. Not for a "
                 + "yes/no you can infer, and never twice for the same question.";
 
@@ -344,13 +511,15 @@ public class AskUserToolsProvider implements ToolsProvider {
     private Map<String, Object> buildHelpPayload() {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("description",
-                "ASK_USER - put a multiple-choice question to the person in the chat and read their pick back. "
-                        + "One call raises one card; the person walks through your questions on it, one at a time, "
-                        + "and every answer comes back together in one result.");
+                "ASK_USER - put a multiple-choice question to the person and read their pick back. One call "
+                        + "asks all your questions and every answer comes back together in one result. Where the "
+                        + "question appears depends on the run: on their screen when somebody is watching, and in "
+                        + "the workspace's connected chat when nobody is, so a question from a scheduled run can "
+                        + "still be answered from a phone.");
 
         Map<String, Object> actions = new LinkedHashMap<>();
         Map<String, Object> ask = new LinkedHashMap<>();
-        ask.put("summary", "Show the question card and wait for the answer.");
+        ask.put("summary", "Put the question to the person and wait for the answer.");
         ask.put("params", Map.of(
                 "questions", "required - list of 1 to " + UserQuestionValidator.MAX_QUESTIONS + " questions, see question_shape"));
         ask.put("returns", Map.of(
@@ -358,14 +527,23 @@ public class AskUserToolsProvider implements ToolsProvider {
                         + "selected is always a list, even for a single choice. custom=true means the person typed "
                         + "freeText instead of picking. A 'validation' field, when present, explains why an answer "
                         + "does not line up with the options you gave; still use what the person said.",
-                "pending_user", "{status:'pending_user', toolCallId}. The card is on screen, nobody answered yet. "
-                        + "Do NOT call ask_user again for it. End your reply with one short sentence saying you are "
-                        + "waiting for their choice, then stop. Their answer arrives as their next message, "
-                        + "with each header and the chosen labels.",
+                "pending_user", "{status:'pending_user', toolCallId} on screen, or {status:'pending_user', via, "
+                        + "destination} when it went to their chat, where via is the chat service and destination "
+                        + "is the room. reason:'already_asked' means this exact question is still waiting there "
+                        + "from an earlier run and nothing new was sent. In every case: do NOT call ask_user again "
+                        + "for it. End your reply with one short sentence saying you are waiting, then stop. Their "
+                        + "answer arrives as their next message, with each header and the chosen labels.",
                 "dismissed", "{status:'dismissed'}. They chose not to answer, or stopped the turn. Continue "
-                        + "without it or ask in plain text; never re-open the same card.",
-                "unavailable", "{status:'unavailable', reason:'no_live_chat'}. This run is unattended (a workflow, "
-                        + "a task, a sub-agent): decide with what you have and state your assumption."));
+                        + "without it or ask in plain text; never ask the same question again.",
+                "unavailable", "{status:'unavailable', reason, message}. 'asked_by_caller': you were started "
+                        + "by another agent, which is waiting for your reply; end your reply with the question "
+                        + "written out (with its options) and say it is for the person: that agent will ask them. "
+                        + "'workflow_step': you run as a workflow step and an answer could not come back to it; "
+                        + "decide with what you have, state your assumption, and if the person must decide, say "
+                        + "in your output that the workflow needs a User Approval step. 'no_live_chat': nobody "
+                        + "to ask and no way for an answer to come back. 'no_channel': nobody is watching and the "
+                        + "workspace has no chat connected. 'channel_failed': the chat refused the message. For "
+                        + "these last three: decide with what you have and state your assumption in your reply."));
         actions.put("ask", ask);
         actions.put("help", Map.of("summary", "This payload. No params."));
         out.put("actions", actions);

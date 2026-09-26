@@ -77,6 +77,13 @@ describe('the card each locale shares', () => {
     expect((meta.twitter as Record<string, unknown>).title).toBe(messages[locale].LandingHome.meta.title);
   });
 
+  it.each(locales)('shares %s with the card drawn in that language', async (locale) => {
+    const meta = await metaFor(locale);
+    const og = meta.openGraph as { images: Array<{ url: string }> };
+    expect(og.images[0].url).toBe(`/landing/og/home-${locale}.jpg`);
+    expect(meta.twitter?.images).toEqual([`/landing/og/home-${locale}.jpg`]);
+  });
+
   it.each(locales)('points %s at itself, not at the apex', async (locale) => {
     const og = (await metaFor(locale)).openGraph as Record<string, unknown>;
     expect(og.url).toBe(locale === 'en' ? ORIGIN : `${ORIGIN}/${locale}`);

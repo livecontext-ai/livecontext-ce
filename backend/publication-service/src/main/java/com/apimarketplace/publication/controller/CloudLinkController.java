@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -27,6 +28,8 @@ import java.util.Map;
 public class CloudLinkController {
 
     private static final Logger logger = LoggerFactory.getLogger(CloudLinkController.class);
+    /** Where an expired callback lands when its flow (and so its return path) is no longer known. */
+    static final String DEFAULT_CALLBACK_ERROR_PATH = "/app/settings/cloud-account";
 
     private final CloudLinkService cloudLinkService;
     private final String frontendUrl;
@@ -142,6 +145,8 @@ public class CloudLinkController {
         } catch (CloudLinkService.CloudAccountNotLinkedException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("error", "CLOUD_LINK_REQUIRED"));
+        } catch (CloudLinkService.CloudLinkPlanRequiredException e) {
+            return planRequired(e);
         } catch (IllegalStateException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("error", "CLOUD_LINK_NOT_READY"));
@@ -163,10 +168,26 @@ public class CloudLinkController {
         } catch (CloudLinkService.CloudAccountNotLinkedException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("error", "CLOUD_LINK_REQUIRED"));
+        } catch (CloudLinkService.CloudLinkPlanRequiredException e) {
+            return planRequired(e);
         } catch (IllegalStateException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("error", "CLOUD_LINK_NOT_READY"));
         }
+    }
+
+    /**
+     * Same shape as the cloud's refusal ({@code error}, {@code planCode}, {@code message}), so the
+     * CE frontend handles a refusal it gets from this install exactly like one relayed from the cloud.
+     */
+    private static ResponseEntity<Map<String, Object>> planRequired(
+            CloudLinkService.CloudLinkPlanRequiredException e) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", CloudLinkService.PLAN_REQUIRED_ERROR);
+        body.put("planCode", e.getPlanCode());
+        body.put("message", "Linking a self-hosted install to LiveContext Cloud requires a paid plan. "
+                + "Choose a plan on LiveContext Cloud and your install reconnects automatically.");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body);
     }
 
     private static CloudLlmSource parseRequestedSource(String value) {
@@ -196,6 +217,12 @@ public class CloudLinkController {
      * Receives the OAuth authorization code on the backend so the code never
      * appears in the frontend URL. The frontend later completes the link by
      * posting the state only from an authenticated session.
+     *
+     * <p>An unknown, expired or already-used state sends the browser back to the CE
+     * page it came from (or the cloud-account settings page when the flow is no longer
+     * known) with {@code cloud_link_error=expired}, instead of a bare 400 the user can
+     * do nothing with: the flow can now outlive a cloud signup and checkout. The target
+     * is always an allowlisted path, and neither the code nor the state is reflected.
      */
     @GetMapping("/callback")
     public ResponseEntity<Void> callback(
@@ -205,6 +232,12 @@ public class CloudLinkController {
         String frontendReturnPath;
         try {
             frontendReturnPath = cloudLinkService.receiveCallback(code, state);
+        } catch (CloudLinkService.CallbackStateException e) {
+            String returnPath = e.getFrontendReturnPath() != null
+                    ? e.getFrontendReturnPath()
+                    : DEFAULT_CALLBACK_ERROR_PATH;
+            headers.set(HttpHeaders.LOCATION, frontendUrl + returnPath + "?cloud_link_error=expired");
+            return new ResponseEntity<>(headers, HttpStatus.SEE_OTHER);
         } catch (IllegalArgumentException e) {
             return new ResponseEntity<>(headers, HttpStatus.BAD_REQUEST);
         }

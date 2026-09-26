@@ -47,7 +47,7 @@ class TablePublishModuleTest {
 
     @BeforeEach
     void setUp() {
-        module = new TablePublishModule(publicationClient);
+        module = new TablePublishModule(publicationClient, org.mockito.Mockito.mock(com.apimarketplace.datasource.services.DataSourceService.class));
     }
 
     private ToolExecutionContext ctx() { return ToolExecutionContext.of(TENANT); }

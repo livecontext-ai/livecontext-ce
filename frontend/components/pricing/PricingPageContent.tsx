@@ -25,7 +25,6 @@ import { ScheduledChangeAlert, DowngradeConfirmModal, BillingCycleChangeModal, C
 import { unifiedApiService } from '@/lib/api/unified-api-service';
 import { useTranslations, useLocale } from 'next-intl';
 import { CREDIT_TIERS, BASE_PRICES, STARTER_MAX_CREDITS, calcPrice as calcPriceBase, creditFactsFor, formatTierLabel, getCreditCost, resolveMaxTierIndex, clampTierIndex, CREDIT_EXAMPLES, CREDIT_EXAMPLES_FAQ_KEY, FAQ_KEYS } from '@/lib/billing/pricing-constants';
-import { useFreeAiCredits } from '@/lib/hooks/useFreeAiCredits';
 import { planFeatureLabels } from '@/lib/billing/planFeatureLabels';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { cloudLinkService, type CloudLinkStatus, CLOUD_NO_SUBSCRIPTION } from '@/lib/api/cloud-link.service';
@@ -68,10 +67,6 @@ export default function PricingPage() {
       tPricing: t,
       credits: creditAmount.toLocaleString(getClientLocale()),
       creditFacts,
-      // The LIVE allowance an admin configured, not the seeded constant: this page
-      // holds the plan rows already, so it can quote what the account will actually
-      // get. Falls back to the seed while the request is in flight.
-      aiCredits: freeAiCredits.toLocaleString(getClientLocale()),
     });
 
   const [notification, setNotification] = useState<{
@@ -129,9 +124,6 @@ export default function PricingPage() {
   const { isAuthenticated, user } = useAuthGuard();
   const { loginWithRedirect } = useAuth();
   const { isUpgrade, isDowngrade, getPlanOrder, getPlansByOrder, plans: dbPlans } = usePlans();
-  // V494: the Free plan's monthly AI allowance. Shared with the comparison table
-  // this page opens, so the card and the table cannot quote two different numbers.
-  const freeAiCredits = useFreeAiCredits();
   const [showEnterpriseModal, setShowEnterpriseModal] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [upgradeModalState, setUpgradeModalState] = useState<UpgradeModalState>('confirm');

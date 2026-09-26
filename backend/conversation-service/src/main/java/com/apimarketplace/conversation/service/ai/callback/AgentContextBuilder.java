@@ -1,6 +1,7 @@
 package com.apimarketplace.conversation.service.ai.callback;
 
 import com.apimarketplace.agent.config.AgentModuleResolver;
+import com.apimarketplace.agent.tools.authz.ToolAuthorizationScope;
 import com.apimarketplace.agent.domain.Message;
 import com.apimarketplace.agent.domain.MessageAttachment;
 import com.apimarketplace.agent.domain.SystemBlock;
@@ -235,7 +236,12 @@ public class AgentContextBuilder {
         // (ConversationAgentService → CLI) can scope the MCP tool set to the agent's
         // toolsConfig.mode. null ⇒ unrestricted (no toolsConfig → all modules).
         List<String> enabledModulesForContext = null;
-        boolean isExternalSource = "WEBHOOK".equals(request.getSource()) || "SCHEDULE".equals(request.getSource()) || "TASK".equals(request.getSource()) || "TASK_REVIEW".equals(request.getSource());
+        // CHANNEL_REPLY is the turn started by an answer that came back from a chat. It belongs
+        // in this list for the same reason the other four do: nobody is in front of it. Leaving
+        // it out would mark that turn as watched, so its OWN next question would be painted as a
+        // card into a stream with no subscriber, and the conversation that had just been rescued
+        // from exactly that failure would fall straight back into it one turn later.
+        boolean isExternalSource = "WEBHOOK".equals(request.getSource()) || "SCHEDULE".equals(request.getSource()) || "TASK".equals(request.getSource()) || "TASK_REVIEW".equals(request.getSource()) || "CHANNEL_REPLY".equals(request.getSource());
         // Agent-bound conversations (agent chat, sub-agent, workflow agent) inherit their
         // title from the agent entity at creation time - the LLM must NOT override it.
         // Only general chat (no agentId, no workflow, interactive source) gets the
@@ -273,8 +279,9 @@ public class AgentContextBuilder {
             // (which re-scopes the direct loop + bridge downstream).
             enabledModules = ensureTaskDelegationModules(enabledModules, request.getSource());
             enabledModulesForContext = List.copyOf(enabledModules);
+            // No agent id = Orbi with a chat-level tool config: it gets Orbi's stance too.
             DefaultSystemPrompts.ModularPromptResult promptResult =
-                DefaultSystemPrompts.build(enabledModules, true);
+                DefaultSystemPrompts.build(enabledModules, true, agentConfig.agentId() == null);
             blockSlots[0] = promptResult.systemPrompt();
             tools = coreToolsProvider.getCoreTools(promptResult.coreToolNames(), shouldIncludeConversationTitle);
             log.info("{} toolsConfig: enabled modules={}, core tools={}",
@@ -548,6 +555,17 @@ public class AgentContextBuilder {
                 provider, model, request.getProvider(), request.getModel());
         }
 
+        // A model an admin disabled runs on its replacement (V515). Resolved here, before the
+        // effort / output-cap lookups and the budget, because a CLI turn goes to the bridge
+        // from this service and never reaches agent-service's own swap.
+        AgentConfigProvider.EffectiveModel effective = agentConfigProvider.resolveEffectiveModel(provider, model);
+        if (effective != null && effective.substituted()) {
+            log.info("Model {} / {} is disabled; this turn runs on {} / {}",
+                provider, model, effective.provider(), effective.model());
+            provider = effective.provider();
+            model = effective.model();
+        }
+
         // Resolve temperature, maxTokens, and maxIterations from agent config.
         // maxTokens: per-agent / per-conversation override wins; otherwise the
         // platform default (general chat). Clamped to the model's real ceiling
@@ -618,6 +636,20 @@ public class AgentContextBuilder {
         // Stream ID for tool callbacks (e.g., websearch screenshot streaming)
         if (streamId != null) {
             credentials.put("__streamId__", streamId);
+        }
+        // V299 - this agent asks permission for sensitive actions wherever it runs,
+        // including the executions that are otherwise exempt. Written only when true:
+        // the marker's ABSENCE is the default, and an explicit false would still be
+        // read as "a value is set" by anything that only checks for presence.
+        if (agentConfig != null && agentConfig.requiresToolAuthorization()) {
+            credentials.put(ToolAuthorizationScope.KEY_REQUIRE_AUTHORIZATION, true);
+        }
+        // Whether a person is in front of this run. Said here, by the only code that
+        // knows, rather than derived downstream: an unattended sync run carries a
+        // conversation and a stream exactly like an interactive chat (the stream id is
+        // minted unconditionally on that path), so the shape cannot be told apart.
+        if (isExternalSource) {
+            credentials.put(ToolAuthorizationScope.KEY_UNATTENDED_RUN, true);
         }
 
         // Add workflow context to credentials for tools that need it (e.g., workflow guard)
@@ -912,7 +944,7 @@ public class AgentContextBuilder {
         // (= every module) so the routing table lists exactly the tools this chat is
         // actually handed: advertising image_generation / generation to a chat that
         // granted neither only teaches the model to call a tool it does not have.
-        return DefaultSystemPrompts.build(new java.util.LinkedHashSet<>(NO_CONFIG_MODULES), true).systemPrompt();
+        return DefaultSystemPrompts.build(new java.util.LinkedHashSet<>(NO_CONFIG_MODULES), true, true).systemPrompt();
     }
 
     /**

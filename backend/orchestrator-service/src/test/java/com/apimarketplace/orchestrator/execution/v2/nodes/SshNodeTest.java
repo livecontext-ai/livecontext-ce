@@ -142,4 +142,29 @@ class SshNodeTest {
             assertEquals("uptime", node.getConfig().command());
         }
     }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("a {{...}} port and timeout are resolved and reported, not left on the typed defaults")
+    @SuppressWarnings("unchecked")
+    void templatedPortAndTimeoutAreResolved() {
+        Core.SshConfig config = new Core.SshConfig(null, null, "user", "password", "pass123", null, "ls -la", null, null);
+        SshNode node = new SshNode("core:ssh", config);
+        node.setDeferredScalars(java.util.Map.of("ssh", java.util.Map.of(
+            "port", "{{core:x.output.port}}", "timeout", "{{core:x.output.timeout}}")));
+        com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+            org.mockito.Mockito.mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+        org.mockito.Mockito.lenient().when(adapter.resolveTemplates(
+                org.mockito.ArgumentMatchers.anyMap(), org.mockito.ArgumentMatchers.any()))
+            .thenAnswer(TemplateResolutionStubs.resolving(java.util.Map.of(
+                "{{core:x.output.port}}", "2222", "{{core:x.output.timeout}}", 45000)));
+        node.setTemplateAdapter(adapter);
+
+        // host is missing, so the node fails its validation right after building its params.
+        NodeExecutionResult result = node.execute(context);
+
+        assertFalse(result.isSuccess());
+        java.util.Map<String, Object> params = (java.util.Map<String, Object>) result.output().get("resolved_params");
+        assertEquals(2222, params.get("port"));
+        assertEquals(45000, params.get("timeout"));
+    }
 }

@@ -213,6 +213,25 @@ describe('workflowPlanGenerator - approval.delegation emission', () => {
     expect(JSON.stringify(secondCore.approval)).toBe(JSON.stringify(firstCore.approval));
   });
 
+  it('emits a picked destination (linkId) and round-trips it losslessly', () => {
+    for (const linkId of ['default', '3f2b1c9e-7a4d-4c1b-9e2f-8d6a5b4c3e21']) {
+      const first = generateWorkflowPlan([approvalNode('approval-1', { channel: 'slack', linkId, messageTemplate: 'Ship it?' })], []);
+      expect(approvalBlockOf(first).delegation).toEqual({ channel: 'slack', linkId, messageTemplate: 'Ship it?' });
+
+      const firstCore = first.cores!.find((c: any) => c.type === 'approval')!;
+      const imported = (NodeCreationService as any).createCoreNodesInline([firstCore], [], 100, 100).nodes[0];
+      expect(imported.data.approvalDelegation).toEqual({ channel: 'slack', linkId, messageTemplate: 'Ship it?' });
+      const second = generateWorkflowPlan([imported], []);
+      const secondCore = second.cores!.find((c: any) => c.type === 'approval')!;
+      expect(JSON.stringify(secondCore.approval)).toBe(JSON.stringify(firstCore.approval));
+    }
+  });
+
+  it('regression: a node that names its own chat emits NO linkId key (older plan shape unchanged)', () => {
+    const plan = generateWorkflowPlan([approvalNode('approval-1', { channel: 'telegram', chatId: '-100123', linkId: '  ' })], []);
+    expect(JSON.stringify(plan)).not.toContain('linkId');
+  });
+
   it('regression: a delegation without custom button labels emits NO approveLabel/rejectLabel keys', () => {
     const plan = generateWorkflowPlan(
       [approvalNode('approval-1', {

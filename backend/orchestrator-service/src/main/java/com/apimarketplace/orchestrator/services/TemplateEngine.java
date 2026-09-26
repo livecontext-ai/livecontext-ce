@@ -64,7 +64,9 @@ public class TemplateEngine implements TemplateResolver {
     // literals as opaque so `}` and `|` characters inside them don't break the match.
     // This allows expressions like {{json('{"a":1}')}} or {{json('[{"x":1}]')}} where the
     // SpEL argument is a JSON literal containing braces/pipes.
-    private static final Pattern EXPRESSION_PATTERN = Pattern.compile("\\{\\{((?:'(?:[^'\\\\]|\\\\.)*'|[^}|])+?(?:\\|[^}]*)?)\\}\\}");
+    // Public so ReportedParams masks exactly the references this engine resolves, never a
+    // second definition of them.
+    public static final Pattern EXPRESSION_PATTERN = Pattern.compile("\\{\\{((?:'(?:[^'\\\\]|\\\\.)*'|[^}|])+?(?:\\|[^}]*)?)\\}\\}");
 
     // Pattern to extract variable identifiers from expressions (including namespace:variable.path format)
     // Supports array access: mcp:step.output.data[0].embedding
@@ -86,6 +88,36 @@ public class TemplateEngine implements TemplateResolver {
         this.spelEvaluator = spelEvaluator;
         this.templateCache = new ConcurrentLruCache<>(10_000);
         logger.info("TemplateEngine initialized with unified {{}} syntax and SpEL");
+    }
+
+    /**
+     * The text a resolved value reads as wherever a node or a template needs a STRING.
+     *
+     * <p>The one rule, shared by text embedded around a reference and by every node that wants a
+     * field as a string: a file-shaped value is its URL (JSON there silently breaks every
+     * {@code <img src="{{col}}">}), a map, collection or array is its JSON literal (so a body built
+     * from it stays parseable), anything else is {@code String.valueOf}. Java's own
+     * {@code toString} ({@code {a=1}}, {@code [x, y]}) is never an answer: it reads as a template
+     * that did not resolve, and no parser downstream accepts it.
+     *
+     * @return {@code null} for {@code null}; never the configured template
+     */
+    public static String asText(Object value) {
+        if (value == null) {
+            return null;
+        }
+        // First, for EVERY value including a String: a file serialised as JSON text is a file too.
+        String fileUrl = com.apimarketplace.orchestrator.domain.file.FileRef.displayUrl(value);
+        if (fileUrl != null) {
+            return fileUrl;
+        }
+        if (value instanceof String s) {
+            return s;
+        }
+        if (value instanceof Map || value instanceof java.util.Collection || value.getClass().isArray()) {
+            return JsonOutputUtil.encode(value);
+        }
+        return String.valueOf(value);
     }
 
     /**
@@ -338,22 +370,11 @@ public class TemplateEngine implements TemplateResolver {
             Object evaluated = evaluateExpressionWithContext(innerExpression, context);
 
             String replacement;
-            String fileUrl = com.apimarketplace.orchestrator.domain.file.FileRef.displayUrl(evaluated);
             if (evaluated == null) {
                 replacement = "";
                 logger.warn("Expression not resolved: {{}}", innerExpression);
-            } else if (fileUrl != null) {
-                // A file-shaped value in a string context is its URL, never its JSON. See
-                // FileRef.displayUrl: JSON here silently breaks every <img src="{{col}}">.
-                replacement = fileUrl;
-            } else if (evaluated instanceof Map || evaluated instanceof java.util.Collection
-                       || evaluated.getClass().isArray()) {
-                // Map/List/array → JSON literal so embedding in a JSON template stays parseable.
-                // Pre-fix produced Java toString ({a=1}); post-fix produces {"a":1}.
-                replacement = JsonOutputUtil.encode(evaluated);
-                logger.debug("Expression {{}} evaluated to JSON: {}", innerExpression, replacement);
             } else {
-                replacement = String.valueOf(evaluated);
+                replacement = asText(evaluated);
                 logger.debug("Expression {{}} evaluated to: {}", innerExpression, replacement);
             }
 
@@ -1043,20 +1064,8 @@ public class TemplateEngine implements TemplateResolver {
             String innerExpression = matcher.group(1).trim();
             Object evaluated = spelEvaluator.evaluateWithMap(innerExpression, context, pathNavigator);
 
-            String replacement;
-            String fileUrl = com.apimarketplace.orchestrator.domain.file.FileRef.displayUrl(evaluated);
-            if (evaluated == null) {
-                replacement = "";
-            } else if (fileUrl != null) {
-                // Mirror of resolveExpressions: a file-shaped value interpolates as its URL.
-                replacement = fileUrl;
-            } else if (evaluated instanceof Map || evaluated instanceof java.util.Collection
-                       || evaluated.getClass().isArray()) {
-                // Mirror of resolveExpressions: encode Map/List/array as JSON, not Java toString.
-                replacement = JsonOutputUtil.encode(evaluated);
-            } else {
-                replacement = String.valueOf(evaluated);
-            }
+            // The one text rule (asText), shared with resolveExpressions and every node.
+            String replacement = evaluated == null ? "" : asText(evaluated);
             matcher.appendReplacement(result, Matcher.quoteReplacement(replacement));
         }
 

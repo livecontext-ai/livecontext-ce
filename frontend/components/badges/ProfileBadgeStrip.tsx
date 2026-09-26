@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl';
 import { badgesService, type Badge } from '@/lib/api/orchestrator/badges.service';
 import { BadgeDetailDialog } from './BadgeDetailDialog';
 import { BadgeMedal } from './BadgeMedal';
+import { trackTrophyViewed } from './badgeAnalytics';
 
 /** Medals shown before the strip offers to expand. Two rows on a wide profile. */
 const COLLAPSED_COUNT = 12;
@@ -59,7 +60,10 @@ export function ProfileBadgeStrip({ userId }: ProfileBadgeStripProps) {
           <button
             key={badge.code}
             type="button"
-            onClick={() => setSelectedCode(badge.code)}
+            onClick={() => {
+              trackTrophyViewed(badge, 'profile');
+              setSelectedCode(badge.code);
+            }}
             title={t(`item.${badge.code}.name`)}
             className="flex w-[68px] flex-col items-center gap-1 rounded-xl p-1 text-center
                        transition-colors hover:bg-theme-secondary focus-visible:outline-none

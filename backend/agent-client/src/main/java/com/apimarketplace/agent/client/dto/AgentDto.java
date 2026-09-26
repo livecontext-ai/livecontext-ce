@@ -41,6 +41,20 @@ public class AgentDto {
     // then the CLI's own default. See AgentEntity.reasoningEffort.
     private String reasoningEffort;
 
+    // V299 - when true, this agent's sensitive actions ask for permission even in
+    // the executions that are otherwise exempt: a scheduled task and an agent-backed
+    // chat, which have a stream to park the question on. A workflow node and a
+    // sub-agent have none, so the flag is deliberately not carried into them (it would
+    // refuse every sensitive action while asking nobody); see AgentRuntimeOverrides.
+    // Off by default, so an agent nobody armed behaves exactly as before.
+    private Boolean requireToolAuthorization;
+
+    // V523 - the workspace chat destination this agent's requests and questions go to.
+    // Null => the workspace default. The orchestrator checks it against the request's workspace.
+    private UUID chatChannelLinkId;
+    // V524 - false => nothing leaves the app (no delivery at all). Null (older payload) => true.
+    private Boolean chatChannelEnabled;
+
     // Stage 5.2b - per-agent override for the COLD summariser model.
     // Null on both ⇒ AgentCompactionModelResolver falls back to the agent's
     // primary model and then to AgentDefaultsConfig.compactionModel.
@@ -161,6 +175,17 @@ public class AgentDto {
 
     public Integer getLoopConsecutiveStop() { return loopConsecutiveStop; }
     public void setLoopConsecutiveStop(Integer loopConsecutiveStop) { this.loopConsecutiveStop = loopConsecutiveStop; }
+
+    public Boolean getChatChannelEnabled() { return chatChannelEnabled; }
+    public void setChatChannelEnabled(Boolean chatChannelEnabled) { this.chatChannelEnabled = chatChannelEnabled; }
+
+    public UUID getChatChannelLinkId() { return chatChannelLinkId; }
+    public void setChatChannelLinkId(UUID chatChannelLinkId) { this.chatChannelLinkId = chatChannelLinkId; }
+
+    public Boolean getRequireToolAuthorization() { return requireToolAuthorization; }
+    public void setRequireToolAuthorization(Boolean requireToolAuthorization) {
+        this.requireToolAuthorization = requireToolAuthorization;
+    }
 
     public String getReasoningEffort() { return reasoningEffort; }
     public void setReasoningEffort(String reasoningEffort) { this.reasoningEffort = reasoningEffort; }

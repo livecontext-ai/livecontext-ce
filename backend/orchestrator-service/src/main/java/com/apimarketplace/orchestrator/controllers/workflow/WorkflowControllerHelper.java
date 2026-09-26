@@ -30,7 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * Helper component for workflow controllers.
@@ -55,6 +54,9 @@ public class WorkflowControllerHelper {
 
     @Autowired
     private TriggerClient triggerClient;
+
+    @Autowired
+    private com.apimarketplace.orchestrator.lifecycle.LocalRunExecutionTracker runTracker;
 
     /**
      * Strict-isolation scope predicate for a single {@link WorkflowRunEntity},
@@ -184,21 +186,27 @@ public class WorkflowControllerHelper {
      * trips V261 NOT NULL and cascade-fails the transaction.
      */
     public void startAsyncExecution(WorkflowExecution execution, String orgIdForWorker) {
-        CompletableFuture.runAsync(() -> {
-            com.apimarketplace.common.web.TenantResolver.runWithOrgScope(orgIdForWorker, () -> {
-                try {
-                    logger.info("Starting async workflow execution: {}", execution.getRunId());
-                    executionService.execute(execution);
-                    logger.info("Workflow execution completed: {}", execution.getRunId());
-                } catch (Exception e) {
-                    logger.error("Workflow execution failed: {}", execution.getRunId(), e);
-                    executionService.handleExecutionError(execution, e);
-                }
-            });
-        }).exceptionally(throwable -> {
-            logger.error("Critical error in async execution: {}", execution.getRunId(), throwable);
-            executionService.handleExecutionError(execution, (Exception) throwable);
-            return null;
+        // Counted by the tracker from before submission until the task (error handling
+        // included) has finished: nothing else awaits the common pool at shutdown, so this
+        // count is what keeps a rolling restart's drain from cutting the run mid-node.
+        runTracker.runAsync(() -> {
+            try {
+                com.apimarketplace.common.web.TenantResolver.runWithOrgScope(orgIdForWorker, () -> {
+                    try {
+                        logger.info("Starting async workflow execution: {}", execution.getRunId());
+                        executionService.execute(execution);
+                        logger.info("Workflow execution completed: {}", execution.getRunId());
+                    } catch (Exception e) {
+                        logger.error("Workflow execution failed: {}", execution.getRunId(), e);
+                        executionService.handleExecutionError(execution, e);
+                    }
+                });
+            } catch (RuntimeException critical) {
+                // Handled INSIDE the counted task (it used to be an exceptionally() stage
+                // chained after it), so the error write is still covered by the drain.
+                logger.error("Critical error in async execution: {}", execution.getRunId(), critical);
+                executionService.handleExecutionError(execution, critical);
+            }
         });
     }
 

@@ -330,6 +330,11 @@ cloud-link:
   client-id: ${CLOUD_LINK_CLIENT_ID:livecontext-frontend}
   redirect-uri: ${CLOUD_LINK_REDIRECT_URI:http://localhost:8080/api/cloud-link/callback}
   encryption-key: ${CLOUD_LINK_ENCRYPTION_KEY:}
+  # Cloud web app the "Connect to Cloud" start URL opens (onboarding, then pricing, then Keycloak).
+  # Blank = marketplace.cloud-api-url minus its trailing /api (https://livecontext.ai).
+  web-url: ${CLOUD_WEB_URL:}
+  # Lifetime of a pending link flow: long enough for a cloud signup + onboarding + checkout.
+  pending-auth-ttl: ${CLOUD_LINK_PENDING_AUTH_TTL:2h}
   ip-hash:
     key-v1: ${CLOUD_LINK_IP_HASH_KEY_V1:${IP_HASH_HMAC_KEY_V1:}}
     key-v2: ${CLOUD_LINK_IP_HASH_KEY_V2:${IP_HASH_HMAC_KEY_V2:}}
@@ -568,6 +573,13 @@ catalog:
   generation:
     seed:
       enabled: ${CATALOG_GENERATION_SEED_ENABLED:true}
+    # The cloud's gap fill (NeverPricedGenerationModelPublisher) publishes the
+    # catalog's starting price as an ADMIN row for any never-priced model. Off
+    # here: this install's generation prices come from the seed above and the
+    # signed bundle, both bundle-owned so the cloud can keep them current, and an
+    # admin row minted locally would freeze them.
+    price-gap-fill:
+      enabled: false
   # Shared Ed25519 trust root for ALL signed bundles fetched from the cloud
   # (LLM model bundle AND API catalog bundle). Format: keyId=base64X509;...
   # The cloud's PUBLIC key is baked as the default so a fresh CE / git clone

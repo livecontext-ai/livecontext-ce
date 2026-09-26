@@ -4,7 +4,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Info } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
 import { formatRelativeDateI18n, formatUtcDateTime } from '@/lib/utils/dateFormatters';
 import { useWorkspaceMembers, type WorkspaceRoster } from '@/hooks/useWorkspaceMembers';
@@ -192,8 +192,13 @@ export function ResourceInfoPopover({
   const showEditorsSection = !!loadEditors && (editorsLoading || (editors !== null && editors.length > 0));
 
   return (
-    <Popover open={open} onOpenChange={handleOpenChange}>
-      <PopoverTrigger asChild>
+    <InfoPopover
+      label={accessibleName}
+      open={open}
+      onOpenChange={handleOpenChange}
+      side={resolvedSide}
+      align={align}
+      trigger={
         <button
           type="button"
           data-testid={testId ?? 'resource-info-trigger'}
@@ -210,93 +215,86 @@ export function ResourceInfoPopover({
         >
           <Info className={cn('shrink-0', variant === 'breadcrumb' ? 'w-3 h-3' : 'h-3.5 w-3.5')} />
         </button>
-      </PopoverTrigger>
-      <PopoverContent
-        side={resolvedSide}
-        align={align}
-        sideOffset={6}
-        onClick={(e) => e.stopPropagation()}
-        aria-label={accessibleName}
-        // No z override. `ui/popover.tsx` already sets z-[64], and its comment explains the
-        // choice at length: clear of the app's 60-63 surface band (sidebar, side panel, grips)
-        // and under the 9999 modal band. Raising it here would have put a casual reference
-        // panel level with the app's own dialogs, for no reason the primitive does not
-        // already serve.
-        className="w-[280px] max-h-[320px] overflow-y-auto p-1.5 bg-theme-primary rounded-xl border border-gray-300/70 dark:border-gray-600/70"
-        data-testid="resource-info-popover"
-      >
-        {ownerId && owner.state !== 'unresolvable' && (
-          <PersonRow
-            label={t('createdBy')}
-            person={owner}
-            detail={createdAt ? formatUtcDateTime(createdAt) : undefined}
-            testId="resource-info-owner"
-          />
-        )}
+      }
+      // The shared "i" layer (z-[100001]), not the stock popover z-[64] this panel used to
+      // keep: every info panel now opens on one layer, above any dialog it can be opened
+      // from, so a breadcrumb or card "i" behaves like every other one. It is transient and
+      // closes on the next outside press, so it never sits over a dialog opened after it.
+      contentClassName="w-[280px] max-h-[320px] p-1.5 text-sm leading-normal text-theme-primary border-gray-300/70 dark:border-gray-600/70"
+      contentProps={{ sideOffset: 6 }}
+      contentTestId="resource-info-popover"
+    >
+      {ownerId && owner.state !== 'unresolvable' && (
+        <PersonRow
+          label={t('createdBy')}
+          person={owner}
+          detail={createdAt ? formatUtcDateTime(createdAt) : undefined}
+          testId="resource-info-owner"
+        />
+      )}
 
-        {/* No owner to name, or no workspace to name them in: state the fact we do have rather
-            than an attribution we cannot stand behind. */}
-        {(!ownerId || owner.state === 'unresolvable') && createdAt && (
-          <FactRow
-            label={t('created')}
-            value={formatRelativeDateI18n(createdAt, tRuns)}
-            detail={formatUtcDateTime(createdAt)}
-            testId="resource-info-created"
-          />
-        )}
+      {/* No owner to name, or no workspace to name them in: state the fact we do have rather
+          than an attribution we cannot stand behind. */}
+      {(!ownerId || owner.state === 'unresolvable') && createdAt && (
+        <FactRow
+          label={t('created')}
+          value={formatRelativeDateI18n(createdAt, tRuns)}
+          detail={formatUtcDateTime(createdAt)}
+          testId="resource-info-created"
+        />
+      )}
 
-        {updatedAt && (
-          <FactRow
-            label={t('lastModified')}
-            value={formatRelativeDateI18n(updatedAt, tRuns)}
-            detail={formatUtcDateTime(updatedAt)}
-            testId="resource-info-modified"
-          />
-        )}
+      {updatedAt && (
+        <FactRow
+          label={t('lastModified')}
+          value={formatRelativeDateI18n(updatedAt, tRuns)}
+          detail={formatUtcDateTime(updatedAt)}
+          testId="resource-info-modified"
+        />
+      )}
 
-        {showEditorsSection && (
-          <>
-            <div className="my-1 border-t border-gray-200 dark:border-gray-700" />
-            <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-0.5">
-              <span className="text-sm font-medium text-theme-secondary">{t('editorsTitle')}</span>
-              {editors && editors.length > 0 && (
-                // The numeral for sighted readers, the words for everyone else. An `aria-label`
-                // on a bare span is dropped by most screen readers (role=generic takes no name
-                // from the author), so the text has to BE there rather than be described.
-                <span className="ml-auto text-xs text-theme-muted tabular-nums">
-                  <span aria-hidden="true">{editors.length}</span>
-                  <span className="sr-only">{t('editorCount', { count: editors.length })}</span>
-                </span>
-              )}
-            </div>
-            {/* What counts as an edit, as text rather than a `title` that neither a touch
-                screen nor a screen reader can reach. Worded without naming the resource: this
-                component does not know what it is describing, and only the caller that has an
-                edit history to offer decides that. */}
-            <p className="px-2.5 pb-1 text-xs text-theme-muted">{t('editorsHint')}</p>
-            {editorsLoading && (
-              <div
-                className="px-2.5 py-1.5 text-sm text-theme-muted"
-                role="status"
-                aria-live="polite"
-                data-testid="resource-info-editors-loading"
-              >
-                {t('editorsLoading')}
-              </div>
+      {showEditorsSection && (
+        <>
+          <div className="my-1 border-t border-gray-200 dark:border-gray-700" />
+          <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-0.5">
+            <span className="text-sm font-medium text-theme-secondary">{t('editorsTitle')}</span>
+            {editors && editors.length > 0 && (
+              // The numeral for sighted readers, the words for everyone else. An `aria-label`
+              // on a bare span is dropped by most screen readers (role=generic takes no name
+              // from the author), so the text has to BE there rather than be described.
+              <span className="ml-auto text-xs text-theme-muted tabular-nums">
+                <span aria-hidden="true">{editors.length}</span>
+                <span className="sr-only">{t('editorCount', { count: editors.length })}</span>
+              </span>
             )}
-            {!editorsLoading && (editors ?? []).map((editor) => (
-              <PersonRow
-                key={editor.userId}
-                person={resolvePerson(editor.userId, roster, editor.displayName ?? null)}
-                detail={editor.editedAt ? formatRelativeDateI18n(editor.editedAt, tRuns) : undefined}
-                badge={editor.editCount > 1 ? t('editCount', { count: editor.editCount }) : undefined}
-                testId={`resource-info-editor-${editor.userId}`}
-              />
-            ))}
-          </>
-        )}
-      </PopoverContent>
-    </Popover>
+          </div>
+          {/* What counts as an edit, as text rather than a `title` that neither a touch
+              screen nor a screen reader can reach. Worded without naming the resource: this
+              component does not know what it is describing, and only the caller that has an
+              edit history to offer decides that. */}
+          <p className="px-2.5 pb-1 text-xs text-theme-muted">{t('editorsHint')}</p>
+          {editorsLoading && (
+            <div
+              className="px-2.5 py-1.5 text-sm text-theme-muted"
+              role="status"
+              aria-live="polite"
+              data-testid="resource-info-editors-loading"
+            >
+              {t('editorsLoading')}
+            </div>
+          )}
+          {!editorsLoading && (editors ?? []).map((editor) => (
+            <PersonRow
+              key={editor.userId}
+              person={resolvePerson(editor.userId, roster, editor.displayName ?? null)}
+              detail={editor.editedAt ? formatRelativeDateI18n(editor.editedAt, tRuns) : undefined}
+              badge={editor.editCount > 1 ? t('editCount', { count: editor.editCount }) : undefined}
+              testId={`resource-info-editor-${editor.userId}`}
+            />
+          ))}
+        </>
+      )}
+    </InfoPopover>
   );
 }
 

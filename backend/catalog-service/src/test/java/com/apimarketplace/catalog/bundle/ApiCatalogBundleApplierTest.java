@@ -152,7 +152,7 @@ class ApiCatalogBundleApplierTest {
     @Test
     @DisplayName("Happy path: gunzips, delegates to merge, flips bundle row WITHOUT storing the payload, writes OK status")
     void happyPathBookkeeping() {
-        when(mergeService.merge(anyList(), anyList())).thenReturn(okMerge());
+        when(mergeService.merge(any(), anyList())).thenReturn(okMerge());
 
         ApiCatalogBundleApplier.ApplyResult r = applier.apply(bundle(9L),
                 gzPayload("{\"apis\":[{\"id\":\"x\"}],\"credentialTemplates\":[{\"credentialName\":\"slack\"}]}"),
@@ -165,8 +165,9 @@ class ApiCatalogBundleApplierTest {
         assertThat(r.deprecatedApis()).isEqualTo(1);
 
         // Merge received the parsed lists.
+        // The APIs arrive as a stream over the payload; iterating the captured value reads it.
         @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<Map<String, Object>>> apisCap = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<Iterable<Map<String, Object>>> apisCap = ArgumentCaptor.forClass(Iterable.class);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<Map<String, Object>>> templatesCap = ArgumentCaptor.forClass(List.class);
         verify(mergeService).merge(apisCap.capture(), templatesCap.capture());
@@ -191,9 +192,92 @@ class ApiCatalogBundleApplierTest {
     }
 
     @Test
+    @DisplayName("The merge consumes the APIs as a stream DURING apply, receiving exactly the payload's maps")
+    void mergeDrainsTheStreamDuringApply() {
+        List<Map<String, Object>> seen = new java.util.ArrayList<>();
+        when(mergeService.merge(any(), anyList())).thenAnswer(inv -> {
+            Iterable<Map<String, Object>> apis = inv.getArgument(0);
+            apis.forEach(seen::add);
+            return okMerge();
+        });
+
+        ApiCatalogBundleApplier.ApplyResult r = applier.apply(bundle(13L), gzPayload(
+                "{\"apis\":[{\"id\":\"a\",\"tools\":[{\"toolSlug\":\"t1\",\"n\":2}]},{\"id\":\"b\"}]}"),
+                "https://cloud");
+
+        assertThat(r.status()).isEqualTo(ApiCatalogBundleApplier.Status.APPLIED);
+        assertThat(seen).extracting(m -> m.get("id")).containsExactly("a", "b");
+        assertThat(seen.get(0).get("tools")).isEqualTo(List.of(Map.of("toolSlug", "t1", "n", 2)));
+    }
+
+    @Test
+    @DisplayName("'apis' null or an object: 'payload has no apis array', and the merge never runs")
+    void apisNotAnArrayRefused() {
+        for (String json : List.of("{\"apis\":null}", "{\"apis\":{\"id\":\"x\"}}", "{\"credentialTemplates\":[]}")) {
+            ApiCatalogBundleApplier.ApplyResult r = applier.apply(bundle(14L), gzPayload(json), "https://cloud");
+            assertThat(r.status()).as(json).isEqualTo(ApiCatalogBundleApplier.Status.APPLY_FAILED);
+            assertThat(r.detail()).as(json).isEqualTo("payload has no 'apis' array");
+        }
+        verifyNoInteractions(mergeService);
+    }
+
+    @Test
+    @DisplayName("TIGHTENING: a second 'apis' key is refused before the merge runs")
+    void duplicateApisKeyRefused() {
+        ApiCatalogBundleApplier.ApplyResult r = applier.apply(bundle(15L),
+                gzPayload("{\"apis\":[{\"id\":\"a\"}],\"apis\":[{\"id\":\"b\"}]}"), "https://cloud");
+
+        assertThat(r.status()).isEqualTo(ApiCatalogBundleApplier.Status.APPLY_FAILED);
+        assertThat(r.detail()).isEqualTo("payload has more than one 'apis' key");
+        verifyNoInteractions(mergeService);
+    }
+
+    @Test
+    @DisplayName("TIGHTENING: a non-object template or price entry refuses the apply up front, not after the merge")
+    void nonObjectTemplateOrPriceRefusedUpFront() {
+        for (String json : List.of(
+                "{\"apis\":[{\"id\":\"a\"}],\"credentialTemplates\":[\"x\"]}",
+                "{\"apis\":[{\"id\":\"a\"}],\"generationPrices\":[42]}")) {
+            ApiCatalogBundleApplier.ApplyResult r = applier.apply(bundle(16L), gzPayload(json), "https://cloud");
+            assertThat(r.status()).as(json).isEqualTo(ApiCatalogBundleApplier.Status.APPLY_FAILED);
+            assertThat(r.detail()).as(json).startsWith("payload gunzip/parse failed");
+        }
+        verifyNoInteractions(mergeService);
+        verifyNoInteractions(priceApplier);
+    }
+
+    @Test
+    @DisplayName("An 'apis' entry that is not an object is refused before the merge runs")
+    void nonObjectApiEntryRefusedBeforeMerge() {
+        ApiCatalogBundleApplier.ApplyResult r = applier.apply(bundle(11L),
+                gzPayload("{\"apis\":[{\"id\":\"x\"},\"oops\"]}"), "https://cloud");
+
+        assertThat(r.status()).isEqualTo(ApiCatalogBundleApplier.Status.APPLY_FAILED);
+        assertThat(r.detail()).contains("1 entries that are not objects");
+        verifyNoInteractions(mergeService);
+    }
+
+    @Test
+    @DisplayName("A payload read failure DURING the merge is APPLY_FAILED, never an escaping exception or a recorded row")
+    void rereadFailureDuringMergeIsApplyFailed() {
+        when(mergeService.merge(any(), anyList()))
+                .thenThrow(new java.io.UncheckedIOException(new java.io.IOException("truncated")));
+
+        ApiCatalogBundleApplier.ApplyResult r = applier.apply(bundle(12L),
+                gzPayload("{\"apis\":[{\"id\":\"x\"}]}"), "https://cloud");
+
+        assertThat(r.status()).isEqualTo(ApiCatalogBundleApplier.Status.APPLY_FAILED);
+        assertThat(r.detail()).startsWith("payload re-read failed during merge");
+        verify(bundleRepo, never()).save(any());
+        // The applier does not write the status row itself: the scheduler records APPLY_FAILED
+        // once, as for every failed apply.
+        verify(syncStatusRepo, never()).save(any());
+    }
+
+    @Test
     @DisplayName("Missing credentialTemplates key is tolerated (treated as empty)")
     void missingTemplatesTolerated() {
-        when(mergeService.merge(anyList(), anyList())).thenReturn(okMerge());
+        when(mergeService.merge(any(), anyList())).thenReturn(okMerge());
 
         ApiCatalogBundleApplier.ApplyResult r = applier.apply(bundle(10L),
                 gzPayload("{\"apis\":[{\"id\":\"x\"}]}"), "https://cloud");
@@ -201,14 +285,14 @@ class ApiCatalogBundleApplierTest {
         assertThat(r.status()).isEqualTo(ApiCatalogBundleApplier.Status.APPLIED);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<Map<String, Object>>> templatesCap = ArgumentCaptor.forClass(List.class);
-        verify(mergeService).merge(anyList(), templatesCap.capture());
+        verify(mergeService).merge(any(), templatesCap.capture());
         assertThat(templatesCap.getValue()).isEmpty();
     }
 
     @Test
     @DisplayName("Every API failing in merge → APPLY_FAILED and NO bundle row (retry must not be short-circuited)")
     void allFailedMeansApplyFailed() {
-        when(mergeService.merge(anyList(), anyList())).thenReturn(
+        when(mergeService.merge(any(), anyList())).thenReturn(
                 new ApiCatalogMergeService.MergeResult(0, 0, 0, 3, 0, 0, 0,
                         List.of("api A: boom", "api B: boom", "api C: boom")));
 
@@ -228,7 +312,7 @@ class ApiCatalogBundleApplierTest {
         existing.setConsecutiveFailures(2);
         when(syncStatusRepo.findById(ApiCatalogBundleSyncStatusEntity.SINGLETON_ID))
                 .thenReturn(Optional.of(existing));
-        when(mergeService.merge(anyList(), anyList())).thenReturn(
+        when(mergeService.merge(any(), anyList())).thenReturn(
                 new ApiCatalogMergeService.MergeResult(5, 12, 0, 1, 0, 0, 2,
                         List.of("api 7e57ed-x (Slack): DataIntegrityViolationException: unique collision")));
 
@@ -258,14 +342,14 @@ class ApiCatalogBundleApplierTest {
         // A subsequent apply of the SAME version runs the merge again (no
         // ALREADY_APPLIED short-circuit) because no active row was recorded.
         applier.apply(bundle(12L), gzPayload("{\"apis\":[{\"id\":\"a\"}]}"), "https://cloud");
-        verify(mergeService, org.mockito.Mockito.times(2)).merge(anyList(), anyList());
+        verify(mergeService, org.mockito.Mockito.times(2)).merge(any(), anyList());
     }
 
     @Test
     @DisplayName("Partial-failure detail is truncated to a sane length (long error lines, many failures)")
     void partialFailureDetailTruncated() {
         String hugeError = "api " + "x".repeat(3000) + ": boom";
-        when(mergeService.merge(anyList(), anyList())).thenReturn(
+        when(mergeService.merge(any(), anyList())).thenReturn(
                 new ApiCatalogMergeService.MergeResult(1, 0, 0, 9, 0, 0, 0,
                         List.of(hugeError, "api b: boom", "api c: boom", "api d: boom",
                                 "api e: boom", "api f: boom", "api g: boom")));
@@ -288,7 +372,7 @@ class ApiCatalogBundleApplierTest {
         stale.setVersion(13L);
         stale.setActive(false);
         when(bundleRepo.findByVersion(13L)).thenReturn(Optional.of(stale));
-        when(mergeService.merge(anyList(), anyList())).thenReturn(okMerge());
+        when(mergeService.merge(any(), anyList())).thenReturn(okMerge());
 
         applier.apply(bundle(13L), gzPayload("{\"apis\":[{\"id\":\"x\"}]}"), "https://cloud");
 
@@ -313,7 +397,7 @@ class ApiCatalogBundleApplierTest {
         // winner's active row IS visible on the catch's confirm-read (else the catch would rethrow).
         when(bundleRepo.findByVersion(any()))
                 .thenReturn(Optional.empty(), Optional.empty(), Optional.of(winner));
-        when(mergeService.merge(anyList(), anyList())).thenReturn(okMerge());
+        when(mergeService.merge(any(), anyList())).thenReturn(okMerge());
         when(bundleRepo.save(any())).thenThrow(new DataIntegrityViolationException(
                 "duplicate key value violates unique constraint \"api_catalog_bundles_version_key\""));
 
@@ -336,7 +420,7 @@ class ApiCatalogBundleApplierTest {
         // save() fails an integrity constraint, but the version is NOT present+active afterwards
         // (findByVersion stays empty) - i.e. this is a genuine failure, not the concurrent-winner race.
         when(bundleRepo.findByVersion(any())).thenReturn(Optional.empty());
-        when(mergeService.merge(anyList(), anyList())).thenReturn(okMerge());
+        when(mergeService.merge(any(), anyList())).thenReturn(okMerge());
         when(bundleRepo.save(any())).thenThrow(new DataIntegrityViolationException(
                 "null value in column \"checksum\" violates not-null constraint"));
 
@@ -356,7 +440,7 @@ class ApiCatalogBundleApplierTest {
         // concurrent apply committed the row in between. Pre-fix used the (empty) pre-check Optional
         // and INSERTed a duplicate; post-fix the in-tx re-read reuses the row (UPDATE).
         when(bundleRepo.findByVersion(15L)).thenReturn(Optional.empty(), Optional.of(landedConcurrently));
-        when(mergeService.merge(anyList(), anyList())).thenReturn(okMerge());
+        when(mergeService.merge(any(), anyList())).thenReturn(okMerge());
 
         applier.apply(bundle(15L), gzPayload("{\"apis\":[{\"id\":\"x\"}]}"), "https://cloud");
 
@@ -381,7 +465,7 @@ class ApiCatalogBundleApplierTest {
         // A price row is keyed on an endpoint UUID, so offering prices over a
         // catalog that has not landed would price endpoints this install does
         // not have.
-        when(mergeService.merge(anyList(), anyList())).thenReturn(okMerge());
+        when(mergeService.merge(any(), anyList())).thenReturn(okMerge());
 
         ApiCatalogBundleApplier.ApplyResult r = applier.apply(bundle(21L), gzPayload(
                 "{\"apis\":[{\"id\":\"x\"}],\"generationPrices\":[{\"integrationName\":\"seedance\","
@@ -394,7 +478,7 @@ class ApiCatalogBundleApplierTest {
         assertThat(capturedPrices()).hasSize(1);
         assertThat(capturedPrices().get(0)).containsEntry("modelId", "seedance-2.0");
         InOrder order = inOrder(mergeService, priceApplier);
-        order.verify(mergeService).merge(anyList(), anyList());
+        order.verify(mergeService).merge(any(), anyList());
         order.verify(priceApplier).apply(anyList(), any());
     }
 
@@ -405,7 +489,7 @@ class ApiCatalogBundleApplierTest {
         // The compatibility posture. A missing key must not fail the apply, and
         // must not be turned into an empty list that could be read as "no
         // prices exist".
-        when(mergeService.merge(anyList(), anyList())).thenReturn(okMerge());
+        when(mergeService.merge(any(), anyList())).thenReturn(okMerge());
 
         ApiCatalogBundleApplier.ApplyResult r =
                 applier.apply(bundle(22L), gzPayload("{\"apis\":[{\"id\":\"x\"}]}"), "https://cloud");
@@ -445,7 +529,7 @@ class ApiCatalogBundleApplierTest {
     void partialApplyOffersNoPrices() {
         // The version is not recorded either, so the next tick retries the whole
         // thing; that is when its prices arrive.
-        when(mergeService.merge(anyList(), anyList())).thenReturn(
+        when(mergeService.merge(any(), anyList())).thenReturn(
                 new ApiCatalogMergeService.MergeResult(1, 1, 0, 2, 0, 0, 0, List.of("api a: boom")));
 
         ApiCatalogBundleApplier.ApplyResult r = applier.apply(bundle(24L), gzPayload(
@@ -468,7 +552,7 @@ class ApiCatalogBundleApplierTest {
     @Test
     @DisplayName("Applying stores the prices the bundle carried, so a later 304 tick has something to re-offer")
     void applyStoresGenerationPrices() {
-        when(mergeService.merge(anyList(), anyList())).thenReturn(okMerge());
+        when(mergeService.merge(any(), anyList())).thenReturn(okMerge());
 
         applier.apply(bundle(11L),
                 gzPayload("{\"apis\":[{\"id\":\"x\"}],\"generationPrices\":[{\"toolSlug\":\"flux-generate\",\"credits\":12}]}"),
@@ -488,7 +572,7 @@ class ApiCatalogBundleApplierTest {
         // is nothing older to preserve here. The "do not overwrite" rule lives
         // on the already-applied path instead, where the payload may be re-read
         // for a version whose capture already exists.
-        when(mergeService.merge(anyList(), anyList())).thenReturn(okMerge());
+        when(mergeService.merge(any(), anyList())).thenReturn(okMerge());
 
         applier.apply(bundle(12L), gzPayload("{\"apis\":[{\"id\":\"x\"}]}"), "https://cloud");
 
@@ -538,7 +622,7 @@ class ApiCatalogBundleApplierTest {
         // The two halves are written independently, so pin them against each
         // other: a serialisation change on one side would otherwise only show up
         // as prices quietly not being applied.
-        when(mergeService.merge(anyList(), anyList())).thenReturn(okMerge());
+        when(mergeService.merge(any(), anyList())).thenReturn(okMerge());
         applier.apply(bundle(15L),
                 gzPayload("{\"apis\":[{\"id\":\"x\"}],\"generationPrices\":"
                         + "[{\"toolSlug\":\"flux\",\"credits\":12}]}"),
@@ -567,7 +651,7 @@ class ApiCatalogBundleApplierTest {
     }
 
     @Test
-    @DisplayName("The already-applied path inflates the payload ONCE: it is the path the whole fleet takes while capturing prices")
+    @DisplayName("The already-applied path reads the payload in ONE streaming pass and never inflates it whole")
     void alreadyAppliedReadsThePayloadOnce() throws Exception {
         // Regression on cost, not correctness. Answering "which prices?" and
         // "was the payload readable?" with two separate gunzip+parse passes
@@ -585,7 +669,11 @@ class ApiCatalogBundleApplierTest {
                 gzPayload("{\"apis\":[{\"id\":\"x\"}],\"generationPrices\":[{\"toolSlug\":\"flux\"}]}"),
                 "https://cloud");
 
-        verify(spy, times(1)).readValue(any(byte[].class), any(TypeReference.class));
+        // One parser opened (one pass), and no whole-document readValue: inflating the payload
+        // whole is what ran the 1 GB CE heap out of memory on the 243 MB bundle.
+        verify(spy, times(1)).getFactory();
+        verify(spy, never()).readValue(any(byte[].class), any(TypeReference.class));
+        verify(priceApplier).apply(org.mockito.ArgumentMatchers.argThat(l -> l != null && l.size() == 1), eq(20L));
     }
 
     @Nested

@@ -2,13 +2,12 @@
 
 import * as React from 'react';
 import { useCallback, useRef, useState } from 'react';
-import { X, Upload, Plus, Trash2, Info, GripVertical } from 'lucide-react';
+import { X, Upload, Plus, Trash2, GripVertical } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { Button } from '@/components/ui/button';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { BuilderNodeData } from '../../../types';
 import type { Connection } from '../useInspectorConnections';
 import { fileService, type FileRef } from '@/lib/api/orchestrator/file.service';
@@ -17,6 +16,7 @@ import { StorageExplorerTab } from '../StorageExplorerTab';
 import type { StorageExplorerEntry } from '@/lib/api/storage-api';
 import { FilePreview } from '../outputs/FilePreview';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
+import { InfoPopover } from '@/components/ui/info-popover';
 
 interface DataInputParametersFormProps {
   node: Node<BuilderNodeData>;
@@ -150,27 +150,17 @@ export function DataInputParametersForm({
           <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">
             {t('items')}
           </span>
-          <Popover>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-              >
-                <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
-              <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                <p className="font-semibold text-slate-900 dark:text-slate-100">{t('title')}</p>
-                <p>{t('description')}</p>
-                <ul className="list-disc list-inside space-y-1 text-xs">
-                  <li>{t('helpItemCreatesOutput')}</li>
-                  <li>{t('helpLabelsAvailable')}</li>
-                  <li>{t('helpFirstItemPreview')}</li>
-                </ul>
-              </div>
-            </PopoverContent>
-          </Popover>
+          <InfoPopover label={t('items')} size="sm" side="right" align="start">
+            <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+              <p className="font-semibold text-slate-900 dark:text-slate-100">{t('title')}</p>
+              <p>{t('description')}</p>
+              <ul className="list-disc list-inside space-y-1 text-xs">
+                <li>{t('helpItemCreatesOutput')}</li>
+                <li>{t('helpLabelsAvailable')}</li>
+                <li>{t('helpFirstItemPreview')}</li>
+              </ul>
+            </div>
+          </InfoPopover>
         </div>
         {!isRunMode && (
           <Button

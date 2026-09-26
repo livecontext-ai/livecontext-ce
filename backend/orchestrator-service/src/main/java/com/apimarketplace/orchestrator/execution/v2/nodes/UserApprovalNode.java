@@ -89,13 +89,46 @@ public class UserApprovalNode extends BaseNode {
 
     @Override
     public NodeExecutionResult execute(ExecutionContext context) {
+        // The configured counts, or their {{...}} resolved for this run. A template used to be
+        // replaced by the default (1 approval, 24 h) because the parser cannot hold it in a number.
+        String approvalsTemplate = deferredScalar("approval", "requiredApprovals");
+        String timeoutTemplate = deferredScalar("approval", "timeoutMs");
+        final int requiredApprovals;
+        final long timeoutMs;
+        String resolutionError = null;
+        int approvals = this.requiredApprovals;
+        long timeout = this.timeoutMs;
+        try {
+            if (approvalsTemplate != null) {
+                long resolved = resolveDeferredLong("approval", "requiredApprovals", approvalsTemplate, context);
+                if (resolved < 1 || resolved > Integer.MAX_VALUE) {
+                    throw new IllegalStateException("approval.requiredApprovals '" + approvalsTemplate
+                        + "' resolved to " + resolved + ": at least one approval is required");
+                }
+                approvals = (int) resolved;
+            }
+            if (timeoutTemplate != null) {
+                long resolved = resolveDeferredLong("approval", "timeoutMs", timeoutTemplate, context);
+                if (resolved <= 0) {
+                    throw new IllegalStateException("approval.timeoutMs '" + timeoutTemplate
+                        + "' resolved to " + resolved + ": it must be a positive number of milliseconds");
+                }
+                timeout = resolved;
+            }
+        } catch (IllegalStateException e) {
+            resolutionError = e.getMessage();
+        }
+        requiredApprovals = approvals;
+        timeoutMs = timeout;
         logger.info("Approval node executing: nodeId={}, approverRoles={}, requiredApprovals={}",
             nodeId, approverRoles, requiredApprovals);
 
         Map<String, Object> resolvedParams = new LinkedHashMap<>();
         resolvedParams.put("approverRoles", approverRoles);
-        resolvedParams.put("requiredApprovals", requiredApprovals);
-        resolvedParams.put("timeoutMs", timeoutMs);
+        resolvedParams.put("requiredApprovals", approvalsTemplate != null
+            ? ReportedParams.valueFrom(approvalsTemplate, requiredApprovals) : requiredApprovals);
+        resolvedParams.put("timeoutMs", timeoutTemplate != null
+            ? ReportedParams.valueFrom(timeoutTemplate, timeoutMs) : timeoutMs);
         resolvedParams.put("contextTemplate", contextTemplate);
         // Delegation decides WHO may approve, and continuationMode decides what the
         // run does once approved. An approval that sat unanswered, or was answered by
@@ -108,13 +141,19 @@ public class UserApprovalNode extends BaseNode {
         }
         resolvedParams.put("continuationMode", continuationMode);
 
+        if (resolutionError != null) {
+            return NodeExecutionResult.failureWithOutput(nodeId, resolutionError,
+                buildFailureOutput(resolvedParams, resolutionError, requiredApprovals, timeoutMs), 0L);
+        }
+
         try {
             if (signalService == null) {
                 logger.warn("Approval node has no signal service, failing: nodeId={}", nodeId);
                 return NodeExecutionResult.failureWithOutput(
                     nodeId,
                     "Signal service not available for approval node",
-                    buildFailureOutput(resolvedParams, "Signal service not available for approval node"),
+                    buildFailureOutput(resolvedParams, "Signal service not available for approval node",
+                        requiredApprovals, timeoutMs),
                     0L);
             }
 
@@ -152,6 +191,12 @@ public class UserApprovalNode extends BaseNode {
             // node never fails on it - see resolveApprovalContext).
             String approvalContext = SignalContextResolver.resolveApprovalContext(
                 contextTemplate, context, templateAdapter);
+            // What the approver reads, beside the template that produced it (the split
+            // list / listResolved pair). `contextTemplate` alone showed the {{...}} text, so
+            // the Params column read as if the context never resolved.
+            if (approvalContext != null) {
+                resolvedParams.put("contextResolved", ReportedParams.valueFrom(contextTemplate, approvalContext));
+            }
 
             // The resolved delegation, the timeout, the approver roles: an approval yields,
             // and a yield persists no step row, so these were reported nowhere until now.
@@ -195,7 +240,7 @@ public class UserApprovalNode extends BaseNode {
             return NodeExecutionResult.failureWithOutput(
                 nodeId,
                 e.getMessage(),
-                buildFailureOutput(resolvedParams, e.getMessage()),
+                buildFailureOutput(resolvedParams, e.getMessage(), requiredApprovals, timeoutMs),
                 0L);
         }
     }
@@ -215,12 +260,27 @@ public class UserApprovalNode extends BaseNode {
         }
         Map<String, Object> block = new LinkedHashMap<>();
         block.put("channel", delegation.channel());
+        if (!delegation.linkId().isBlank()) {
+            // Not a template: an id or "default", resolved against the run's workspace at send.
+            block.put("linkId", delegation.linkId());
+        }
         if (delegation.credentialId() != null) {
             block.put("credentialId", delegation.credentialId());
         }
         String resolvedChatId = SignalContextResolver.resolveApprovalContext(
             delegation.chatId(), context, templateAdapter);
-        block.put("chatId", resolvedChatId != null ? resolvedChatId : delegation.chatId());
+        if (resolvedChatId != null) {
+            block.put("chatId", resolvedChatId);
+        } else if (delegation.chatId() != null && !delegation.chatId().contains("{{")) {
+            // A literal chat id, with nothing to resolve (or no adapter wired): send to it.
+            block.put("chatId", delegation.chatId());
+        } else if (delegation.chatId() != null) {
+            // A template that resolved to nothing. It used to be sent AS the chat id, the
+            // literal {{...}}. Omitted instead: the notifier records the delivery as failed
+            // ("missing chatId") and the approval still waits, the node's soft semantics.
+            logger.warn("Approval delegation chatId resolved to nothing, not delivering: nodeId={}, chatId={}",
+                nodeId, delegation.chatId());
+        }
         String resolvedMessage = SignalContextResolver.resolveApprovalContext(
             delegation.messageTemplate(), context, templateAdapter);
         if (resolvedMessage != null && !resolvedMessage.isBlank()) {
@@ -256,7 +316,8 @@ public class UserApprovalNode extends BaseNode {
         return block;
     }
 
-    private Map<String, Object> buildFailureOutput(Map<String, Object> resolvedParams, String error) {
+    private Map<String, Object> buildFailureOutput(Map<String, Object> resolvedParams, String error,
+                                                   int requiredApprovals, long timeoutMs) {
         Map<String, Object> failOutput = new HashMap<>();
         failOutput.put("resolved_params", ReportedParams.forReport(resolvedParams));
         failOutput.put("approver_roles", approverRoles);

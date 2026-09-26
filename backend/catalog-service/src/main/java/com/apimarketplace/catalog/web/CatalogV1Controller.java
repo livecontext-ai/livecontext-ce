@@ -61,11 +61,13 @@ public class CatalogV1Controller {
                                          @RequestHeader(value = "X-Lc-Generation-Unit", required = false) String generationQuantityUnit,
                                          @RequestHeader(value = "X-Lc-Generation-Multiplier", required = false) java.math.BigDecimal generationPriceMultiplier,
                                          @RequestHeader(value = "X-Lc-Workflow-Id", required = false) String analyticsWorkflowId,
-                                         @RequestHeader(value = "X-Lc-Node-Id", required = false) String analyticsNodeId) {
+                                         @RequestHeader(value = "X-Lc-Node-Id", required = false) String analyticsNodeId,
+                                         @RequestHeader(value = "X-Lc-Step-Output", required = false) String stepOutput) {
         applyBillingHeaders(request, billingScopeKind, billingScopeId, billingStepId,
                 generationModelId, generationQuantity, generationQuantityUnit,
                 generationPriceMultiplier);
         applyAnalyticsHeaders(request, analyticsWorkflowId, analyticsNodeId);
+        applyStepOutputHeader(request, stepOutput);
         return executeToolInternal(toolId, request, userId, orgId, requestId);
     }
 
@@ -89,11 +91,13 @@ public class CatalogV1Controller {
                                          @RequestHeader(value = "X-Lc-Generation-Unit", required = false) String generationQuantityUnit,
                                          @RequestHeader(value = "X-Lc-Generation-Multiplier", required = false) java.math.BigDecimal generationPriceMultiplier,
                                          @RequestHeader(value = "X-Lc-Workflow-Id", required = false) String analyticsWorkflowId,
-                                         @RequestHeader(value = "X-Lc-Node-Id", required = false) String analyticsNodeId) {
+                                         @RequestHeader(value = "X-Lc-Node-Id", required = false) String analyticsNodeId,
+                                         @RequestHeader(value = "X-Lc-Step-Output", required = false) String stepOutput) {
         applyBillingHeaders(request, billingScopeKind, billingScopeId, billingStepId,
                 generationModelId, generationQuantity, generationQuantityUnit,
                 generationPriceMultiplier);
         applyAnalyticsHeaders(request, analyticsWorkflowId, analyticsNodeId);
+        applyStepOutputHeader(request, stepOutput);
         // Combine apiSlug/toolSlug - service handles this format
         String toolId = apiSlug + "/" + toolSlug;
         return executeToolInternal(toolId, request, userId, orgId, requestId);
@@ -126,6 +130,7 @@ public class CatalogV1Controller {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(Map.of(
                             "success", false,
+                            "error", ToolNotFoundException.ERROR_CODE,
                             "message", "Tool not found",
                             "toolId", toolId));
         } catch (MockToolExecutionService.MockExampleNotFoundException e) {
@@ -168,6 +173,14 @@ public class CatalogV1Controller {
         }
         if (nodeId != null && NODE_ID_SHAPE.matcher(nodeId.trim()).matches()) {
             request.setAnalyticsNodeId(nodeId.trim());
+        }
+    }
+
+    /** See {@link ToolExecutionRequest#isStepOutput()}: header-only (stripped at the edge by
+     * BillingContextHeaders, @JsonIgnore on the body), like the billing scope. */
+    static void applyStepOutputHeader(ToolExecutionRequest request, String stepOutput) {
+        if (request != null && "true".equalsIgnoreCase(stepOutput == null ? null : stepOutput.trim())) {
+            request.setStepOutput(true);
         }
     }
 
@@ -304,6 +317,20 @@ public class CatalogV1Controller {
 
             ToolExecutionResponse response = catalogV1Service.executeTool(toolId, safeRequest, userId, orgId, resolvedRequestId);
             return ResponseEntity.ok(response);
+        } catch (ToolNotFoundException e) {
+            // The id names no tool (deleted, re-imported under a new id, or never valid).
+            // A caller mistake, not a server fault: without this catch the generic one
+            // below answered 500 and logged a stack trace at ERROR, which also told the
+            // agent-facing caller the call "may be retried" when it cannot ever succeed.
+            // Nothing was executed and nothing was reserved: the lookup runs first.
+            log.info("Tool {} not found - execution refused", toolId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of(
+                            "success", false,
+                            "error", ToolNotFoundException.ERROR_CODE,
+                            "message", e.getMessage(),
+                            "toolId", toolId
+                    ));
         } catch (com.apimarketplace.catalog.service.exception.InsufficientCreditsException e) {
             // Pre-flight reservation refused: the tool was NOT executed, so this
             // is a 402 rather than a 200 envelope with success=false. Same body

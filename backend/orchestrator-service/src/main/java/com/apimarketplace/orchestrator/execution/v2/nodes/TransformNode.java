@@ -56,8 +56,9 @@ public class TransformNode extends BaseNode {
             }
         }
 
+        // Declared outside the try so a late failure reports the mappings that DID resolve.
+        Map<String, Object> transformed = new LinkedHashMap<>();
         try {
-            Map<String, Object> transformed = new LinkedHashMap<>();
             List<Map<String, Object>> evaluations = new ArrayList<>();
 
             for (Core.TransformMapping mapping : mappings) {
@@ -152,7 +153,12 @@ public class TransformNode extends BaseNode {
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - startTime;
             logger.error("❌ Transform execution failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
-            Map<String, Object> failureOutput = buildFailureOutput(earlyInputData, context);
+            // A mapping that already resolved reports its value; only the rest keep the configured
+            // expression, which is all there is for them.
+            Map<String, Object> reported = new LinkedHashMap<>(earlyInputData);
+            transformed.forEach((label, value) -> reported.put(label, ReportedParams.valueFrom(
+                earlyInputData.get(label) instanceof String expr ? expr : null, value)));
+            Map<String, Object> failureOutput = buildFailureOutput(ReportedParams.forReport(reported), context);
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failureOutput, duration);
         }
     }

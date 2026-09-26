@@ -64,26 +64,20 @@ export async function generateMetadata({
     alternates: { canonical: url },
     // Both blocks spelled out in full: Next merges metadata shallowly per
     // top-level field, so a partial override drops the root layout's values.
+    // `images` is deliberately OMITTED from both: setting it here would win over
+    // the file-based `opengraph-image.tsx` next to this page, and every shared
+    // integration would fall back to the one generic site-wide card again.
     openGraph: {
       siteName: 'LiveContext',
       title,
       description,
       url,
       type: 'article',
-      images: [
-        {
-          url: '/og-image.jpg',
-          width: 1200,
-          height: 630,
-          alt: 'LiveContext: one message in, a working automation out.',
-        },
-      ],
     },
     twitter: {
       card: 'summary_large_image',
       title,
       description,
-      images: ['/og-image.jpg'],
     },
     robots: noIndex ? { index: false, follow: true } : undefined,
   };

@@ -13,6 +13,7 @@ import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
 import com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -22,6 +23,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -383,9 +385,9 @@ class AgentNodeTest {
         }
 
         @Test
-        @DisplayName("Should use original prompt when template resolution fails")
-        void shouldUseOriginalPromptWhenTemplateResolutionFails() {
-            Agent agent = createAgentWithPrompt("Original prompt");
+        @DisplayName("fails when prompt resolution fails instead of sending the RAW prompt to the model")
+        void failsWhenPromptResolutionFails() {
+            Agent agent = createAgentWithPrompt("Summarize {{core:load.output.text}}");
             AgentNode node = new AgentNode("agent:analyzer", agent);
             node.acceptServices(ServiceRegistry.builder()
                 .agentClient(mockAgentClient)
@@ -395,6 +397,26 @@ class AgentNodeTest {
             when(mockTemplateAdapter.resolveTemplates(any(), any()))
                 .thenThrow(new RuntimeException("Template error"));
 
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isFailure());
+            assertTrue(result.errorMessage().orElse("").contains("Template error"));
+            verify(mockAgentClient, never()).executeAgent(any(AgentExecutionRequestDto.class));
+        }
+
+        @Test
+        @DisplayName("a prompt that is one whole reference to an object is sent as its JSON (was: the RAW prompt, {{...}} and all)")
+        void wholeReferenceToObjectIsSentAsJson() {
+            Agent agent = createAgentWithPrompt("{{core:load.output.order}}");
+            AgentNode node = new AgentNode("agent:analyzer", agent);
+            node.acceptServices(ServiceRegistry.builder()
+                .agentClient(mockAgentClient)
+                .templateAdapter(mockTemplateAdapter)
+                .build());
+
+            when(mockTemplateAdapter.resolveTemplates(any(), any()))
+                .thenAnswer(inv -> resolveEach(inv.getArgument(0), Map.of(
+                    "{{core:load.output.order}}", Map.of("id", 7))));
             when(mockAgentClient.executeAgent(any(AgentExecutionRequestDto.class)))
                 .thenReturn(createSuccessResponse());
 
@@ -402,8 +424,109 @@ class AgentNodeTest {
 
             ArgumentCaptor<AgentExecutionRequestDto> captor = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
             verify(mockAgentClient).executeAgent(captor.capture());
+            assertEquals("{\"id\":7}", captor.getValue().prompt());
+        }
+    }
 
-            assertEquals("Original prompt", captor.getValue().prompt());
+    /**
+     * Stands in for the adapter: each value found in {@code resolutions} is replaced by its
+     * resolution (which may be null, as a reference to nothing is), every other value echoes.
+     */
+    private static Map<String, Object> resolveEach(Map<String, Object> input, Map<String, Object> resolutions) {
+        Map<String, Object> out = new HashMap<>();
+        input.forEach((k, v) -> out.put(k, resolutions.containsKey(v) ? resolutions.get(v) : v));
+        return out;
+    }
+
+    private static Agent classifyAgentWith(Object content, String categoryDescription) {
+        Map<String, Object> params = new HashMap<>();
+        params.put("content", content);
+        return new Agent(
+            "agent-classify-1", "classify", "Content Classifier", null, null,
+            "openai", "gpt-4o", null, "Classify this content",
+            0.7, 4096, 10, 5, List.of(), null,
+            params,
+            List.of(
+                Map.of("label", "billing", "description", categoryDescription),
+                Map.of("label", "other", "description", "Anything else")),
+            null, List.of(), null, null);
+    }
+
+    private static ClassifyResponseDto classifiedAsBilling() {
+        return new ClassifyResponseDto(
+            true, "billing", 0.9, "r",
+            null, 10L, "openai", "gpt-4o", 1, 1, 0, null, null, null,
+            null, null);
+    }
+
+    @Nested
+    @DisplayName("Classify / guardrail template resolution")
+    class ClassifyTemplateResolutionTests {
+
+        private AgentNode node(Agent agent) {
+            AgentNode node = new AgentNode("agent:classifier", agent);
+            node.acceptServices(ServiceRegistry.builder()
+                .agentClient(mockAgentClient)
+                .templateAdapter(mockTemplateAdapter)
+                .build());
+            return node;
+        }
+
+        @Test
+        @DisplayName("content that references nothing FAILS the node (was: the configured {{...}} text was classified)")
+        void contentReferencingNothingFails() {
+            AgentNode node = node(classifyAgentWith("{{core:missing.output.text}}", "Billing"));
+            Map<String, Object> nothing = new HashMap<>();
+            nothing.put("{{core:missing.output.text}}", null);
+            when(mockTemplateAdapter.resolveTemplates(any(), any()))
+                .thenAnswer(inv -> resolveEach(inv.getArgument(0), nothing));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isFailure());
+            assertTrue(result.errorMessage().orElse("").contains("{{core:missing.output.text}}"),
+                "the failure names the expression that resolved to nothing");
+            verify(mockAgentClient, never()).executeClassify(any(ClassifyRequestDto.class));
+        }
+
+        @Test
+        @DisplayName("content that resolves to an object is classified as its JSON, never as Java's {a=1}")
+        void objectContentIsSentAsJson() {
+            AgentNode node = node(classifyAgentWith("{{core:load.output.ticket}}", "Billing"));
+            when(mockTemplateAdapter.resolveTemplates(any(), any()))
+                .thenAnswer(inv -> resolveEach(inv.getArgument(0), Map.of(
+                    "{{core:load.output.ticket}}", Map.of("subject", "Refund"))));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class)))
+                .thenReturn(classifiedAsBilling());
+
+            node.execute(context);
+
+            ArgumentCaptor<ClassifyRequestDto> captor = ArgumentCaptor.forClass(ClassifyRequestDto.class);
+            verify(mockAgentClient).executeClassify(captor.capture());
+            assertEquals("{\"subject\":\"Refund\"}", captor.getValue().content());
+        }
+
+        @Test
+        @DisplayName("a category description is resolved before it reaches the model (was: sent verbatim with its {{...}})")
+        void categoryDescriptionIsResolved() {
+            AgentNode node = node(classifyAgentWith("Where is my refund?", "{{trigger:start.output.billing_hint}}"));
+            when(mockTemplateAdapter.resolveTemplates(any(), any()))
+                .thenAnswer(inv -> resolveEach(inv.getArgument(0), Map.of(
+                    "{{trigger:start.output.billing_hint}}", "Invoices, refunds, payments")));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class)))
+                .thenReturn(classifiedAsBilling());
+
+            NodeExecutionResult result = node.execute(context);
+
+            ArgumentCaptor<ClassifyRequestDto> captor = ArgumentCaptor.forClass(ClassifyRequestDto.class);
+            verify(mockAgentClient).executeClassify(captor.capture());
+            assertEquals("Invoices, refunds, payments", captor.getValue().categories().get(0).description());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> reported = (Map<String, Object>) result.output().get("resolved_params");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> reportedCategories = (List<Map<String, Object>>) reported.get("categories");
+            assertEquals("Invoices, refunds, payments", reportedCategories.get(0).get("description"),
+                "the Params column shows the description the model received");
         }
     }
 
@@ -1674,5 +1797,580 @@ class AgentNodeTest {
                 return NodeExecutionResult.success(nodeId, Map.of());
             }
         };
+    }
+
+    /**
+     * The Params column of an agent, classify or guardrail node reports what the MODEL received,
+     * whole. It used to describe anything over 2,000 characters as its first 120 followed by
+     * "(N chars)", so a classified email showed everything except the email (prod run
+     * run_<id>: "Classify this incoming email… (5044 chars)").
+     */
+    @Nested
+    @DisplayName("Params: what the model received is reported whole")
+    class ModelInputReportedWhole {
+
+        private final String longPrompt = "Classify this incoming email." + " Body line of the mail.".repeat(250);
+
+        private AgentNode node(Agent agent) {
+            AgentNode node = new AgentNode("agent:classifier", agent);
+            node.acceptServices(ServiceRegistry.builder()
+                .agentClient(mockAgentClient)
+                .templateAdapter(mockTemplateAdapter)
+                .build());
+            when(mockTemplateAdapter.resolveTemplates(any(), any())).thenAnswer(inv -> inv.getArgument(0));
+            return node;
+        }
+
+        private Agent classify(Map<String, Object> params, List<Map<String, Object>> categories) {
+            return new Agent(
+                "agent-classify-1", "classify", "Classify Mail", null, null,
+                "openai", "gpt-4o", null, longPrompt,
+                0.2, 4096, 10, 5, List.of(), null,
+                params, categories, null, List.of(), null, null);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> reported(NodeExecutionResult result) {
+            return (Map<String, Object>) result.output().get("resolved_params");
+        }
+
+        @Test
+        @DisplayName("BUG: a 5,000-character classify prompt is reported in full, not as its first 120 characters")
+        void longClassifyPromptIsReportedWhole() {
+            assertThat(longPrompt.length()).isGreaterThan(5_000);
+            List<Map<String, Object>> categories = new ArrayList<>();
+            for (int i = 0; i < 9; i++) {
+                categories.add(Map.of("label", "category_" + i, "description", "Description " + i + " ok".repeat(100)));
+            }
+            AgentNode node = node(classify(Map.of(), categories));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class))).thenReturn(classifiedAsBilling());
+
+            Map<String, Object> reported = reported(node.execute(context));
+
+            assertThat(reported.get("prompt")).isEqualTo(longPrompt);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> reportedCategories = (List<Map<String, Object>>) reported.get("categories");
+            assertThat(reportedCategories).hasSize(9);
+            assertThat(reportedCategories.get(8).get("description")).isEqualTo("Description 8" + " ok".repeat(100));
+            assertThat(reported).containsKeys("model", "provider", "temperature").doesNotContainKey(ReportedParams.TRUNCATED);
+        }
+
+        @Test
+        @DisplayName("with no content configured the prompt IS the content: `content` reports that same text, whole")
+        void promptStandingInForContentIsReportedOnce() {
+            AgentNode node = node(classify(Map.of(), List.of(Map.of("label", "billing", "description", "B"))));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class))).thenReturn(classifiedAsBilling());
+
+            Map<String, Object> reported = reported(node.execute(context));
+
+            assertThat(reported.get("prompt")).isEqualTo(longPrompt);
+            // Kept, equal to the prompt: {{core:<label>.input.content}} is read by existing workflows.
+            assertThat(reported.get("content")).isEqualTo(reported.get("prompt"));
+        }
+
+        @Test
+        @DisplayName("a separately configured content is reported whole beside the prompt")
+        void separateContentIsReportedWhole() {
+            String email = "Dear team," + " please help with my invoice.".repeat(200);
+            AgentNode node = node(classify(Map.of("content", email),
+                List.of(Map.of("label", "billing", "description", "B"))));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class))).thenReturn(classifiedAsBilling());
+
+            Map<String, Object> reported = reported(node.execute(context));
+
+            assertThat(reported.get("content")).isEqualTo(email);
+            assertThat(reported.get("prompt")).isEqualTo(longPrompt);
+        }
+
+        @Test
+        @DisplayName("an agent's system prompt and prompt are reported whole, and do not push its settings off the row")
+        void agentPromptsAreReportedWhole() {
+            String systemPrompt = "You are a careful analyst." + " Be precise.".repeat(2_000);
+            Agent agent = new Agent(
+                "agent-1", "agent", "Data Analyzer", null, null,
+                "openai", "gpt-4o", systemPrompt, longPrompt,
+                0.7, 4096, 10, 5, List.of(), null,
+                Map.of(), List.of(), null, List.of(), null, null);
+            AgentNode node = new AgentNode("agent:analyzer", agent);
+            node.acceptServices(ServiceRegistry.builder()
+                .agentClient(mockAgentClient)
+                .templateAdapter(mockTemplateAdapter)
+                .build());
+            when(mockTemplateAdapter.resolveTemplates(any(), any())).thenAnswer(inv -> inv.getArgument(0));
+            when(mockAgentClient.executeAgent(any(AgentExecutionRequestDto.class))).thenReturn(createSuccessResponse());
+
+            Map<String, Object> reported = reported(node.execute(context));
+
+            assertThat(systemPrompt.length()).isGreaterThan(20_000);
+            assertThat(reported.get("systemPrompt")).isEqualTo(systemPrompt);
+            assertThat(reported.get("prompt")).isEqualTo(longPrompt);
+            assertThat(reported).containsKeys("model", "provider", "temperature", "maxTokens")
+                .doesNotContainKey(ReportedParams.TRUNCATED);
+        }
+    }
+
+    /**
+     * Two rules that bound "reported whole": a workspace variable stays withheld inside the
+     * text, and a classify content the prompt already embeds is sent (and reported) once.
+     */
+    @Nested
+    @DisplayName("Params: workspace variables withheld, embedded content sent once")
+    class ModelInputMaskingAndEmbedding {
+
+        private static final String BODY = "Hello, my invoice #42 is wrong and I need a refund.";
+        private static final String SECRET_VALUE = "sk-live-SECRET-123";
+
+        /** A resolver that substitutes each known {{...}} inside any string, like the engine does. */
+        private Map<String, Object> substitute(Map<String, Object> input) {
+            Map<String, String> tokens = Map.of(
+                "{{trigger:start.output.body}}", BODY,
+                "{{$vars.api_key}}", SECRET_VALUE);
+            Map<String, Object> out = new HashMap<>();
+            input.forEach((k, v) -> {
+                if (v instanceof String s) {
+                    for (Map.Entry<String, String> t : tokens.entrySet()) {
+                        s = s.replace(t.getKey(), t.getValue());
+                    }
+                    out.put(k, s);
+                } else {
+                    out.put(k, v);
+                }
+            });
+            return out;
+        }
+
+        private AgentNode node(Agent agent) {
+            AgentNode node = new AgentNode("agent:node", agent);
+            node.acceptServices(ServiceRegistry.builder()
+                .agentClient(mockAgentClient)
+                .templateAdapter(mockTemplateAdapter)
+                .build());
+            // Lenient: one test replaces it with a resolver that references nothing.
+            lenient().when(mockTemplateAdapter.resolveTemplates(any(), any())).thenAnswer(inv -> substitute(inv.getArgument(0)));
+            return node;
+        }
+
+        private Agent agentOf(String type, String systemPrompt, String prompt, Map<String, Object> params,
+                              List<Map<String, Object>> categories, List<Map<String, Object>> rules) {
+            return new Agent(
+                "agent-1", type, "Node", null, null,
+                "openai", "gpt-4o", systemPrompt, prompt,
+                0.2, 4096, 10, 5, List.of(), null,
+                params, categories, null, rules, null, null);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> reported(NodeExecutionResult result) {
+            return (Map<String, Object>) result.output().get("resolved_params");
+        }
+
+        private ClassifyRequestDto sentClassify() {
+            ArgumentCaptor<ClassifyRequestDto> captor = ArgumentCaptor.forClass(ClassifyRequestDto.class);
+            verify(mockAgentClient).executeClassify(captor.capture());
+            return captor.getValue();
+        }
+
+        @Test
+        @DisplayName("SECURITY: a {{$vars.x}} in a classify prompt is withheld in the report, the rest of the prompt shown; the model still gets the value")
+        void workspaceVariableInPromptIsWithheld() {
+            AgentNode node = node(agentOf("classify", null,
+                "Use key {{$vars.api_key}} to classify {{trigger:start.output.body}}", Map.of(),
+                List.of(Map.of("label", "billing", "description", "Money")), List.of()));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class))).thenReturn(classifiedAsBilling());
+
+            Map<String, Object> reported = reported(node.execute(context));
+
+            assertThat((String) reported.get("prompt"))
+                .isEqualTo("Use key " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE + " to classify " + BODY)
+                .doesNotContain(SECRET_VALUE);
+            assertThat(sentClassify().prompt()).contains(SECRET_VALUE);
+        }
+
+        @Test
+        @DisplayName("SECURITY: a {{$vars.x}} in an agent system prompt is withheld in the report")
+        void workspaceVariableInSystemPromptIsWithheld() {
+            AgentNode node = node(agentOf("agent", "Auth with {{$vars.api_key}}. Be precise.", "Go",
+                Map.of(), List.of(), List.of()));
+            when(mockAgentClient.executeAgent(any(AgentExecutionRequestDto.class))).thenReturn(createSuccessResponse());
+
+            Map<String, Object> reported = reported(node.execute(context));
+
+            assertThat((String) reported.get("systemPrompt"))
+                .isEqualTo("Auth with " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE + ". Be precise.");
+        }
+
+        @Test
+        @DisplayName("SECURITY: a {{$vars.x}} in a category description or a configured content is withheld in the report")
+        void workspaceVariableInDescriptionAndContentIsWithheld() {
+            AgentNode node = node(agentOf("classify", null, "Route this",
+                Map.of("content", "Token {{$vars.api_key}}: {{trigger:start.output.body}}"),
+                List.of(Map.of("label", "billing", "description", "Key {{$vars.api_key}}")), List.of()));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class))).thenReturn(classifiedAsBilling());
+
+            Map<String, Object> reported = reported(node.execute(context));
+
+            assertThat((String) reported.get("content"))
+                .isEqualTo("Token " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE + ": " + BODY);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> categories = (List<Map<String, Object>>) reported.get("categories");
+            assertThat(categories.get(0).get("description"))
+                .isEqualTo("Key " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE);
+        }
+
+        @Test
+        @DisplayName("BUG: a content the prompt already embeds is sent ONCE, as the prompt; the report keeps it as the content")
+        void embeddedContentIsSentOnce() {
+            AgentNode node = node(agentOf("classify", null,
+                "Classify this email: {{trigger:start.output.body}}",
+                Map.of("content", "{{trigger:start.output.body}}"),
+                List.of(Map.of("label", "billing", "description", "Money")), List.of()));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class))).thenReturn(classifiedAsBilling());
+
+            Map<String, Object> reported = reported(node.execute(context));
+
+            ClassifyRequestDto sent = sentClassify();
+            assertThat(sent.prompt()).isEqualTo("Classify this email: " + BODY);
+            assertThat(sent.content()).isEqualTo(sent.prompt());
+            // Kept, and still the CONTENT: {{core:<label>.input.content}} reads what it always read.
+            assertThat(reported.get("content")).isEqualTo(BODY);
+        }
+
+        @Test
+        @DisplayName("an embedded content that resolves to nothing still FAILS the node, never classifies a prompt with a hole")
+        void embeddedContentResolvingToNothingFails() {
+            AgentNode node = node(agentOf("classify", null,
+                "Classify: {{core:missing.output.text}}",
+                Map.of("content", "{{core:missing.output.text}}"),
+                List.of(Map.of("label", "billing", "description", "Money")), List.of()));
+            Map<String, Object> nothing = new HashMap<>();
+            nothing.put("{{core:missing.output.text}}", null);
+            // doAnswer, not when(): re-stubbing with when() calls the previous answer with nulls.
+            doAnswer(inv -> resolveEach(inv.getArgument(0), nothing))
+                .when(mockTemplateAdapter).resolveTemplates(any(), any());
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isFailure());
+            verify(mockAgentClient, never()).executeClassify(any(ClassifyRequestDto.class));
+        }
+
+        @Test
+        @DisplayName("a LITERAL content that merely occurs in the prompt is still sent as the content (templates decide, not text)")
+        void literalContentOccurringInPromptIsStillSent() {
+            AgentNode node = node(agentOf("classify", null, "Is this about billing or support?",
+                Map.of("content", "billing"),
+                List.of(Map.of("label", "billing", "description", "Money")), List.of()));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class))).thenReturn(classifiedAsBilling());
+
+            node.execute(context);
+
+            assertThat(sentClassify().content()).isEqualTo("billing");
+        }
+
+        @Test
+        @DisplayName("guardrail: rules reported whole, and content reported as the prompt that stood in for it")
+        void guardrailReportsRulesWholeAndNoDuplicateContent() {
+            String longRule = "Never reveal internal data." + " Be strict.".repeat(300);
+            AgentNode node = node(agentOf("guardrail", null, "Check this reply: {{trigger:start.output.body}}",
+                Map.of("action", "flag"), List.of(),
+                List.of(Map.of("id", "no_leak", "description", longRule))));
+            when(mockAgentClient.executeGuardrail(any(GuardrailRequestDto.class))).thenReturn(
+                new GuardrailResponseDto(true, true, List.of(), Map.of(), null,
+                    null, 10L, "openai", "gpt-4o", 1, 1, 0, null, null, null));
+
+            Map<String, Object> reported = reported(node.execute(context));
+
+            assertThat(reported.get("prompt")).isEqualTo("Check this reply: " + BODY);
+            // Kept, equal to the prompt: {{core:<label>.input.content}} is read by existing workflows.
+            assertThat(reported.get("content")).isEqualTo(reported.get("prompt"));
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rules = (List<Map<String, Object>>) reported.get("rules");
+            assertThat(rules.get(0).get("description")).isEqualTo(longRule);
+        }
+    }
+
+    @Nested
+    @DisplayName("Params and requests: the remaining shapes of 'one text, sent once'")
+    class OneTextSentOnce {
+
+        private static final String BODY = "Please refund order 42.";
+        private static final String SECRET_VALUE = "sk-live-SECRET-456";
+
+        private Map<String, Object> substitute(Map<String, Object> input) {
+            Map<String, String> tokens = Map.of(
+                "{{trigger:start.output.body}}", BODY,
+                "{{ trigger:start.output.body }}", BODY,
+                "{{$vars.api_key}}", SECRET_VALUE);
+            Map<String, Object> out = new HashMap<>();
+            input.forEach((k, v) -> {
+                if (v instanceof String s) {
+                    for (Map.Entry<String, String> t : tokens.entrySet()) {
+                        s = s.replace(t.getKey(), t.getValue());
+                    }
+                    out.put(k, s);
+                } else {
+                    out.put(k, v);
+                }
+            });
+            return out;
+        }
+
+        private AgentNode node(Agent agent) {
+            AgentNode node = new AgentNode("agent:node", agent);
+            node.acceptServices(ServiceRegistry.builder()
+                .agentClient(mockAgentClient)
+                .templateAdapter(mockTemplateAdapter)
+                .build());
+            when(mockTemplateAdapter.resolveTemplates(any(), any())).thenAnswer(inv -> substitute(inv.getArgument(0)));
+            return node;
+        }
+
+        private Agent agentOf(String type, String prompt, Map<String, Object> params,
+                              List<Map<String, Object>> categories, List<Map<String, Object>> rules) {
+            return new Agent(
+                "agent-1", type, "Node", null, null,
+                "openai", "gpt-4o", null, prompt,
+                0.2, 4096, 10, 5, List.of(), null,
+                params, categories, null, rules, null, null);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> reported(NodeExecutionResult result) {
+            return (Map<String, Object>) result.output().get("resolved_params");
+        }
+
+        private GuardrailResponseDto passed() {
+            return new GuardrailResponseDto(true, true, List.of(), Map.of(), null,
+                null, 10L, "openai", "gpt-4o", 1, 1, 0, null, null, null);
+        }
+
+        @Test
+        @DisplayName("BUG: an embedded content spelled with spaces inside the braces is still recognised, and sent once")
+        void embeddedContentWithSpacesIsSentOnce() {
+            AgentNode node = node(agentOf("classify", "Classify this: {{ trigger:start.output.body }}",
+                Map.of("content", "{{trigger:start.output.body}}"),
+                List.of(Map.of("label", "billing", "description", "Money")), List.of()));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class))).thenReturn(classifiedAsBilling());
+
+            node.execute(context);
+
+            ArgumentCaptor<ClassifyRequestDto> captor = ArgumentCaptor.forClass(ClassifyRequestDto.class);
+            verify(mockAgentClient).executeClassify(captor.capture());
+            assertThat(captor.getValue().content()).isEqualTo(captor.getValue().prompt());
+        }
+
+        @Test
+        @DisplayName("a configured content that resolves to the same text as the prompt is reported as that text")
+        void contentEqualToPromptIsReportedOnce() {
+            AgentNode node = node(agentOf("classify", BODY,
+                Map.of("content", "{{trigger:start.output.body}}"),
+                List.of(Map.of("label", "billing", "description", "Money")), List.of()));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class))).thenReturn(classifiedAsBilling());
+
+            Map<String, Object> reported = reported(node.execute(context));
+
+            assertThat(reported.get("prompt")).isEqualTo(BODY);
+            // Kept, equal to the prompt: {{core:<label>.input.content}} is read by existing workflows.
+            assertThat(reported.get("content")).isEqualTo(reported.get("prompt"));
+        }
+
+        @Test
+        @DisplayName("BUG: a guardrail with no content sends the prompt as the content, the SAME string, so the worker sends it once")
+        void guardrailWithoutContentSendsOneString() {
+            AgentNode node = node(agentOf("guardrail", "Check this reply: {{trigger:start.output.body}}",
+                Map.of("action", "flag"), List.of(),
+                List.of(Map.of("id", "no_leak", "description", "No internal data"))));
+            when(mockAgentClient.executeGuardrail(any(GuardrailRequestDto.class))).thenReturn(passed());
+
+            node.execute(context);
+
+            ArgumentCaptor<GuardrailRequestDto> captor = ArgumentCaptor.forClass(GuardrailRequestDto.class);
+            verify(mockAgentClient).executeGuardrail(captor.capture());
+            assertThat(captor.getValue().content()).isEqualTo("Check this reply: " + BODY);
+            assertThat(captor.getValue().distinctPrompt()).isNull();
+        }
+
+        @Test
+        @DisplayName("SECURITY: a {{$vars.x}} in a guardrail rule description is withheld in the report")
+        void workspaceVariableInRuleDescriptionIsWithheld() {
+            AgentNode node = node(agentOf("guardrail", "Check: {{trigger:start.output.body}}",
+                Map.of("action", "flag"), List.of(),
+                List.of(Map.of("id", "no_key", "description", "Never print {{$vars.api_key}}"))));
+            when(mockAgentClient.executeGuardrail(any(GuardrailRequestDto.class))).thenReturn(passed());
+
+            Map<String, Object> reported = reported(node.execute(context));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rules = (List<Map<String, Object>>) reported.get("rules");
+            assertThat(rules.get(0).get("description"))
+                .isEqualTo("Never print " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE);
+        }
+    }
+
+    @Nested
+    @DisplayName("Resolved once, and never leaked through the content that stood in for the prompt")
+    class ResolvedOnceAndMaskedContent {
+
+        private AgentNode node(Agent agent) {
+            AgentNode node = new AgentNode("agent:node", agent);
+            node.acceptServices(ServiceRegistry.builder()
+                .agentClient(mockAgentClient)
+                .templateAdapter(mockTemplateAdapter)
+                .build());
+            return node;
+        }
+
+        private Agent agentOf(String type, String prompt, Map<String, Object> params, List<Map<String, Object>> rules) {
+            return new Agent(
+                "agent-1", type, "Node", null, null,
+                "openai", "gpt-4o", null, prompt,
+                0.2, 4096, 10, 5, List.of(), null,
+                params, List.of(Map.of("label", "billing", "description", "Money")), null, rules, null, null);
+        }
+
+        /** Every call resolves {{clock}} to a NEW value, like a timestamp or a random id would. */
+        private void clockResolver() {
+            java.util.concurrent.atomic.AtomicInteger tick = new java.util.concurrent.atomic.AtomicInteger();
+            when(mockTemplateAdapter.resolveTemplates(any(), any())).thenAnswer(inv -> {
+                Map<String, Object> out = new HashMap<>();
+                ((Map<String, Object>) inv.getArgument(0)).forEach((k, v) -> out.put(k,
+                    v instanceof String s ? s.replace("{{clock}}", "t" + tick.incrementAndGet()) : v));
+                return out;
+            });
+        }
+
+        @Test
+        @DisplayName("BUG: classify with no content sends ONE resolution as prompt and content, even for a template that changes per call")
+        void classifyResolvesThePromptOnce() {
+            clockResolver();
+            AgentNode node = node(agentOf("classify", "Sent at {{clock}}", Map.of(), List.of()));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class))).thenReturn(classifiedAsBilling());
+
+            node.execute(context);
+
+            ArgumentCaptor<ClassifyRequestDto> captor = ArgumentCaptor.forClass(ClassifyRequestDto.class);
+            verify(mockAgentClient).executeClassify(captor.capture());
+            assertThat(captor.getValue().content()).isEqualTo(captor.getValue().prompt());
+            assertThat(captor.getValue().distinctPrompt()).isNull();
+        }
+
+        @Test
+        @DisplayName("BUG: guardrail with no content sends ONE resolution as prompt and content, even for a template that changes per call")
+        void guardrailResolvesThePromptOnce() {
+            clockResolver();
+            AgentNode node = node(agentOf("guardrail", "Checked at {{clock}}", Map.of("action", "flag"),
+                List.of(Map.of("id", "no_leak", "description", "No internal data"))));
+            when(mockAgentClient.executeGuardrail(any(GuardrailRequestDto.class))).thenReturn(
+                new GuardrailResponseDto(true, true, List.of(), Map.of(), null,
+                    null, 10L, "openai", "gpt-4o", 1, 1, 0, null, null, null));
+
+            node.execute(context);
+
+            ArgumentCaptor<GuardrailRequestDto> captor = ArgumentCaptor.forClass(GuardrailRequestDto.class);
+            verify(mockAgentClient).executeGuardrail(captor.capture());
+            assertThat(captor.getValue().content()).isEqualTo(captor.getValue().prompt());
+        }
+
+        @Test
+        @DisplayName("SECURITY: with no content configured, the reported content is the MASKED prompt, never the variable in clear")
+        void contentStandingInForThePromptIsMasked() {
+            when(mockTemplateAdapter.resolveTemplates(any(), any())).thenAnswer(inv -> {
+                Map<String, Object> out = new HashMap<>();
+                ((Map<String, Object>) inv.getArgument(0)).forEach((k, v) -> out.put(k,
+                    v instanceof String s ? s.replace("{{$vars.api_key}}", "sk-live-LEAK") : v));
+                return out;
+            });
+            AgentNode node = node(agentOf("classify", "Key {{$vars.api_key}}", Map.of(), List.of()));
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class))).thenReturn(classifiedAsBilling());
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> reported = (Map<String, Object>) node.execute(context).output().get("resolved_params");
+
+            assertThat(reported.get("content")).isEqualTo("Key " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE);
+            assertThat(reported.toString()).doesNotContain("sk-live-LEAK");
+        }
+    }
+
+    @Nested
+    @DisplayName("Params: an agent's own template params")
+    class AgentTemplateParams {
+
+        @Test
+        @DisplayName("SECURITY: a template param pulling a workspace variable is masked, the others reported resolved")
+        void workspaceVariableParamIsMasked() {
+            Map<String, Object> params = new HashMap<>();
+            params.put("customer", "{{trigger:start.output.name}}");
+            params.put("api_hint", "Key {{$vars.crm_token}}");
+            params.put("retries", "{{$vars.retry_count}}");
+            Agent agent = new Agent(
+                "agent-1", "agent", "Data Analyzer", null, null,
+                "openai", "gpt-4o", null, "Summarise",
+                0.7, 4096, 10, 5, List.of(), null,
+                params, List.of(), null, List.of(), null, null);
+            AgentNode node = new AgentNode("agent:analyzer", agent);
+            node.acceptServices(ServiceRegistry.builder()
+                .agentClient(mockAgentClient)
+                .templateAdapter(mockTemplateAdapter)
+                .build());
+            when(mockTemplateAdapter.resolveTemplates(any(), any())).thenAnswer(inv -> {
+                Map<String, Object> out = new HashMap<>();
+                ((Map<String, Object>) inv.getArgument(0)).forEach((k, v) -> {
+                    if (v instanceof String s) {
+                        if (s.equals("{{$vars.retry_count}}")) {
+                            out.put(k, 3);
+                            return;
+                        }
+                        s = s.replace("{{trigger:start.output.name}}", "Ada").replace("{{$vars.crm_token}}", "crm-SECRET");
+                        out.put(k, s);
+                    } else {
+                        out.put(k, v);
+                    }
+                });
+                return out;
+            });
+            when(mockAgentClient.executeAgent(any(AgentExecutionRequestDto.class))).thenReturn(createSuccessResponse());
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> reported = (Map<String, Object>) node.execute(context).output().get("resolved_params");
+
+            assertThat(reported.get("customer")).isEqualTo("Ada");
+            assertThat(reported.get("api_hint")).isEqualTo("Key " + ReportedParams.WITHHELD_WORKSPACE_VARIABLE);
+            assertThat(reported.get("retries")).isEqualTo(ReportedParams.WITHHELD_WORKSPACE_VARIABLE);
+            assertThat(reported.toString()).doesNotContain("crm-SECRET");
+        }
+    }
+
+    @Nested
+    @DisplayName("Params: an agent's structured template param")
+    class AgentStructuredTemplateParam {
+
+        @Test
+        @DisplayName("SECURITY: a map param with a workspace variable in a leaf is described by shape, never in clear")
+        void structuredParamWithVariableIsNotInClear() {
+            Map<String, Object> params = new HashMap<>();
+            params.put("crm", Map.of("user", "svc", "region", "{{$vars.crm_region}}"));
+            Agent agent = new Agent(
+                "agent-1", "agent", "Data Analyzer", null, null,
+                "openai", "gpt-4o", null, "Summarise",
+                0.7, 4096, 10, 5, List.of(), null,
+                params, List.of(), null, List.of(), null, null);
+            AgentNode node = new AgentNode("agent:analyzer", agent);
+            node.acceptServices(ServiceRegistry.builder()
+                .agentClient(mockAgentClient)
+                .templateAdapter(mockTemplateAdapter)
+                .build());
+            when(mockTemplateAdapter.resolveTemplates(any(), any())).thenAnswer(inv -> {
+                Map<String, Object> out = new HashMap<>((Map<String, Object>) inv.getArgument(0));
+                out.put("crm", Map.of("user", "svc", "region", "crm-SECRET"));
+                return out;
+            });
+            when(mockAgentClient.executeAgent(any(AgentExecutionRequestDto.class))).thenReturn(createSuccessResponse());
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> reported = (Map<String, Object>) node.execute(context).output().get("resolved_params");
+
+            assertThat(reported.toString()).doesNotContain("crm-SECRET");
+            assertThat(String.valueOf(reported.get("crm"))).startsWith("Map(keys=[");
+        }
     }
 }

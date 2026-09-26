@@ -64,6 +64,10 @@ public class AvatarGenerationService {
     @Autowired(required = false)
     private com.apimarketplace.agent.service.ModelExecutionLinkService executionLinkService;
 
+    /** Swaps a disabled model for its replacement (V515); null in unit tests = no swap. */
+    @Autowired(required = false)
+    private com.apimarketplace.agent.service.ModelReplacementResolver modelReplacementResolver;
+
     public AvatarGenerationService(ProviderLlmJsonInvoker jsonInvoker,
                                    LLMProviderFactory providerFactory,
                                    @Autowired(required = false) RuntimeLlmProviderResolver providerResolver,
@@ -100,6 +104,15 @@ public class AvatarGenerationService {
                 ? model : defaultModelOf(effectiveProvider);
         if (effectiveModel == null) {
             throw new IllegalStateException("No default model available for provider " + effectiveProvider);
+        }
+
+        // A model an admin disabled runs on its replacement (V515), before the link lookup.
+        if (modelReplacementResolver != null) {
+            var sub = modelReplacementResolver.substituteIfDisabled(effectiveProvider, effectiveModel).orElse(null);
+            if (sub != null) {
+                effectiveProvider = sub.provider();
+                effectiveModel = sub.model();
+            }
         }
 
         // Honor model execution links (CLOUD): an admin routing a billed model to a
@@ -167,8 +180,18 @@ public class AvatarGenerationService {
         } catch (IllegalArgumentException bridgeNotRelayable) {
             logger.info("Avatar gen: {}/{} routes to a CLI bridge; falling back to the platform utility model {}/{}",
                     provider, model, utilityProvider, utilityModel);
+            String fallbackProvider = utilityProvider;
+            String fallbackModel = utilityModel;
+            // The utility model can be disabled too: same swap as the requested pair.
+            if (modelReplacementResolver != null) {
+                var sub = modelReplacementResolver.substituteIfDisabled(fallbackProvider, fallbackModel).orElse(null);
+                if (sub != null) {
+                    fallbackProvider = sub.provider();
+                    fallbackModel = sub.model();
+                }
+            }
             try {
-                return executionLinkService.resolveSingleCompletionTarget(utilityProvider, utilityModel);
+                return executionLinkService.resolveSingleCompletionTarget(fallbackProvider, fallbackModel);
             } catch (IllegalArgumentException utilityAlsoBridged) {
                 throw new IllegalStateException("No API-capable model available for avatar generation"
                         + " (both the default and the utility model route to a CLI bridge)");

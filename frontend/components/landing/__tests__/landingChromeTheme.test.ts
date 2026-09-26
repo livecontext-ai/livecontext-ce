@@ -23,7 +23,7 @@ const globalsCssSrc = readFileSync(
 // <img> behind every brand mark on the public site, both the landing's integrations strip
 // and its "what you can build" cards, and the /integrations directory through
 // IntegrationLogo, which only binds a catalogue record onto it. Reading IntegrationLogo
-// alone would pass while the mark itself lost logo-mono.
+// alone would pass while the mark itself lost its dark-theme file.
 const brandMarkSrc = readFileSync(
   path.resolve(__dirname, '../../integrations/BrandMark.tsx'),
   'utf8',
@@ -106,13 +106,13 @@ describe('public-site self-contained theme contract', () => {
     expect(landingPageSrc).not.toMatch(/dark:text-slate-100/); // feature-node icon
     expect(landingPageSrc).toMatch(/feature-node-icon/);
 
-    // Mono brand logos. `monoDarkInvertClass` is the body-`dark:` utility and must appear
-    // in NEITHER: on the public site the theme lives on `.landing-root`, so a body-scoped
-    // utility silently never fires.
-    for (const src of [landingPageSrc, brandMarkSrc]) {
-      expect(src).not.toMatch(/monoDarkInvertClass/);
+    // Dark brand marks. They are drawn by ServiceLogo, whose `.svc-logo-*` rules read the
+    // `.dark` ancestor exactly like the `dark` variant (so `.landing-root.dark` drives them),
+    // never by a CSS filter that would recolour the brand.
+    expect(brandMarkSrc).toMatch(/<ServiceLogo/);
+    for (const src of [landingPageSrc, brandMarkSrc, shellSrc]) {
+      expect(src).not.toMatch(/logo-mono|monoDarkInvertClass/);
     }
-    expect(brandMarkSrc).toMatch(/logo-mono/);
   });
 });
 

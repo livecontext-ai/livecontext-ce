@@ -72,7 +72,10 @@ services:
           memory: 384M
 
   minio:
-    image: quay.io/minio/minio:latest
+    # MinIO no longer publishes pullable images (Docker Hub and Quay both refuse anonymous pulls
+    # since 2026-09), so this is Pigsty's maintained build of the same MinIO server: same data
+    # format, entrypoint and root user, and it reads a volume written by the upstream image.
+    image: pgsty/minio:latest
     container_name: livecontext-minio
     restart: unless-stopped
     environment:
@@ -93,7 +96,7 @@ services:
           memory: 256M
 
   minio-init:
-    image: quay.io/minio/mc:latest
+    image: pgsty/mc:latest
     container_name: livecontext-minio-init
     depends_on:
       minio:
@@ -193,6 +196,9 @@ services:
       # network request and works offline; it is shown once per user and never replays older
       # entries. Set CHANGELOG_ENABLED=false to remove it entirely (no panel, no sidebar entry).
       CHANGELOG_ENABLED: ${CHANGELOG_ENABLED:-true}
+      # Signing secret of your Slack app, only if you connect Slack as a chat channel: without it
+      # every Slack button press is refused, because who pressed cannot be verified.
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
       # Browser agent (agent_browse) - OFF by default. Opt in with the
       # `browser-agent` profile + WEBSEARCH_ENABLED=true (both set by
       # docker/.env.ce.browser-agent). When enabled, the orchestrator talks to

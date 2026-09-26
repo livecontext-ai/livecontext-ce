@@ -52,7 +52,7 @@ afterEach(() => {
 });
 
 describe('what a brand-new account is shown after onboarding', () => {
-  it('names the plan and both of its monthly pots, with a figure on each', () => {
+  it('names the plan and its one monthly pool, with its figure and what it pays for', () => {
     armWelcomeGift();
 
     renderGift();
@@ -63,20 +63,17 @@ describe('what a brand-new account is shown after onboarding', () => {
     // choosing a plan, it is finding out what the one it has gives it.
     expect(modal.textContent).toContain('Free plan');
 
-    // The two pots, each with its own figure. A screen that named only the
-    // workflow credits reads as "chat spends your credits too", which is the
-    // opposite of what happens and the exact question the reader has.
+    // One pool: the monthly credits pay for workflows AND for chat and agents on
+    // the models marked Free. The separate AI credits row is gone.
     const credits = screen.getByTestId('welcome-gift-credits');
-    expect(credits.textContent).toContain('Workflow credits');
+    expect(credits.textContent).toContain('Monthly credits');
     expect(credits.textContent).toContain('1,000');
-
-    const aiCredits = screen.getByTestId('welcome-gift-ai-credits');
-    expect(aiCredits.textContent).toContain('AI credits');
-    expect(aiCredits.textContent).toContain('100');
-
-    // And what each one is FOR, since the two are not interchangeable.
     expect(credits.textContent).toContain('workflows');
-    expect(aiCredits.textContent).toContain('chat and agent');
+    expect(credits.textContent).toContain('chat and agent');
+    expect(credits.textContent).toContain('Free');
+
+    expect(screen.queryByTestId('welcome-gift-ai-credits')).toBeNull();
+    expect(modal.textContent).not.toMatch(/AI credits|AI allowance/);
   });
 
   it('quotes the same workflow grant the rest of the product quotes', () => {

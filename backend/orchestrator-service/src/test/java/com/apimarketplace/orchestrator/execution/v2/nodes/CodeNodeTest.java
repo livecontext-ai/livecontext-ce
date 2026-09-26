@@ -845,4 +845,78 @@ class CodeNodeTest {
             assertTrue(sentCode.contains("\"triggeredAt\""), "Should contain trigger data directly");
         }
     }
+
+    @Test
+    @DisplayName("a failure AFTER the code resolved measures the RESOLVED code; it used to measure the {{...}} template")
+    @SuppressWarnings("unchecked")
+    void failureAfterResolutionMeasuresResolvedCode() throws Exception {
+        String resolvedCode = "console.log('a much longer script than its template');";
+        CodeNode node = new CodeNode("core:code", new Core.CodeConfig("javascript", "{{core:gen.output.script}}", 10));
+        node.setCodeExecutor(mockCodeExecutor);
+        com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+            org.mockito.Mockito.mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+        Map<String, Object> values = new HashMap<>();
+        values.put("{{core:gen.output.script}}", resolvedCode);
+        org.mockito.Mockito.when(adapter.resolveTemplates(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+            .thenAnswer(TemplateResolutionStubs.resolving(values));
+        node.setTemplateAdapter(adapter);
+        org.mockito.Mockito.when(mockCodeExecutor.execute(org.mockito.ArgumentMatchers.any()))
+            .thenThrow(new IllegalStateException("sandbox unavailable"));
+
+        NodeExecutionResult result = node.execute(context);
+
+        assertFalse(result.isSuccess());
+        Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+        assertEquals(resolvedCode.length(), params.get("codeLength"));
+    }
+
+    @org.junit.jupiter.api.Nested
+    @DisplayName("templated timeoutSeconds")
+    class DeferredTimeout {
+
+        private CodeNode nodeWithTemplatedTimeout(Object resolvesTo) {
+            CodeNode node = new CodeNode("core:code", new Core.CodeConfig("javascript", "return 1;", 10));
+            node.setCodeExecutor(mockCodeExecutor);
+            node.setDeferredScalars(Map.of("code", Map.of("timeoutSeconds", "{{core:x.output.n}}")));
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            Map<String, Object> values = new HashMap<>();
+            values.put("{{core:x.output.n}}", resolvesTo);
+            org.mockito.Mockito.lenient().when(adapter.resolveTemplates(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(TemplateResolutionStubs.resolving(values));
+            node.setTemplateAdapter(adapter);
+            return node;
+        }
+
+        @Test
+        @DisplayName("a {{...}} timeoutSeconds runs with the resolved value, not the typed default")
+        @SuppressWarnings("unchecked")
+        void templatedTimeoutIsResolved() throws Exception {
+            CodeNode node = nodeWithTemplatedTimeout(30);
+            org.mockito.ArgumentCaptor<com.apimarketplace.orchestrator.services.code.CodeExecutor.CodeRequest> request =
+                org.mockito.ArgumentCaptor.forClass(com.apimarketplace.orchestrator.services.code.CodeExecutor.CodeRequest.class);
+            org.mockito.Mockito.when(mockCodeExecutor.execute(request.capture()))
+                .thenThrow(new IllegalStateException("stop after capture"));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals(30_000, request.getValue().runTimeoutMs());
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals(30, params.get("timeoutSeconds"));
+        }
+
+        @Test
+        @DisplayName("a {{...}} timeoutSeconds that is not a number fails the node instead of running on the default")
+        void nonNumericTemplatedTimeoutFails() throws Exception {
+            CodeNode node = nodeWithTemplatedTimeout("abc");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.isSuccess());
+            String message = result.errorMessage().orElse("");
+            assertTrue(message.contains("code") && message.contains("abc"), message);
+            org.mockito.Mockito.verify(mockCodeExecutor, org.mockito.Mockito.never())
+                .execute(org.mockito.ArgumentMatchers.any());
+        }
+    }
 }

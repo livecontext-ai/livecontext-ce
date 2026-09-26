@@ -17,7 +17,10 @@ export type BadgeFamily =
   | 'SHIPPER'
   | 'PUBLISHER'
   | 'SHARER'
-  | 'POPULARITY';
+  | 'POPULARITY'
+  | 'REACHABLE'
+  | 'MULTICHANNEL'
+  | 'REMOTE_CONTROL';
 
 /** Visual rank. Mirrors the backend `BadgeTier` enum, weakest first. */
 export type BadgeTier = 'BRONZE' | 'SILVER' | 'GOLD' | 'PLATINUM' | 'DIAMOND';
@@ -35,7 +38,10 @@ export type BadgeMetric =
   | 'WORKFLOWS_PINNED'
   | 'PUBLICATIONS_PUBLISHED'
   | 'PUBLICATIONS_PUBLIC'
-  | 'PUBLICATION_USES';
+  | 'PUBLICATION_USES'
+  | 'CHANNELS_CONNECTED'
+  | 'CHANNEL_SERVICES'
+  | 'REMOTE_DECISIONS';
 
 /** One badge plus the viewer's standing against it. Mirrors backend `BadgeView`. */
 export interface Badge {

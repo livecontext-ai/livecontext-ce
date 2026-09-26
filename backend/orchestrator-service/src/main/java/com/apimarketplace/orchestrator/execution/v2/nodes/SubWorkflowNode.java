@@ -129,8 +129,9 @@ public class SubWorkflowNode extends BaseNode {
         if (rawWorkflowId != null) resolvedParams.put("workflowId", rawWorkflowId);
         if (config != null) {
             if (config.inputMapping() != null) resolvedParams.put("inputMapping", config.inputMapping());
-            resolvedParams.put("timeoutSeconds", config.timeoutSeconds());
-            resolvedParams.put("maxDepth", config.maxDepth());
+            // A setting the plan wrote as {{...}} is reported as that template until it resolves.
+            resolvedParams.put("timeoutSeconds", configuredOr("timeoutSeconds", config.timeoutSeconds()));
+            resolvedParams.put("maxDepth", configuredOr("maxDepth", config.maxDepth()));
             if (config.triggerId() != null) resolvedParams.put("triggerId", config.triggerId());
         }
         // Through the gate once, here, rather than at each of the exits below: the
@@ -139,9 +140,17 @@ public class SubWorkflowNode extends BaseNode {
         resolvedParams = ReportedParams.forReport(resolvedParams);
 
         try {
+            // timeoutSeconds / maxDepth written as {{...}}: resolved here, never the default the
+            // typed config fell back to. The config's own clamps apply to the resolved value.
+            Core.SubWorkflowConfig cfg = withDeferredScalars("subWorkflow", config, Core.SubWorkflowConfig.class, context);
+            if (cfg != null) {
+                resolvedParams.put("timeoutSeconds", reported("timeoutSeconds", cfg.timeoutSeconds()));
+                resolvedParams.put("maxDepth", reported("maxDepth", cfg.maxDepth()));
+            }
+
             // 1. Anti-recursion depth guard
             int currentDepth = getCurrentDepth(context);
-            int maxDepth = config != null ? config.maxDepth() : 5;
+            int maxDepth = cfg != null ? cfg.maxDepth() : 5;
             if (currentDepth >= maxDepth) {
                 String msg = String.format(
                     "Sub-workflow recursion depth %d exceeds maximum %d", currentDepth, maxDepth);
@@ -279,6 +288,13 @@ public class SubWorkflowNode extends BaseNode {
             // by us - we only carry data, never plan-control intent).
             Map<String, Object> inputData = com.apimarketplace.orchestrator.trigger.ReusableTriggerService
                     .sanitizePlanMarker(resolveInputData(context));
+            // What the child actually receives, beside the expression that produced it (the same
+            // pair split reports as list / listResolved). Bounded by the gate: it is upstream data.
+            if (config != null && config.inputMapping() != null && !config.inputMapping().isBlank()) {
+                resolvedParams.put("inputMappingResolved",
+                    ReportedParams.valueFrom(config.inputMapping(), inputData));
+                resolvedParams = ReportedParams.forReport(resolvedParams);
+            }
             Map<String, Object> childGlobalData = buildChildSubWorkflowGlobalData(currentDepth, childAncestry);
 
             // 7. Fire trigger (bypass queue, force auto mode)
@@ -292,7 +308,7 @@ public class SubWorkflowNode extends BaseNode {
             logger.info("SubWorkflow firing trigger: nodeId={}, subRunId={}, triggerId={}, type={}",
                 nodeId, subRunId, triggerId, triggerType);
 
-            int timeoutSeconds = config != null ? config.timeoutSeconds() : 300;
+            int timeoutSeconds = cfg != null ? cfg.timeoutSeconds() : 300;
             // ONE budget for the whole call, started before the fire. timeoutSeconds is documented
             // as "maximum time to wait for the sub-workflow to complete", so it has to cover the
             // fire AND the wait for the child epoch to close below; giving the wait its own fresh
@@ -1234,20 +1250,7 @@ public class SubWorkflowNode extends BaseNode {
             return null;
         }
 
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__wfId__", rawWorkflowId);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object result = resolved.get("__wfId__");
-                return result != null ? String.valueOf(result) : rawWorkflowId;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve workflowId expression '{}': {}",
-                    rawWorkflowId, e.getMessage());
-                return rawWorkflowId;
-            }
-        }
-
-        return rawWorkflowId;
+        return resolveTemplateString(rawWorkflowId, context);
     }
 
     /**
@@ -1260,27 +1263,30 @@ public class SubWorkflowNode extends BaseNode {
             return context.triggerData() != null ? new HashMap<>(context.triggerData()) : new HashMap<>();
         }
 
-        if (templateAdapter != null) {
-            try {
-                Map<String, Object> toResolve = Map.of("__input__", inputMapping);
-                Map<String, Object> resolved = templateAdapter.resolveTemplates(toResolve, context);
-                Object result = resolved.get("__input__");
-                if (result instanceof Map) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> mapResult = (Map<String, Object>) result;
-                    return new HashMap<>(mapResult);
-                }
-                // If resolved to a string or other type, wrap it
-                Map<String, Object> wrapped = new HashMap<>();
-                wrapped.put("data", result);
-                return wrapped;
-            } catch (Exception e) {
-                logger.warn("Failed to resolve inputMapping '{}': {}", inputMapping, e.getMessage());
-            }
+        // A mapping that fails to resolve fails the node. It used to log a warning and hand the
+        // child the PARENT's trigger data instead, so the child ran green on input nobody chose.
+        Object result = resolveTemplateValue(inputMapping, context);
+        if (result instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> mapResult = (Map<String, Object>) result;
+            return new HashMap<>(mapResult);
         }
+        // If resolved to a string or other type, wrap it
+        Map<String, Object> wrapped = new HashMap<>();
+        wrapped.put("data", result);
+        return wrapped;
+    }
 
-        // Fallback: pass trigger data
-        return context.triggerData() != null ? new HashMap<>(context.triggerData()) : new HashMap<>();
+    /** The configured template for {@code field} when the plan wrote one, else {@code value}. */
+    private Object configuredOr(String field, Object value) {
+        String template = deferredScalar("subWorkflow", field);
+        return template != null ? template : value;
+    }
+
+    /** A resolved value as reported: through the workspace-variable rule when it came from a template. */
+    private Object reported(String field, Object value) {
+        String template = deferredScalar("subWorkflow", field);
+        return template != null ? ReportedParams.valueFrom(template, value) : value;
     }
 
     private Map<String, Object> buildInputDataMap(String workflowId) {

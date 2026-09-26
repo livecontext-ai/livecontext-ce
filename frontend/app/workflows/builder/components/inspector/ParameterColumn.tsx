@@ -1,9 +1,8 @@
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { Info } from 'lucide-react';
 
 import type { Node, Edge } from 'reactflow';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { InfoPopover } from '@/components/ui/info-popover';
 import { InspectorColumn } from './InspectorColumn';
 import { useConnectionProps } from './ExpressionField';
 import { useDataSourceColumns } from '../../hooks/useDataSourceData';
@@ -710,19 +709,9 @@ export const ParameterColumn = (props: ParameterColumnProps) => {
         showRightBorder={true}
         headerRight={
           <div className="flex items-center gap-1">
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
-                >
-                  <Info className="h-3 w-3 text-slate-500 dark:text-slate-400" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[min(420px,calc(100vw-32px))] max-h-[600px] overflow-y-auto p-4 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-[24px] z-[99999]" side="right" align="start">
+            <InfoPopover label={columnTitle} size="sm" side="right" align="start" contentClassName="w-[min(420px,calc(100vw-32px))] max-h-[600px] p-4 rounded-[24px]">
                 <ExpressionSyntaxGuide />
-              </PopoverContent>
-            </Popover>
+              </InfoPopover>
           </div>
         }
       >

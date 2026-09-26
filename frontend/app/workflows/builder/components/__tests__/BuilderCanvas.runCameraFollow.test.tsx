@@ -180,12 +180,44 @@ describe('BuilderCanvas camera follow', () => {
     // CURRENT nodes rather than the ones captured when it was registered, or it frames
     // an empty list for the rest of the run, silently.
     const { rerender } = render(<BuilderCanvas {...baseProps()} nodes={[]} />);
+    rerender(<BuilderCanvas {...baseProps()} />);
+    follow({ workflowId: 'wf-1', nodeIds: ['n-a'] });
+    expect(fitBounds, 'the listener was still looking at the nodes it mounted with').toHaveBeenCalledTimes(1);
+  });
+
+  it('frames a move that arrived BEFORE its nodes rendered, once they do', () => {
+    // An agent's plan sync is imported inside a transition, so the move for the nodes it
+    // just added can land before those nodes commit. Dropping it would leave the build
+    // unfollowed with the toggle reading as on.
+    const { rerender } = render(<BuilderCanvas {...baseProps()} nodes={[]} />);
     follow({ workflowId: 'wf-1', nodeIds: ['n-a'] });
     expect(fitBounds).not.toHaveBeenCalled();
 
     rerender(<BuilderCanvas {...baseProps()} />);
-    follow({ workflowId: 'wf-1', nodeIds: ['n-a'] });
-    expect(fitBounds, 'the listener was still looking at the nodes it mounted with').toHaveBeenCalledTimes(1);
+    expect(fitBounds).toHaveBeenCalledTimes(1);
+    // Applied once, not on every later render.
+    rerender(<BuilderCanvas {...baseProps()} nodes={[node('n-a', 50, 0), node('n-b', 600, 0)] as any[]} />);
+    expect(fitBounds).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a move whose nodes never came in time, rather than yanking the camera later', () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+    try {
+      const { rerender } = render(<BuilderCanvas {...baseProps()} nodes={[]} />);
+      follow({ workflowId: 'wf-1', nodeIds: ['n-a'] });
+      now.mockReturnValue(1_000 + 5_000);
+      rerender(<BuilderCanvas {...baseProps()} />);
+      expect(fitBounds).not.toHaveBeenCalled();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('never keeps a move meant for another canvas waiting for nodes', () => {
+    const { rerender } = render(<BuilderCanvas {...baseProps()} nodes={[]} />);
+    follow({ workflowId: 'another-wf', nodeIds: ['n-a'] });
+    rerender(<BuilderCanvas {...baseProps()} />);
+    expect(fitBounds).not.toHaveBeenCalled();
   });
 
   it('follows a node to its new position after a re-layout', () => {

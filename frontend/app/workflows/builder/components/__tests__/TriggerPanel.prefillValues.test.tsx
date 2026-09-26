@@ -224,6 +224,76 @@ describe('TriggerPanel - prefill from the template values', () => {
     await waitFor(() => expect(fieldById('f1')?.value).toBe('Lyon'));
   });
 
+  it('fills the form on the FIRST request when its fields arrive after the seed (no second click needed)', async () => {
+    // The application page rebuilds the configs from the canvas: a form trigger can
+    // arrive with no fields and get them a moment later. Pre-fix the seed ran once,
+    // against the empty field list, and the user had to ask a second time.
+    const values = { 'trigger:my_form': { city: 'Lyon' } };
+    const { rerender } = renderPanel({
+      triggerConfigs: [{ ...formTrigger, fields: [] }],
+      prefillValues: values,
+    });
+
+    rerender(
+      <TriggerPanel
+        isOpen
+        onClose={() => {}}
+        runId="run-1"
+        workflowId="wf-1"
+        triggerConfigs={[{ ...formTrigger }]}
+        onExecuteTrigger={vi.fn(async () => [])}
+        prefillValues={values}
+      />,
+    );
+
+    await waitFor(() => expect(fieldById('f1')?.value).toBe('Lyon'));
+  });
+
+  it('does not re-seed over the user\'s typing when the configs are rebuilt with the SAME fields', async () => {
+    // A rebuilt config (new object, same shape) is a parent re-render, not a new
+    // shape: the user's edit must survive it.
+    const values = { 'trigger:my_form': { city: 'Lyon' } };
+    const { rerender } = renderPanel({ prefillValues: values });
+
+    await waitFor(() => expect(fieldById('f1')?.value).toBe('Lyon'));
+    fireEvent.change(fieldById('f1')!, { target: { value: 'Paris' } });
+
+    rerender(
+      <TriggerPanel
+        isOpen
+        onClose={() => {}}
+        runId="run-1"
+        workflowId="wf-1"
+        triggerConfigs={[{ ...formTrigger, fields: formTrigger.fields!.map(f => ({ ...f })) }]}
+        onExecuteTrigger={vi.fn(async () => [])}
+        prefillValues={values}
+      />,
+    );
+
+    expect(fieldById('f1')?.value).toBe('Paris');
+  });
+
+  it('seeds the form when the panel is OPENED by the same click that loads the values', async () => {
+    // The real sequence: the panel is mounted closed, and one click both opens it and
+    // hands down the values.
+    const values = { 'trigger:my_form': { city: 'Lyon' } };
+    const { rerender } = renderPanel({ isOpen: false, prefillValues: null });
+
+    rerender(
+      <TriggerPanel
+        isOpen
+        onClose={() => {}}
+        runId="run-1"
+        workflowId="wf-1"
+        triggerConfigs={[formTrigger]}
+        onExecuteTrigger={vi.fn(async () => [])}
+        prefillValues={values}
+      />,
+    );
+
+    await waitFor(() => expect(fieldById('f1')?.value).toBe('Lyon'));
+  });
+
   it('seeds a chat trigger\'s message box', async () => {
     renderPanel({
       triggerConfigs: [chatTrigger],

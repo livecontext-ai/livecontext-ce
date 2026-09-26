@@ -1039,6 +1039,116 @@ class AgentConfigProviderTest {
      * <p>Each test uses a fresh provider instance so the internal
      * {@code AtomicReference} cache starts empty.
      */
+    /**
+     * V515: a chat turn on a CLI model goes to the bridge from conversation-service, so the
+     * swap of a disabled model has to be asked of agent-service from here.
+     */
+    @Nested
+    @DisplayName("resolveEffectiveModel - disabled model replacement")
+    class ResolveEffectiveModel {
+
+        private void answer(String body) {
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class),
+                    eq("claude-code"), eq("claude-opus-4-8")))
+                    .thenReturn(new ResponseEntity<>(body, HttpStatus.OK));
+        }
+
+        @Test
+        @DisplayName("a disabled model comes back as its replacement")
+        void disabledModelIsReplaced() {
+            answer("""
+                {"provider":"claude-code","model":"claude-opus-4-9","substituted":true,"explicit":true}
+                """);
+
+            var effective = agentConfigProvider.resolveEffectiveModel("claude-code", "claude-opus-4-8");
+
+            assertThat(effective.substituted()).isTrue();
+            assertThat(effective.provider()).isEqualTo("claude-code");
+            assertThat(effective.model()).isEqualTo("claude-opus-4-9");
+        }
+
+        @Test
+        @DisplayName("an enabled model comes back unchanged")
+        void enabledModelUnchanged() {
+            answer("""
+                {"provider":"claude-code","model":"claude-opus-4-8","substituted":false}
+                """);
+
+            var effective = agentConfigProvider.resolveEffectiveModel("claude-code", "claude-opus-4-8");
+
+            assertThat(effective.substituted()).isFalse();
+            assertThat(effective.model()).isEqualTo("claude-opus-4-8");
+        }
+
+        @Test
+        @DisplayName("fails open: agent-service unreachable runs the pair as asked")
+        void failureRunsPairAsAsked() {
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class),
+                    eq("claude-code"), eq("claude-opus-4-8")))
+                    .thenThrow(new org.springframework.web.client.ResourceAccessException("down"));
+
+            var effective = agentConfigProvider.resolveEffectiveModel("claude-code", "claude-opus-4-8");
+
+            assertThat(effective.substituted()).isFalse();
+            assertThat(effective.model()).isEqualTo("claude-opus-4-8");
+        }
+
+        @Test
+        @DisplayName("the answer is cached per pair: consecutive turns do not re-ask")
+        void answerIsCached() {
+            answer("""
+                {"provider":"claude-code","model":"claude-opus-4-9","substituted":true}
+                """);
+
+            agentConfigProvider.resolveEffectiveModel("claude-code", "claude-opus-4-8");
+            agentConfigProvider.resolveEffectiveModel("claude-code", "claude-opus-4-8");
+
+            verify(restTemplate, times(1)).exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class),
+                    eq(String.class), eq("claude-code"), eq("claude-opus-4-8"));
+        }
+
+        @Test
+        @DisplayName("a failed lookup is cached too: while agent-service is down a turn does not pay the timeout every time")
+        void failureIsCached() {
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class),
+                    eq("claude-code"), eq("claude-opus-4-8")))
+                    .thenThrow(new org.springframework.web.client.ResourceAccessException("down"));
+
+            agentConfigProvider.resolveEffectiveModel("claude-code", "claude-opus-4-8");
+            agentConfigProvider.resolveEffectiveModel("claude-code", "claude-opus-4-8");
+
+            verify(restTemplate, times(1)).exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class),
+                    eq(String.class), eq("claude-code"), eq("claude-opus-4-8"));
+        }
+
+        @Test
+        @DisplayName("an expired answer is asked again, so an admin's new replacement reaches chat")
+        void expiredAnswerIsRefetched() {
+            answer("""
+                {"provider":"claude-code","model":"claude-opus-4-9","substituted":true}
+                """);
+            agentConfigProvider.resolveEffectiveModel("claude-code", "claude-opus-4-8");
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> cache = (java.util.Map<String, Object>) org.springframework.test.util.ReflectionTestUtils
+                    .getField(agentConfigProvider, "effectiveModelCache");
+            cache.clear();
+
+            agentConfigProvider.resolveEffectiveModel("claude-code", "claude-opus-4-8");
+
+            verify(restTemplate, times(2)).exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class),
+                    eq(String.class), eq("claude-code"), eq("claude-opus-4-8"));
+        }
+
+        @Test
+        @DisplayName("a blank pair is never sent")
+        void blankPairNotSent() {
+            var effective = agentConfigProvider.resolveEffectiveModel("", "claude-opus-4-8");
+
+            assertThat(effective.substituted()).isFalse();
+            assertThat(mockingDetails(restTemplate).getInvocations()).isEmpty();
+        }
+    }
+
     @Nested
     @DisplayName("getAvailableModels - model catalog cache + RPC")
     class GetAvailableModels {

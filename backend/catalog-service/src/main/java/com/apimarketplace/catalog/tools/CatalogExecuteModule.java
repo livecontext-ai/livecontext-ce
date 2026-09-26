@@ -170,6 +170,14 @@ public class CatalogExecuteModule implements ToolModule {
     public static final String TOOL_CALL_FAILED_CODE = "TOOL_CALL_FAILED";
 
     /**
+     * The tool_id names no tool any more. Distinct from {@link #TOOL_CALL_FAILED_CODE},
+     * whose remedy is "send it once more": a missing tool fails identically every time,
+     * so the only useful step is to look the tool up again.
+     */
+    public static final String TOOL_NOT_FOUND_CODE =
+            com.apimarketplace.catalog.service.exception.ToolNotFoundException.ERROR_CODE;
+
+    /**
      * The provider refused an authenticated call, and the account this call used is
      * the reason why.
      *
@@ -1257,8 +1265,8 @@ public class CatalogExecuteModule implements ToolModule {
             // PLAN_EXCLUDES_THIS belongs on this list for a sharper reason than
             // the other two. It is minted precisely to STOP the balance
             // sentence being said: the account has credits, they are the
-            // monthly grant, and that grant funds workflow runs and never a
-            // generation. Demoting it to a Detail: made the generic lead say
+            // monthly grant, and that grant funds workflow runs and free-tier
+            // chat but never a generation. Demoting it to a Detail: made the generic lead say
             // "not enough credits" to a user whose screen shows several hundred,
             // which is how a correct rule reads as a bug, and it sends the agent
             // to a remedy (top up) that is not the one that works (subscribe, or
@@ -1279,6 +1287,27 @@ public class CatalogExecuteModule implements ToolModule {
                         + (message.isEmpty() ? "" : " Detail: " + message);
             }
             return ToolExecutionResult.failure(ToolErrorCode.QUOTA_EXCEEDED, lead, errorBody);
+        }
+
+        if (e.getStatusCode() == HttpStatus.NOT_FOUND
+                && TOOL_NOT_FOUND_CODE.equals(text(errorBody, "error"))) {
+            // Keyed on the body's code and not on the bare 404, like the credential
+            // selection branch below: only the catalog's own "no such tool" answer means
+            // the id is stale. It used to arrive as a 500, land in the generic catch of
+            // the caller, and tell the agent to send the same dead id once more.
+            // RESOURCE_NOT_FOUND, not TOOL_NOT_FOUND: the latter means the agent-facing tool
+            // or action itself does not exist, whereas here `catalog(action='execute')` exists
+            // and it is the catalog ITEM the id pointed at that is gone.
+            log.info("Tool {} not found in the catalog - agent told to search again", toolId);
+            return ToolExecutionResult.failure(
+                ToolErrorCode.RESOURCE_NOT_FOUND,
+                TOOL_NOT_FOUND_CODE + ": tool_id '" + toolId + "' does not name any tool in the "
+                    + "catalog (it may have been removed or replaced), so nothing ran and nothing was "
+                    + "charged. Sending it again fails the same way. Find the tool again with "
+                    + "catalog(action='search', query='<what this call should do>') and call "
+                    + "catalog(action='execute') with a tool_id from that result.",
+                Map.of("toolId", toolId)
+            );
         }
 
         if (e.getStatusCode() == HttpStatus.UNAUTHORIZED || e.getStatusCode() == HttpStatus.FORBIDDEN) {

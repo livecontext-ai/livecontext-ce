@@ -21,7 +21,9 @@ public final class ToolAccessControl {
 
     /** READ actions per tool category - anything NOT listed here is considered WRITE. */
     private static final Map<String, Set<String>> READ_ACTIONS = Map.ofEntries(
-        Map.entry("table",       Set.of("get", "list", "query_rows", "help")),
+        // present (on workflow, table, interface, agent and file alike) only switches what the
+        // user is looking at, through the same checks as get; it mutates nothing.
+        Map.entry("table",       Set.of("get", "list", "query_rows", "help", "present")),
         // read_rows / find_rows are builder-internal TABLE reads dispatched through
         // WorkflowBuilderProvider.execute (the workflow tool), so they are gated on the
         // "workflow" access mode here. They are pure reads (they never mutate the plan or
@@ -29,13 +31,13 @@ public final class ToolAccessControl {
         // to inspect a workflow's table data - without them, the gate would wrongly deny a
         // read. The write counterparts insert_row/update_row/delete_row stay WRITE.
         // mock_suggest is a pure read: it proposes a mock output and mutates nothing.
-        Map.entry("workflow",    Set.of("load", "get", "list", "describe", "validate", "runs", "get_run", "wait_run", "get_node_output", "search", "help", "get_plan", "read_rows", "find_rows", "mock_suggest")),
-        Map.entry("interface",   Set.of("get", "list", "help")),
+        Map.entry("workflow",    Set.of("load", "get", "list", "describe", "validate", "runs", "get_run", "wait_run", "get_node_output", "search", "help", "get_plan", "read_rows", "find_rows", "mock_suggest", "present")),
+        Map.entry("interface",   Set.of("get", "list", "help", "present")),
         // budgets is a pure read - it reports what capped agents have spent and mutates
         // nothing. Omitting it would make the action PERMISSION_DENIED for every agent
         // created with agentAccessMode=read, while the tool help advertises it to all of
         // them: an action visible to a caller that cannot call it.
-        Map.entry("agent",       Set.of("get", "list", "help", "budgets", "inbox", "outbox", "review_inbox", "backlog", "recurrence_list", "get_history", "search_messages")),
+        Map.entry("agent",       Set.of("get", "list", "help", "budgets", "inbox", "outbox", "review_inbox", "backlog", "recurrence_list", "get_history", "search_messages", "present")),
         // runs / get_run / get_node_output are the SAME three read actions the "workflow"
         // entry above already lists, and ApplicationCrudModule handles all three. Omitting
         // them here made an applicationAccessMode='read' agent be told it needs write access
@@ -73,7 +75,7 @@ public final class ToolAccessControl {
         // listed, so a read-only agent (fileAccessMode='read') is blocked from them.
         // Singular "file" matches the allow-list category (CREDENTIAL_KEYS) and the
         // "fileAccessMode" credential key (checkWriteAccess derives category+"AccessMode").
-        Map.entry("file",        Set.of("list", "get", "view", "visualize", "help"))
+        Map.entry("file",        Set.of("list", "get", "view", "visualize", "help", "present"))
     );
 
     /**

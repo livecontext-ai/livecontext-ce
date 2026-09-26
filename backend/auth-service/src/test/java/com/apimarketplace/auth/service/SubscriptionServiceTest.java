@@ -421,6 +421,36 @@ class SubscriptionServiceTest {
         }
 
         @Test
+        @DisplayName("lifecycle: a plan change re-syncs the Resend contact (plan property), a renewal does not")
+        void planChangeSyncsLifecycleContactRenewalDoesNot() throws Exception {
+            com.apimarketplace.auth.lifecycle.LifecycleEmailService lifecycleEmails =
+                    mock(com.apimarketplace.auth.lifecycle.LifecycleEmailService.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(subscriptionService, "lifecycleEmails", lifecycleEmails);
+            User user = createTestUser(1L);
+            BillingCustomer bc = createBillingCustomer(1L, user);
+            Plan freePlan = createPlan(1L, "FREE");
+            Plan starterPlan = createPlan(2L, "STARTER");
+            com.apimarketplace.auth.domain.Subscription existing = createExistingSubscription(10L, bc, freePlan, "active");
+            existing.setProviderSubscriptionId("sub_lc_1");
+            existing.setCreditQuantity(1);
+            setupStripeRetrieve(createStripeSubscription("sub_lc_1", "cus_test_1", false, 1));
+            when(billingCustomerRepository.findByUserId(1L)).thenReturn(Optional.of(bc));
+            when(planRepository.findById(2L)).thenReturn(Optional.of(starterPlan));
+            when(subscriptionRepository.findByProviderSubscriptionId("sub_lc_1")).thenReturn(Optional.of(existing));
+            when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            when(billingEventRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            subscriptionService.onSubscriptionUpsert("evt_lc_1", "sub_lc_1", "active",
+                    2L, null, LocalDateTime.now(), LocalDateTime.now().plusDays(30), 1L, null, 1, null);
+            verify(lifecycleEmails, times(1)).syncContact(1L);
+
+            // Same plan, same status: a renewal delivery, no contact write.
+            subscriptionService.onSubscriptionUpsert("evt_lc_2", "sub_lc_1", "active",
+                    2L, null, LocalDateTime.now(), LocalDateTime.now().plusDays(30), 1L, null, 1, null);
+            verify(lifecycleEmails, times(1)).syncContact(1L);
+        }
+
+        @Test
         @DisplayName("analytics: a status-only transition (active -> past_due) emits subscription_changed with plan_changed=false")
         void statusTransitionEmits() throws Exception {
             com.apimarketplace.auth.analytics.AuthAnalyticsEmitter analytics =

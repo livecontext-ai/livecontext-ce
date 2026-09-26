@@ -6,7 +6,10 @@ import FirstLoginGuard from '../components/security/FirstLoginGuard';
 import { AppDataProvider, LOGIN_SIGNIN_AT_KEY, LOGIN_REDIRECT_LOG_KEY } from '../lib/providers/smart-providers';
 import { EmbeddedAuthProvider } from '../lib/providers/embedded-auth-provider';
 import AnalyticsProvider from '../components/analytics/AnalyticsProvider';
+import AcquisitionCapture from '../components/lifecycle/AcquisitionCapture';
 import { IS_CE } from '../lib/edition';
+import { markOrbiGreeting } from '../components/chat/orbi/orbiGreeting';
+import { stripOidcCallbackParams } from '../lib/auth/oidcCallbackUrl';
 
 // Persist OIDC user in localStorage (vs default sessionStorage) so that opening the app
 // in a new tab - or closing/reopening the tab - finds the previously stored user and can
@@ -25,7 +28,8 @@ export const oidcConfig = {
     ? new WebStorageStateStore({ store: window.localStorage })
     : undefined,
   onSigninCallback: () => {
-    window.history.replaceState({}, document.title, window.location.pathname);
+    window.history.replaceState({}, document.title,
+      stripOidcCallbackParams(window.location.pathname, window.location.search));
     // Mark successful signin time. Two consumers read this (via the shared keys):
     // safeRedirectToLogin detects "401 right after signin" (backend issue, not auth),
     // and decideLoginRedirect treats "automatic redirect right after a signin" as the
@@ -33,6 +37,8 @@ export const oidcConfig = {
     sessionStorage.setItem(LOGIN_SIGNIN_AT_KEY, Date.now().toString());
     // Clear redirect loop counter - this signin proves prior redirects were legitimate.
     sessionStorage.removeItem(LOGIN_REDIRECT_LOG_KEY);
+    // Orbi waves hello the first time it appears after this sign-in.
+    markOrbiGreeting();
   },
 };
 
@@ -42,6 +48,8 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       <AppDataProvider>
         {/* CE (self-hosted) ships no product analytics/tracking. */}
         {!IS_CE && <AnalyticsProvider />}
+        {/* First-touch attribution for the cloud lifecycle e-mails; landing included. */}
+        {!IS_CE && <AcquisitionCapture />}
         <FirstLoginGuard>
           {children}
         </FirstLoginGuard>

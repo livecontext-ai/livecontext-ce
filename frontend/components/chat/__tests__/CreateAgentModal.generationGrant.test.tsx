@@ -22,6 +22,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * render as `chatConfig.generationLabel`.
  */
 
+// The destination picker reads the workspace's destinations; that is covered in its own test.
+vi.mock('@/components/app/ChannelDestinationPicker', () => ({
+  ChannelDestinationPicker: () => null,
+  isWorking: () => true,
+  useChatDestinations: () => ({ destinations: [], workspaceDefault: null, isLoading: false, isError: false }),
+}));
 vi.mock('next-intl', () => ({
   useTranslations: (ns?: string) => (key: string) => `${ns}.${key}`,
 }));
@@ -47,6 +53,15 @@ vi.mock('@/components/ui/tooltip', () => ({
   TooltipContent: () => null,
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+// The field "i" (InfoPopover) sits on the stubbed Popover above, which would render its panel
+// inline next to the control. Stand it in with a marker that carries its label and its text,
+// neither a button nor visible copy, so each field block still holds only its own control
+// while a test can assert which "i" is wired to which field.
+vi.mock('@/components/ui/info-popover', () => ({
+  InfoPopover: ({ label, children }: { label: string; children: React.ReactNode }) => (
+    <span data-info-label={label} data-info-text={typeof children === 'string' ? children : undefined} />
+  ),
 }));
 
 vi.mock('@/lib/api/storage-api', () => ({

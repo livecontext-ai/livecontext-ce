@@ -154,7 +154,8 @@ final class SignalContextResolver {
             if (resolved == null) {
                 return null;
             }
-            String text = String.valueOf(resolved);
+            // A whole-template reference to an object reads as its JSON, never Java's {a=1}.
+            String text = com.apimarketplace.orchestrator.services.TemplateEngine.asText(resolved);
             if (text.isBlank()) {
                 return null;
             }

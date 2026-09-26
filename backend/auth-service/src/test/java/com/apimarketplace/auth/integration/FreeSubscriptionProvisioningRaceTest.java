@@ -43,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest
 @DisplayName("FREE subscription provisioning is race-free (real Postgres, real threads)")
-class FreeSubscriptionProvisioningRaceTest extends AuthPostgresIntegrationTest {
+class FreeSubscriptionProvisioningRaceTest extends AuthScratchPostgresSpringTest {
 
 
     @Autowired private FreeSubscriptionProvisioner provisioner;

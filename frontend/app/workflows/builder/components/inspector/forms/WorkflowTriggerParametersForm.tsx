@@ -1,13 +1,12 @@
 'use client';
 
 import * as React from 'react';
-import * as ReactDOM from 'react-dom';
-import { Info, X, Workflow } from 'lucide-react';
+import { Workflow } from 'lucide-react';
+import { InfoPopover } from '@/components/ui/info-popover';
 import type { Node } from 'reactflow';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useTranslations } from 'next-intl';
 import type { BuilderNodeData } from '../../../types';
-import { usePopoverPosition } from '../../../hooks/ui/usePopoverPosition';
 
 const DATA_MODE_OPTIONS = [
   { value: 'all', label: 'Accept all data' },
@@ -56,64 +55,24 @@ export function WorkflowTriggerParametersForm({
     } as BuilderNodeData);
   }, [data, workflowTriggerData, isRunMode, onUpdate]);
 
-  const [isInfoOpen, setIsInfoOpen] = React.useState(false);
-  const { buttonRef: infoButtonRef, popoverStyle } = usePopoverPosition(isInfoOpen, 288);
 
   return (
     <div className="space-y-4 pt-2">
       <div className="flex items-center gap-1.5">
         <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('workflowTrigger.configuration')}</span>
-        <div className="relative inline-flex">
-          <button
-            ref={infoButtonRef}
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsInfoOpen(!isInfoOpen);
-            }}
-            className="p-0.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-            title={t('workflowTrigger.moreInfo')}
-          >
-            <Info className="h-3 w-3 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300" />
-          </button>
-          {isInfoOpen && typeof document !== 'undefined' && ReactDOM.createPortal(
-            <>
-              <div
-                className="fixed inset-0 z-[9998]"
-                onClick={() => setIsInfoOpen(false)}
-              />
-              <div
-                className="fixed z-[9999] p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 shadow-lg"
-                style={popoverStyle}
-              >
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <span className="font-medium text-sm text-slate-700 dark:text-slate-200">
-                    {t('workflowTrigger.title')}
-                  </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsInfoOpen(false);
-                    }}
-                    className="p-0.5 rounded hover:bg-slate-100 dark:hover:bg-slate-700"
-                  >
-                    <X className="h-3.5 w-3.5 text-slate-400" />
-                  </button>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mb-2">
-                  {t('workflowTrigger.description')}
-                </p>
-                <div className="border-t border-slate-200 dark:border-slate-700 pt-2">
-                  <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{t('workflowTrigger.availableOutputs')}</p>
-                  <ul className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5 font-mono">
-                    <li>• result</li>
-                    <li>• status</li>
-                  </ul>
-                </div>
-              </div>
-            </>,
-            document.body
-          )}
-        </div>
+        <InfoPopover label={t('workflowTrigger.configuration')} size="sm" side="bottom" align="end" contentClassName="w-[288px] p-3">
+          <p className="mb-2 font-medium text-sm text-slate-700 dark:text-slate-200">{t('workflowTrigger.title')}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mb-2">
+            {t('workflowTrigger.description')}
+          </p>
+          <div className="border-t border-slate-200 dark:border-slate-700 pt-2">
+            <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">{t('workflowTrigger.availableOutputs')}</p>
+            <ul className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5 font-mono">
+              <li>• result</li>
+              <li>• status</li>
+            </ul>
+          </div>
+        </InfoPopover>
       </div>
 
       {/* Referenced Workflow */}

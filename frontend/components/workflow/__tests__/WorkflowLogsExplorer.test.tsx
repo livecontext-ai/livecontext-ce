@@ -62,12 +62,19 @@ beforeEach(() => {
   api.execution.getStepOutputObjectAtPath.mockImplementation((_wf, _run, id) => Promise.resolve({ message: `output-${id}`, items: [{ title: 'First', count: 2 }, { title: 'Second', count: 3 }] }));
 });
 afterEach(() => { cleanup(); client?.clear(); });
+/** Each view has its own epoch, so switching may load that epoch's node list first. */
+async function switchView(name: 'Simple' | 'Table') {
+  fireEvent.click(screen.getByRole('radio', { name }));
+  await waitFor(() => expect(screen.queryByText(messages.workflow.logs.loading)).not.toBeInTheDocument());
+}
+const openTable = () => switchView('Table');
+const openSimple = () => switchView('Simple');
 
 describe('run logs shared presentation', () => {
-  it('returns to Root from a direct node link and opens another node in the same epoch and view', async () => {
+  it('returns to Root from a direct node link and opens another node in the same view, on all epochs', async () => {
     mount({ initialStepAlias: 'mcp:save' });
     await screen.findByText('"output-12"');
-    fireEvent.click(screen.getByRole('radio', { name: 'Table' }));
+    await openTable();
     fireEvent.click(screen.getByRole('button', { name: 'Root' }));
     const root = screen.getByTestId('workflow-logs-root');
     expect(breadcrumb).toHaveBeenLastCalledWith([{ label: 'Root' }]);
@@ -75,8 +82,8 @@ describe('run logs shared presentation', () => {
     expect(screen.queryByTestId('workflow-logs-table')).not.toBeInTheDocument();
     fireEvent.click(within(root).getByRole('button', { name: /fetch/ }));
     expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-alias', 'fetch');
-    expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-epoch', '2');
-    expect(screen.getByLabelText('Epoch')).toHaveValue('2');
+    expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-epoch', 'null');
+    expect(screen.getByLabelText('Epoch')).toHaveValue('all');
   });
 
   it('allows Root navigation even when the directly linked node did not execute', async () => {
@@ -96,9 +103,9 @@ describe('run logs shared presentation', () => {
     expect(screen.getByRole('button', { name: 'Show nodes' })).toHaveAttribute('aria-expanded', 'false');
     expect(screen.getByLabelText('Node').parentElement).toHaveClass('hidden');
     expect(screen.getByRole('navigation', { name: 'Nodes' }).parentElement).not.toHaveClass('@min-[38rem]:flex');
-    fireEvent.click(screen.getByRole('radio', { name: 'Table' }));
+    await openTable();
     expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-alias', 'fetch');
-    fireEvent.click(screen.getByRole('radio', { name: 'Simple' }));
+    await openSimple();
     fireEvent.click(screen.getByRole('button', { name: 'Show nodes' }));
     expect(screen.getByLabelText('Node').parentElement).not.toHaveClass('hidden');
     expect(screen.getByRole('navigation', { name: 'Nodes' }).parentElement).toHaveClass('@min-[38rem]:flex');
@@ -144,24 +151,58 @@ describe('run logs shared presentation', () => {
     await screen.findByText('"output-11"');
     fireEvent.click(screen.getByRole('button', { name: 'Input' }));
     await screen.findByText('"input-11"');
-    fireEvent.click(screen.getByRole('radio', { name: 'Table' }));
+    await openTable();
     expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-path', '');
     expect(screen.queryByLabelText('Passage')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('radio', { name: 'Simple' }));
+    await openSimple();
     expect(screen.getByTestId('workflow-logs-simple')).toHaveTextContent('input-11');
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
   });
 
+  it('opens the table on all epochs every time while the simple view keeps its own epoch and passage', async () => {
+    mount();
+    await screen.findByText('"output-12"');
+    fireEvent.change(screen.getByLabelText('Passage'), { target: { value: '11' } });
+    await screen.findByText('"output-11"');
+    await openTable();
+    expect(screen.getByLabelText('Epoch')).toHaveValue('all');
+    expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-epoch', 'null');
+    expect(api.getEpochAggregatedSteps).toHaveBeenCalledWith('run', undefined);
+    fireEvent.change(screen.getByLabelText('Epoch'), { target: { value: '1' } });
+    await waitFor(() => expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-epoch', '1'));
+    await openSimple();
+    await screen.findByText('"output-11"');
+    expect(screen.getByLabelText('Epoch')).toHaveValue('2');
+    expect(screen.getByLabelText('Passage')).toHaveValue('11');
+    await openTable();
+    expect(screen.getByLabelText('Epoch')).toHaveValue('all');
+    expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-epoch', 'null');
+  });
+
+  it('keeps the passage selector when more passages exist than are loaded', async () => {
+    api.getRunStepsPaged.mockResolvedValue(page([step(12)], 2, 2));
+    mount();
+    await screen.findByText('"output-12"');
+    expect(screen.getByLabelText('Passage')).toHaveValue('12');
+  });
+
+  it('shows the passage selector only when the node ran more than once', async () => {
+    api.getRunStepsPaged.mockResolvedValue(page([step(12)]));
+    mount();
+    await screen.findByText('"output-12"');
+    expect(screen.queryByLabelText('Passage')).not.toBeInTheDocument();
+  });
+
   it('navigates nested table breadcrumbs and preserves the path across view toggles', async () => {
     mount();
     await screen.findByText('"output-12"');
-    fireEvent.click(screen.getByRole('radio', { name: 'Table' }));
+    await openTable();
     fireEvent.click(screen.getByRole('button', { name: 'Drill down' }));
     fireEvent.click(screen.getByRole('button', { name: 'Drill down' }));
     expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-path', 'output.items');
-    fireEvent.click(screen.getByRole('radio', { name: 'Simple' }));
-    fireEvent.click(screen.getByRole('radio', { name: 'Table' }));
+    await openSimple();
+    await openTable();
     expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-path', 'output.items');
     fireEvent.click(screen.getByRole('button', { name: 'output' }));
     expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-path', 'output');
@@ -172,14 +213,14 @@ describe('run logs shared presentation', () => {
   it('resets the nested path when choosing another node or epoch', async () => {
     mount();
     await screen.findByText('"output-12"');
-    fireEvent.click(screen.getByRole('radio', { name: 'Table' }));
+    await openTable();
     fireEvent.click(screen.getByRole('button', { name: 'Drill down' }));
     fireEvent.change(screen.getByLabelText('Node'), { target: { value: 'save' } });
     expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-path', '');
     expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-alias', 'save');
     fireEvent.click(screen.getByRole('button', { name: 'Drill down' }));
-    fireEvent.change(screen.getByLabelText('Epoch'), { target: { value: 'all' } });
-    await waitFor(() => expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-epoch', 'null'));
+    fireEvent.change(screen.getByLabelText('Epoch'), { target: { value: '1' } });
+    await waitFor(() => expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-epoch', '1'));
     expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-path', '');
   });
 
@@ -187,7 +228,7 @@ describe('run logs shared presentation', () => {
     api.getRunStepsPaged.mockRejectedValue(new Error('Unavailable'));
     mount();
     await screen.findByRole('alert');
-    fireEvent.click(screen.getByRole('radio', { name: 'Table' }));
+    await openTable();
     expect(screen.getByTestId('navigable-table')).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
@@ -258,14 +299,24 @@ describe('run logs shared presentation', () => {
     api.getRunStepsPaged.mockImplementation((_run, _alias, pageIndex) => Promise.resolve(page(pageIndex === 0 ? Array.from({ length: 500 }, (_, index) => step(600 - index)) : [step(100)], 501, 2)));
     mount();
     await screen.findByText('"output-600"');
-    expect(screen.getByText('500 / 501 passages loaded')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Load more passages' }));
-    await screen.findByText('501 / 501 passages loaded');
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Load more passages' })).not.toBeInTheDocument());
     expect(screen.getByLabelText('Passage')).toHaveValue('600');
     expect(api.getRunStepsPaged).toHaveBeenLastCalledWith('uuid', 'fetch', 1, 500, 2);
     fireEvent.change(screen.getByLabelText('Passage'), { target: { value: '100' } });
     await screen.findByText('"output-100"');
-    expect(screen.queryByRole('button', { name: 'Load more passages' })).not.toBeInTheDocument();
+  });
+
+  it('shows no read-only badge and no passage counter in the footer', async () => {
+    // The whole Logs panel is read-only by nature and the passage selector already says how many
+    // runs there are, so both footer labels were noise ("Read only", "1 / 1 passages loaded").
+    api.getRunStepsPaged.mockResolvedValue(page([step(12)]));
+    const { container } = mount();
+    await screen.findByText('"output-12"');
+    expect(screen.queryByText('Read only')).not.toBeInTheDocument();
+    expect(screen.queryByText(/passages loaded/)).not.toBeInTheDocument();
+    // With a single loaded page there is nothing left to put in the footer, so it is not rendered.
+    expect(container.querySelector('footer')).toBeNull();
   });
 
   it('shows the recorded node failure even when it produced no output', async () => {
@@ -314,7 +365,7 @@ describe('run logs shared presentation', () => {
     api.execution.getStepOutputObjectAtPath.mockResolvedValue(value);
     mount();
     await waitFor(() => expect(screen.getByTestId('workflow-logs-simple')).toHaveTextContent('Output data'));
-    fireEvent.click(screen.getByRole('radio', { name: 'Table' }));
+    await openTable();
     expect(screen.getByTestId('workflow-logs-table')).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });

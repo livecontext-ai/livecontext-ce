@@ -3,18 +3,12 @@ package com.apimarketplace.auth.web.version;
 import com.apimarketplace.auth.web.version.CeReleaseController.LatestRelease;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.info.GitProperties;
-
-import java.util.Properties;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@link CeVersionCheckScheduler}: it stores a successful fetch,
- * passes the running version to the feed, and is best-effort on null / error.
+ * passes the reported version (release tag or dev) to the feed, and is best-effort on null / error.
  */
 class CeVersionCheckSchedulerTest {
 
@@ -34,16 +28,9 @@ class CeVersionCheckSchedulerTest {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private static ObjectProvider<GitProperties> gitProviderWithVersion(String version) {
-        ObjectProvider<GitProperties> provider = mock(ObjectProvider.class);
-        Properties p = new Properties();
-        // No release tag and no commit sha in this fixture, so the running version
-        // resolves deterministically to the Maven build version (the value asserted
-        // below). The release-tag / dev-<sha> precedence is covered in VersionControllerTest.
-        p.setProperty("build.version", version);
-        when(provider.getIfAvailable()).thenReturn(new GitProperties(p));
-        return provider;
+    /** A scheduler whose reported version is fixed, independent of the machine's APP_VERSION. */
+    private static CeVersionCheckScheduler scheduler(VersionUpdateService svc, FakeFeed feed, String reported) {
+        return new CeVersionCheckScheduler(svc, feed, () -> reported);
     }
 
     @Test
@@ -53,8 +40,7 @@ class CeVersionCheckSchedulerTest {
         FakeFeed feed = new FakeFeed();
         feed.toReturn = new LatestRelease("0.3.0", "https://example.test/notes", true, "2026-06-25T09:00:00Z");
 
-        CeVersionCheckScheduler scheduler =
-                new CeVersionCheckScheduler(svc, feed, gitProviderWithVersion("0.1.0"));
+        CeVersionCheckScheduler scheduler = scheduler(svc, feed, "0.1.0");
         scheduler.checkNow();
 
         assertThat(feed.capturedCurrent).isEqualTo("0.1.0");
@@ -75,7 +61,7 @@ class CeVersionCheckSchedulerTest {
         FakeFeed feed = new FakeFeed();
         feed.toReturn = null;
 
-        new CeVersionCheckScheduler(svc, feed, gitProviderWithVersion("0.1.0")).checkNow();
+        scheduler(svc, feed, "0.1.0").checkNow();
 
         assertThat(svc.current().latestVersion()).isEqualTo("0.2.0"); // unchanged
     }
@@ -92,7 +78,7 @@ class CeVersionCheckSchedulerTest {
         FakeFeed feed = new FakeFeed();
         feed.toReturn = new LatestRelease(null, null, false, null);
 
-        new CeVersionCheckScheduler(svc, feed, gitProviderWithVersion("0.1.0")).checkNow();
+        scheduler(svc, feed, "0.1.0").checkNow();
 
         UpdateStatus stored = svc.current();
         assertThat(stored.latestVersion()).isEqualTo("0.2.0");
@@ -110,7 +96,7 @@ class CeVersionCheckSchedulerTest {
         FakeFeed feed = new FakeFeed();
         feed.toReturn = new LatestRelease("   ", null, false, null);
 
-        new CeVersionCheckScheduler(svc, feed, gitProviderWithVersion("0.1.0")).checkNow();
+        scheduler(svc, feed, "0.1.0").checkNow();
 
         assertThat(svc.current().latestVersion()).isEqualTo("0.2.0");
     }
@@ -124,24 +110,42 @@ class CeVersionCheckSchedulerTest {
         feed.toThrow = new RuntimeException("connection refused");
 
         // Must not throw.
-        new CeVersionCheckScheduler(svc, feed, gitProviderWithVersion("0.1.0")).checkNow();
+        scheduler(svc, feed, "0.1.0").checkNow();
 
         assertThat(svc.current().latestVersion()).isEqualTo("0.2.0"); // unchanged
     }
 
     @Test
-    @DisplayName("with no git info the running version sent to the feed is 'dev'")
-    void devVersionWhenNoGit() {
+    @DisplayName("the value sent to the feed is the reported version, verbatim")
+    void sendsTheReportedVersion() {
         VersionUpdateService svc = new VersionUpdateService();
         FakeFeed feed = new FakeFeed();
-        feed.toReturn = new LatestRelease("0.3.0", null, false, null);
-        @SuppressWarnings("unchecked")
-        ObjectProvider<GitProperties> noGit = mock(ObjectProvider.class);
-        when(noGit.getIfAvailable()).thenReturn(null);
+        feed.toReturn = new LatestRelease("0.3.1", null, false, null);
 
-        new CeVersionCheckScheduler(svc, feed, noGit).checkNow();
+        scheduler(svc, feed, "v0.3.1").checkNow();
 
-        assertThat(feed.capturedCurrent).isEqualTo("dev");
+        assertThat(feed.capturedCurrent).isEqualTo("v0.3.1");
+    }
+
+    @Test
+    @DisplayName("the Spring constructor reports through VersionInfo.reportedVersion, never resolveVersion")
+    void productionConstructorUsesReportedVersion() throws Exception {
+        // Regression: the poller used to send VersionInfo.resolveVersion(git), the DISPLAYED
+        // version, whose last fallback is the never-bumped POM version (0.1.6 through the whole
+        // v0.3 line). From-source builds, our own e2e stacks included, were then counted in the
+        // fleet ledger as installs of an old release. The Spring constructor must not take git
+        // properties at all: with no way to reach them it cannot fall back to them.
+        java.lang.reflect.Constructor<?>[] ctors = CeVersionCheckScheduler.class.getConstructors();
+        assertThat(ctors).hasSize(1);
+        assertThat(ctors[0].getParameterTypes())
+                .containsExactly(VersionUpdateService.class, ReleaseFeedClient.class);
+
+        VersionUpdateService svc = new VersionUpdateService();
+        FakeFeed feed = new FakeFeed();
+        feed.toReturn = new LatestRelease("0.3.1", null, false, null);
+        new CeVersionCheckScheduler(svc, feed).checkNow();
+
+        assertThat(feed.capturedCurrent).isEqualTo(com.apimarketplace.auth.web.VersionInfo.reportedVersion());
     }
 
     @Test

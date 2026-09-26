@@ -292,7 +292,7 @@ public class BackEdgeHandler implements RunScopedCache {
 
             BackEdgeState state = (BackEdgeState) context.getGlobalData(stateKey(spec)).orElse(null);
 
-            int maxIterations = resolveMaxIterations(spec);
+            int maxIterations = resolveMaxIterations(spec, context, plan);
 
             // Reconcile with what OTHER replicas have already run before answering, so this
             // predicate can never report "room left" on the sole basis of local progress.
@@ -341,6 +341,69 @@ public class BackEdgeHandler implements RunScopedCache {
             ? executionConfig.resolveLoopIterationLimits(null)
             : LoopIterationLimits.FALLBACK;
         return limits.resolve(spec.maxIterationsOverride());
+    }
+
+    /**
+     * {@link #resolveMaxIterations(BackEdgeSpec)}, with the hub's {@code maxIterations} resolved
+     * against the run when the plan wrote it as a {@code {{...}}} template. The parser sets such a
+     * template aside (an int cannot hold it), so the typed cap is absent and the loop used to run
+     * on the run's default budget as if the author had written nothing.
+     *
+     * @throws IllegalStateException when the template resolves to nothing or to something that is
+     *         not a positive whole number: the loop never runs on a cap nobody chose
+     */
+    private int resolveMaxIterations(BackEdgeSpec spec, ExecutionContext context, WorkflowPlan plan) {
+        String template = spec.maxIterationsOverride() == null ? hubMaxIterationsTemplate(spec, plan) : null;
+        if (template == null) {
+            return resolveMaxIterations(spec);
+        }
+        Object value = templateEngine != null
+            ? templateEngine.evaluateTemplateWithMap(template, EvalContextBuilder.buildStandardEvalContext(context))
+            : null;
+        Integer cap = positiveWholeNumber(value);
+        if (cap == null) {
+            throw new IllegalStateException("loop.maxIterations '" + template + "' resolved to "
+                + (value == null ? "nothing" : "'" + value + "'")
+                + ": it must be a positive whole number. Check that the referenced node ran and that the path exists.");
+        }
+        LoopIterationLimits limits = executionConfig != null
+            ? executionConfig.resolveLoopIterationLimits(null)
+            : LoopIterationLimits.FALLBACK;
+        return limits.resolve(cap);
+    }
+
+    /** The {@code {{...}}} the plan wrote for this loop hub's maxIterations, or {@code null}. */
+    private static String hubMaxIterationsTemplate(BackEdgeSpec spec, WorkflowPlan plan) {
+        // A declared back-edge's own cap, written on the edge marker, wins like its typed form does.
+        if (spec.edge() != null && spec.edge().backEdge() != null
+                && spec.edge().backEdge().maxIterationsTemplate() != null) {
+            return spec.edge().backEdge().maxIterationsTemplate();
+        }
+        if (spec.hubKey() == null || plan == null || plan.getCores() == null) {
+            return null;
+        }
+        for (com.apimarketplace.orchestrator.domain.workflow.Core core : plan.getCores()) {
+            if (spec.hubKey().equals(core.getNormalizedKey())) {
+                Map<String, String> fields = core.deferredScalars().get("loop");
+                return fields == null ? null : fields.get("maxIterations");
+            }
+        }
+        return null;
+    }
+
+    private static Integer positiveWholeNumber(Object value) {
+        if (value instanceof String text) {
+            value = text.trim();
+        }
+        try {
+            java.math.BigDecimal number = value instanceof Number n
+                ? new java.math.BigDecimal(n.toString())
+                : new java.math.BigDecimal(String.valueOf(value));
+            int cap = number.intValueExact();
+            return cap > 0 ? cap : null;
+        } catch (RuntimeException notAWholeNumber) {
+            return null;
+        }
     }
 
     /**
@@ -418,7 +481,6 @@ public class BackEdgeHandler implements RunScopedCache {
             String loopCoreKey = spec.hubKey();
             String bodyTargetKey = spec.bodyEntryKey();
             String condition = spec.condition();
-            int maxIterations = resolveMaxIterations(spec);
             String loopLabel = loopLabel(plan, spec);
 
             if (bodyTargetKey == null) {
@@ -430,6 +492,9 @@ public class BackEdgeHandler implements RunScopedCache {
             if (!portMatches(spec, sourceNode, currentContext)) {
                 continue;
             }
+            // Resolved only for the back-edge actually taken: a templated cap on a branch the
+            // node did not route to must not be evaluated, let alone fail the run.
+            int maxIterations = resolveMaxIterations(spec, context, plan);
 
             // Get or create state.
             // state.iteration() = body iteration that just completed.
@@ -682,7 +747,6 @@ public class BackEdgeHandler implements RunScopedCache {
             String loopCoreKey = spec.hubKey();
             String bodyTargetKey = spec.bodyEntryKey();
             String condition = spec.condition();
-            int maxIterations = resolveMaxIterations(spec);
             String loopLabel = loopLabel(plan, spec);
 
             if (bodyTargetKey == null) continue;
@@ -692,6 +756,7 @@ public class BackEdgeHandler implements RunScopedCache {
             if (!portMatches(spec, sourceNode, result)) {
                 continue;
             }
+            int maxIterations = resolveMaxIterations(spec, context, plan);
 
             // state.iteration() = body iter that just completed. create() returns
             // iteration=0 (the initial body entry).

@@ -73,6 +73,9 @@ public class FindNode extends BaseNode {
     @Override
     public NodeExecutionResult execute(ExecutionContext context) {
         long startTime = System.currentTimeMillis();
+        // The row cap of this execution: a templated crud.limit resolved, not the default 100
+        // the builder gave the node when the parser could not hold the template in an Integer.
+        int maxItems = effectiveMaxItems(context);
 
         logger.info("[FindNode] Executing: nodeId={}, dataSourceId={}, maxItems={}, hasToolsGateway={}",
             nodeId, stepConfig.dataSourceId(), maxItems, toolsGateway != null);
@@ -142,7 +145,8 @@ public class FindNode extends BaseNode {
             // similarity search carries a whole query vector, an IN-list carries whatever
             // the author matched on, and when template resolution fails this map falls back
             // to the ENTIRE trigger payload. All of it was copied onto the step row as-is.
-            resolvedInputData.putAll(ReportedParams.forReport(prepareCrudInput(context)));
+            resolvedInputData.putAll(ReportedParams.forReport(
+                CrudDeferredScalars.reportable(prepareCrudInput(context), stepConfig.crud())));
             items = executeCrudRead(context, startTime);
             if (items == null) {
                 logger.warn("[FindNode] CRUD read failed, trying list fallback: nodeId={}", nodeId);
@@ -275,6 +279,9 @@ public class FindNode extends BaseNode {
                 billingIdentifiers.put("__workflowId__", context.plan().getId());
             }
             billingIdentifiers.put("__analyticsNodeId__", nodeId);
+            // This result becomes the step's OUTPUT, read whole by downstream nodes: the catalog
+            // then clips text only above 1 MB (inline base64 still above 4 KB).
+            billingIdentifiers.put(com.apimarketplace.orchestrator.services.impl.CatalogToolsGateway.STEP_OUTPUT_MARKER, Boolean.TRUE);
             // Which credential this step runs on - one decision, owned by
             // StepCredentialSelection, so this node and StepNode cannot drift on the
             // markers they emit.
@@ -314,6 +321,24 @@ public class FindNode extends BaseNode {
         }
     }
 
+    /**
+     * {@link #maxItems}, or the plan's templated {@code crud.limit} resolved for this run and
+     * clamped exactly like the constructor clamps a configured one.
+     */
+    private int effectiveMaxItems(ExecutionContext context) {
+        String template = stepConfig.crud() != null ? stepConfig.crud().deferredScalars().get("limit") : null;
+        if (template == null || templateAdapter == null) {
+            return maxItems;
+        }
+        Map<String, Object> probe = new HashMap<>();
+        Map<String, Object> crudProbe = new HashMap<>();
+        crudProbe.put("limit", resolveTemplateValue(template, context));
+        probe.put("crud", crudProbe);
+        Integer limit = CrudDeferredScalars.limitOf(CrudDeferredScalars.coerce(probe, stepConfig.crud()));
+        int requested = limit != null && limit > 0 ? limit : 100;
+        return Math.min(requested, FIND_NODE_HARD_CAP);
+    }
+
     private Map<String, Object> prepareCrudInput(ExecutionContext context) {
         Map<String, Object> rawInput = new HashMap<>();
         if (stepConfig.params() != null) rawInput.putAll(stepConfig.params());
@@ -342,14 +367,21 @@ public class FindNode extends BaseNode {
                 }
                 crudMap.put("similarity", similarityMap);
             }
+            // A {{...}} limit / offset / topK / threshold the parser set aside resolves here too.
+            CrudDeferredScalars.putTemplates(crudMap, stepConfig.crud());
             rawInput.put("crud", crudMap);
         }
 
         if (templateAdapter != null && !rawInput.isEmpty()) {
             try {
-                return templateAdapter.resolveTemplates(rawInput, context);
-            } catch (Exception e) {
+                return CrudDeferredScalars.coerce(
+                    templateAdapter.resolveTemplates(rawInput, context), stepConfig.crud());
+            } catch (RuntimeException e) {
+                // Fail the node. The fallback queried the table with the raw where/set values
+                // and reported them, plus the whole trigger payload, as the find's parameters.
                 logger.warn("[FindNode] Template resolution failed: nodeId={}, error={}", nodeId, e.getMessage());
+                throw new IllegalStateException(
+                    "Could not resolve the find's parameters: " + e.getMessage(), e);
             }
         }
 

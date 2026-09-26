@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { getClientLocale } from '@/lib/utils/locale';
 import {
   DndContext,
@@ -10,6 +11,7 @@ import {
   useSensor,
   useSensors,
   DragEndEvent,
+  DragOverlay,
 } from "@dnd-kit/core";
 import {
   arrayMove,
@@ -20,6 +22,12 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  List as VirtualList,
+  useDynamicRowHeight,
+  useListCallbackRef,
+  type RowComponentProps,
+} from "react-window";
+import {
   GripVertical,
   Star,
   Trash2,
@@ -29,6 +37,7 @@ import {
   Gauge,
   Sparkles,
   KeyRound,
+  Archive,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -54,6 +63,11 @@ import { getProviderIconSrc } from "@/lib/ai-providers/providerIcons";
 import { REASONING_EFFORT_LEVELS, supportsReasoningEffort } from "@/lib/ai-providers/reasoningEffort";
 import AddModelDialog from "./AddModelDialog";
 import ModelExecutionLinkCell from "./ModelExecutionLinkCell";
+import { ServiceLogo } from '@/components/ui/service-logo';
+import ToastContainer from '@/components/ToastContainer';
+import { useToast } from '@/components/Toast';
+import { formatUtcDateOrNull } from '@/lib/utils/dateFormatters';
+import RetiredModelsPanel from "./RetiredModelsPanel";
 
 interface ModelManagementPanelProps {
   /**
@@ -64,8 +78,65 @@ interface ModelManagementPanelProps {
   t: (key: string, values?: Record<string, string>) => string;
 }
 
+type SortOrder = "rank" | "releaseAsc" | "releaseDesc";
+
+/**
+ * Order by release date (YYYY-MM-DD compares as text). Rows with no known date go LAST in
+ * both directions: an unknown date is neither old nor new, and putting it first would bury
+ * the models the admin is actually looking for. Stable, so ties keep their rank order.
+ */
+function sortByReleaseDate(rows: ModelConfigEntry[], order: Exclude<SortOrder, "rank">): ModelConfigEntry[] {
+  const dir = order === "releaseAsc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const da = a.releaseDate ?? "";
+    const db = b.releaseDate ?? "";
+    if (!da || !db) return da ? -1 : db ? 1 : 0;
+    return da < db ? -dir : da > db ? dir : 0;
+  });
+}
+
 /** One shared empty array for the (many) models with no execution link. */
 const NO_EXECUTION_LINKS: ModelExecutionLink[] = [];
+
+/** Height of a plain row before it is measured (name line + control grid + gap), as rendered. */
+const ESTIMATED_ROW_HEIGHT = 72;
+/** The list scrolls inside once it would take more than this share of the viewport. */
+const LIST_VIEWPORT_SHARE = 0.7;
+/** Rows mounted beyond the viewport, so a short drag or a fast scroll finds them ready. */
+const LIST_OVERSCAN = 8;
+
+type VirtualModelRowProps = {
+  rows: ModelConfigEntry[];
+  renderRow: (model: ModelConfigEntry) => React.ReactNode;
+  draggingKey: string | null;
+};
+
+/**
+ * One slot of the virtual list. The slot is keyed by POSITION (react-window's choice) while
+ * the row inside is keyed by model, so a row's local edit state never follows a slot onto a
+ * different model after a reorder. The bottom padding is the gap the old `space-y-1` gave,
+ * inside the slot so the measured height includes it.
+ */
+function VirtualModelRow({
+  index,
+  style,
+  ariaAttributes,
+  rows,
+  renderRow,
+  draggingKey,
+}: RowComponentProps<VirtualModelRowProps>) {
+  const model = rows[index];
+  const key = `${model.provider}:${model.id}`;
+  return (
+    <div
+      style={{ ...style, zIndex: draggingKey === key ? 10 : undefined }}
+      {...ariaAttributes}
+      className="pb-1"
+    >
+      {renderRow(model)}
+    </div>
+  );
+}
 
 const TIER_OPTIONS = [
   { value: "top", label: "Top", badgeClass: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" },
@@ -90,25 +161,32 @@ const EFFORT_SELECT_OPTIONS = [
 // second line and the whole table misaligns). Cloud gets two extra FIXED
 // columns: the CE-ship chip (V381) and the free-tier chip (V493). Fixed (not
 // auto) so their varying labels cannot shift the following columns from row to
-// row. Both are absent on CE builds, which keep the original 10-column layout -
-// a CE install ships no bundle and meters no credits, so neither chip means
-// anything there.
+// row. Both are absent on CE builds - a CE install ships no bundle and meters
+// no credits, so neither chip means anything there.
+//
+// The model name is NOT a column: it sits on its own line above this grid, in
+// every row. As a `1fr` column it only got what the other columns left over,
+// and in the settings content width (~900px) the cloud row's fixed columns,
+// gaps, provider badge, tier and effort selects add up to more than that, so
+// on every CLI row (the only ones with an effort select) the name column was
+// 0px wide and the name did not show at all. The provider column is the
+// flexible one now; its badge truncates and keeps the full slug in its title.
 const ROW_GRID_COLS = IS_CE
-  ? "grid-cols-[28px_40px_28px_auto_1fr_auto_auto_24px_100px_140px_52px]"
-  : "grid-cols-[28px_40px_28px_88px_60px_auto_1fr_auto_auto_24px_100px_140px_52px]";
+  ? "grid-cols-[28px_40px_28px_minmax(0,1fr)_auto_auto_24px_100px_140px_76px]"
+  : "grid-cols-[28px_40px_28px_88px_60px_minmax(0,1fr)_auto_auto_24px_100px_140px_76px]";
 
 function ProviderBadge({ provider }: { provider: string }) {
   const iconSrc = getProviderIconSrc(provider);
   return (
     <span
-      className="inline-flex items-center gap-1.5 text-xs text-theme-secondary bg-theme-tertiary px-1.5 py-0.5 rounded whitespace-nowrap"
+      className="inline-flex max-w-full items-center gap-1.5 text-xs text-theme-secondary bg-theme-tertiary px-1.5 py-0.5 rounded whitespace-nowrap"
       title={provider}
     >
       {iconSrc ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={iconSrc} alt={provider} className="w-3.5 h-3.5 object-contain" />
+        <ServiceLogo src={iconSrc} alt={provider} className="w-3.5 h-3.5 flex-shrink-0 object-contain" />
       ) : null}
-      <span className="font-mono">{provider}</span>
+      <span className="font-mono truncate">{provider}</span>
     </span>
   );
 }
@@ -175,6 +253,84 @@ function NameCell({
       aria-label={`${t("modelConfig.editName")}: ${model.name}`}
     >
       {model.name}
+    </button>
+  );
+}
+
+/**
+ * The rank, typed. Dragging only works for a short move: with hundreds of models, taking
+ * #420 to #5 meant scrolling the whole catalogue with the button held, and in a virtualised
+ * list the rows in between are not even mounted to drop on. Typing the target position is
+ * the long move; the drag handle stays for nudging a row past its neighbours.
+ */
+function RankCell({
+  model,
+  rank,
+  rankCount,
+  onMoveToRank,
+  t,
+}: {
+  model: ModelConfigEntry;
+  /** 1-based position in the whole list of this tab, not in the filtered view. */
+  rank: number;
+  rankCount: number;
+  onMoveToRank: (model: ModelConfigEntry, rank: number) => void;
+  t: (key: string) => string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(rank));
+  /**
+   * Enter and Escape both unmount the focused input, and Chromium then fires its blur
+   * with the handlers of the last render. Without this latch Escape still moved the model
+   * (blur committed the typed value) and Enter saved the order twice.
+   */
+  const settled = useRef(false);
+
+  const commit = () => {
+    if (settled.current) return;
+    settled.current = true;
+    setEditing(false);
+    const typed = Number.parseInt(value, 10);
+    if (!Number.isFinite(typed)) return;
+    const target = Math.min(Math.max(typed, 1), rankCount);
+    if (target !== rank) onMoveToRank(model, target);
+  };
+
+  if (editing) {
+    return (
+      <input
+        type="number"
+        min={1}
+        max={rankCount}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          else if (e.key === "Escape") {
+            settled.current = true;
+            setEditing(false);
+          }
+        }}
+        aria-label={`${t("modelConfig.rankEdit")} (${rank}): ${model.name}`}
+        data-testid={`model-rank-input-${model.provider}-${model.id}`}
+        className="w-full h-6 px-0.5 text-sm tabular-nums rounded border border-theme bg-theme-primary text-theme-primary [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        autoFocus
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => { settled.current = false; setValue(String(rank)); setEditing(true); }}
+      data-testid={`model-rank-${model.provider}-${model.id}`}
+      title={t("modelConfig.rankEdit")}
+      // The visible number is part of the name (WCAG 2.5.3), so it is read out too.
+      aria-label={`${t("modelConfig.rankEdit")} (${rank}): ${model.name}`}
+      className="text-sm text-theme-secondary tabular-nums hover:text-theme-primary hover:underline decoration-dotted underline-offset-2"
+    >
+      {rank}
     </button>
   );
 }
@@ -313,7 +469,6 @@ function RateLimitCell({
   const [rpm, setRpm] = useState(model.rateLimitRpm != null ? String(model.rateLimitRpm) : "");
   const [tpmTenant, setTpmTenant] = useState(model.rateLimitTpmPerTenant != null ? String(model.rateLimitTpmPerTenant) : "");
   const [rpmTenant, setRpmTenant] = useState(model.rateLimitRpmPerTenant != null ? String(model.rateLimitRpmPerTenant) : "");
-  const popoverRef = useRef<HTMLDivElement>(null);
 
   const hasLimits = model.rateLimitTpm != null || model.rateLimitRpm != null
     || model.rateLimitTpmPerTenant != null || model.rateLimitRpmPerTenant != null;
@@ -352,80 +507,146 @@ function RateLimitCell({
     setRpmTenant(model.rateLimitRpmPerTenant != null ? String(model.rateLimitRpmPerTenant) : "");
   };
 
-  // Click-outside auto-saves (like PricingCell), Escape cancels
-  useEffect(() => {
-    if (!editing) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        commitRef.current();
-      }
-    };
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cancel();
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleEscape);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleEscape);
-    };
-  }, [editing]);
-
-  if (!editing) {
-    const tpmLabel = formatCompactLimit(model.rateLimitTpm);
-    const rpmLabel = formatCompactLimit(model.rateLimitRpm);
-    const tooltip = hasLimits
-      ? [
-          `TPM: ${model.rateLimitTpm?.toLocaleString(getClientLocale()) ?? "-"}`,
-          `RPM: ${model.rateLimitRpm?.toLocaleString(getClientLocale()) ?? "-"}`,
-        ].join(" · ")
-      : t("modelConfig.rateLimits.set");
-
-    return (
-      <button
-        type="button"
-        onClick={() => setEditing(true)}
-        className="flex w-full items-center justify-between gap-3 text-sm text-theme-secondary hover:text-theme-primary transition-colors"
-        title={tooltip}
-      >
-        <span className="flex items-baseline gap-1 tabular-nums">
-          <span className="text-xs uppercase tracking-wide opacity-70">TPM</span>
-          <span>{tpmLabel}</span>
-        </span>
-        <span className="flex items-baseline gap-1 tabular-nums">
-          <span className="text-xs uppercase tracking-wide opacity-70">RPM</span>
-          <span>{rpmLabel}</span>
-        </span>
-      </button>
-    );
-  }
-
+  const tpmLabel = formatCompactLimit(model.rateLimitTpm);
+  const rpmLabel = formatCompactLimit(model.rateLimitRpm);
+  const tooltip = hasLimits
+    ? [
+        `TPM: ${model.rateLimitTpm?.toLocaleString(getClientLocale()) ?? "-"}`,
+        `RPM: ${model.rateLimitRpm?.toLocaleString(getClientLocale()) ?? "-"}`,
+      ].join(" · ")
+    : t("modelConfig.rateLimits.set");
   const inputClass = "w-full h-7 px-2 text-sm rounded border border-theme bg-theme-primary text-theme-primary";
 
+  // The editor is PORTALLED (shared Popover), never an absolute child of the row. A disabled
+  // model's row is `opacity-40`, and opacity makes the row a stacking context: an in-row
+  // editor painted at 40% and its z-index could not lift it over the rows below, which
+  // covered it. Most catalog rows are disabled, so on most rows the editor was effectively
+  // invisible. Click outside saves (like PricingCell), Escape cancels.
   return (
-    <div ref={popoverRef} className="absolute right-0 top-full mt-1 z-50 bg-theme-primary border border-theme rounded-xl shadow-lg p-3 w-56">
-      <p className="text-sm font-medium text-theme-primary mb-2">{t("modelConfig.rateLimits.title")}</p>
-      <div className="space-y-1.5">
-        <input type="number" value={tpm} onChange={(e) => setTpm(e.target.value)}
-          placeholder={t("modelConfig.rateLimits.tpmGlobal")} step="1000" min="0"
-          className={inputClass} autoFocus />
-        <input type="number" value={rpm} onChange={(e) => setRpm(e.target.value)}
-          placeholder={t("modelConfig.rateLimits.rpmGlobal")} step="10" min="0"
-          className={inputClass} />
-        {/* Per-tenant rate-limit inputs hidden while the platform runs the GLOBAL
-            rate-limit strategy (per-tenant caps are dormant, not enforced). The
-            tpmTenant/rpmTenant state stays initialised from the model and is passed
-            through unchanged by commit(), so editing the global limits never wipes
-            the per-tenant values and re-enabling is just re-adding these inputs. */}
-      </div>
-      <div className="flex justify-end gap-1 mt-2">
-        <Button size="sm" variant="outline" className="h-6 text-sm px-2" onClick={cancel}>
-          {t("modelConfig.addDialog.cancel")}
-        </Button>
-        <Button size="sm" className="h-6 text-sm px-2" onClick={commit}>
-          OK
-        </Button>
-      </div>
+    <Popover
+      open={editing}
+      onOpenChange={(open) => {
+        if (open) setEditing(true);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-3 text-sm text-theme-secondary hover:text-theme-primary transition-colors"
+          title={tooltip}
+        >
+          <span className="flex items-baseline gap-1 tabular-nums">
+            <span className="text-xs uppercase tracking-wide opacity-70">TPM</span>
+            <span>{tpmLabel}</span>
+          </span>
+          <span className="flex items-baseline gap-1 tabular-nums">
+            <span className="text-xs uppercase tracking-wide opacity-70">RPM</span>
+            <span>{rpmLabel}</span>
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="w-56 p-3"
+        data-testid={`rate-limit-editor-${model.provider}-${model.id}`}
+        onInteractOutside={() => commitRef.current()}
+        onEscapeKeyDown={(e) => {
+          e.preventDefault();
+          cancel();
+        }}
+      >
+        <p className="text-sm font-medium text-theme-primary mb-2">{t("modelConfig.rateLimits.title")}</p>
+        <div className="space-y-1.5">
+          <input type="number" value={tpm} onChange={(e) => setTpm(e.target.value)}
+            placeholder={t("modelConfig.rateLimits.tpmGlobal")} step="1000" min="0"
+            className={inputClass} autoFocus />
+          <input type="number" value={rpm} onChange={(e) => setRpm(e.target.value)}
+            placeholder={t("modelConfig.rateLimits.rpmGlobal")} step="10" min="0"
+            className={inputClass} />
+          {/* Per-tenant rate-limit inputs hidden while the platform runs the GLOBAL
+              rate-limit strategy (per-tenant caps are dormant, not enforced). The
+              tpmTenant/rpmTenant state stays initialised from the model and is passed
+              through unchanged by commit(), so editing the global limits never wipes
+              the per-tenant values and re-enabling is just re-adding these inputs. */}
+        </div>
+        <div className="flex justify-end gap-1 mt-2">
+          <Button size="sm" variant="outline" className="h-6 text-sm px-2" onClick={cancel}>
+            {t("modelConfig.addDialog.cancel")}
+          </Button>
+          <Button size="sm" className="h-6 text-sm px-2" onClick={commit}>
+            OK
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Separator between provider and model id in a Select value. Provider slugs never contain it. */
+const REPLACEMENT_SEPARATOR = ":";
+const REPLACEMENT_DEFAULT = "__platform_default__";
+
+function ReplacementSelect({
+  model,
+  options,
+  onChange,
+  t,
+}: {
+  model: ModelConfigEntry;
+  options: ModelConfigEntry[];
+  onChange: (model: ModelConfigEntry, provider: string | null, modelId: string | null) => void;
+  t: (key: string) => string;
+}) {
+  const current =
+    model.replacementProvider && model.replacementModel
+      ? `${model.replacementProvider}${REPLACEMENT_SEPARATOR}${model.replacementModel}`
+      : REPLACEMENT_DEFAULT;
+  // Keep a replacement that is not among the options (e.g. disabled since) selectable, so
+  // the control shows what is stored instead of silently reading "platform default".
+  const currentMissing =
+    current !== REPLACEMENT_DEFAULT
+    && !options.some((o) => `${o.provider}${REPLACEMENT_SEPARATOR}${o.id}` === current);
+  return (
+    <div
+      className="flex flex-shrink-0 items-center gap-1 text-sm text-theme-secondary"
+      title={t("modelConfig.replacementTooltip")}
+      data-testid={`model-replacement-${model.provider}-${model.id}`}
+    >
+      <span className="whitespace-nowrap">{t("modelConfig.replacedBy")}</span>
+      <Select
+        value={current}
+        onValueChange={(value) => {
+          if (value === REPLACEMENT_DEFAULT) {
+            onChange(model, null, null);
+            return;
+          }
+          const cut = value.indexOf(REPLACEMENT_SEPARATOR);
+          onChange(model, value.slice(0, cut), value.slice(cut + 1));
+        }}
+      >
+        <SelectTrigger
+          aria-label={t("modelConfig.replacedBy")}
+          className="!h-6 !min-h-0 text-sm !rounded-lg !px-2 !py-0.5 min-w-0 max-w-[16rem] w-auto gap-0.5 [&>svg]:h-3 [&>svg]:w-3 bg-theme-tertiary text-theme-primary"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={REPLACEMENT_DEFAULT}>{t("modelConfig.replacementDefault")}</SelectItem>
+          {currentMissing && (
+            <SelectItem value={current}>
+              {`${model.replacementProvider} / ${model.replacementModel}`}
+            </SelectItem>
+          )}
+          {options.map((o) => (
+            <SelectItem
+              key={`${o.provider}${REPLACEMENT_SEPARATOR}${o.id}`}
+              value={`${o.provider}${REPLACEMENT_SEPARATOR}${o.id}`}
+            >
+              {`${o.name} (${o.provider})`}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
@@ -433,6 +654,8 @@ function RateLimitCell({
 function SortableModelRow({
   model,
   index,
+  rankCount,
+  onMoveToRank,
   executionLinks,
   executionLinksLoaded,
   onExecutionLinksChanged,
@@ -441,6 +664,9 @@ function SortableModelRow({
   onCycleBundleEnabled,
   onToggleFreeTier,
   onToggleRecommended,
+  replacementOptions,
+  showReplacement,
+  onReplacementChange,
   onTierChange,
   onReasoningEffortChange,
   onPricingChange,
@@ -448,12 +674,19 @@ function SortableModelRow({
   onNameChange,
   onDelete,
   onReset,
+  onRetire,
+  dragDisabled,
+  showReleaseDate,
   selected,
   onSelectedChange,
   t,
 }: {
   model: ModelConfigEntry;
+  /** 0-based position in the whole list of this tab (filters do not renumber). */
   index: number;
+  /** Size of the whole list, the highest rank that can be typed. */
+  rankCount: number;
+  onMoveToRank: (model: ModelConfigEntry, rank: number) => void;
   /** Execution links whose BILLED pair is this model - empty when unrouted. */
   executionLinks: ModelExecutionLink[];
   /** False while the list is unknown (never read, or the read failed). */
@@ -465,6 +698,15 @@ function SortableModelRow({
   onCycleBundleEnabled: (model: ModelConfigEntry) => void;
   onToggleFreeTier: (model: ModelConfigEntry) => void;
   onToggleRecommended: (model: ModelConfigEntry) => void;
+  /** Enabled models this one can be replaced by while it is disabled (V515). */
+  replacementOptions: ModelConfigEntry[];
+  /**
+   * Only on the chat tab, whose rows carry the GLOBAL enabled flag the runtime swap reads.
+   * Other tabs show a per-category flag, so a replacement offered there would do nothing.
+   */
+  showReplacement: boolean;
+  /** null/null = no explicit replacement (the platform default is used). */
+  onReplacementChange: (model: ModelConfigEntry, provider: string | null, modelId: string | null) => void;
   onTierChange: (model: ModelConfigEntry, tier: string) => void;
   onReasoningEffortChange: (model: ModelConfigEntry, effort: string) => void;
   onPricingChange: (model: ModelConfigEntry, input: number, output: number) => void;
@@ -477,9 +719,16 @@ function SortableModelRow({
   }) => void;
   onDelete: (model: ModelConfigEntry) => void;
   onReset: (model: ModelConfigEntry) => void;
+  /** V533: retire the model for good (asks for confirmation first). */
+  onRetire: (model: ModelConfigEntry) => void;
+  /** True while the list is sorted by release date: a drop position would mean nothing. */
+  dragDisabled: boolean;
+  /** Show the release date on the name line (while sorting by it, so the order reads). */
+  showReleaseDate: boolean;
   selected: boolean;
   onSelectedChange: (model: ModelConfigEntry, selected: boolean) => void;
-  t: (key: string) => string;
+  /** Values: the release-date label names its date. */
+  t: (key: string, values?: Record<string, string>) => string;
 }) {
   const {
     attributes,
@@ -488,24 +737,109 @@ function SortableModelRow({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: `${model.provider}:${model.id}` });
+  } = useSortable({ id: `${model.provider}:${model.id}`, disabled: dragDisabled });
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
   };
+  const releasedOn = showReleaseDate ? formatUtcDateOrNull(model.releaseDate) : null;
 
   return (
     <div
       ref={setNodeRef}
       style={style}
+      data-testid={`model-row-${model.provider}-${model.id}`}
       className={cn(
-        "grid items-center gap-2 px-3 py-2 rounded-lg border border-theme bg-theme-primary transition-colors",
-        ROW_GRID_COLS,
+        "px-3 py-2 rounded-lg border border-theme bg-theme-primary transition-colors",
         isDragging && "opacity-50 shadow-lg z-50",
         model.enabled === false && "opacity-40"
       )}
     >
+      {/* Model name, then the real id beside it, then the badges, on a line of their
+          own so no column width can squeeze the name out (see ROW_GRID_COLS).
+
+          The id is the point of the second label. The name is editable, so it is
+          whatever an admin last typed, and with only that on screen there was no way
+          to tell a renamed model from one still wearing its catalogue name, nor to
+          find the id a workflow or an execution link actually refers to. It appears
+          ONLY when the two differ, so its presence means "this one has been renamed". */}
+      <div className="flex items-center gap-1.5 min-w-0 mb-1.5">
+        <div className="min-w-0 max-w-full">
+          <NameCell model={model} onNameChange={onNameChange} t={t} />
+        </div>
+        {model.name !== model.id && (
+          <span
+            className="min-w-0 flex-1 truncate text-xs font-mono text-theme-secondary"
+            title={model.id}
+            data-testid={`model-id-${model.provider}-${model.id}`}
+          >
+            {model.id}
+          </span>
+        )}
+        {/* Both of these used to be text pills. On a catalogue where most rows carry at
+            least one, the row read as a sentence of badges and the name lost the fight for
+            attention. They keep their full wording in the tooltip. */}
+        {model.isCustom && (
+          <span
+            title={t("modelConfig.custom")}
+            aria-label={t("modelConfig.custom")}
+            data-testid={`model-custom-${model.provider}-${model.id}`}
+            className="flex-shrink-0 text-purple-600 dark:text-purple-400"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+          </span>
+        )}
+        {/* Full catalog is listed for ranking even without a key. Mark rows the
+            picker/runtime can't yet serve so it isn't confusing. Bridge rows use
+            their own availability signal, so they're excluded here. */}
+        {showReleaseDate && (
+          <span
+            className="flex-shrink-0 text-xs text-theme-secondary"
+            data-testid={`model-release-${model.provider}-${model.id}`}
+          >
+            {releasedOn
+              ? t("modelConfig.releasedOn", { date: releasedOn })
+              : t("modelConfig.releaseUnknown")}
+          </span>
+        )}
+        {model.available === false && model.providerKind !== 'bridge' && (
+          <span
+            title={t("modelConfig.notConfiguredTooltip")}
+            aria-label={t("modelConfig.notConfigured")}
+            data-testid={`model-unconfigured-${model.provider}-${model.id}`}
+            className="flex-shrink-0 text-amber-600 dark:text-amber-400"
+          >
+            <KeyRound className="w-3.5 h-3.5" />
+          </span>
+        )}
+        {/* Execution-link badge + one-click "route to the CLI" button. Cloud
+            only: the execution-link endpoints are not loaded in CE, so the
+            control would 404 there. Renders nothing for a model that is neither
+            linked nor routable by a CLI. */}
+        {IS_CLOUD && executionLinksLoaded && (
+          <ModelExecutionLinkCell
+            model={model}
+            links={executionLinks}
+            onChanged={onExecutionLinksChanged}
+            onError={onExecutionLinkError}
+          />
+        )}
+        {/* V515: a disabled model is not removed from the runs that already use it (agents,
+            workflow nodes, chat endpoints): they run on this replacement instead, or on the
+            platform default when none is chosen. Only shown while the model is disabled,
+            the only state in which it does anything. */}
+        {showReplacement && model.enabled === false && (
+          <ReplacementSelect
+            model={model}
+            options={replacementOptions}
+            onChange={onReplacementChange}
+            t={t}
+          />
+        )}
+      </div>
+
+      <div className={cn("grid items-center gap-2", ROW_GRID_COLS)}>
       {/* Selection, for the bulk bar above the list. Its own column so the drag handle
           stays where the eye expects it. */}
       <Checkbox
@@ -525,9 +859,13 @@ function SortableModelRow({
         >
           <GripVertical className="w-3.5 h-3.5" />
         </button>
-        <span className="text-sm text-theme-secondary tabular-nums">
-          {index + 1}
-        </span>
+        <RankCell
+          model={model}
+          rank={index + 1}
+          rankCount={rankCount}
+          onMoveToRank={onMoveToRank}
+          t={t}
+        />
       </div>
 
       {/* Enable/disable toggle */}
@@ -566,10 +904,10 @@ function SortableModelRow({
       )}
 
       {/* Free-tier opening (V493): whether a Free-plan account may spend its monthly
-          AI ALLOWANCE (the separate pot, not the workflow credits) on this model. Off
-          by default. Cloud only - a CE install meters nothing, so there is no
-          allowance to open. Only rendered on the chat and browser_agent tabs, whose
-          source types the allowance actually funds; image rows are mode-filtered out
+          credits on a chat / agent turn on this model. Off by default. Cloud only - a
+          CE install meters nothing, so there is nothing to open. Only rendered on the
+          chat and browser_agent tabs, whose source types the Free credits actually
+          fund; image rows are mode-filtered out
           of both and can never reach this. */}
       {!IS_CE && (
         <button
@@ -590,68 +928,6 @@ function SortableModelRow({
 
       {/* Provider badge - icon + name (icons distinguish CLI from API) */}
       <ProviderBadge provider={model.provider} />
-
-      {/* Model name, then the real id under it, then the badges.
-
-          The id line is the point of this cell. The name is editable, so it is whatever an
-          admin last typed, and with only that on screen there was no way to tell a renamed
-          model from one still wearing its catalogue name, nor to find the id a workflow or
-          an execution link actually refers to. It appears ONLY when the two differ, so a
-          second line means "this one has been renamed" at a glance and an untouched
-          catalogue stays one line per row. */}
-      <div className="flex items-center gap-1.5 min-w-0">
-        <div className="min-w-0 flex-1">
-          <NameCell model={model} onNameChange={onNameChange} t={t} />
-          {model.name !== model.id && (
-            <span
-              className="block truncate text-[11px] leading-tight text-theme-secondary"
-              title={model.id}
-              data-testid={`model-id-${model.provider}-${model.id}`}
-            >
-              {model.id}
-            </span>
-          )}
-        </div>
-        {/* Both of these used to be text pills. On a catalogue where most rows carry at
-            least one, the row read as a sentence of badges and the name lost the fight for
-            attention. They keep their full wording in the tooltip. */}
-        {model.isCustom && (
-          <span
-            title={t("modelConfig.custom")}
-            aria-label={t("modelConfig.custom")}
-            data-testid={`model-custom-${model.provider}-${model.id}`}
-            className="flex-shrink-0 text-purple-600 dark:text-purple-400"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-          </span>
-        )}
-        {/* Full catalog is listed for ranking even without a key. Mark rows the
-            picker/runtime can't yet serve so it isn't confusing. Bridge rows use
-            their own availability signal, so they're excluded here. */}
-        {model.available === false && model.providerKind !== 'bridge' && (
-          <span
-            title={t("modelConfig.notConfiguredTooltip")}
-            aria-label={t("modelConfig.notConfigured")}
-            data-testid={`model-unconfigured-${model.provider}-${model.id}`}
-            className="flex-shrink-0 text-amber-600 dark:text-amber-400"
-          >
-            <KeyRound className="w-3.5 h-3.5" />
-          </span>
-        )}
-        {/* Execution-link badge + one-click "route to the CLI" button. Cloud
-            only: the execution-link endpoints are not loaded in CE, so the
-            control would 404 there. Renders nothing for a model that is neither
-            linked nor routable by a CLI, so it stays a badge among badges rather
-            than a new grid column (ROW_GRID_COLS is unchanged). */}
-        {IS_CLOUD && executionLinksLoaded && (
-          <ModelExecutionLinkCell
-            model={model}
-            links={executionLinks}
-            onChanged={onExecutionLinksChanged}
-            onError={onExecutionLinkError}
-          />
-        )}
-      </div>
 
       {/* Tier select */}
       <Select
@@ -737,12 +1013,23 @@ function SortableModelRow({
         )}
         <button
           type="button"
+          onClick={() => onRetire(model)}
+          className="text-theme-secondary hover:text-amber-600 transition-colors p-1"
+          title={t("modelConfig.retire.action")}
+          aria-label={`${t("modelConfig.retire.action")}: ${model.name}`}
+          data-testid={`model-retire-${model.provider}-${model.id}`}
+        >
+          <Archive className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
           onClick={() => onDelete(model)}
           className="text-theme-secondary hover:text-red-500 transition-colors p-1"
           title={t("modelConfig.deleteModel")}
         >
           <Trash2 className="w-3.5 h-3.5" />
         </button>
+      </div>
       </div>
     </div>
   );
@@ -810,6 +1097,14 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
   const [tierFilter, setTierFilter] = useState<string>("all");
   /** "all" | "on" | "off" - which side of the per-model switch to show. */
   const [stateFilter, setStateFilter] = useState<string>("all");
+  /**
+   * "rank" (the fallback order, the default) or a release-date order, which is how an admin
+   * finds the old models worth retiring. Models with no known release date go last either way.
+   */
+  const [sortOrder, setSortOrder] = useState<SortOrder>("rank");
+  /** Bumped after a retire so the Retired list re-reads. */
+  const [retiredReload, setRetiredReload] = useState(0);
+  const { toasts, addToast, removeToast } = useToast();
   /**
    * Active category tab. {@code 'chat'} mirrors the legacy global view -
    * writes go to the parent {@code model_config_overrides.ranking} column
@@ -954,8 +1249,11 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         m.id.toLowerCase().includes(needle) || (m.name ?? "").toLowerCase().includes(needle),
       );
     }
+    if (sortOrder !== "rank") {
+      filtered = sortByReleaseDate(filtered, sortOrder);
+    }
     return filtered;
-  }, [models, providerFilter, category, tierFilter, stateFilter, search]);
+  }, [models, providerFilter, category, tierFilter, stateFilter, search, sortOrder]);
 
   const filtersActive =
     providerFilter !== "all" || tierFilter !== "all" || stateFilter !== "all" || search.trim() !== "";
@@ -1174,6 +1472,56 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
     return byPair;
   }, [executionLinks]);
 
+  /**
+   * The list is virtualised: only the rows in view (plus an overscan) are mounted. A full
+   * catalogue is several hundred rows, each carrying selects, inputs and a drag handle, and
+   * every DISABLED row also carries a replacement select whose options are every enabled
+   * model, so mounting them all at once is what made the tab slow to open.
+   */
+  // State-backed: the list replaces its handle once its element exists, and that has to
+  // re-render the panel so the gutter below is read from a mounted element.
+  const [listApi, setListApi] = useListCallbackRef(null);
+  const rowHeight = useDynamicRowHeight({ defaultRowHeight: ESTIMATED_ROW_HEIGHT, key: category });
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window === "undefined" ? 900 : window.innerHeight,
+  );
+  useEffect(() => {
+    const onResize = () => setViewportHeight(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  /** Set by a typed rank, consumed once the list has re-rendered in its new order. */
+  const pendingScrollKey = useRef<string | null>(null);
+  /** Row being dragged, lifted above its siblings (each virtual row is its own layer). */
+  const [draggingKey, setDraggingKey] = useState<string | null>(null);
+  /**
+   * Width of the list's own scrollbar gutter (0 with overlay scrollbars), read off the list
+   * itself: the app styles its scrollbars, so a generic probe measures the wrong one.
+   */
+  const [scrollbarWidth, setScrollbarWidth] = useState(0);
+  // Not from the list's onResize: that fires before the handle exists, and never again for
+  // a list whose height is fixed. The gutter is `stable`, so it does not change with content.
+  useEffect(() => {
+    const el = listApi?.element;
+    if (!el) return;
+    const width = el.offsetWidth - el.clientWidth;
+    setScrollbarWidth((prev) => (prev === width ? prev : width));
+  }, [listApi, viewportHeight]);
+
+  /** Rank = position in the whole list of this tab, so filters never renumber a row. */
+  const rankIndex = useMemo(
+    () => new Map(models.map((m, i) => [`${m.provider}:${m.id}`, i])),
+    [models],
+  );
+
+  useEffect(() => {
+    const key = pendingScrollKey.current;
+    if (!key) return;
+    pendingScrollKey.current = null;
+    const i = visibleModels.findIndex((m) => `${m.provider}:${m.id}` === key);
+    if (i !== -1) listApi?.scrollToRow({ index: i, align: "smart" });
+  }, [visibleModels, listApi]);
+
   const saveAndRefresh = async (fn: () => Promise<void>) => {
     setSaving(true);
     try {
@@ -1200,7 +1548,20 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
     );
     if (oldIndex === -1 || newIndex === -1) return;
 
-    const reordered = arrayMove(models, oldIndex, newIndex);
+    await persistOrder(arrayMove(models, oldIndex, newIndex));
+  };
+
+  /** Typed rank (1-based, already clamped by the cell) = the long move a drag cannot make. */
+  const handleMoveToRank = async (model: ModelConfigEntry, rank: number) => {
+    const oldIndex = models.findIndex((m) => m.provider === model.provider && m.id === model.id);
+    if (oldIndex === -1 || oldIndex === rank - 1) return;
+    // Follow the row to where it lands: in a virtualised list it would otherwise vanish
+    // from the viewport, and the admin could not see that the move happened.
+    pendingScrollKey.current = `${model.provider}:${model.id}`;
+    await persistOrder(arrayMove(models, oldIndex, rank - 1));
+  };
+
+  const persistOrder = async (reordered: ModelConfigEntry[]) => {
     setModels(reordered);
 
     const rankings = reordered.map((m, i) => ({
@@ -1258,9 +1619,8 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
   };
 
   // Free-tier opening (V493): lets a Free-plan account fund a chat / agent turn on
-  // this model from its monthly AI allowance (V494's separate pot) instead of the
-  // PAYG bucket alone. This is what makes an agent usable for a visitor who has not
-  // topped up. The monthly credit grant is unaffected and stays workflow-only.
+  // this model from its monthly credits instead of the PAYG bucket alone. This is
+  // what makes an agent usable for a visitor who has not topped up.
   const handleToggleFreeTier = (model: ModelConfigEntry) => {
     const current = model.freeTierEnabled === true;
     const next = !current;
@@ -1284,6 +1644,50 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         setError(e instanceof Error ? e.message : String(e));
       });
   };
+
+  // V515: what a disabled model's existing runs execute on instead. Optimistic like the
+  // chips above; a refused pair (unknown, itself) comes back as the server's message.
+  const handleReplacementChange = (
+    model: ModelConfigEntry,
+    provider: string | null,
+    modelId: string | null,
+  ) => {
+    const previous = { replacementProvider: model.replacementProvider, replacementModel: model.replacementModel };
+    const patch = { replacementProvider: provider ?? undefined, replacementModel: modelId ?? undefined };
+    setModels((prev) =>
+      prev.map((m) =>
+        m.provider === model.provider && m.id === model.id ? { ...m, ...patch, hasOverride: true } : m,
+      ),
+    );
+    modelConfigService
+      .saveOverride({
+        provider: model.provider,
+        modelId: model.id,
+        replacementProvider: provider,
+        replacementModel: modelId,
+      })
+      .catch((e) => {
+        setModels((prev) =>
+          prev.map((m) =>
+            m.provider === model.provider && m.id === model.id ? { ...m, ...previous } : m,
+          ),
+        );
+        setError(e instanceof Error ? e.message : String(e));
+      });
+  };
+
+  // Only models a run could actually use: enabled, configured, and not a cloud CLI bridge. The backend accepts any
+  // catalog model, but at run time an unconfigured replacement is skipped for the platform
+  // default, so offering one here would be a choice that silently does nothing.
+  const replacementOptions = useMemo(
+    () => models.filter((m) =>
+      m.enabled !== false
+      && m.available !== false
+      // On cloud a CLI bridge is admin-only: every non-admin run swapped onto one would be
+      // refused by the bridge access check, which is the failure this control exists to end.
+      && !(IS_CLOUD && m.providerKind === 'bridge')),
+    [models],
+  );
 
   const handleToggleEnabled = (model: ModelConfigEntry) => {
     // currently disabled (enabled === false) → turn on; otherwise turn off.
@@ -1416,6 +1820,51 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
     });
   };
 
+  /**
+   * V533: retire models for good. They leave the admin list and every picker, the CE bundle
+   * stops shipping them, and no feed sync, seed or bundle can bring them back; only a restore
+   * from the Retired list does. Confirmed first because of that last part.
+   */
+  const handleRetire = async (targets: ModelConfigEntry[]) => {
+    if (targets.length === 0) return;
+    const question =
+      targets.length === 1
+        ? t("modelConfig.retire.confirmOne", { name: targets[0].name })
+        : t("modelConfig.retire.confirmMany", { count: String(targets.length) });
+    if (!confirm(question)) return;
+    setSaving(true);
+    try {
+      const res = await modelConfigService.retireModels(
+        targets.map((m) => ({ provider: m.provider, modelId: m.id })),
+      );
+      clearModelsCache();
+      const gone = new Set(targets.map((m) => `${m.provider}:${m.id}`));
+      setSelectedKeys((prev) => new Set([...prev].filter((k) => !gone.has(k))));
+      addToast({
+        type: "success",
+        title: t("modelConfig.retire.doneTitle", { count: String(res?.retired ?? targets.length) }),
+        message: t("modelConfig.retire.doneMessage"),
+      });
+      setRetiredReload((n) => n + 1);
+      await fetchModels({ silent: true });
+    } catch (e) {
+      // The server's reason when it gave one, not a generic sentence.
+      addToast({
+        type: "error",
+        title: t("modelConfig.retire.error"),
+        message: e instanceof Error && e.message ? e.message : "",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /** After a restore: the models are back (disabled) in the main list. */
+  const handleRestored = async () => {
+    clearModelsCache();
+    await fetchModels({ silent: true });
+  };
+
   const handleResetAll = () => {
     if (!confirm(t("modelConfig.resetConfirm"))) return;
     saveAndRefresh(async () => {
@@ -1444,6 +1893,56 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
   }
 
   const sortableIds = visibleModels.map((m) => `${m.provider}:${m.id}`);
+  // Grows with the rows until it reaches most of the viewport, then scrolls inside, so a
+  // filter that leaves three models does not sit in a mostly empty box.
+  // Summed over the rows actually listed (measured, else the estimate): an average would
+  // also count rows a previous filter measured, and leave a strip or a stray scrollbar.
+  const listCap = Math.round(viewportHeight * LIST_VIEWPORT_SHARE);
+  let listHeight = 0;
+  for (let i = 0; i < visibleModels.length && listHeight < listCap; i++) {
+    listHeight += rowHeight.getRowHeight(i) ?? ESTIMATED_ROW_HEIGHT;
+  }
+  listHeight = Math.min(listCap, Math.ceil(listHeight));
+  const draggedModel = draggingKey
+    ? visibleModels.find((m) => `${m.provider}:${m.id}` === draggingKey) ?? null
+    : null;
+
+  const renderRow = (model: ModelConfigEntry) => {
+    const key = `${model.provider}:${model.id}`;
+    return (
+      <SortableModelRow
+        key={key}
+        model={model}
+        index={rankIndex.get(key) ?? 0}
+        rankCount={models.length}
+        onMoveToRank={handleMoveToRank}
+        executionLinks={executionLinksByModel.get(key) ?? NO_EXECUTION_LINKS}
+        executionLinksLoaded={executionLinksLoaded}
+        onExecutionLinksChanged={loadExecutionLinks}
+        onExecutionLinkError={setExecutionLinkError}
+        onToggleEnabled={handleToggleEnabled}
+        onCycleBundleEnabled={handleCycleBundleEnabled}
+        onToggleFreeTier={handleToggleFreeTier}
+        onToggleRecommended={handleToggleRecommended}
+        replacementOptions={replacementOptions}
+        showReplacement={category === 'chat'}
+        onReplacementChange={handleReplacementChange}
+        onTierChange={handleTierChange}
+        onReasoningEffortChange={handleReasoningEffortChange}
+        onPricingChange={handlePricingChange}
+        onRateLimitChange={handleRateLimitChange}
+        onNameChange={handleNameChange}
+        onDelete={handleDelete}
+        onReset={handleReset}
+        onRetire={(m) => handleRetire([m])}
+        dragDisabled={sortOrder !== "rank"}
+        showReleaseDate={sortOrder !== "rank"}
+        selected={selectedKeys.has(key)}
+        onSelectedChange={setRowSelected}
+        t={t}
+      />
+    );
+  };
 
   return (
     // -mt-2 pulls the panel up under the page's connection-mode pill toggle so
@@ -1555,6 +2054,24 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
               ))}
             </SelectContent>
           </Select>
+          {/* Release-date order: the quickest way to find the old models worth retiring.
+              Dragging is off while it is active, since a drop position would not be a rank. */}
+          <div data-testid="sort-order">
+          <Select value={sortOrder} onValueChange={(v) => setSortOrder(v as SortOrder)}>
+            <SelectTrigger
+              className="rounded-lg px-3 text-sm min-w-[160px]"
+              aria-label={t("modelConfig.sort.label")}
+              title={t("modelConfig.sort.label")}
+            >
+              <SelectValue placeholder={t("modelConfig.sort.label")} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="rank">{t("modelConfig.sort.rank")}</SelectItem>
+              <SelectItem value="releaseAsc">{t("modelConfig.sort.oldest")}</SelectItem>
+              <SelectItem value="releaseDesc">{t("modelConfig.sort.newest")}</SelectItem>
+            </SelectContent>
+          </Select>
+          </div>
           {/* The provider switch lives next to the provider filter on purpose: it acts on the
               provider you are looking at, and there is no sensible "all providers" version of
               it. Hidden until one is picked. */}
@@ -1617,8 +2134,8 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         </div>
       )}
 
-      {/* V494: the pricing page, the plan cards and the comparison table all announce
-          the Free plan's monthly AI allowance unconditionally. The allowance can only
+      {/* The pricing page, the plan cards and the comparison table all announce that
+          the Free plan's monthly credits pay for chat and agents. Those credits can only
           be spent on the models opened below, so with none open the promise is real
           money the platform advertises and then refuses on the first turn. Nothing
           errors and no log fires - the only place this is visible is here, in front of
@@ -1677,6 +2194,16 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
               </SelectContent>
             </Select>
           </div>
+          <Button
+            size="sm"
+            variant="outline"
+            data-testid="bulk-retire"
+            className="text-amber-700 dark:text-amber-400"
+            onClick={() => handleRetire(selectedModels)}
+          >
+            <Archive className="w-3.5 h-3.5 mr-1" />
+            {t("modelConfig.retire.bulk", { count: String(selectedModels.length) })}
+          </Button>
           <Button size="sm" variant="ghost" data-testid="bulk-clear" onClick={() => setSelectedKeys(new Set())}>
             {t("modelConfig.bulkClear")}
           </Button>
@@ -1687,7 +2214,12 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
       <div className={cn(
         "grid items-center gap-2 px-3 py-1 text-sm text-theme-secondary font-medium",
         ROW_GRID_COLS
-      )}>
+      )}
+        data-testid="model-list-header"
+        // The list below always reserves its scrollbar gutter; the header gives up the same
+        // width, or on a classic-scrollbar OS every column drifts from its heading.
+        style={{ paddingRight: `calc(0.75rem + ${scrollbarWidth}px)` }}
+      >
         <Checkbox
           checked={allFilteredSelected}
           onCheckedChange={(v) => selectAllFiltered(v === true)}
@@ -1701,7 +2233,6 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         {/* Free-tier chip column (cloud only) - same, the chip labels itself */}
         {!IS_CE && <div />}
         <div>{t("modelConfig.columns.provider")}</div>
-        <div>{t("modelConfig.columns.model")}</div>
         <div>{t("modelConfig.columns.tier")}</div>
         <div>{t("modelConfig.columns.effort")}</div>
         <div>
@@ -1719,42 +2250,45 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
+        onDragStart={(e) => setDraggingKey(String(e.active.id))}
+        onDragCancel={() => setDraggingKey(null)}
+        onDragEnd={(e) => {
+          setDraggingKey(null);
+          return handleDragEnd(e);
+        }}
       >
         <SortableContext
           items={sortableIds}
           strategy={verticalListSortingStrategy}
         >
-          <div className="space-y-1">
-            {visibleModels.map((model) => (
-              <SortableModelRow
-                key={`${model.provider}:${model.id}`}
-                model={model}
-                index={models.indexOf(model)}
-                executionLinks={
-                  executionLinksByModel.get(`${model.provider}:${model.id}`) ?? NO_EXECUTION_LINKS
-                }
-                executionLinksLoaded={executionLinksLoaded}
-                onExecutionLinksChanged={loadExecutionLinks}
-                onExecutionLinkError={setExecutionLinkError}
-                onToggleEnabled={handleToggleEnabled}
-                onCycleBundleEnabled={handleCycleBundleEnabled}
-                onToggleFreeTier={handleToggleFreeTier}
-                onToggleRecommended={handleToggleRecommended}
-                onTierChange={handleTierChange}
-                onReasoningEffortChange={handleReasoningEffortChange}
-                onPricingChange={handlePricingChange}
-                onRateLimitChange={handleRateLimitChange}
-                onNameChange={handleNameChange}
-                onDelete={handleDelete}
-                onReset={handleReset}
-                selected={selectedKeys.has(`${model.provider}:${model.id}`)}
-                onSelectedChange={setRowSelected}
-                t={t}
-              />
-            ))}
-          </div>
+          {visibleModels.length > 0 && (
+            <VirtualList
+              listRef={setListApi}
+              rowComponent={VirtualModelRow}
+              rowCount={visibleModels.length}
+              rowHeight={rowHeight}
+              rowProps={{ rows: visibleModels, renderRow, draggingKey }}
+              overscanCount={LIST_OVERSCAN}
+              style={{ height: listHeight, scrollbarGutter: "stable" }}
+              data-testid="model-list"
+            />
+          )}
         </SortableContext>
+        {/* What follows the pointer. Without it the moving element is the row itself, whose
+            virtual slot unmounts once auto-scroll carries it past the overscan, and the row
+            vanished mid-drag. */}
+        <DragOverlay>
+          {draggedModel && (
+            <div
+              data-testid="model-drag-overlay"
+              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-theme bg-theme-primary shadow-lg"
+            >
+              <GripVertical className="w-3.5 h-3.5 text-theme-secondary" />
+              <span className="text-sm font-medium text-theme-primary truncate">{draggedModel.name}</span>
+              <ProviderBadge provider={draggedModel.provider} />
+            </div>
+          )}
+        </DragOverlay>
       </DndContext>
 
       {visibleModels.length === 0 && (
@@ -1762,6 +2296,15 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
           {t("modelConfig.noModels")}
         </div>
       )}
+
+      <RetiredModelsPanel
+        t={t}
+        reloadToken={retiredReload}
+        onRestored={handleRestored}
+        addToast={addToast}
+      />
+
+      <ToastContainer toasts={toasts} onRemoveToast={removeToast} />
 
       {showAddDialog && (
         <AddModelDialog

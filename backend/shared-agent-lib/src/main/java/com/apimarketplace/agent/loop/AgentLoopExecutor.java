@@ -874,7 +874,10 @@ public class AgentLoopExecutor {
     /**
      * True when this rule was already granted for the turn, so no card will be raised.
      * Mirrors {@code RemoteToolExecutionService.isAlreadyAuthorized}, including the
-     * conversation-wide {@code "*"} wildcard the "always allow" toggle writes.
+     * conversation-wide {@code "*"} wildcard the "always allow" toggle writes and the
+     * ask-scoped grant an approval given in a chat writes. Both delegate to
+     * {@link com.apimarketplace.agent.tools.authz.AuthorizationAsk}, so the mirror is the
+     * shared decision rather than a second copy of it.
      */
     private static boolean isAlreadyAuthorized(Map<String, Object> credentials, ToolCall toolCall) {
         if (credentials == null) {
@@ -885,7 +888,9 @@ public class AgentLoopExecutor {
             return false;
         }
         String rule = ToolAuthorizationGuard.matchedRule(toolCall.toolName(), toolCall.arguments());
-        return granted.contains("*") || (rule != null && granted.contains(rule));
+        return com.apimarketplace.agent.tools.authz.AuthorizationAsk.authorizes(granted, rule,
+                com.apimarketplace.agent.tools.authz.AuthorizationAsk.fingerprintOfCall(
+                        rule, toolCall.toolName(), toolCall.arguments()));
     }
 
     private static String actionOf(ToolCall toolCall) {
