@@ -15,8 +15,8 @@ import { showCloudLinkPlanRequiredModal } from '@/components/billing/CloudLinkPl
  * object, an `Error`, a chat stream message string, or a workflow `step.errorMessage`) and pop
  * the matching CE modal.
  *
- * The plan check runs first: while the cloud account is on FREE every relayed call is refused
- * for that reason, and topping up credit or refreshing a bundle would not help.
+ * The plan check runs first: while the cloud account is on FREE every paid relay call (LLM,
+ * catalog, web search) is refused for that reason, and topping up credit would not help.
  *
  * Returns true when handled, so callers can short-circuit their generic error path -
  * notably the Cloud Stripe {@code is402Error} modal, which is a no-op in CE anyway but

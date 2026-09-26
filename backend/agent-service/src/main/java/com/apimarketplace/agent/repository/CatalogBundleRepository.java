@@ -15,6 +15,14 @@ public interface CatalogBundleRepository extends JpaRepository<CatalogBundleEnti
 
     Optional<CatalogBundleEntity> findFirstByActiveTrue();
 
+    /**
+     * Checksum of the active bundle, without loading its payload. Cloud: the ETag a CE poll is
+     * compared against (304 when it matches). CE: the checksum it holds, sent as
+     * {@code If-None-Match}.
+     */
+    @Query("SELECT b.checksum FROM CatalogBundleEntity b WHERE b.active = true")
+    Optional<String> findActiveChecksum();
+
     Optional<CatalogBundleEntity> findTopByOrderByVersionDesc();
 
     java.util.List<CatalogBundleEntity> findByActiveFalseOrderByVersionDesc();

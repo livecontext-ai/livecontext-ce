@@ -72,7 +72,7 @@ class WorkflowRunControllerAggregatedStepsTest {
         // Both overloads must return a present Optional so the controller proceeds to
         // toResponseList; the actual response rows come from the toResponseList stub per test.
         lenient().when(stepAggregationService.getAggregatedSteps(RUN_ID)).thenReturn(Optional.of(List.of()));
-        lenient().when(stepAggregationService.getAggregatedSteps(eq(RUN_ID), anyInt())).thenReturn(Optional.of(List.of()));
+        lenient().when(stepAggregationService.getAggregatedStepsWithElapsed(eq(RUN_ID), anyInt())).thenReturn(Optional.of(List.of()));
     }
 
     /** One mutable aggregated-step row as the SQL projection would build it (max-spawn). */
@@ -228,6 +228,23 @@ class WorkflowRunControllerAggregatedStepsTest {
             // Still the per-epoch value; cumulative override must NOT touch the epoch path.
             assertThat(firstStatusCounts(response)).containsEntry("failed", 1);
             org.mockito.Mockito.verify(workflowEpochService, org.mockito.Mockito.never()).getAccumulatedNodeCounts(RUN_ID);
+        }
+
+        @Test
+        @DisplayName("the per-epoch path asks for the elapsed time (what the Run tab draws); the whole-run path never does")
+        void perEpochPathCarriesElapsedWholeRunDoesNot() {
+            StateSnapshot snap = org.mockito.Mockito.mock(StateSnapshot.class);
+            lenient().when(snap.getDags()).thenReturn(Collections.emptyMap());
+            lenient().when(stateSnapshotService.getSnapshot(RUN_ID)).thenReturn(snap);
+
+            controller.getAggregatedSteps(RUN_ID, 2, TENANT_ID, null);
+            org.mockito.Mockito.verify(stepAggregationService).getAggregatedStepsWithElapsed(RUN_ID, 2);
+            org.mockito.Mockito.verify(stepAggregationService, org.mockito.Mockito.never()).getAggregatedSteps(RUN_ID, 2);
+
+            controller.getAggregatedSteps(RUN_ID, null, TENANT_ID, null);
+            org.mockito.Mockito.verify(stepAggregationService).getAggregatedSteps(RUN_ID);
+            org.mockito.Mockito.verify(stepAggregationService, org.mockito.Mockito.times(1))
+                    .getAggregatedStepsWithElapsed(org.mockito.ArgumentMatchers.anyString(), anyInt());
         }
     }
 }

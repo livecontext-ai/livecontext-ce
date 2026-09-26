@@ -719,15 +719,6 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
     isConversationActive,
     isLoadingConversation: !!isLoadingConversation,
     messagesContainerRef,
-    streamLastError: currentStreamState?.error ? {
-      message: currentStreamState.error.message,
-      retryable: currentStreamState.error.retryable
-    } : null,
-    attemptStreamReconnection: () => {
-      if (conversationIdFromParams) {
-        streaming.checkAndReconnect(conversationIdFromParams);
-      }
-    },
     // No longer have separate 'connecting' state - streaming starts immediately
     isStreamReconnecting: false,
     streamReconnectAttempts: 0,

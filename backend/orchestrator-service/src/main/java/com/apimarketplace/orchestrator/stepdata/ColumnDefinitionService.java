@@ -14,17 +14,18 @@ import java.util.*;
 @Service
 public class ColumnDefinitionService {
 
-    // No hidden fields - show all data as-is
-    private static final Set<String> HIDDEN_FIELDS = Set.of();
+    // Only the row's technical key is hidden: it identifies the row for the grid, the reader
+    // identifies it by its coordinates (the "id" column).
+    private static final Set<String> HIDDEN_FIELDS = Set.of(StepDataRowMapper.ROW_KEY_FIELD);
 
     // Ordered list of known fields for stable column ordering
     private static final List<String> FIELD_ORDER = List.of(
-            // 1. Essential - what happened?
-            "id", "status", "nodeType", "durationMs",
-            // 2. Data - what went in / out / wrong?
+            // 1. Where does this row come from? (the id IS these coordinates, always first)
+            "id", "epoch", "spawn", "iteration", "itemIndex",
+            // 2. Essential - what happened?
+            "status", "nodeType", "durationMs",
+            // 3. Data - what went in / out / wrong?
             "input", "output", "errorMessage",
-            // 3. Execution context
-            "epoch", "spawn", "iteration", "itemIndex",
             // --- Node-specific fields ---
             // Decision
             "selectedBranch", "conditionExpression", "conditionResolved", "conditionResult", "evaluations",
@@ -62,7 +63,7 @@ public class ColumnDefinitionService {
 
     static {
         // Common
-        reg("id", "ID", ColumnType.NUMBER, RenderType.TEXT, 50, true, true, null);
+        reg("id", "ID", ColumnType.STRING, RenderType.TEXT, 70, true, true, null);
         reg("status", "Status", ColumnType.STRING, RenderType.STATUS_BADGE, 110, true, true, null);
         reg("toolId", "Tool ID", ColumnType.STRING, RenderType.TEXT, 150, true, true, null);
         reg("nodeType", "Node Type", ColumnType.STRING, RenderType.BADGE, 120, true, true, null);

@@ -56,6 +56,7 @@ class CeLinkServiceTest {
     @Mock private CeLinkActiveRowCachePublisher cachePublisher;
     @Mock private org.springframework.context.ApplicationEventPublisher eventPublisher;
     @Mock private PlanResolutionService planResolutionService;
+    @Mock private OnboardingService onboardingService;
 
     private CeLinkService service;
 
@@ -67,6 +68,7 @@ class CeLinkServiceTest {
     private static final Long OTHER_ID = 99L;
     private static final UUID INSTALL = UUID.fromString("11111111-2222-3333-4444-555555555555");
     private static final String CE_VERSION = "1.4.0";
+    private static final String CALLER_SUB = "kc-sub-42";
 
     @BeforeEach
     void setUp() {
@@ -75,72 +77,98 @@ class CeLinkServiceTest {
         // keep exercising the link logic. Lenient: collision / revoked paths never consult it.
         lenient().when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID))
                 .thenReturn(entitlement("PRO"));
+        // Default: the caller finished the cloud onboarding (email code included), so the
+        // register tests exercise the link logic. Lenient: most paths never reach the check.
+        lenient().when(userRepository.findById(CALLER_ID)).thenReturn(Optional.of(callerWithSub()));
+        lenient().when(onboardingService.needsOnboarding(CALLER_SUB)).thenReturn(false);
+    }
+
+    private static User callerWithSub() {
+        User caller = new User();
+        caller.setId(CALLER_ID);
+        caller.setProviderId(CALLER_SUB);
+        return caller;
     }
 
     private CeLinkService newService(long planCacheTtlSeconds) {
         return new CeLinkService(repository, heartbeatRepository, userRepository,
                 auditService, activeRowCache, cachePublisher, eventPublisher,
-                planResolutionService, planCacheTtlSeconds);
+                planResolutionService, onboardingService, planCacheTtlSeconds);
     }
 
     private static PlanResolutionService.DefaultWorkspacePlan entitlement(String planCode) {
         return PlanResolutionService.DefaultWorkspacePlan.of(planCode);
     }
 
-    // ===== paid-plan gate: register + linkAccess =====
+    // ===== register never looks at the plan, only at the onboarding; linkAccess (paid relays) does =====
 
     @Nested
-    @DisplayName("paid-plan gate")
-    class PaidPlanGate {
+    @DisplayName("plan and onboarding gates")
+    class PlanAndOnboardingGates {
 
         @Test
-        @DisplayName("regression: a FREE account can no longer register a new install (403 plan required, nothing written)")
-        void freeAccountCannotRegisterNewInstall() {
+        @DisplayName("regression: a FREE account registers a new install (201), the plan is never consulted")
+        void freeAccountRegistersNewInstall() {
             when(repository.findById(INSTALL)).thenReturn(Optional.empty());
             when(userRepository.lockExistingForKeyShare(CALLER_ID)).thenReturn(Optional.of(CALLER_ID));
-            when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID)).thenReturn(entitlement("FREE"));
+            // The account IS on FREE: the old code refused here. lenient: register must not read it.
+            lenient().when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID)).thenReturn(entitlement("FREE"));
+
+            CeLinkRegisterResponse response = service.register(CALLER_ID, INSTALL, CE_VERSION, "Mine", AUDIT);
+
+            assertThat(response.registered()).isTrue();
+            assertThat(response.error()).isNull();
+            verify(repository).save(any(CeLink.class));
+            verifyNoInteractions(planResolutionService);
+        }
+
+        @Test
+        @DisplayName("regression: an account that has not finished the onboarding (email code included) cannot register: 403 onboarding required, nothing written")
+        void unfinishedOnboardingCannotRegister() {
+            when(repository.findById(INSTALL)).thenReturn(Optional.empty());
+            when(userRepository.lockExistingForKeyShare(CALLER_ID)).thenReturn(Optional.of(CALLER_ID));
+            // needsOnboarding is true for an unverified email too: it is the web app's own rule.
+            when(onboardingService.needsOnboarding(CALLER_SUB)).thenReturn(true);
 
             CeLinkRegisterResponse response = service.register(CALLER_ID, INSTALL, CE_VERSION, "Mine", AUDIT);
 
             assertThat(response.registered()).isFalse();
-            assertThat(response.isPlanRequired()).isTrue();
-            assertThat(response.error()).isEqualTo("CLOUD_LINK_PLAN_REQUIRED");
-            assertThat(response.planCode()).isEqualTo("FREE");
+            assertThat(response.isOnboardingRequired()).isTrue();
+            assertThat(response.error()).isEqualTo("CLOUD_LINK_ONBOARDING_REQUIRED");
             verify(repository, never()).save(any());
-            verifyNoInteractions(auditService, activeRowCache, cachePublisher);
+            verifyNoInteractions(auditService, activeRowCache, cachePublisher, planResolutionService);
         }
 
         @Test
-        @DisplayName("CREDIT_PACK and an unknown plan code are not paid: register refused (fails closed)")
-        void creditPackAndUnknownPlanAreRefused() {
+        @DisplayName("an account row that cannot be read back is treated as not onboarded (fails closed)")
+        void unreadableAccountIsNotOnboarded() {
             when(repository.findById(INSTALL)).thenReturn(Optional.empty());
             when(userRepository.lockExistingForKeyShare(CALLER_ID)).thenReturn(Optional.of(CALLER_ID));
-            when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID))
-                    .thenReturn(entitlement("CREDIT_PACK"), entitlement("PLATINUM"));
+            when(userRepository.findById(CALLER_ID)).thenReturn(Optional.empty());
 
-            CeLinkRegisterResponse creditPack = service.register(CALLER_ID, INSTALL, CE_VERSION, "Mine", AUDIT);
-            CeLinkRegisterResponse unknown = service.register(CALLER_ID, INSTALL, CE_VERSION, "Mine", AUDIT);
+            CeLinkRegisterResponse response = service.register(CALLER_ID, INSTALL, CE_VERSION, "Mine", AUDIT);
 
-            assertThat(creditPack.isPlanRequired()).isTrue();
-            assertThat(creditPack.planCode()).isEqualTo("CREDIT_PACK");
-            assertThat(unknown.isPlanRequired()).isTrue();
-            assertThat(unknown.planCode()).isEqualTo("PLATINUM");
+            assertThat(response.isOnboardingRequired()).isTrue();
             verify(repository, never()).save(any());
+            verifyNoInteractions(onboardingService);
         }
 
         @Test
-        @DisplayName("regression: an idempotent re-register by a FREE owner answers plan required, and the link is kept (not revoked)")
-        void idempotentReRegisterRefusedWhenFree() {
+        @DisplayName("regression: an idempotent re-register by a FREE owner answers registered, never plan required")
+        void idempotentReRegisterByFreeOwnerIsOk() {
             CeLink existing = new CeLink(INSTALL, CALLER_ID, "My laptop");
             when(repository.findById(INSTALL)).thenReturn(Optional.of(existing));
-            when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID)).thenReturn(entitlement("FREE"));
+            // The account IS on FREE: the old code refused here. lenient: register must not read it.
+            lenient().when(planResolutionService.resolveDefaultWorkspacePlan(CALLER_ID)).thenReturn(entitlement("FREE"));
 
             CeLinkRegisterResponse response = service.register(CALLER_ID, INSTALL, CE_VERSION, "My laptop", AUDIT);
 
-            assertThat(response.isPlanRequired()).isTrue();
+            assertThat(response.registered()).isTrue();
             assertThat(existing.getStatus()).isEqualTo(CeLink.Status.ACTIVE);
             verify(repository, never()).save(any());
-            verifyNoInteractions(auditService, eventPublisher);
+            // Neither the plan nor the onboarding is re-checked for an ACTIVE link (a decision:
+            // links made before the onboarding rule keep working).
+            verifyNoInteractions(planResolutionService, onboardingService, auditService, eventPublisher);
         }
 
         @Test
@@ -187,7 +215,7 @@ class CeLinkServiceTest {
         }
 
         @Test
-        @DisplayName("linkAccess: suspended while FREE, restored by itself once the account pays (no re-link)")
+        @DisplayName("linkAccess (paid relays): PLAN_REQUIRED while FREE, ACTIVE by itself once the account pays (no re-link)")
         void suspendedThenRestoredAfterUpgrade() {
             when(repository.findByInstallIdAndUserId(INSTALL, CALLER_ID))
                     .thenReturn(Optional.of(new CeLink(INSTALL, CALLER_ID, "L")));

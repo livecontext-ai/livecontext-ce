@@ -352,9 +352,8 @@ public class PlanResolutionService {
      * over its cloud link): the default membership when the user may act in it, else, when the
      * default is missing or paused / dormant ({@link #canMemberActInOrg}), the user's OWN personal
      * workspace (the {@code AuthenticationFilter} fallback). Deliberately IGNORES any
-     * {@code X-Organization-ID} on the current request, so the CE-link plan gate answers the same
-     * thing whether it is asked from the browser (eligibility, in whatever workspace is active
-     * there) or from the CE (register, heartbeat, relays).
+     * {@code X-Organization-ID} on the current request, so the CE-link paid-relay gate never
+     * depends on which workspace happens to be open in a browser.
      *
      * <p>Unlike {@link #resolveActiveOrgEntitlement} it does NOT turn a lookup failure into FREE:
      * it reports it ({@link DefaultWorkspacePlan#lookupFailed()}), so a fail-closed caller can

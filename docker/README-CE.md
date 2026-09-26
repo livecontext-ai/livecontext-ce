@@ -273,13 +273,14 @@ docker compose --env-file .env --env-file docker/.env.ce.browser-agent up -d
 ```
 
 - **Model:** the agent node picks the model per AI provider
-  (google/anthropic/openai/deepseek/mistral/...). When the install is
-  **cloud-linked**, the browser agent relays its per-step LLM calls through your
-  cloud connection and bills the cloud account, exactly like the chat / workflow
-  agents and `web_search` (no local key needed). **Not linked?** Add that
-  provider's API key in the app (Settings > AI providers), or set the matching
-  env key (e.g. `GEMINI_API_KEY` for Google); otherwise the run fails with the
-  provider's "No API key" error.
+  (google/anthropic/openai/deepseek/mistral/...). When **your LLM source is
+  Cloud** (Settings > AI providers, which needs a paid plan on the linked cloud
+  account), the browser agent relays its per-step LLM calls through your own cloud
+  connection and bills that account, exactly like the chat / workflow agents and
+  `web_search` (no local key needed). **On your own keys** (not linked, or linked
+  on the Free plan)? Add that provider's API key in the app (Settings > AI
+  providers), or set the matching env key (e.g. `GEMINI_API_KEY` for Google);
+  otherwise the run fails with the provider's "No API key" error.
 - **web_search:** the same `browser-agent` profile also starts a **SearXNG**
   metasearch sidecar, wired via `WEBSEARCH_SEARXNG_URL`, so `web_search` returns
   results. Its config (kept engines + JSON output) is mounted read-only from
@@ -460,6 +461,8 @@ docker compose up -d
 git pull --ff-only
 docker compose pull
 docker compose up -d
+# Only with the optional browser agent: it is built from source, so rebuild it too
+docker compose --env-file .env --env-file docker/.env.ce.browser-agent up -d --build websearch
 
 # View backend / frontend logs
 docker compose logs -f livecontext

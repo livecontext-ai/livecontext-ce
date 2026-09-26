@@ -27,6 +27,28 @@ class ColumnDefinitionServiceTest {
         service = new ColumnDefinitionService();
     }
 
+    @Test
+    @DisplayName("deriveColumnsFromRows puts id and its coordinates first, and hides the technical row key")
+    void derivedColumnsLeadWithExecutionCoordinates() {
+        java.util.Map<String, Object> row = new java.util.LinkedHashMap<>();
+        row.put("output", java.util.Map.of("a", 1));
+        row.put("input", java.util.Map.of("b", 2));
+        row.put("status", "completed");
+        row.put("itemIndex", 3);
+        row.put("iteration", 0);
+        row.put("spawn", 0);
+        row.put("epoch", 21);
+        row.put("id", "21.0.0.3");
+        row.put(StepDataRowMapper.ROW_KEY_FIELD, 987654L);
+
+        List<String> fields = service.deriveColumnsFromRows(List.of(row)).stream()
+                .map(ColumnDefinition::field).toList();
+
+        // Before the fix epoch/spawn/iteration sat after input/output/error, off-screen.
+        assertThat(fields).startsWith("id", "epoch", "spawn", "iteration", "itemIndex", "status");
+        assertThat(fields).doesNotContain(StepDataRowMapper.ROW_KEY_FIELD);
+    }
+
     @Nested
     @DisplayName("common columns")
     class CommonColumnsTests {

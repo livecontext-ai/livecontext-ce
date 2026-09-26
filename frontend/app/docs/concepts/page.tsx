@@ -37,8 +37,9 @@ export default function ConceptsPage() {
           A <strong>run</strong> is one execution of a workflow. It has a status, records every
           step&apos;s output, and stays browsable afterwards. When the same trigger fires again, the new
           results are added to the run as a new <strong>epoch</strong>, so you can browse every past
-          fire. A <strong>spawn</strong> is a re-execution inside the same epoch, for example a loop
-          iteration or a retry. See <a href="/runs">Runs &amp; execution</a>.
+          fire. A <strong>spawn</strong> is a re-execution inside the same epoch, produced by re-running
+          a step; a loop pass is counted by the <strong>iteration</strong> instead. See{' '}
+          <a href="/runs">Runs &amp; execution</a>.
         </p>
 
         <h2>Nodes, edges, and ports</h2>

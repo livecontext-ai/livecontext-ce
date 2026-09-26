@@ -5,7 +5,6 @@ import com.apimarketplace.agent.domain.CatalogBundleSyncStatusEntity;
 import com.apimarketplace.agent.repository.CatalogBundleSyncStatusRepository;
 import com.apimarketplace.auth.client.AuthClient;
 import com.apimarketplace.common.plan.CeLinkAccessResult;
-import com.apimarketplace.common.plan.CeLinkRefusal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -210,10 +209,53 @@ class CatalogBundleControllerTest {
         SignedBundle sb = new SignedBundle(1L, 1, "cs", "sig", "k1", "cloud", 10, 1000, "cGF5bG9hZA==");
         when(service.getActiveSignedBundle()).thenReturn(Optional.of(sb));
 
-        ResponseEntity<?> resp = controller.latestSignedBundle(CLOUD_USER, INSTALL_ID);
+        ResponseEntity<?> resp = controller.latestSignedBundle(CLOUD_USER, INSTALL_ID, null);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isEqualTo(sb);
+    }
+
+    @Test
+    @DisplayName("CE /latest answers a bodiless 304 when the caller already holds the active bundle")
+    void latestNotModifiedWhenChecksumMatches() {
+        when(authClient.ceLinkAccess(CLOUD_USER, INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
+        when(service.getActiveChecksum()).thenReturn(Optional.of("cs"));
+
+        ResponseEntity<?> resp = controller.latestSignedBundle(CLOUD_USER, INSTALL_ID, "\"cs\"");
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_MODIFIED);
+        assertThat(resp.getBody()).isNull();
+        assertThat(resp.getHeaders().getETag()).isEqualTo("\"cs\"");
+        assertThat(resp.getHeaders().getCacheControl()).contains("private").contains("no-cache");
+        // The payload is never loaded: that is the whole point of the 304.
+        verify(service, never()).getActiveSignedBundle();
+    }
+
+    @Test
+    @DisplayName("CE /latest serves the bundle with its ETag when the caller holds an older one; never publicly cacheable")
+    void latestServesWhenChecksumDiffers() {
+        when(authClient.ceLinkAccess(CLOUD_USER, INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
+        when(service.getActiveChecksum()).thenReturn(Optional.of("new"));
+        SignedBundle sb = new SignedBundle(2L, 1, "new", "sig", "k1", "cloud", 10, 1000, "cGF5bG9hZA==");
+        when(service.getActiveSignedBundle()).thenReturn(Optional.of(sb));
+
+        ResponseEntity<?> resp = controller.latestSignedBundle(CLOUD_USER, INSTALL_ID, "\"old\"");
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody()).isEqualTo(sb);
+        assertThat(resp.getHeaders().getETag()).isEqualTo("\"new\"");
+        assertThat(resp.getHeaders().getCacheControl()).contains("private").doesNotContain("public");
+    }
+
+    @Test
+    @DisplayName("CE /latest: the link gate runs BEFORE the 304, so an unlinked caller with a matching ETag is still refused")
+    void latestGateBeforeNotModified() {
+        when(authClient.ceLinkAccess(CLOUD_USER, "install-unlinked")).thenReturn(CeLinkAccessResult.notLinked());
+
+        ResponseEntity<?> resp = controller.latestSignedBundle(CLOUD_USER, "install-unlinked", "\"cs\"");
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        verify(service, never()).getActiveChecksum();
     }
 
     @Test
@@ -221,14 +263,14 @@ class CatalogBundleControllerTest {
     void latest404() {
         when(authClient.ceLinkAccess(CLOUD_USER, INSTALL_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
         when(service.getActiveSignedBundle()).thenReturn(Optional.empty());
-        ResponseEntity<?> resp = controller.latestSignedBundle(CLOUD_USER, INSTALL_ID);
+        ResponseEntity<?> resp = controller.latestSignedBundle(CLOUD_USER, INSTALL_ID, null);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     @Test
     @DisplayName("CE /latest → 401 when there is no validated cloud identity (no X-User-ID)")
     void latestUnauthenticatedWithoutCloudIdentity() {
-        ResponseEntity<?> resp = controller.latestSignedBundle(null, INSTALL_ID);
+        ResponseEntity<?> resp = controller.latestSignedBundle(null, INSTALL_ID, null);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(resp.getBody()).isEqualTo(Map.of("error", "AUTHENTICATION_REQUIRED"));
         // The gate short-circuits before resolving the bundle - no link check, no service call.
@@ -240,7 +282,7 @@ class CatalogBundleControllerTest {
     @DisplayName("CE /latest → 403 when the install is not a linked, active cloud install (anti-abuse: no link, no updates)")
     void latestForbiddenWhenInstallNotLinked() {
         when(authClient.ceLinkAccess(CLOUD_USER, "install-unlinked")).thenReturn(CeLinkAccessResult.notLinked());
-        ResponseEntity<?> resp = controller.latestSignedBundle(CLOUD_USER, "install-unlinked");
+        ResponseEntity<?> resp = controller.latestSignedBundle(CLOUD_USER, "install-unlinked", null);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(resp.getBody()).isEqualTo(Map.of("error", "CE_LINK_NOT_ACTIVE"));
         // The bundle is never served to an unlinked install.
@@ -248,19 +290,18 @@ class CatalogBundleControllerTest {
     }
 
     @Test
-    @DisplayName("CE /latest and /{version} -> 403 CLOUD_LINK_PLAN_REQUIRED when the linked account is not on a paid plan")
-    void bundleDownloadsRefusedWhenPlanRequired() {
+    @DisplayName("regression: CE /latest and /{version} serve the bundle to a linked account on ANY plan (FREE included) - a bundle spends no cloud money")
+    void bundleDownloadsServedToFreeLinkedAccount() {
         when(authClient.ceLinkAccess(CLOUD_USER, INSTALL_ID)).thenReturn(CeLinkAccessResult.planRequired("FREE"));
+        SignedBundle sb = new SignedBundle(42L, 1, "cs", "sig", "k", "c", 1, 100, "cA==");
+        when(service.getActiveSignedBundle()).thenReturn(Optional.of(sb));
+        when(service.getSignedBundleByVersion(42L)).thenReturn(Optional.of(sb));
 
-        ResponseEntity<?> latest = controller.latestSignedBundle(CLOUD_USER, INSTALL_ID);
+        ResponseEntity<?> latest = controller.latestSignedBundle(CLOUD_USER, INSTALL_ID, null);
         ResponseEntity<?> byVersion = controller.signedBundleByVersion(CLOUD_USER, INSTALL_ID, 42L);
 
-        assertThat(latest.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-        assertThat(latest.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
-        assertThat(byVersion.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-        assertThat(byVersion.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
-        verify(service, never()).getActiveSignedBundle();
-        verify(service, never()).getSignedBundleByVersion(anyLong());
+        assertThat(latest.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(byVersion.getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 
     @Test
@@ -271,7 +312,11 @@ class CatalogBundleControllerTest {
         when(service.getSignedBundleByVersion(42L)).thenReturn(Optional.of(sb));
         when(service.getSignedBundleByVersion(43L)).thenReturn(Optional.empty());
 
-        assertThat(controller.signedBundleByVersion(CLOUD_USER, INSTALL_ID, 42L).getStatusCode()).isEqualTo(HttpStatus.OK);
+        ResponseEntity<?> ok = controller.signedBundleByVersion(CLOUD_USER, INSTALL_ID, 42L);
+        assertThat(ok.getStatusCode()).isEqualTo(HttpStatus.OK);
+        // Same policy as /latest: gated on the caller, so never storable by a shared cache.
+        assertThat(ok.getHeaders().getETag()).isEqualTo("\"cs\"");
+        assertThat(ok.getHeaders().getCacheControl()).contains("private");
         assertThat(controller.signedBundleByVersion(CLOUD_USER, INSTALL_ID, 43L).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
@@ -324,6 +369,9 @@ class CatalogBundleControllerTest {
         row.setLastAppliedAt(Instant.parse("2026-04-20T10:00:00Z"));
         row.setLastFetchStatus("OK");
         row.setConsecutiveFailures(0);
+        java.time.Instant waitUntil = java.time.Instant.parse("2026-09-26T18:00:00Z");
+        row.setBackoffLevel(3);
+        row.setNextAttemptAt(waitUntil);
         when(syncStatusRepo.findById(CatalogBundleSyncStatusEntity.SINGLETON_ID))
                 .thenReturn(Optional.of(row));
         when(schedulerProvider.getIfAvailable()).thenReturn(scheduler);
@@ -337,6 +385,9 @@ class CatalogBundleControllerTest {
         assertThat(body).containsEntry("lastFetchStatus", "OK");
         assertThat(body).containsEntry("consecutiveFailures", 0);
         assertThat(body).containsEntry("schedulerEnabled", true);
+        // The operator must be able to see WHY the scheduled sync is quiet.
+        assertThat(body).containsEntry("backoffLevel", 3);
+        assertThat(body).containsEntry("nextAttemptAt", waitUntil);
     }
 
     @Test

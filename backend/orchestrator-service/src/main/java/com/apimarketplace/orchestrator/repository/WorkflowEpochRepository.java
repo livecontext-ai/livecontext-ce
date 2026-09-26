@@ -146,6 +146,22 @@ public class WorkflowEpochRepository {
             ORDER BY epoch ASC
             """;
 
+    /** {@link #LIST_EPOCH_TIMESTAMPS_SQL} restricted to the {@code ?} most recent epochs, newest first. */
+    private static final String LIST_LATEST_EPOCH_TIMESTAMPS_SQL = """
+            SELECT epoch, started_at, closed_at, is_active, epoch_state
+            FROM workflow_epochs
+            WHERE run_id = ? AND entry_type = 'EPOCH_HEADER'
+            ORDER BY epoch DESC
+            LIMIT ?
+            """;
+
+    private static final RowMapper<EpochTimelineRow> EPOCH_TIMELINE_ROW_MAPPER = (rs, rowNum) -> new EpochTimelineRow(
+            rs.getInt("epoch"),
+            rs.getTimestamp("started_at") != null ? rs.getTimestamp("started_at").toInstant().toString() : null,
+            rs.getTimestamp("closed_at") != null ? rs.getTimestamp("closed_at").toInstant().toString() : null,
+            rs.getBoolean("is_active"),
+            rs.getString("epoch_state"));
+
     private static final String LIST_EPOCH_HEADERS_SQL = """
             SELECT epoch, epoch_state, is_active, started_at, closed_at, trigger_id, duration_ms
             FROM workflow_epochs
@@ -310,15 +326,16 @@ public class WorkflowEpochRepository {
      * and the source of truth lives in workflow_epochs, not in workflow_runs.metadata.
      */
     public List<EpochTimelineRow> listEpochTimestamps(String runId) {
-        return jdbcTemplate.query(LIST_EPOCH_TIMESTAMPS_SQL,
-                (rs, rowNum) -> new EpochTimelineRow(
-                        rs.getInt("epoch"),
-                        rs.getTimestamp("started_at") != null ? rs.getTimestamp("started_at").toInstant().toString() : null,
-                        rs.getTimestamp("closed_at") != null ? rs.getTimestamp("closed_at").toInstant().toString() : null,
-                        rs.getBoolean("is_active"),
-                        rs.getString("epoch_state")
-                ),
-                runId);
+        return jdbcTemplate.query(LIST_EPOCH_TIMESTAMPS_SQL, EPOCH_TIMELINE_ROW_MAPPER, runId);
+    }
+
+    /**
+     * {@link #listEpochTimestamps} for the {@code limit} most recent epochs only, NEWEST FIRST.
+     * A long-lived schedule accumulates ~10k epochs a week; a caller that shows a window must
+     * not read, and deserialize the state of, every one of them.
+     */
+    public List<EpochTimelineRow> listLatestEpochTimestamps(String runId, int limit) {
+        return jdbcTemplate.query(LIST_LATEST_EPOCH_TIMESTAMPS_SQL, EPOCH_TIMELINE_ROW_MAPPER, runId, limit);
     }
 
     /**

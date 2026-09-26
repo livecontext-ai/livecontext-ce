@@ -32,6 +32,9 @@ const WORKFLOW_CONTEXT = {
   stepAlias: 'table:contacts',
 };
 
+/** The parent step's coordinates, injected on every nested row (see STEP_CONTEXT_COLUMNS). */
+const CONTEXT = ['@epoch', '@spawn', '@iteration'];
+
 const okJson = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
 
 const setup = (jsonPath: string, showIdColumn = false) =>
@@ -202,8 +205,8 @@ describe('useDataFetching nested workflow rows - real id preservation', () => {
     });
 
     // Real id kept -> only the array position was injected; id-less item -> the fallback too.
-    expect(result.current.rows[0]._injectedDataKeys).toEqual(['array_index']);
-    expect(result.current.rows[1]._injectedDataKeys).toEqual(['id', 'array_index']);
+    expect(result.current.rows[0]._injectedDataKeys).toEqual([...CONTEXT, 'array_index']);
+    expect(result.current.rows[1]._injectedDataKeys).toEqual(['id', ...CONTEXT, 'array_index']);
   });
 
   it('leaves the id to the fixed lane when the view builds one', async () => {
@@ -212,7 +215,7 @@ describe('useDataFetching nested workflow rows - real id preservation', () => {
       await result.current.fetchData(1, 100);
     });
 
-    expect(result.current.columns.map(c => c.field)).toEqual(['id', 'email']);
+    expect(result.current.columns.map(c => c.field)).toEqual([...CONTEXT, 'id', 'email']);
     mockFetch.mockImplementation((url: string) => {
       if (url.includes('/output/detailed')) return Promise.resolve(okJson({ rows: [{ id: 1, output: { title: 'a' } }], columns: [] }));
       throw new Error(`unexpected url ${url}`);
@@ -221,7 +224,7 @@ describe('useDataFetching nested workflow rows - real id preservation', () => {
     await act(async () => {
       await withLane.result.current.fetchData(1, 100);
     });
-    expect(withLane.result.current.columns.map(c => c.field)).toEqual(['title']);
+    expect(withLane.result.current.columns.map(c => c.field)).toEqual([...CONTEXT, 'title']);
   });
 
   it('declares the injected id for a primitive nested value too', async () => {
@@ -238,7 +241,7 @@ describe('useDataFetching nested workflow rows - real id preservation', () => {
     });
 
     expect(result.current.rows[0].data).toMatchObject({ value: 'hello', id: 1 });
-    expect(result.current.rows[0]._injectedDataKeys).toEqual(['id']);
+    expect(result.current.rows[0]._injectedDataKeys).toEqual(['id', ...CONTEXT]);
   });
 
   it('declares the injected array position on the DATASOURCE nested path too', async () => {
@@ -296,7 +299,7 @@ describe('useDataFetching nested workflow rows - real id preservation', () => {
       await result.current.fetchData(1, 20, null, null, { epoch: 2 });
       await result.current.fetchColumns();
     });
-    expect(result.current.columns.map(c => c.field)).toEqual(['id', 'email']);
+    expect(result.current.columns.map(c => c.field)).toEqual([...CONTEXT, 'id', 'email']);
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(result.current.rows[0].data.id).toBe(4711);
   });
@@ -306,7 +309,7 @@ describe('useDataFetching nested workflow rows - real id preservation', () => {
     const { result } = setup('output.rows');
     await act(async () => { await result.current.fetchData(1, 20); });
     await act(async () => { await result.current.fetchData(2, 20, null, null, null, true); });
-    expect(result.current.columns.map(c => c.field).sort()).toEqual(['email', 'id', 'title']);
+    expect(result.current.columns.map(c => c.field).sort()).toEqual([...CONTEXT, 'email', 'id', 'title'].sort());
     expect(result.current.rows.map(row => row.data.id)).toEqual([1, 4711, 4712]);
   });
 });

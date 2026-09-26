@@ -37,6 +37,7 @@ class SkillBundleSyncSchedulerTest {
     @Mock private SkillBundleVerifier verifier;
     @Mock private SkillBundleApplier applier;
     @Mock private SkillBundleSyncStatusRepository syncStatusRepo;
+    @Mock private com.apimarketplace.agent.repository.SkillBundleRepository bundleRepo;
     @Mock private TrustedKeyRegistry trustedKeys;
     @Mock private CatalogBundleTrustBootstrap trustBootstrap;
     @Mock private ObjectProvider<CloudLlmRuntimeAccess> runtimeAccessProvider;
@@ -49,7 +50,7 @@ class SkillBundleSyncSchedulerTest {
 
     @BeforeEach
     void setUp() {
-        scheduler = new SkillBundleSyncScheduler(fetcher, verifier, applier, syncStatusRepo,
+        scheduler = new SkillBundleSyncScheduler(fetcher, verifier, applier, syncStatusRepo, bundleRepo,
                 trustedKeys, trustBootstrap, runtimeAccessProvider);
         lenient().when(syncStatusRepo.findById(SkillBundleSyncStatusEntity.SINGLETON_ID))
                 .thenReturn(Optional.empty());
@@ -67,7 +68,7 @@ class SkillBundleSyncSchedulerTest {
 
         scheduler.tick();
 
-        verify(fetcher, never()).fetchLatest(any());
+        verify(fetcher, never()).fetchLatest(any(), any());
         assertThat(captureStatus().getLastFetchStatus()).isEqualTo("TRUST_UNCONFIGURED");
     }
 
@@ -81,12 +82,12 @@ class SkillBundleSyncSchedulerTest {
         when(trustedKeys.hasKeys()).thenReturn(false);
         when(trustBootstrap.bootstrapTrust())
                 .thenReturn(CatalogBundleTrustBootstrap.Result.pinned("livecontext-prod-v1"));
-        when(fetcher.fetchLatest(creds)).thenReturn(SkillBundleFetcher.FetchResult.noActive());
+        when(fetcher.fetchLatest(creds, null)).thenReturn(SkillBundleFetcher.FetchResult.noActive());
 
         scheduler.tick();
 
         // Pre-fix (private empty snapshot) this returned at TRUST_UNCONFIGURED and never fetched.
-        verify(fetcher).fetchLatest(creds);
+        verify(fetcher).fetchLatest(creds, null);
         assertThat(captureStatus().getLastFetchStatus()).isEqualTo("NO_ACTIVE");
     }
 
@@ -102,11 +103,11 @@ class SkillBundleSyncSchedulerTest {
         when(trustedKeys.hasKeys()).thenReturn(false, true);
         when(trustBootstrap.bootstrapTrust())
                 .thenReturn(CatalogBundleTrustBootstrap.Result.skipped("could not be pinned (already present)"));
-        when(fetcher.fetchLatest(creds)).thenReturn(SkillBundleFetcher.FetchResult.noActive());
+        when(fetcher.fetchLatest(creds, null)).thenReturn(SkillBundleFetcher.FetchResult.noActive());
 
         scheduler.tick();
 
-        verify(fetcher).fetchLatest(creds);
+        verify(fetcher).fetchLatest(creds, null);
         assertThat(captureStatus().getLastFetchStatus()).isEqualTo("NO_ACTIVE");
     }
 
@@ -118,7 +119,7 @@ class SkillBundleSyncSchedulerTest {
 
         scheduler.tick();
 
-        verify(fetcher, never()).fetchLatest(any());
+        verify(fetcher, never()).fetchLatest(any(), any());
         SkillBundleSyncStatusEntity row = captureStatus();
         assertThat(row.getLastFetchStatus()).isEqualTo("NOT_LINKED");
         assertThat(row.getConsecutiveFailures()).as("informational tick does not bump failures").isZero();
@@ -131,7 +132,7 @@ class SkillBundleSyncSchedulerTest {
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
         SignedSkillBundle bundle = new SignedSkillBundle(1, 1, "c", "s", "k", "i", 1, 10, "p");
-        when(fetcher.fetchLatest(creds)).thenReturn(SkillBundleFetcher.FetchResult.fetched(bundle));
+        when(fetcher.fetchLatest(creds, null)).thenReturn(SkillBundleFetcher.FetchResult.fetched(bundle));
         byte[] bytes = "{}".getBytes();
         when(verifier.verify(bundle)).thenReturn(SkillBundleVerifier.Result.success(bytes));
         when(applier.apply(eqBundle(bundle), any(byte[].class), any()))
@@ -151,7 +152,7 @@ class SkillBundleSyncSchedulerTest {
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
         SignedSkillBundle bundle = new SignedSkillBundle(1, 1, "c", "s", "k", "i", 1, 10, "p");
-        when(fetcher.fetchLatest(creds)).thenReturn(SkillBundleFetcher.FetchResult.fetched(bundle));
+        when(fetcher.fetchLatest(creds, null)).thenReturn(SkillBundleFetcher.FetchResult.fetched(bundle));
         when(verifier.verify(bundle))
                 .thenReturn(SkillBundleVerifier.Result.fail(SkillBundleVerifier.Status.SIGNATURE_INVALID, "bad"));
 
@@ -167,7 +168,7 @@ class SkillBundleSyncSchedulerTest {
         when(trustedKeys.hasKeys()).thenReturn(true);
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
-        when(fetcher.fetchLatest(creds)).thenReturn(SkillBundleFetcher.FetchResult.noActive());
+        when(fetcher.fetchLatest(creds, null)).thenReturn(SkillBundleFetcher.FetchResult.noActive());
 
         scheduler.tick();
 
@@ -181,7 +182,7 @@ class SkillBundleSyncSchedulerTest {
         when(trustedKeys.hasKeys()).thenReturn(true);
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
-        when(fetcher.fetchLatest(creds)).thenReturn(SkillBundleFetcher.FetchResult.httpError("HTTP 500"));
+        when(fetcher.fetchLatest(creds, null)).thenReturn(SkillBundleFetcher.FetchResult.httpError("HTTP 500"));
 
         scheduler.tick();
 
@@ -197,7 +198,7 @@ class SkillBundleSyncSchedulerTest {
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
         SignedSkillBundle bundle = new SignedSkillBundle(1, 1, "c", "s", "k", "i", 1, 10, "p");
-        when(fetcher.fetchLatest(creds)).thenReturn(SkillBundleFetcher.FetchResult.fetched(bundle));
+        when(fetcher.fetchLatest(creds, null)).thenReturn(SkillBundleFetcher.FetchResult.fetched(bundle));
         when(verifier.verify(bundle)).thenReturn(SkillBundleVerifier.Result.success("{}".getBytes()));
         when(applier.apply(any(), any(), any()))
                 .thenReturn(SkillBundleApplier.ApplyResult.failed("bad payload"));
@@ -214,7 +215,7 @@ class SkillBundleSyncSchedulerTest {
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
         SignedSkillBundle bundle = new SignedSkillBundle(1, 1, "c", "s", "k", "i", 1, 10, "p");
-        when(fetcher.fetchLatest(creds)).thenReturn(SkillBundleFetcher.FetchResult.fetched(bundle));
+        when(fetcher.fetchLatest(creds, null)).thenReturn(SkillBundleFetcher.FetchResult.fetched(bundle));
         when(verifier.verify(bundle)).thenReturn(SkillBundleVerifier.Result.success("{}".getBytes()));
         when(applier.apply(any(), any(), any())).thenThrow(new RuntimeException("boom"));
 

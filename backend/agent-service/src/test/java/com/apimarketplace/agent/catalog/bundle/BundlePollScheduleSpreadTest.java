@@ -35,9 +35,9 @@ class BundlePollScheduleSpreadTest {
     }
 
     private static void assertSpreadDefault(Class<?> scheduler, String property) throws NoSuchMethodException {
-        Method tick = scheduler.getDeclaredMethod("tick");
+        Method tick = scheduler.getDeclaredMethod("tickIfDue");
         Scheduled scheduled = tick.getAnnotation(Scheduled.class);
-        assertThat(scheduled).as("@Scheduled must stay on tick()").isNotNull();
+        assertThat(scheduled).as("@Scheduled must stay on tickIfDue()").isNotNull();
         assertThat(scheduled.cron())
                 .as("the documented property must remain the override")
                 .contains(property);

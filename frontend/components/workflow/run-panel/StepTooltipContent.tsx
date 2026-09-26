@@ -2,8 +2,8 @@
 
 import { useTranslations } from 'next-intl';
 import { CheckCircle2, XCircle, Loader2, CircleSlash, PauseCircle } from 'lucide-react';
-import { formatUtcDateTime, parseUtcAware } from '@/lib/utils/dateFormatters';
-import { deriveEffectiveStatus, formatCompactDuration, type StepEntry } from './runFormatting';
+import { formatUtcDateTime } from '@/lib/utils/dateFormatters';
+import { deriveEffectiveStatus, formatCompactDuration, stepDisplayDurationMs, type StepEntry } from './runFormatting';
 
 type StepTooltipStep = Pick<
   StepEntry,
@@ -21,14 +21,15 @@ export function StepTooltipContent({ step, label, showCumulative }: { step: Step
   const effectiveStatus = deriveEffectiveStatus(step.status, step.statusCounts);
   const isRunning = effectiveStatus === 'running';
   const isAwaiting = effectiveStatus === 'awaiting_signal';
-  const useTotal = showCumulative && step.totalExecutionTimeMs != null;
-  const durationMs = useTotal
-    ? step.totalExecutionTimeMs!
-    : step.executionTimeMs != null
-      ? step.executionTimeMs
-      : step.startTime
-        ? Math.max(0, (step.endTime ? parseUtcAware(step.endTime).getTime() : Date.now()) - parseUtcAware(step.startTime).getTime())
-        : 0;
+  // Same figure as the row's gauge, by construction: both read stepDisplayDurationMs.
+  const durationMs = stepDisplayDurationMs(step, showCumulative);
+  const useTotal = showCumulative && step.totalExecutionTimeMs != null && durationMs != null;
+  // One epoch: the row shows elapsed time. When parallel items made the summed work longer than
+  // that, say so, instead of leaving the user to wonder where the rest of the time went.
+  const totalWorkMs = !showCumulative && durationMs != null && step.executionTimeMs != null
+    && step.executionTimeMs > durationMs + 1000
+    ? step.executionTimeMs
+    : null;
   const hasAnyCount = !!step.statusCounts && (
     (step.statusCounts.completed ?? 0) +
     (step.statusCounts.failed ?? 0) +
@@ -127,9 +128,20 @@ export function StepTooltipContent({ step, label, showCumulative }: { step: Step
             isRunning ? 'text-blue-500 dark:text-blue-400' : 'text-gray-900 dark:text-gray-100'
           }`}
         >
-          {step.startTime && durationMs >= 0 ? formatCompactDuration(durationMs) : '-'}
+          {durationMs != null ? formatCompactDuration(durationMs) : '-'}
         </span>
       </div>
+
+      {totalWorkMs != null && (
+        <div className="flex items-center justify-between gap-3" data-step-total-work>
+          <span className="text-gray-500 dark:text-gray-400">
+            {t('workflow.runSteps.stepTooltip.totalWork')}
+          </span>
+          <span className="font-medium text-gray-900 dark:text-gray-100 tabular-nums">
+            {formatCompactDuration(totalWorkMs)}
+          </span>
+        </div>
+      )}
 
       {/* Per-status execution breakdown */}
       {hasAnyCount && (

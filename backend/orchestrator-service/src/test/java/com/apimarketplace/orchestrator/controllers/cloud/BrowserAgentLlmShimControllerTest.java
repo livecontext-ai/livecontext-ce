@@ -45,17 +45,25 @@ class BrowserAgentLlmShimControllerTest {
     @Mock private CloudBrowserAgentLlmRelayClient relayClient;
     @Mock private CloudLlmRuntimeAccess runtimeAccess;
 
+    /** The orchestrator's signer: every relay call names a tenant it signed. */
+    private final com.apimarketplace.orchestrator.tools.websearch.BrowserAgentRelayTenantSigner signer =
+            new com.apimarketplace.orchestrator.tools.websearch.BrowserAgentRelayTenantSigner();
+    private static final String TENANT = "42";
+    private String sig() {
+        return signer.sign(TENANT);
+    }
+
     @SuppressWarnings("unchecked")
     private BrowserAgentLlmShimController controller(String secret, boolean linked) {
         ObjectProvider<CloudLlmRuntimeAccess> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(runtimeAccess);
         if (linked) {
-            lenient().when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(
+            lenient().when(runtimeAccess.resolveCloudRuntime(TENANT)).thenReturn(
                     Optional.of(new CloudLlmRuntimeCredentials("tok", "install-1", "https://livecontext.ai/api")));
         } else {
-            lenient().when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.empty());
+            lenient().when(runtimeAccess.resolveCloudRuntime(TENANT)).thenReturn(Optional.empty());
         }
-        return new BrowserAgentLlmShimController(relayClient, provider, secret);
+        return new BrowserAgentLlmShimController(relayClient, provider, secret, signer);
     }
 
     private CloudLlmRelayRequest captureRelay() {
@@ -76,7 +84,7 @@ class BrowserAgentLlmShimControllerTest {
                         Map.of("role", "system", "content", "You are a browser agent."),
                         Map.of("role", "user", "content", "Go to example.com and report the title.")));
 
-        ResponseEntity<?> resp = controller.chatCompletions(null, null, body);
+        ResponseEntity<?> resp = controller.chatCompletions(null, null, TENANT, sig(), body);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         Map<?, ?> out = (Map<?, ?>) resp.getBody();
@@ -104,7 +112,7 @@ class BrowserAgentLlmShimControllerTest {
                 "model", "gemini-3.1-flash-lite",
                 "messages", List.of(Map.of("role", "user", "content", "hi")));
 
-        ResponseEntity<?> resp = controller.chatCompletions(null, "google", body);
+        ResponseEntity<?> resp = controller.chatCompletions(null, "google", TENANT, sig(), body);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         CloudLlmRelayRequest relayed = captureRelay();
@@ -126,7 +134,7 @@ class BrowserAgentLlmShimControllerTest {
                         Map.of("type", "text", "text", "What is on screen?"),
                         Map.of("type", "image_url", "image_url", Map.of("url", dataUrl))))));
 
-        controller.chatCompletions(null, null, body);
+        controller.chatCompletions(null, null, TENANT, sig(), body);
 
         CloudLlmRelayRequest relayed = captureRelay();
         Message userMsg = relayed.completionRequest().conversationHistory().get(0);
@@ -150,7 +158,7 @@ class BrowserAgentLlmShimControllerTest {
                 "response_format", Map.of("type", "json_object"),
                 "messages", List.of(Map.of("role", "user", "content", "next step")));
 
-        ResponseEntity<?> resp = controller.chatCompletions(null, null, body);
+        ResponseEntity<?> resp = controller.chatCompletions(null, null, TENANT, sig(), body);
 
         Map<?, ?> out = (Map<?, ?>) resp.getBody();
         Map<?, ?> message = (Map<?, ?>) ((Map<?, ?>) ((List<?>) out.get("choices")).get(0)).get("message");
@@ -165,7 +173,7 @@ class BrowserAgentLlmShimControllerTest {
     void rejectsWrongSecret() {
         var controller = controller("s3cret", true);
 
-        ResponseEntity<?> resp = controller.chatCompletions("wrong", null,
+        ResponseEntity<?> resp = controller.chatCompletions("wrong", null, TENANT, sig(),
                 Map.of("model", "google/x", "messages", List.of()));
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -178,7 +186,7 @@ class BrowserAgentLlmShimControllerTest {
         when(relayClient.complete(any(), any())).thenReturn(CompletionResponse.text("ok"));
         var controller = controller("s3cret", true);
 
-        ResponseEntity<?> resp = controller.chatCompletions("s3cret", null,
+        ResponseEntity<?> resp = controller.chatCompletions("s3cret", null, TENANT, sig(),
                 Map.of("model", "google/x", "messages", List.of(Map.of("role", "user", "content", "hi"))));
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -189,7 +197,7 @@ class BrowserAgentLlmShimControllerTest {
     void rejectsMissingSecret() {
         var controller = controller("s3cret", true);
 
-        ResponseEntity<?> resp = controller.chatCompletions(null, null,
+        ResponseEntity<?> resp = controller.chatCompletions(null, null, TENANT, sig(),
                 Map.of("model", "google/x", "messages", List.of()));
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -201,7 +209,7 @@ class BrowserAgentLlmShimControllerTest {
     void missingModelIs400() {
         var controller = controller("", true);
 
-        ResponseEntity<?> resp = controller.chatCompletions(null, null, Map.of("messages", List.of()));
+        ResponseEntity<?> resp = controller.chatCompletions(null, null, TENANT, sig(), Map.of("messages", List.of()));
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         verify(relayClient, never()).complete(any(), any());
@@ -213,7 +221,7 @@ class BrowserAgentLlmShimControllerTest {
         when(relayClient.complete(any(), any())).thenThrow(new IllegalStateException("cloud 500"));
         var controller = controller("", true);
 
-        ResponseEntity<?> resp = controller.chatCompletions(null, null,
+        ResponseEntity<?> resp = controller.chatCompletions(null, null, TENANT, sig(),
                 Map.of("model", "gemini-3.1-flash-lite", "messages", List.of(Map.of("role", "user", "content", "hi"))));
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
@@ -225,7 +233,7 @@ class BrowserAgentLlmShimControllerTest {
         when(relayClient.complete(any(), any())).thenReturn(CompletionResponse.text("ok"));
         var controller = controller("", true);
 
-        controller.chatCompletions(null, null,
+        controller.chatCompletions(null, null, TENANT, sig(),
                 Map.of("model", "gemini-3.1-flash-lite", "messages", List.of(Map.of("role", "user", "content", "hi"))));
 
         assertThat(captureRelay().provider()).isEqualTo("google");
@@ -243,7 +251,7 @@ class BrowserAgentLlmShimControllerTest {
                         Map.of("type", "text", "text", "look"),
                         Map.of("type", "image_url", "image_url", Map.of("url", "http://not-a-data-url"))))));
 
-        ResponseEntity<?> resp = controller.chatCompletions(null, null, body);
+        ResponseEntity<?> resp = controller.chatCompletions(null, null, TENANT, sig(), body);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         Message userMsg = captureRelay().completionRequest().conversationHistory().get(0);
@@ -256,9 +264,9 @@ class BrowserAgentLlmShimControllerTest {
     void beanAbsentIs503() {
         ObjectProvider<CloudLlmRuntimeAccess> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(null);
-        var controller = new BrowserAgentLlmShimController(relayClient, provider, "");
+        var controller = new BrowserAgentLlmShimController(relayClient, provider, "", signer);
 
-        ResponseEntity<?> resp = controller.chatCompletions(null, null,
+        ResponseEntity<?> resp = controller.chatCompletions(null, null, TENANT, sig(),
                 Map.of("model", "google/x", "messages", List.of()));
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
@@ -270,7 +278,7 @@ class BrowserAgentLlmShimControllerTest {
     void notLinkedShortCircuits() {
         var controller = controller("", false);
 
-        ResponseEntity<?> resp = controller.chatCompletions(null, null,
+        ResponseEntity<?> resp = controller.chatCompletions(null, null, TENANT, sig(),
                 Map.of("model", "google/x", "messages", List.of()));
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
@@ -282,5 +290,93 @@ class BrowserAgentLlmShimControllerTest {
     void stripFencesNoop() {
         assertThat(BrowserAgentLlmShimController.stripJsonFences("{\"a\":1}")).isEqualTo("{\"a\":1}");
         assertThat(BrowserAgentLlmShimController.stripJsonFences("```json\n{\"a\":1}\n```")).isEqualTo("{\"a\":1}");
+    }
+
+    @Test
+    @DisplayName("regression: with the tenant header the relay runs on THAT tenant's link, never the install's newest one")
+    void relaysOnTheCallersOwnLink() {
+        var controller = controller("", false);
+        // The install's newest link belongs to another user (e.g. FREE): it must never be used.
+        lenient().when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(
+                new CloudLlmRuntimeCredentials("other-tok", "install-other", "https://livecontext.ai/api")));
+        CloudLlmRuntimeCredentials own = new CloudLlmRuntimeCredentials("own-tok", "install-own", "https://livecontext.ai/api");
+        when(runtimeAccess.resolveCloudRuntime(TENANT)).thenReturn(Optional.of(own));
+        when(relayClient.complete(any(), any())).thenReturn(CompletionResponse.text("ok"));
+
+        ResponseEntity<?> resp = controller.chatCompletions(null, "google", TENANT, sig(), Map.of(
+                "model", "gemini-3.1-flash-lite",
+                "messages", List.of(Map.of("role", "user", "content", "hi"))));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        ArgumentCaptor<CloudLlmRuntimeCredentials> creds = ArgumentCaptor.forClass(CloudLlmRuntimeCredentials.class);
+        verify(relayClient).complete(creds.capture(), any());
+        assertThat(creds.getValue()).isEqualTo(own);
+        verify(runtimeAccess, never()).resolveActiveCloudRuntime();
+    }
+
+    @Test
+    @DisplayName("a tenant whose own cloud runtime is not ready gets 503, never another user's link")
+    void tenantWithoutOwnRuntimeIsRefused() {
+        var controller = controller("", false);
+
+        ResponseEntity<?> resp = controller.chatCompletions(null, "google", TENANT, sig(), Map.of(
+                "model", "gemini-3.1-flash-lite",
+                "messages", List.of(Map.of("role", "user", "content", "hi"))));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        verify(relayClient, never()).complete(any(), any());
+    }
+
+    @Test
+    @DisplayName("regression: a tenant without the orchestrator's signature is refused 401, no link is read, no relay")
+    void unsignedTenantIsRefused() {
+        var controller = controller("", true);
+
+        ResponseEntity<?> resp = controller.chatCompletions(null, "google", TENANT, null, Map.of(
+                "model", "gemini-3.1-flash-lite", "messages", List.of(Map.of("role", "user", "content", "hi"))));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verify(runtimeAccess, never()).resolveCloudRuntime(any());
+        verify(runtimeAccess, never()).resolveActiveCloudRuntime();
+        verify(relayClient, never()).complete(any(), any());
+    }
+
+    @Test
+    @DisplayName("regression: naming ANOTHER tenant with a signature made for this one is refused 401 (no picking whose link pays)")
+    void signatureOfAnotherTenantIsRefused() {
+        var controller = controller("", true);
+
+        ResponseEntity<?> resp = controller.chatCompletions(null, "google", "7", sig(), Map.of(
+                "model", "gemini-3.1-flash-lite", "messages", List.of(Map.of("role", "user", "content", "hi"))));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verify(relayClient, never()).complete(any(), any());
+    }
+
+    @Test
+    @DisplayName("no tenant at all (an old runner, or an outside caller) is refused 401: no install-wide fallback")
+    void noTenantIsRefused() {
+        var controller = controller("", true);
+        lenient().when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(
+                new CloudLlmRuntimeCredentials("tok", "install-1", "https://livecontext.ai/api")));
+
+        ResponseEntity<?> resp = controller.chatCompletions(null, "google", null, null, Map.of(
+                "model", "gemini-3.1-flash-lite", "messages", List.of(Map.of("role", "user", "content", "hi"))));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verify(relayClient, never()).complete(any(), any());
+    }
+
+    @Test
+    @DisplayName("the cloud-link state cannot be read: 503 cloud_link (the runner's handled status), never a 500")
+    void unreadableLinkStateIs503() {
+        var controller = controller("", true);
+        when(runtimeAccess.resolveCloudRuntime(TENANT)).thenThrow(new IllegalStateException("publication down"));
+
+        ResponseEntity<?> resp = controller.chatCompletions(null, "google", TENANT, sig(), Map.of(
+                "model", "gemini-3.1-flash-lite", "messages", List.of(Map.of("role", "user", "content", "hi"))));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        verify(relayClient, never()).complete(any(), any());
     }
 }

@@ -12,7 +12,7 @@
  */
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Sparkles, MessageSquare, FileText, AppWindow, Workflow, Play, Plus, SlidersHorizontal } from 'lucide-react';
+import { Sparkles, MessageSquare, FileText, AppWindow, Workflow, Play, Plus, SlidersHorizontal, BarChart3 } from 'lucide-react';
 import { usePathname } from '@/i18n/navigation';
 import { ChatCore } from '@/components/chat/ChatCore';
 import { WelcomeTitle } from '@/app/shared/components';
@@ -69,6 +69,7 @@ import {
   type RunPanelData,
 } from '@/components/workflow/run-panel/runPanelBus';
 import { WorkflowLogsPanelContent } from '@/components/workflow/WorkflowLogsPanelContent';
+import { RunAnalysisPanelContent } from '@/components/workflow/run-panel/RunAnalysisPanelContent';
 import {
   clearPendingWorkflowPanelLogs,
   consumePendingWorkflowPanelLogs,
@@ -84,6 +85,8 @@ export const APP_TAB_ID = '__application__';
 export const WORKFLOW_TAB_ID = '__workflow__';
 /** Run history + epochs + steps of the current run (run mode). */
 export const RUN_TAB_ID = '__run__';
+/** Analysis of the bound run's recent epochs, with navigation back to its Run sub-tab. */
+export const ANALYSIS_TAB_ID = '__analysis__';
 /** Logs of the bound run, with navigation back to its Run sub-tab. */
 export const LOGS_TAB_ID = '__logs__';
 /** Node palette (edit mode) - the former floating "Add node" panel. */
@@ -559,7 +562,13 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   const [activeTabId, setActiveTabId] = useState(defaultTabId);
   const [logsTarget, setLogsTarget] = useState<WorkflowLogsNavigationTarget | null>(null);
   const showLogsTab = (showRunTab && !!currentRunId) || !!logsTarget;
-  const hasExtraTabs = visibleTriggerConfigs.length > 0 || showAppTab || hasWorkflowSlot || showRunTab || showLogsTab || showNodeCreatorTab || showInspectorTab;
+  // Analysis reads the bound run only: no run, nothing to analyse. Never on a marketplace
+  // preview (prop OR the bus, like the Stop control below), whose frozen showcase run is served
+  // by public endpoints this tab does not call, nor on a public share page, whose visitor has no
+  // scope on the owner's run analysis.
+  const showAnalysisTab = showRunTab && !!currentRunId && !isPreviewOnly && !runData.isPreviewOnly
+    && !(pathname ?? '').startsWith('/s/');
+  const hasExtraTabs = visibleTriggerConfigs.length > 0 || showAppTab || hasWorkflowSlot || showRunTab || showAnalysisTab || showLogsTab || showNodeCreatorTab || showInspectorTab;
 
   useEffect(() => {
     setLogsTarget((target) => (
@@ -669,16 +678,17 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       (activeTabId === APP_TAB_ID && appTabAllowed && applicationConfigs.length > 0) ||
       (activeTabId === RUN_TAB_ID && showRunTab) ||
       (activeTabId === LOGS_TAB_ID && !!logsTarget) ||
+      (activeTabId === ANALYSIS_TAB_ID && showAnalysisTab) ||
       (activeTabId === NODE_CREATOR_TAB_ID && showNodeCreatorTab) ||
       (activeTabId === INSPECTOR_TAB_ID && showInspectorTab);
     if (!isActiveTabAvailable) {
       // An application-first panel whose interfaces have not arrived yet keeps
       // waiting on the Application tab rather than flashing the canvas.
-      setActiveTabId(activeTabId === LOGS_TAB_ID && showRunTab
+      setActiveTabId((activeTabId === LOGS_TAB_ID || activeTabId === ANALYSIS_TAB_ID) && showRunTab
         ? RUN_TAB_ID
         : applicationFirst && hasWorkflowSlot ? APP_TAB_ID : defaultTabId);
     }
-  }, [triggerConfigs, applicationConfigs.length, appTabAllowed, activeTabId, hasWorkflowSlot, showRunTab, showNodeCreatorTab, showInspectorTab, applicationFirst, defaultTabId, logsTarget]);
+  }, [triggerConfigs, applicationConfigs.length, appTabAllowed, activeTabId, hasWorkflowSlot, showRunTab, showAnalysisTab, showNodeCreatorTab, showInspectorTab, applicationFirst, defaultTabId, logsTarget]);
 
   // Consume pending tab activation (set before panel was opened)
   useEffect(() => {
@@ -953,6 +963,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
     + (hasWorkflowSlot ? 1 : 0)
     + (showAppTab ? 1 : 0)
     + (showRunTab ? 1 : 0)
+    + (showAnalysisTab ? 1 : 0)
     + (showLogsTab ? 1 : 0)
     + (showNodeCreatorTab ? 1 : 0)
     + (showInspectorTab ? 1 : 0);
@@ -971,6 +982,17 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
    * its own copy of the active/inactive pattern.
    */
   const focusWorkflowTab = useCallback(() => selectPanelTab(WORKFLOW_TAB_ID), [selectPanelTab]);
+  /**
+   * Back to the Run tab from one of its children (Logs, Analysis): always on the run DETAIL.
+   *
+   * The Run tab remounts on the level of the last level request it received, and that request
+   * outlives the navigation that made it: after opening the run history once (version chip),
+   * every return from a child landed on the list of runs instead of the run just looked at.
+   */
+  const backToRunDetail = useCallback(() => {
+    setRunViewRequest(prev => ({ view: 'run', seq: (prev?.seq ?? 0) + 1 }));
+    selectPanelTab(RUN_TAB_ID);
+  }, [selectPanelTab]);
 
   const subTabClass = (isActive: boolean) => cn(
     panelTabClass(isActive, 'sm'),
@@ -1087,6 +1109,21 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
           >
             <Play className="w-3.5 h-3.5 shrink-0" />
             {t('sidePanel.runTab')}
+          </button>
+        )}
+
+        {showAnalysisTab && (
+          <button
+            type="button"
+            data-analysis-tab-button
+            aria-pressed={activeTabId === ANALYSIS_TAB_ID}
+            data-testid="panel-sub-tab"
+            data-active={activeTabId === ANALYSIS_TAB_ID ? 'true' : undefined}
+            onClick={() => selectPanelTab(ANALYSIS_TAB_ID)}
+            className={subTabClass(activeTabId === ANALYSIS_TAB_ID)}
+          >
+            <BarChart3 className="w-3.5 h-3.5 shrink-0" />
+            {t('sidePanel.analysisTab')}
           </button>
         )}
 
@@ -1253,7 +1290,15 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
           workflowId={logsTarget.workflowId}
           runId={logsTarget.runId}
           initialStepAlias={logsTarget.initialStepAlias}
-          onBack={() => selectPanelTab(RUN_TAB_ID)}
+          onBack={backToRunDetail}
+        />
+      ) : activeTabId === ANALYSIS_TAB_ID && currentRunId ? (
+        <RunAnalysisPanelContent
+          key={`${workflowId}:${currentRunId}`}
+          workflowId={workflowId}
+          runId={currentRunId}
+          surfaceId={runSurfaceId}
+          onBack={backToRunDetail}
         />
       ) : activeTabId === CHAT_TAB_ID ? (
         <ChatCore

@@ -366,6 +366,8 @@ export const orchestratorApi = {
   triggerSpecific: executionService.triggerSpecific.bind(executionService),
   // Per-epoch aggregated steps (node timing)
   getEpochAggregatedSteps: executionService.getAggregatedSteps.bind(executionService),
+  // Run analysis (Analysis tab: last N epochs with per-node cells)
+  getRunAnalysis: executionService.getRunAnalysis.bind(executionService),
   // Per-epoch active signals (for epoch state viewing on canvas)
   getEpochSignals: executionService.getEpochSignals.bind(executionService),
   // Per-epoch pre-aggregated node+edge status counts

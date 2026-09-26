@@ -361,6 +361,16 @@
     "unshare": "Deixar de compartilhar"
   },
   "dataTable": {
+    "workflowRowId": {
+      "label": "Como ler este ID",
+      "intro": "O ID indica onde esta linha foi executada: epoch.spawn.iteração.item, ou seja, os valores das colunas ao lado (começam em 0). Os zeros finais são omitidos.",
+      "exampleEpoch": "época 21",
+      "exampleSpawn": "época 20, spawn 1 (uma reexecução)",
+      "exampleIteration": "época 20, iteração 2",
+      "exampleItem": "época 20, item de índice 3",
+      "exampleNested": "índice 3 dentro da saída da linha 21",
+      "sameId": "Um ID não é único: uma espera e sua conclusão, ou dois gatilhos diferentes, podem compartilhá-lo."
+    },
     "deleteColumns": "Excluir Colunas",
     "deleteColumnsConfirm": "Tem certeza que deseja excluir {count} coluna(s) selecionada(s)? Esta ação não pode ser desfeita.",
     "dragToReorganize": "Arraste para reorganizar a coluna",
@@ -591,7 +601,8 @@
     "deleteInterfaceTitle": "Excluir interface",
     "deleteWorkflowConfirm": "Tem certeza de que deseja excluir \"{name}\"? Esta ação não pode ser desfeita.",
     "deleteFailed": "Não foi possível excluir \"{name}\". Tente novamente.",
-    "deleteWorkflowTitle": "Excluir fluxo de trabalho"
+    "deleteWorkflowTitle": "Excluir fluxo de trabalho",
+    "analysisTab": "Análise"
   },
   "platformStatus": {
     "headline": {
@@ -1237,7 +1248,8 @@
         "running": "Em execução",
         "skipped": "Ignorado",
         "started": "Iniciado",
-        "stillRunning": "Ainda em execução"
+        "stillRunning": "Ainda em execução",
+        "totalWork": "Trabalho total (itens somados)"
       }
     },
     "cancelRun": {
@@ -1332,6 +1344,72 @@
       "scopeAll": "todas as épocas",
       "scopeEpoch": "época {epoch}",
       "budgetBlockedMessageCumulative": "Gasto {spent} de {budget}, e este limite nunca reinicia. Nenhuma execução nova foi iniciada; aumente o limite ou mude o seu reinício para continuar."
+    },
+    "runAnalysis": {
+      "window": "Épocas exibidas",
+      "windowOption": "Últimas {count}",
+      "windowOf": "Últimas {shown} de {total, plural, one {# época} other {# épocas}}",
+      "refresh": "Atualizar",
+      "loading": "Carregando a análise",
+      "error": "Não foi possível carregar a análise.",
+      "retry": "Tentar novamente",
+      "empty": "Nenhuma época foi executada ainda. Execute o workflow para ver a análise.",
+      "kpi": {
+        "epochs": "Épocas",
+        "successRate": "Taxa de sucesso",
+        "failedCount": "{count} com falha",
+        "noSettled": "Nenhuma concluída",
+        "avgDuration": "Duração média",
+        "maxDuration": "máx. {value}",
+        "credits": "Custo",
+        "perEpoch": "{value} por época",
+        "noCost": "Nenhum custo registrado"
+      },
+      "chart": {
+        "title": "Duração e custo por época",
+        "duration": "Duração",
+        "cost": "Custo"
+      },
+      "grid": {
+        "title": "Nós por época",
+        "colorBy": "Colorir por",
+        "byStatus": "Status",
+        "byDuration": "Duração",
+        "failures": "{count} com falha",
+        "partials": "{count} parcia{count, plural, one {l} other {is}}",
+        "average": "média {value}",
+        "items": "{count} execuções",
+        "totalWork": "trabalho total {value}"
+      },
+      "legend": {
+        "ok": "Sucesso",
+        "failed": "Falha",
+        "partial": "Parcial",
+        "skipped": "Ignorado",
+        "running": "Em execução",
+        "waiting": "Aguardando",
+        "none": "Não executado",
+        "fast": "Rápido",
+        "slow": "Lento"
+      },
+      "insight": {
+        "failing": "{node} falhou em {count} de {total, plural, one {# época} other {# épocas}}.",
+        "epochFailures": "{count, plural, one {# época falhou} other {# épocas falharam}} sem nenhuma etapa de nó com falha: abra os logs da execução para ver o motivo.",
+        "lastError": "Último erro: {error}",
+        "slower": "{node} ficou mais lento a partir da época {epoch}: {before} e depois {after}.",
+        "none": "Nenhuma falha nestas épocas."
+      },
+      "compare": {
+        "title": "Comparar duas épocas",
+        "hint": "Clique em uma barra ou célula para escolher a época a comparar.",
+        "reference": "Referência",
+        "node": "Nó",
+        "epoch": "Época #{epoch}",
+        "showOnCanvas": "Mostrar a época {epoch} no canvas",
+        "total": "Total",
+        "notRun": "Não executado",
+        "needTwo": "São necessárias pelo menos duas épocas para comparar."
+      }
     }
   },
   "workflowRelations": {
@@ -2098,9 +2176,55 @@
       "restoreFailed": "Não foi possível reativar a sua conta. Tente novamente."
     },
     "agentError": {
-      "title": "Algo correu mal",
-      "description": "Ocorreu um erro durante a execução. Tente novamente daqui a pouco.",
-      "retry": "Tentar novamente"
+      "close": "Fechar",
+      "gotIt": "Entendi",
+      "technicalDetails": "Detalhes técnicos",
+      "kinds": {
+        "interrupted": {
+          "title": "A resposta foi interrompida",
+          "description": "O serviço reiniciou enquanto o assistente respondia. A resposta parcial foi salva. Envie sua mensagem novamente para continuar."
+        },
+        "providerBilling": {
+          "title": "O provedor de IA recusou a solicitação por motivo de cobrança",
+          "description": "A conta usada para chamar este modelo não tem mais crédito com o provedor. Escolha outro modelo ou recarregue a conta do provedor se você usa sua própria chave."
+        },
+        "rateLimit": {
+          "title": "Muitas solicitações para este modelo",
+          "description": "O provedor está limitando a frequência de chamadas a este modelo. Aguarde um minuto e envie sua mensagem novamente, ou escolha outro modelo."
+        },
+        "contextTooLong": {
+          "title": "Esta conversa é longa demais para o modelo",
+          "description": "A conversa e seus anexos excedem o que este modelo consegue ler de uma vez. Inicie uma nova conversa, remova anexos grandes ou escolha um modelo com contexto maior."
+        },
+        "contentBlocked": {
+          "title": "O provedor bloqueou esta solicitação",
+          "description": "Os filtros de segurança do provedor recusaram esta mensagem ou a resposta. Reformule seu pedido e tente novamente."
+        },
+        "modelUnavailable": {
+          "title": "Este modelo não está disponível",
+          "description": "O provedor não oferece mais este modelo, ou ele não pode ser usado no chat. Escolha outro modelo no seletor."
+        },
+        "providerUnavailable": {
+          "title": "O provedor de IA está temporariamente indisponível",
+          "description": "O provedor do modelo está sobrecarregado ou com instabilidade. Tente novamente em alguns instantes ou escolha outro modelo."
+        },
+        "network": {
+          "title": "A conexão com o modelo foi perdida",
+          "description": "A conexão caiu ou expirou antes de a resposta terminar. Envie sua mensagem novamente."
+        },
+        "providerRejected": {
+          "title": "O modelo recusou a solicitação",
+          "description": "O provedor recusou a solicitação como ela foi enviada a este modelo. Isso geralmente vem de uma incompatibilidade entre a plataforma e este modelo específico, não da sua mensagem. Escolha outro modelo por enquanto."
+        },
+        "sendFailed": {
+          "title": "Não foi possível enviar sua mensagem",
+          "description": "O servidor não conseguiu aceitar sua mensagem. Envie-a novamente em instantes e recarregue a página se o erro continuar."
+        },
+        "unknown": {
+          "title": "Algo deu errado",
+          "description": "Ocorreu um erro durante a execução. Tente novamente em instantes."
+        }
+      }
     },
     "missingApiKey": {
       "title": "Chave de API necessária",
@@ -3741,6 +3865,8 @@
       "subscriptionRequired": "Usar a nuvem exige uma subscrição paga ativa na sua conta na nuvem associada. Uma conta gratuita não pode pagar as chamadas retransmitidas.",
       "viewPlans": "Ver planos",
       "linkRequired": "Vincule uma conta Cloud antes de mudar para Cloud.",
+      "onboardingRequired": "Sua conta do LiveContext Cloud ainda não concluiu a configuração (código de verificação do e-mail e perfil). Conclua no LiveContext Cloud e troque novamente.",
+      "notReady": "O LiveContext Cloud não está acessível no momento, então a troca não foi feita. Sua instalação continua vinculada: tente novamente em instantes.",
       "saveError": "Falha ao atualizar a origem das credenciais de integração.",
       "cloudCovers": "Isto abrange também a geração: imagens, vídeo, som, voz e música correm com as chaves de fornecedor da conta na nuvem e são faturadas aí em créditos, por segundo ou por ficheiro, ao preço publicado para cada modelo."
     },
@@ -3752,6 +3878,9 @@
       "connectedAs": "Conectado como {username}",
       "label": "Origem do LLM",
       "linkRequired": "Vincule uma conta Cloud antes de mudar para Cloud.",
+      "planRequired": "Os modelos na nuvem exigem um plano pago na conta cloud vinculada. A instalação continua vinculada: escolha um plano e troque novamente, ou mantenha suas chaves de API.",
+      "onboardingRequired": "Sua conta do LiveContext Cloud ainda não concluiu a configuração (código de verificação do e-mail e perfil). Conclua no LiveContext Cloud e troque novamente.",
+      "notReady": "O LiveContext Cloud não está acessível no momento, então a troca não foi feita. Sua instalação continua vinculada: tente novamente em instantes.",
       "saveError": "Falha ao atualizar a origem do LLM."
     },
     "executionLinks": {
@@ -15510,25 +15639,16 @@
   "ceCloudLink": {
     "expired": "A conexão expirou, clique em Conectar novamente.",
     "planRequired": {
-      "title": "Seu vínculo com o LiveContext Cloud precisa de um plano pago",
-      "body": "Vincular uma instalação auto-hospedada ao LiveContext Cloud exige um plano pago na conta cloud. Escolha um plano e esta instalação se reconecta automaticamente, sem precisar vincular de novo.",
+      "title": "Os modelos na nuvem exigem um plano pago",
+      "body": "Esta instalação está vinculada ao LiveContext Cloud. Os modelos na nuvem, a pesquisa na web e as integrações na nuvem exigem um plano pago na conta cloud. Escolha um plano e eles funcionam na hora, sem precisar vincular nada de novo.",
       "cta": "Ver os planos cloud",
       "sidebarBadge": "Plano pago necessário"
     },
     "planRequiredModal": {
       "title": "Plano pago necessário",
-      "description": "Esta instalação está vinculada a uma conta LiveContext Cloud sem plano pago, por isso o cloud recusou a solicitação. Escolha um plano no LiveContext Cloud e esta instalação se reconecta automaticamente.",
+      "description": "Esta instalação está vinculada a uma conta do LiveContext Cloud sem plano pago. Os modelos na nuvem, a pesquisa na web e as integrações na nuvem exigem um. Escolha um plano no LiveContext Cloud e eles funcionam na hora: a instalação continua vinculada.",
       "cta": "Ver os planos cloud",
       "close": "Fechar"
-    },
-    "cloud": {
-      "returning": "Voltando para sua instalação auto-hospedada.",
-      "pricingBannerTitle": "Vincular sua instalação auto-hospedada exige um plano pago",
-      "pricingBannerBody": "Escolha um plano abaixo. Assim que sua assinatura estiver ativa, você volta para sua instalação para concluir a conexão.",
-      "pricingBannerContinue": "Tenho um plano pago, continuar",
-      "pricingBannerStillRequired": "Seu plano atual ainda não é um plano pago. Escolha um plano para continuar.",
-      "pricingBannerNoPending": "Esta solicitação de conexão não está mais disponível. Clique em Conectar novamente na sua instalação auto-hospedada.",
-      "pricingBannerError": "Não foi possível verificar seu plano. Tente novamente."
     }
   }
 }

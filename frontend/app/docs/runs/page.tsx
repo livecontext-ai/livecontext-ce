@@ -348,6 +348,47 @@ export default function RunsPage() {
           reusable, so fires work again once you top up.
         </Callout>
 
+        <h3>Logs</h3>
+        <p>
+          <strong>Logs</strong> lists every time a node ran, with what went in and what came out. The{' '}
+          <strong>Simple</strong> view reads one pass at a time; the <strong>Table</strong> view puts
+          every pass of the node in one table, filtered by epoch and status. Click an input or an
+          output cell to open that field as a table: it lists the field for every pass loaded in the
+          table, one row per element. Use the breadcrumb to come back.
+        </p>
+        <p>
+          The first columns always say where a row comes from: <strong>ID</strong>, then{' '}
+          <strong>Epoch</strong>, <strong>Spawn</strong>, and <strong>Iteration</strong>. They stay
+          visible inside an opened field too: each element keeps the coordinates of the pass it came
+          from, so a value you drilled into never loses its origin.
+        </p>
+        <p>
+          The <strong>ID</strong> is those coordinates written together,{' '}
+          <code>epoch.spawn.iteration.item</code>, with trailing zeros left out. Each number is the
+          value of its own column, and they all count from 0. Because it describes the row itself,
+          the ID never changes when you filter, scroll to older rows, or when new passes arrive. Hover
+          or tap the info icon next to the ID header for a reminder.
+        </p>
+        <DocsTable
+          caption="How to read an ID in the Logs table"
+          rowHeaders
+          head={['ID', 'Means']}
+          rows={[
+            [<code key="a">21</code>, 'Epoch 21, first pass.'],
+            [<code key="b">20.1</code>, 'Epoch 20, spawn 1: the step was re-run.'],
+            [<code key="c">20.0.2</code>, 'Epoch 20, loop iteration 2.'],
+            [<code key="d">20.0.0.3</code>, 'Epoch 20, the item at index 3 of a Split.'],
+            [<code key="e">21:3</code>, 'Inside an opened field: the element at index 3 of the list from row 21.'],
+          ]}
+        />
+        <p>
+          An ID is not unique. A node that waits and then completes writes two rows at the same
+          coordinates, and a node reached from two different triggers can show the same ID for both.
+          Use the status and the times to tell them apart. An element that carries its own{' '}
+          <code>id</code> field (a table row, for example) shows that value instead, and an opened
+          field that is a single value (not a list) shows the ID of its pass.
+        </p>
+
         <h2>Troubleshooting</h2>
         <DocsTable
           caption="Common run problems and what to check"
@@ -359,6 +400,7 @@ export default function RunsPage() {
             ['Re-run is refused', 'The step is still executing, the run was cancelled or timed out, or the edit changes the topology.'],
             ['The duration looks short for a run that lives for days', 'It is the last execution’s working time, not the run’s lifetime.'],
             ['No new epoch opens', 'Look for a reached spending cap on the run, or CREDIT_EXHAUSTED on the trigger node.'],
+            ['Two rows in Logs have the same ID', 'Expected: a wait and its completion, or two triggers, can share coordinates. Compare the status and the times.'],
           ]}
         />
 

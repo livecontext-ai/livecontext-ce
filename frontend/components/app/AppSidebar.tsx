@@ -74,12 +74,18 @@ interface AppSidebarProps {
 // writes `transform` inline, so both are transitioned. `invisible` rides the same
 // transition (visibility flips at its END when closing), so the off-screen drawer stays
 // out of the tab order and the accessibility tree.
-// Desktop (md:) is unchanged: static rail/expanded column animated on its width.
+// Desktop (md:): static rail/expanded column animated on its width, 300 ms ease-in-out like
+// the right side panel.
+// Every transition utility here carries Tailwind's important modifier (`!`). globals.css has an
+// UNLAYERED `* { transition-property: color, ..., transform, ...; transition-duration: 300ms }`
+// rule, and unlayered CSS beats every Tailwind utility (they live in `@layer utilities`). Without
+// `!` the computed transition list had neither `width` nor `translate`, so both the desktop
+// collapse and the mobile slide jumped with no motion.
 // `touch-pan-y` hands horizontal moves to the swipe-to-close gesture; pinch-zoom stays allowed.
 // Note: `translate-x-0` still computes to a non-`none` translate, which makes this column the
 // containing block of any `position: fixed` child. Overlays opened from it must stay portalled.
 export function appSidebarClasses(sidebarOpen: boolean, sidebarCollapsed: boolean): string {
-  const baseClasses = 'bg-theme-secondary flex-shrink-0 overflow-hidden w-64 transition-[translate,transform,visibility] duration-300 ease-out md:transition-all md:duration-700 md:ease-in-out md:translate-x-0 md:visible touch-pan-y touch-pinch-zoom md:touch-auto';
+  const baseClasses = 'bg-theme-secondary flex-shrink-0 overflow-hidden w-64 transition-[translate,transform,visibility]! duration-300! ease-out! md:transition-[width]! md:ease-in-out! md:translate-x-0 md:visible touch-pan-y touch-pinch-zoom md:touch-auto';
   const collapsedWidthClasses = sidebarCollapsed ? 'md:w-16' : 'md:w-64';
   const positionClasses = sidebarOpen
     ? 'absolute inset-y-0 left-0 translate-x-0 z-[60] md:relative md:inset-auto md:h-full'

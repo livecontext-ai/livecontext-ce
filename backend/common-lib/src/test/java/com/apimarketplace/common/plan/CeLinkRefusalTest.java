@@ -41,9 +41,9 @@ class CeLinkRefusalTest {
         assertThat(response.getBody())
                 .containsEntry("error", "CLOUD_LINK_PLAN_REQUIRED")
                 .containsEntry("planCode", "FREE")
-                .containsEntry("message", "Linking a self-hosted install to LiveContext Cloud requires a paid plan. "
-                        + "Choose a plan at https://livecontext.ai/app/settings/pricing and your install "
-                        + "reconnects automatically.")
+                .containsEntry("message", "Cloud models, web search and cloud integrations from a self-hosted "
+                        + "install require a paid LiveContext Cloud plan. Your install stays linked: choose a "
+                        + "plan at https://livecontext.ai/app/settings/pricing and they work right away.")
                 .hasSize(3);
         assertThat(CeLinkRefusal.errorCode(CeLinkAccessResult.planRequired("FREE")))
                 .isEqualTo("CLOUD_LINK_PLAN_REQUIRED");
@@ -68,5 +68,41 @@ class CeLinkRefusalTest {
         assertThat(CeLinkRefusal.response(null).getBody()).containsEntry("error", "CE_LINK_NOT_ACTIVE");
         assertThat(CeLinkRefusal.errorCode(null)).isEqualTo("CE_LINK_NOT_ACTIVE");
         assertThat(new CeLinkAccessResult(null, null).access()).isEqualTo(CeLinkAccess.NOT_LINKED);
+    }
+
+    @Test
+    @DisplayName("regression: linkOnlyResponse (bundles) lets a linked account through on ANY plan, PLAN_REQUIRED included")
+    void linkOnlyResponsePassesAnyLinkedPlan() {
+        assertThat(CeLinkRefusal.linkOnlyResponse(CeLinkAccessResult.active("PRO"))).isNull();
+        assertThat(CeLinkRefusal.linkOnlyResponse(CeLinkAccessResult.planRequired("FREE"))).isNull();
+        // A failed plan lookup on a real link is still a link: the bundle spends no cloud money.
+        assertThat(CeLinkRefusal.linkOnlyResponse(CeLinkAccessResult.planRequired(null))).isNull();
+    }
+
+    @Test
+    @DisplayName("linkOnlyResponse refuses an unlinked install and a null verdict with CE_LINK_NOT_ACTIVE (fails closed)")
+    void linkOnlyResponseRefusesUnlinked() {
+        for (CeLinkAccessResult verdict : new CeLinkAccessResult[] {CeLinkAccessResult.notLinked(), null}) {
+            ResponseEntity<Map<String, Object>> response = CeLinkRefusal.linkOnlyResponse(verdict);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(response.getBody()).isEqualTo(CeLinkRefusal.notLinkedBody());
+        }
+    }
+
+    @Test
+    @DisplayName("isLinked is true for ACTIVE and PLAN_REQUIRED, false for NOT_LINKED")
+    void isLinkedCoversBothLinkedVerdicts() {
+        assertThat(CeLinkAccessResult.active("PRO").isLinked()).isTrue();
+        assertThat(CeLinkAccessResult.planRequired("FREE").isLinked()).isTrue();
+        assertThat(CeLinkAccessResult.notLinked().isLinked()).isFalse();
+    }
+
+    @Test
+    @DisplayName("the onboarding refusal carries its code and a message an older install can display as is")
+    void onboardingRequiredBody() {
+        assertThat(CeLinkRefusal.onboardingRequiredBody())
+                .containsEntry("error", "CLOUD_LINK_ONBOARDING_REQUIRED")
+                .containsEntry("message", CeLinkRefusal.ONBOARDING_REQUIRED_MESSAGE)
+                .hasSize(2);
     }
 }

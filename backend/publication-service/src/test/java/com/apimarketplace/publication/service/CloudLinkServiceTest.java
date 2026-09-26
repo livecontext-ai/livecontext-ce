@@ -235,6 +235,8 @@ class CloudLinkServiceTest {
             when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
                     .thenReturn(ResponseEntity.ok().build());
 
+            stubCloudPlan("PRO"); // CLOUD is a paid relay: only a paid account may select it
+
             service.linkAccount(TENANT_ID, state);
 
             assertThat(stored.get()).isNotNull();
@@ -663,6 +665,9 @@ class CloudLinkServiceTest {
             CeCloudLinkEntity link = buildLink();
             link.setInstallId(UUID.fromString("11111111-2222-3333-4444-555555555555"));
             link.setRegisteredAt(clock.instant());
+            link.setCachedAccessToken("cached-access-token");
+            link.setTokenExpiresAt(clock.instant().plusSeconds(300));
+            stubCloudPlan("PRO"); // CLOUD is a paid relay: only a paid account may select it
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
             when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -670,8 +675,8 @@ class CloudLinkServiceTest {
 
             assertThat(selected).isEqualTo(CloudLlmSource.CLOUD);
             ArgumentCaptor<CeCloudLinkEntity> saved = ArgumentCaptor.forClass(CeCloudLinkEntity.class);
-            verify(cloudLinkRepository).save(saved.capture());
-            assertThat(saved.getValue().getLlmSource()).isEqualTo("CLOUD");
+            verify(cloudLinkRepository, atLeastOnce()).save(saved.capture());
+            assertThat(saved.getAllValues().get(saved.getAllValues().size() - 1).getLlmSource()).isEqualTo("CLOUD");
         }
 
         @Test
@@ -756,6 +761,8 @@ class CloudLinkServiceTest {
             when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
                     .thenReturn(ResponseEntity.ok().build());
 
+            stubCloudPlan("PRO"); // CLOUD is a paid relay: only a paid account may select it
+
             CloudLlmSource selected = service.setCatalogSource(TENANT_ID, CloudLlmSource.CLOUD);
 
             assertThat(selected).isEqualTo(CloudLlmSource.CLOUD);
@@ -794,6 +801,9 @@ class CloudLinkServiceTest {
             CeCloudLinkEntity link = buildLink();
             link.setInstallId(UUID.fromString("11111111-2222-3333-4444-555555555555"));
             link.setRegisteredAt(clock.instant());
+            link.setCachedAccessToken("cached-access-token");
+            link.setTokenExpiresAt(clock.instant().plusSeconds(300));
+            stubCloudPlan("PRO"); // CLOUD is a paid relay: only a paid account may select it
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
             when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -801,10 +811,10 @@ class CloudLinkServiceTest {
 
             assertThat(selected).isEqualTo(CloudLlmSource.CLOUD);
             ArgumentCaptor<CeCloudLinkEntity> saved = ArgumentCaptor.forClass(CeCloudLinkEntity.class);
-            verify(cloudLinkRepository).save(saved.capture());
-            assertThat(saved.getValue().getCatalogSource()).isEqualTo("CLOUD");
+            verify(cloudLinkRepository, atLeastOnce()).save(saved.capture());
+            assertThat(saved.getAllValues().get(saved.getAllValues().size() - 1).getCatalogSource()).isEqualTo("CLOUD");
             // The LLM toggle is independent and must stay untouched.
-            assertThat(saved.getValue().getLlmSource()).isEqualTo("BYOK");
+            assertThat(saved.getAllValues().get(saved.getAllValues().size() - 1).getLlmSource()).isEqualTo("BYOK");
         }
 
         @Test
@@ -1025,6 +1035,8 @@ class CloudLinkServiceTest {
             when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
                     .thenReturn(ResponseEntity.ok().build());
+
+            stubCloudPlan("PRO"); // CLOUD is a paid relay: only a paid account may select it
 
             CloudLinkService.HeartbeatOutcome outcome = service.sendHeartbeat(link);
 
@@ -1625,6 +1637,22 @@ class CloudLinkServiceTest {
 
             assertThat(service.fetchCloudUsageHistory(TENANT_ID, 0, 15)).isNull();
             verifyNoInteractions(restTemplate);
+        }
+    }
+
+    /** The cloud's GET /ce-link/{installId}/entitlements answers this plan code. */
+    private void stubCloudPlan(String planCode) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode body =
+                    new ObjectMapper().readTree("{\"planCode\":\"" + planCode + "\"}");
+            when(restTemplate.exchange(
+                    org.mockito.ArgumentMatchers.contains("/entitlements"),
+                    eq(HttpMethod.GET),
+                    any(HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(ResponseEntity.ok(body));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException(e);
         }
     }
 

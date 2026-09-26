@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState } from 'react';
 import type { DataSourceItemRow, PaginationState } from '../types';
 import { getValueAtPath } from '../visualHelpers';
 import type { SortConfig } from '../utils/dataTableUtils';
-import { getDefaultSortConfig } from '../utils/dataTableUtils';
+import { compareDisplayIds, displayIdOf, getDefaultSortConfig } from '../utils/dataTableUtils';
 import { cellDisplayText as cellText } from '@/lib/datatable/assetValue';
 
 export interface UseSortingAndFilteringParams {
@@ -62,8 +62,9 @@ export function useSortingAndFiltering({
       let bValue: any;
 
       if (sortConfig.key === 'id') {
-        aValue = a.id;
-        bValue = b.id;
+        // The id the row SHOWS (e.g. a nested log item's "21:3"), never the hidden React key.
+        const order = compareDisplayIds(displayIdOf(a), displayIdOf(b));
+        return sortConfig.direction === 'asc' ? order : -order;
       } else if (sortConfig.key === 'priority') {
         aValue = a.priority;
         bValue = b.priority;

@@ -5,9 +5,11 @@ import com.apimarketplace.catalog.domain.ApiCatalogBundleSyncStatusEntity;
 import com.apimarketplace.catalog.repository.ApiCatalogBundleRepository;
 import com.apimarketplace.catalog.repository.ApiCatalogBundleSyncStatusRepository;
 import com.apimarketplace.common.web.AdminRoleGuard;
+import com.apimarketplace.common.web.BundleEtags;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -19,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,6 +47,19 @@ import java.util.Optional;
 @Slf4j
 @RestController
 public class ApiCatalogBundleController {
+
+    /**
+     * {@code /latest} may be served from a shared cache (Cloudflare, once a cache rule covers the
+     * path) for five minutes. That is what keeps a growing fleet off the origin: every install
+     * that downloads the 32 MB payload in full, including old releases that can never send a
+     * validator, is then answered by the edge, and the origin serves it about once per edge
+     * location per five minutes. The cost is up to five minutes of delay after an activation,
+     * nothing next to a 15-minute poll. The ETag still lets the edge answer a 304.
+     */
+    static final CacheControl LATEST_CACHE = CacheControl.maxAge(Duration.ofMinutes(5)).cachePublic();
+
+    /** A numbered version's bytes never change once built, so it may be cached for a day. */
+    static final CacheControl VERSION_CACHE = CacheControl.maxAge(Duration.ofDays(1)).cachePublic().immutable();
 
     private final ApiCatalogBundleService bundleService;
     private final ApiCatalogBundleSigner signer;
@@ -156,8 +172,9 @@ public class ApiCatalogBundleController {
             return ResponseEntity.status(503).body(Map.of(
                     "error", "api-catalog.bundle.sync.enabled=false on this instance"));
         }
+        boolean ran = true;
         try {
-            scheduler.tick();
+            ran = scheduler.tick();
         } catch (Exception e) {
             // Same guarantee as the scheduled tick: the endpoint must not 500
             // because downstream apply failed - the failure is already
@@ -167,7 +184,11 @@ public class ApiCatalogBundleController {
         ApiCatalogBundleSyncStatusEntity row = syncStatusRepo
                 .findById(ApiCatalogBundleSyncStatusEntity.SINGLETON_ID)
                 .orElseGet(ApiCatalogBundleSyncStatusEntity::new);
-        return ResponseEntity.ok(toSyncStatusView(row));
+        Map<String, Object> view = toSyncStatusView(row);
+        // A sync was already running, so this click did nothing: say so, rather than let the row
+        // (about to be updated by that other sync) pass for the result of this one.
+        view.put("syncInProgress", !ran);
+        return ResponseEntity.ok(view);
     }
 
     /**
@@ -192,19 +213,20 @@ public class ApiCatalogBundleController {
             Optional<ApiCatalogBundleRepository.ActiveBundleMeta> meta = bundleService.getActiveBundleMetadata();
             // Only a row that still carries its payload is servable; a CE-side
             // applied row must 404 here exactly as it did before, never 304.
-            if (meta.isPresent() && isServable(meta.get()) && matchesEtag(ifNoneMatch, meta.get().getChecksum())) {
+            if (meta.isPresent() && isServable(meta.get()) && BundleEtags.matches(ifNoneMatch, meta.get().getChecksum())) {
                 return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
-                        .eTag(quoted(meta.get().getChecksum()))
+                        .eTag(BundleEtags.quoted(meta.get().getChecksum()))
+                        .cacheControl(LATEST_CACHE)
                         .build();
             }
         }
-        return streamOrNotFound(bundleService.getActiveRawBundle());
+        return streamOrNotFound(bundleService.getActiveRawBundle(), LATEST_CACHE);
     }
 
     /** CE download (public): a specific version (replay / diagnostics). */
     @GetMapping("/api/catalog/public/bundles/{version}")
     public ResponseEntity<StreamingResponseBody> signedBundleByVersion(@PathVariable long version) {
-        return streamOrNotFound(bundleService.getRawBundleByVersion(version));
+        return streamOrNotFound(bundleService.getRawBundleByVersion(version), VERSION_CACHE);
     }
 
     /**
@@ -220,7 +242,8 @@ public class ApiCatalogBundleController {
      * as {@code {}} - a 200 carrying a valid ETag and an empty body, with no
      * exception and no log line.
      */
-    private ResponseEntity<StreamingResponseBody> streamOrNotFound(Optional<ApiCatalogBundleService.RawBundle> bundle) {
+    private ResponseEntity<StreamingResponseBody> streamOrNotFound(
+            Optional<ApiCatalogBundleService.RawBundle> bundle, CacheControl cacheControl) {
         if (bundle.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
@@ -228,45 +251,14 @@ public class ApiCatalogBundleController {
         StreamingResponseBody body = out -> ApiCatalogBundleJsonWriter.write(b, out);
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_JSON)
-                .eTag(quoted(b.checksum()))
+                .eTag(BundleEtags.quoted(b.checksum()))
+                .cacheControl(cacheControl)
                 .body(body);
     }
 
     private static boolean isServable(ApiCatalogBundleRepository.ActiveBundleMeta meta) {
         Integer servable = meta.getServable();
         return servable != null && servable == 1;
-    }
-
-    /**
-     * RFC 9110 {@code If-None-Match}: a comma-separated list of entity tags, or
-     * {@code *}. Weak prefixes are ignored because the comparison for a
-     * conditional GET is the weak one. A blank header matches nothing.
-     */
-    private static boolean matchesEtag(String ifNoneMatch, String checksum) {
-        if (ifNoneMatch == null || ifNoneMatch.isBlank() || checksum == null || checksum.isBlank()) {
-            return false;
-        }
-        String header = ifNoneMatch.trim();
-        if ("*".equals(header)) {
-            return true;
-        }
-        for (String candidate : header.split(",")) {
-            String tag = candidate.trim();
-            if (tag.startsWith("W/")) {
-                tag = tag.substring(2).trim();
-            }
-            if (tag.length() >= 2 && tag.startsWith("\"") && tag.endsWith("\"")) {
-                tag = tag.substring(1, tag.length() - 1);
-            }
-            if (tag.equals(checksum)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static String quoted(String checksum) {
-        return "\"" + checksum + "\"";
     }
 
     /**
@@ -296,6 +288,10 @@ public class ApiCatalogBundleController {
         out.put("lastFetchStatus", row.getLastFetchStatus());
         out.put("lastFetchError", row.getLastFetchError());
         out.put("consecutiveFailures", row.getConsecutiveFailures());
+        // Poll backoff: why the scheduled sync may be quiet for a while after failures. A manual
+        // sync ignores it. backoffLevel 0 and a null nextAttemptAt mean no wait.
+        out.put("backoffLevel", row.getBackoffLevel());
+        out.put("nextAttemptAt", row.getNextAttemptAt());
         out.put("updatedAt", row.getUpdatedAt());
         out.put("schedulerEnabled", schedulerProvider.getIfAvailable() != null);
         return out;

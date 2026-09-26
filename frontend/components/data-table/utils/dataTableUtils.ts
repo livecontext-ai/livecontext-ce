@@ -261,7 +261,31 @@ export function displayIdOf(row: DataSourceItemRow): string | number {
   // the expansion counter in their place is the very substitution this whole change removes. Only a
   // missing id (or a non-scalar, which React cannot render) falls back to the row's own.
   const isScalar = typeof own === 'string' || typeof own === 'number';
-  return !injected && own !== undefined && own !== null && isScalar ? own : row.id;
+  return !injected && own !== undefined && own !== null && isScalar ? own : (row._displayId ?? row.id);
+}
+
+/**
+ * Order two ids as {@link displayIdOf} returns them. Numbers compare numerically, and a run-log
+ * id (`20.0.2` coordinates, `21:3` nested item) compares segment by segment on `.` and `:`,
+ * numerically where both segments are finite numbers - so "21.10" sorts after "21.9" and "9"
+ * before "21", which a plain string comparison gets wrong.
+ */
+export function compareDisplayIds(a: string | number, b: string | number): number {
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  const aParts = String(a).split(/[.:]/);
+  const bParts = String(b).split(/[.:]/);
+  for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+    if (aParts[i] === undefined) return -1;
+    if (bParts[i] === undefined) return 1;
+    const aNum = Number(aParts[i]);
+    const bNum = Number(bParts[i]);
+    const bothNumeric = aParts[i] !== '' && bParts[i] !== '' && Number.isFinite(aNum) && Number.isFinite(bNum);
+    const order = bothNumeric
+      ? aNum - bNum
+      : aParts[i] < bParts[i] ? -1 : aParts[i] > bParts[i] ? 1 : 0;
+    if (order !== 0) return order;
+  }
+  return 0;
 }
 
 /**

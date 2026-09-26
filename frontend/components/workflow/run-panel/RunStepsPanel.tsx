@@ -20,7 +20,7 @@ import { StepRowActions } from '@/components/workflow/StepRowActions';
 import { EpochSelector } from './EpochSelector';
 import { StepTooltipContent } from './StepTooltipContent';
 import { WaterfallView } from './WaterfallView';
-import { formatCompactDuration, type EpochTimestamp, type StepEntry } from './runFormatting';
+import { formatCompactDuration, stepDisplayDurationMs, type EpochTimestamp, type StepEntry } from './runFormatting';
 import { computeDagOrder, sortByDagOrder } from '@/lib/workflow/dagStepOrder';
 import { runCostGaugeState } from '@/components/budget/budgetPeriod';
 import { BudgetChip } from '@/components/budget/BudgetChip';
@@ -488,17 +488,9 @@ export function RunStepsPanel({
                         <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 whitespace-nowrap">
                           {formatRel(step.startTime)}
                           {(() => {
-                            // When viewing all epochs, show cumulative totalExecutionTimeMs
-                            const useTotal = selectedEpoch == null && step.totalExecutionTimeMs != null;
-                            const hasBackendTiming = useTotal || step.executionTimeMs != null;
-                            const ms = useTotal
-                              ? step.totalExecutionTimeMs!
-                              : step.executionTimeMs != null
-                                ? step.executionTimeMs
-                                : step.endTime
-                                  ? Math.max(0, parseUtcAware(step.endTime).getTime() - parseUtcAware(step.startTime!).getTime())
-                                  : 0;
-                            return (hasBackendTiming || ms > 0) ? ` · ${formatCompactDuration(ms)}` : '';
+                            // Same figure as the waterfall gauge and the tooltip, by construction.
+                            const ms = stepDisplayDurationMs(step, selectedEpoch == null);
+                            return ms != null ? ` · ${formatCompactDuration(ms)}` : '';
                           })()}
                         </span>
                       )}

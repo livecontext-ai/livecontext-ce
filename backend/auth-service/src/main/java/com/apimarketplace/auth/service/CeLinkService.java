@@ -51,6 +51,9 @@ import java.util.stream.Collectors;
  *   </li>
  *   <li>Else, when the caller has no account (a session that outlived its deletion):
  *       401, nothing written.</li>
+ *   <li>Else, when the caller has not completed the cloud onboarding (email code included):
+ *       403 {@code CLOUD_LINK_ONBOARDING_REQUIRED}, nothing written. The plan is never checked:
+ *       any plan, FREE included, may link.</li>
  *   <li>Else: INSERT new row + REGISTER audit + return 201.</li>
  * </ol>
  *
@@ -79,6 +82,7 @@ public class CeLinkService {
     private final CeLinkActiveRowCachePublisher cachePublisher;
     private final ApplicationEventPublisher eventPublisher;
     private final PlanResolutionService planResolutionService;
+    private final OnboardingService onboardingService;
     /**
      * PAID plan codes for {@link #planAccess}, keyed by cloud user id alone: the decision reads
      * the user's DEFAULT workspace whatever the request carries, so the user is the whole key.
@@ -100,6 +104,7 @@ public class CeLinkService {
                          CeLinkActiveRowCachePublisher cachePublisher,
                          ApplicationEventPublisher eventPublisher,
                          PlanResolutionService planResolutionService,
+                         OnboardingService onboardingService,
                          @Value("${cloud-link.plan-access-cache.ttl-seconds:30}") long planCacheTtlSeconds) {
         this.repository = repository;
         this.heartbeatRepository = heartbeatRepository;
@@ -109,6 +114,7 @@ public class CeLinkService {
         this.cachePublisher = cachePublisher;
         this.eventPublisher = eventPublisher;
         this.planResolutionService = planResolutionService;
+        this.onboardingService = onboardingService;
         this.paidPlanCache = planCacheTtlSeconds > 0
                 ? Caffeine.newBuilder()
                         .expireAfterWrite(Duration.ofSeconds(planCacheTtlSeconds))
@@ -135,16 +141,6 @@ public class CeLinkService {
             CeLink row = existing.get();
             if (row.getUserId().equals(callerUserId)) {
                 if (row.getStatus() == CeLink.Status.ACTIVE) {
-                    // Idempotent retry of a link the caller already owns. The plan is
-                    // re-checked here too: an install linked while paid and re-registering
-                    // after a fall back to FREE must learn it is suspended, not be told
-                    // "registered". The row is kept as is (suspended, never revoked).
-                    CeLinkAccessResult access = planAccess(callerUserId);
-                    if (!access.isActive()) {
-                        log.info("CeLink register refused (plan required) installId={} userId={} plan={}",
-                                installId, callerUserId, access.planCode());
-                        return CeLinkRegisterResponse.planRequired(access.planCode());
-                    }
                     // Idempotent retry: return current scopes, no audit row (not a state change).
                     log.debug("CeLink register idempotent for installId={} userId={}", installId, callerUserId);
                     return CeLinkRegisterResponse.ok(row.getScopes());
@@ -191,13 +187,16 @@ public class CeLinkService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "no account for this session");
         }
 
-        // New register: only an account on a paid plan may link an install. Nothing is
-        // written for a refused caller, so paying and retrying is a plain first register.
-        CeLinkAccessResult access = planAccess(callerUserId);
-        if (!access.isActive()) {
-            log.info("CeLink register refused (plan required) installId={} userId={} plan={}",
-                    installId, callerUserId, access.planCode());
-            return CeLinkRegisterResponse.planRequired(access.planCode());
+        // New register: any plan may link (FREE included; only the paid relays look at the plan),
+        // but only an account that completed the cloud onboarding, email code included. An install
+        // that bypassed it (an older CE opening the bare Keycloak sign-up, where an email is never
+        // checked) is refused and nothing is written, so its next heartbeat tick registers as soon
+        // as the onboarding is done. An idempotent re-register of a link that is already ACTIVE is
+        // not re-checked: links made before this rule keep working (a decision, not an oversight).
+        if (!hasCompletedOnboarding(callerUserId)) {
+            log.info("CeLink register refused (onboarding not completed) installId={} userId={}",
+                    installId, callerUserId);
+            return CeLinkRegisterResponse.onboardingRequired();
         }
         CeLink fresh = new CeLink(installId, callerUserId,
                 label == null || label.isBlank() ? "CE install" : label);
@@ -327,8 +326,8 @@ public class CeLinkService {
 
     /**
      * Whether {@code userId} owns an ACTIVE link row for {@code installId}. LINK STATE ONLY:
-     * a suspended link (active row, unpaid plan) still answers true here. Every gate that
-     * decides whether a linked install may USE the cloud must call {@link #linkAccess}.
+     * a link whose account is not paid still answers true here. Every paid relay (LLM, web
+     * search, catalog) must call {@link #linkAccess} instead.
      */
     @Transactional(readOnly = true)
     public boolean userOwnsActiveLink(Long userId, UUID installId) {
@@ -341,14 +340,15 @@ public class CeLinkService {
     }
 
     /**
-     * The single "linked AND paid" decision behind every CE-link-gated cloud endpoint
-     * (register, heartbeat, the internal {@code /ce-link/{installId}/active} probe the relays
-     * call through auth-client).
+     * The "linked AND paid" decision behind the internal {@code /ce-link/{installId}/active}
+     * probe every cloud endpoint a linked install calls reads through auth-client. The paid
+     * relays (LLM, web search, catalog) need {@code ACTIVE}; the bundles only need a link
+     * ({@link CeLinkAccessResult#isLinked}). Register and heartbeat never look at the plan.
      *
      * <ul>
      *   <li>{@code NOT_LINKED}: no ACTIVE link row for (install, user). No plan is consulted.</li>
      *   <li>{@code PLAN_REQUIRED}: the link is ACTIVE but the governing plan is not paid. The
-     *       link is SUSPENDED, never revoked, so it comes back by itself once the account pays.</li>
+     *       link itself is untouched, and the paid relays open as soon as the account pays.</li>
      *   <li>{@code ACTIVE}: linked and paid.</li>
      * </ul>
      */
@@ -364,22 +364,21 @@ public class CeLinkService {
      * Is the governing plan of {@code userId} paid? The governing plan is the plan of the OWNER
      * of the user's DEFAULT workspace ({@link PlanResolutionService#resolveDefaultWorkspacePlan}):
      * the workspace the gateway resolves for a CE install's calls, which carry no active-workspace
-     * claim. Deliberately NOT the browser's active workspace: eligibility is asked from the
-     * browser and register / heartbeat / relays from the CE, and both must get the same answer.
-     * A member whose DEFAULT workspace is a paid TEAM workspace is allowed; a member who is only
+     * claim. Deliberately NOT the browser's active workspace, so the answer does not depend on
+     * which workspace happens to be open in a browser. A member whose DEFAULT workspace is a paid TEAM workspace is allowed; a member who is only
      * browsing a paid workspace while their default is FREE is not.
      *
-     * <p><b>Fails CLOSED, a deliberate exception to "plan gating fails open":</b> a CE link spends
-     * cloud money (LLM, search and catalog calls run on the cloud's keys), so FREE, CREDIT_PACK,
-     * CE, blank and unknown codes all answer PLAN_REQUIRED ({@link PlanTier#isPaid}), and so does
-     * a plan lookup that FAILED (plan code null). The refusal is temporary by construction:
-     * suspend, never revoke, and a failure is never cached.
+     * <p><b>Fails CLOSED, a deliberate exception to "plan gating fails open":</b> the paid relays
+     * spend cloud money (LLM, search and catalog calls run on the cloud's keys), so FREE,
+     * CREDIT_PACK, CE, blank and unknown codes all answer PLAN_REQUIRED ({@link PlanTier#isPaid}),
+     * and so does a plan lookup that FAILED (plan code null). The refusal is temporary by
+     * construction: the link is never touched, and a failure is never cached.
      *
      * <p>Only a PAID answer is cached ({@code cloud-link.plan-access-cache.ttl-seconds}, 30 s,
      * per replica): the relays call this on every LLM call. Paying therefore lands immediately
      * everywhere; a downgrade lands within the TTL.
      */
-    public CeLinkAccessResult planAccess(Long userId) {
+    CeLinkAccessResult planAccess(Long userId) {
         if (userId == null) {
             return CeLinkAccessResult.notLinked();
         }
@@ -399,6 +398,18 @@ public class CeLinkService {
             paidPlanCache.put(userId, plan.planCode());
         }
         return CeLinkAccessResult.active(plan.planCode());
+    }
+
+    /**
+     * Whether the account finished the cloud onboarding. {@link OnboardingService#needsOnboarding}
+     * is the single rule the web app enforces too, and it already folds in the email
+     * verification (an unverified email always "needs onboarding").
+     */
+    private boolean hasCompletedOnboarding(Long userId) {
+        return userRepository.findById(userId)
+                .map(User::getProviderId)
+                .map(providerId -> !onboardingService.needsOnboarding(providerId))
+                .orElse(false);
     }
 
     /**

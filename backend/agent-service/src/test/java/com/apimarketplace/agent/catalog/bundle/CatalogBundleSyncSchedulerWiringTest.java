@@ -33,6 +33,8 @@ class CatalogBundleSyncSchedulerWiringTest {
             .withBean(CatalogBundleApplier.class, () -> mock(CatalogBundleApplier.class))
             .withBean(CatalogBundleSyncStatusRepository.class,
                     () -> mock(CatalogBundleSyncStatusRepository.class))
+            .withBean(com.apimarketplace.agent.repository.CatalogBundleRepository.class,
+                    () -> mock(com.apimarketplace.agent.repository.CatalogBundleRepository.class))
             .withBean(TrustedKeyRegistry.class, () -> mock(TrustedKeyRegistry.class))
             .withBean(CatalogBundleTrustBootstrap.class, () -> mock(CatalogBundleTrustBootstrap.class))
             .withConfiguration(UserConfigurations.of(CatalogBundleSyncScheduler.class));

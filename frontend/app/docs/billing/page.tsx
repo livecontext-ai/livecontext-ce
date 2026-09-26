@@ -385,8 +385,9 @@ export default function BillingPage() {
           <strong>Quota &amp; Usage</strong> headline shows the cloud account&apos;s usage.
         </p>
         <p>
-          Model calls relayed through the cloud are billed to the cloud account, once per execution, so
-          a retry never charges twice. See <a href="/self-host">Self-hosting</a>.
+          Any cloud plan can link an install, the Free plan included. Model calls, integration calls and
+          web searches relayed through the cloud need a paid plan on the cloud account, and are billed to
+          it, once per execution, so a retry never charges twice. See <a href="/self-host">Self-hosting</a>.
         </p>
 
         <h2>Troubleshooting</h2>

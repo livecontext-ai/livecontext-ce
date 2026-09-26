@@ -361,6 +361,16 @@
     }
   },
   "dataTable": {
+    "workflowRowId": {
+      "label": "How to read this ID",
+      "intro": "The ID tells where this row ran: epoch.spawn.iteration.item, the same values as the columns next to it (they count from 0). Trailing zeros are left out.",
+      "exampleEpoch": "epoch 21",
+      "exampleSpawn": "epoch 20, spawn 1 (a rerun)",
+      "exampleIteration": "epoch 20, iteration 2",
+      "exampleItem": "epoch 20, item index 3",
+      "exampleNested": "index 3 inside the output of row 21",
+      "sameId": "An ID is not unique: a wait and its completion, or runs of two different triggers, can share one."
+    },
     "deleteColumns": "Delete Columns",
     "deleteColumnsConfirm": "Are you sure you want to delete {count} selected column(s)? This action cannot be undone.",
     "dragToReorganize": "Drag to reorganize column",
@@ -591,7 +601,8 @@
     "deleteAgentTitle": "Delete Agent",
     "deleteAgentConfirm": "Are you sure you want to delete \"{name}\"? This action cannot be undone.",
     "deleteDatasourceTitle": "Delete Data Source",
-    "deleteDatasourceConfirm": "Are you sure you want to delete \"{name}\"? This action cannot be undone."
+    "deleteDatasourceConfirm": "Are you sure you want to delete \"{name}\"? This action cannot be undone.",
+    "analysisTab": "Analysis"
   },
   "platformStatus": {
     "headline": {
@@ -1256,7 +1267,8 @@
         "duration": "Duration",
         "stillRunning": "Still running",
         "cumulative": "cumulative",
-        "executions": "Executions"
+        "executions": "Executions",
+        "totalWork": "Total work (items added up)"
       }
     },
     "cancelRun": {
@@ -1337,6 +1349,72 @@
       "scopeAll": "all epochs",
       "scopeEpoch": "epoch {epoch}",
       "budgetBlockedMessageCumulative": "Spent {spent} of {budget}, and this cap never resets. No new run was started; raise the cap or change how it resets to continue."
+    },
+    "runAnalysis": {
+      "window": "Epochs shown",
+      "windowOption": "Last {count}",
+      "windowOf": "Last {shown} of {total, plural, one {# epoch} other {# epochs}}",
+      "refresh": "Refresh",
+      "loading": "Loading analysis",
+      "error": "Could not load the analysis.",
+      "retry": "Retry",
+      "empty": "No epoch has run yet. Run the workflow to see its analysis.",
+      "kpi": {
+        "epochs": "Epochs",
+        "successRate": "Success rate",
+        "failedCount": "{count} failed",
+        "noSettled": "None finished yet",
+        "avgDuration": "Average duration",
+        "maxDuration": "max {value}",
+        "credits": "Cost",
+        "perEpoch": "{value} per epoch",
+        "noCost": "No cost recorded"
+      },
+      "chart": {
+        "title": "Duration and cost per epoch",
+        "duration": "Duration",
+        "cost": "Cost"
+      },
+      "grid": {
+        "title": "Nodes by epoch",
+        "colorBy": "Color by",
+        "byStatus": "Status",
+        "byDuration": "Duration",
+        "failures": "{count} failed",
+        "partials": "{count} partial",
+        "average": "avg {value}",
+        "items": "{count} executions",
+        "totalWork": "total work {value}"
+      },
+      "legend": {
+        "ok": "Succeeded",
+        "failed": "Failed",
+        "partial": "Partial",
+        "skipped": "Skipped",
+        "running": "Running",
+        "waiting": "Waiting",
+        "none": "Did not run",
+        "fast": "Fast",
+        "slow": "Slow"
+      },
+      "insight": {
+        "failing": "{node} failed in {count} of {total, plural, one {# epoch} other {# epochs}}.",
+        "epochFailures": "{count, plural, one {# epoch} other {# epochs}} failed without a failing node step: open the run logs to see why.",
+        "lastError": "Last error: {error}",
+        "slower": "{node} got slower from epoch {epoch}: {before} then {after}.",
+        "none": "No failure in these epochs."
+      },
+      "compare": {
+        "title": "Compare two epochs",
+        "hint": "Click a bar or a cell to pick the epoch to compare.",
+        "reference": "Reference",
+        "node": "Node",
+        "epoch": "Epoch #{epoch}",
+        "showOnCanvas": "Show epoch {epoch} on the canvas",
+        "total": "Total",
+        "notRun": "Did not run",
+        "needTwo": "At least two epochs are needed to compare."
+      }
     }
   },
   "workflowRelations": {
@@ -2180,9 +2258,55 @@
       "restoreFailed": "We could not reactivate your account. Please try again."
     },
     "agentError": {
-      "title": "Something went wrong",
-      "description": "An error occurred while running this. Please try again in a moment.",
-      "retry": "Try again"
+      "close": "Close",
+      "gotIt": "Got it",
+      "technicalDetails": "Technical details",
+      "kinds": {
+        "interrupted": {
+          "title": "The answer was interrupted",
+          "description": "The service restarted while the assistant was answering. The partial response has been saved. Send your message again to continue."
+        },
+        "providerBilling": {
+          "title": "The AI provider refused the request for billing reasons",
+          "description": "The account used to call this model has no credit left with its provider. Choose another model, or top up the provider account if you use your own key."
+        },
+        "rateLimit": {
+          "title": "Too many requests to this model",
+          "description": "The provider is limiting how fast this model can be called. Wait a minute and send your message again, or choose another model."
+        },
+        "contextTooLong": {
+          "title": "This conversation is too long for the model",
+          "description": "The conversation and its attachments exceed what this model can read at once. Start a new conversation, remove large attachments, or choose a model with a larger context."
+        },
+        "contentBlocked": {
+          "title": "The provider blocked this request",
+          "description": "The model provider's safety filters refused this message or its answer. Rephrase your request and try again."
+        },
+        "modelUnavailable": {
+          "title": "This model is not available",
+          "description": "The provider no longer serves this model, or it cannot be used for chat. Choose another model in the model selector."
+        },
+        "providerUnavailable": {
+          "title": "The AI provider is temporarily unavailable",
+          "description": "The model provider is overloaded or having an outage. Try again in a few moments, or choose another model."
+        },
+        "network": {
+          "title": "The connection to the model was lost",
+          "description": "The connection dropped or timed out before the answer was finished. Send your message again."
+        },
+        "providerRejected": {
+          "title": "The model rejected the request",
+          "description": "The provider refused the request as it was sent to this model. This usually comes from an incompatibility between the platform and this specific model, not from your message. Choose another model for now."
+        },
+        "sendFailed": {
+          "title": "Your message could not be sent",
+          "description": "The server could not take your message. Send it again in a moment, and reload the page if it keeps failing."
+        },
+        "unknown": {
+          "title": "Something went wrong",
+          "description": "An error occurred while running this. Please try again in a moment."
+        }
+      }
     },
     "missingApiKey": {
       "title": "API Key Required",
@@ -3547,6 +3671,9 @@
       "byokHint": "API model calls use the keys configured on this instance.",
       "connectedAs": "Connected as {username}",
       "linkRequired": "Link a Cloud account before switching to Cloud.",
+      "planRequired": "Cloud models need a paid plan on your linked cloud account. The install stays linked: choose a plan and switch again, or keep API keys.",
+      "onboardingRequired": "Your LiveContext Cloud account has not finished its setup (email verification code and profile). Finish it on LiveContext Cloud, then switch again.",
+      "notReady": "LiveContext Cloud cannot be reached right now, so the switch was not made. Your install is still linked: try again in a moment.",
       "saveError": "Failed to update the LLM source."
     },
     "catalogSource": {
@@ -3558,6 +3685,8 @@
       "subscriptionRequired": "Using Cloud requires an active paid subscription on your linked cloud account. A free account cannot pay for relayed calls.",
       "viewPlans": "View plans",
       "linkRequired": "Link a Cloud account before switching to Cloud.",
+      "onboardingRequired": "Your LiveContext Cloud account has not finished its setup (email verification code and profile). Finish it on LiveContext Cloud, then switch again.",
+      "notReady": "LiveContext Cloud cannot be reached right now, so the switch was not made. Your install is still linked: try again in a moment.",
       "saveError": "Failed to update the integration credential source.",
       "cloudCovers": "This covers generation too: images, video, sound, speech and music run on the cloud account's provider keys and are billed there in credits, per second or per asset, at the price published for each model."
     },
@@ -15510,25 +15639,16 @@
   "ceCloudLink": {
     "expired": "The connection expired, click Connect again.",
     "planRequired": {
-      "title": "Your LiveContext Cloud link needs a paid plan",
-      "body": "Linking a self-hosted install to LiveContext Cloud requires a paid plan on the cloud account. Choose a plan and this install reconnects automatically, with nothing to link again.",
+      "title": "Cloud models need a paid plan",
+      "body": "This install is linked to LiveContext Cloud. Cloud models, web search and cloud integrations need a paid plan on the cloud account. Choose a plan and they work right away, with nothing to link again.",
       "cta": "View cloud plans",
       "sidebarBadge": "Paid plan required"
     },
     "planRequiredModal": {
       "title": "Paid plan required",
-      "description": "This install is linked to a LiveContext Cloud account that is not on a paid plan, so the cloud refused the request. Choose a plan on LiveContext Cloud and this install reconnects automatically.",
+      "description": "This install is linked to a LiveContext Cloud account that is not on a paid plan. Cloud models, web search and cloud integrations need one. Choose a plan on LiveContext Cloud and they work right away: the install stays linked.",
       "cta": "View cloud plans",
       "close": "Close"
-    },
-    "cloud": {
-      "returning": "Returning to your self-hosted install.",
-      "pricingBannerTitle": "Linking your self-hosted install requires a paid plan",
-      "pricingBannerBody": "Choose a plan below. Once your subscription is active, you are taken back to your install to finish connecting it.",
-      "pricingBannerContinue": "I have a paid plan, continue",
-      "pricingBannerStillRequired": "Your current plan is not a paid plan yet. Choose a plan to continue.",
-      "pricingBannerNoPending": "This connection request is no longer available. Click Connect again on your self-hosted install.",
-      "pricingBannerError": "We could not check your plan. Please try again."
     }
   }
 }

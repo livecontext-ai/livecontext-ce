@@ -175,6 +175,16 @@ const TERMS: Term[] = [
     ),
   },
   {
+    term: 'Iteration',
+    definition: (
+      <>
+        One pass through a loop body, counted from 0 within the epoch. In <strong>Logs</strong>, a row&apos;s ID
+        reads <code>epoch.spawn.iteration.item</code>, so <code>20.0.2</code> is loop iteration 2 of epoch 20. See{' '}
+        <a href="/runs">Runs &amp; execution</a>.
+      </>
+    ),
+  },
+  {
     term: 'Label',
     definition: (
       <>
@@ -287,7 +297,8 @@ const TERMS: Term[] = [
     term: 'Spawn',
     definition: (
       <>
-        A re-execution of nodes within the same epoch, for example a loop iteration or a retry. See{' '}
+        A re-execution of nodes within the same epoch, produced by re-running a step. Re-running raises the
+        spawn, never the epoch; a loop pass is counted by the iteration instead. See{' '}
         <a href="/runs">Runs &amp; execution</a>.
       </>
     ),

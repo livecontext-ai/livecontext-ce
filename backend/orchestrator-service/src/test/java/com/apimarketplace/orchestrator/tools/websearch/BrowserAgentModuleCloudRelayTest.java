@@ -19,6 +19,8 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -37,13 +39,17 @@ class BrowserAgentModuleCloudRelayTest {
     @Mock private CloudLlmRuntimeAccess runtimeAccess;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final BrowserAgentRelayTenantSigner signer = new BrowserAgentRelayTenantSigner();
     private BrowserAgentModule module;
 
     @BeforeEach
     void setUp() {
         lenient().when(config.getServiceUrl()).thenReturn("http://websearch-host:8085");
         module = new BrowserAgentModule(restTemplate, config, redisTemplate, objectMapper);
+        module.setRelayTenantSigner(signer);
     }
+
+    private static final String TENANT = "42";
 
     private static CloudLlmRuntimeCredentials creds() {
         return new CloudLlmRuntimeCredentials("tok-123", "install-abc", "https://livecontext.ai/api");
@@ -57,16 +63,21 @@ class BrowserAgentModuleCloudRelayTest {
     }
 
     @Test
-    @DisplayName("cloud-linked: routes the llm block to the cloud relay shim, model stays clean")
+    @DisplayName("LLM source CLOUD: routes the llm block to the cloud relay shim, model stays clean")
     void routesToCloudRelayWhenLinked() {
         module.setCloudRuntimeAccess(runtimeAccess);
-        when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds()));
+        when(runtimeAccess.isCloudSelected(TENANT)).thenReturn(true);
+        when(runtimeAccess.resolveCloudRuntime(TENANT)).thenReturn(Optional.of(creds()));
 
         Map<String, Object> llm = llm();
-        module.maybeRouteLlmToCloudRelay(llm);
+        module.maybeRouteLlmToCloudRelay(llm, TENANT);
 
         assertThat(llm.get("provider_kind")).isEqualTo("bridge");
         assertThat(llm.get("bridge_url")).isEqualTo("http://livecontext:8080/api/browser-agent/llm");
+        // The shim must relay on this tenant's own link (an install can hold several).
+        assertThat(llm.get("relay_tenant_id")).isEqualTo(TENANT);
+        // ...signed, so the shim can trust it.
+        assertThat(signer.verify(TENANT, (String) llm.get("relay_tenant_sig"))).isTrue();
         // Model stays CLEAN (pricing/observability read it); provider travels via the
         // X-LLM-Provider header the runner's BridgeChatClient sends to the shim.
         assertThat(llm.get("model")).isEqualTo("gemini-3.1-flash-lite");
@@ -74,13 +85,53 @@ class BrowserAgentModuleCloudRelayTest {
     }
 
     @Test
-    @DisplayName("not linked: leaves the llm block untouched so the direct-key path runs")
-    void noOpWhenNotLinked() {
+    @DisplayName("regression: a linked install on its OWN keys (every FREE account) is never moved onto the paid cloud relay")
+    void noOpWhenLinkedButOnOwnKeys() {
         module.setCloudRuntimeAccess(runtimeAccess);
-        when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.empty());
+        // Linked (an install-level runtime exists), but this tenant chose its own keys.
+        lenient().when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds()));
+        when(runtimeAccess.isCloudSelected(TENANT)).thenReturn(false);
 
         Map<String, Object> llm = llm();
-        module.maybeRouteLlmToCloudRelay(llm);
+        module.maybeRouteLlmToCloudRelay(llm, TENANT);
+
+        assertThat(llm).doesNotContainKey("provider_kind").doesNotContainKey("bridge_url");
+        verify(runtimeAccess, never()).resolveActiveCloudRuntime();
+    }
+
+    @Test
+    @DisplayName("the cloud-link state cannot be read: no routing, the direct-key path runs")
+    void noOpWhenCloudStateUnreadable() {
+        module.setCloudRuntimeAccess(runtimeAccess);
+        when(runtimeAccess.isCloudSelected(TENANT)).thenThrow(new IllegalStateException("publication down"));
+
+        Map<String, Object> llm = llm();
+        module.maybeRouteLlmToCloudRelay(llm, TENANT);
+
+        assertThat(llm).doesNotContainKey("provider_kind");
+    }
+
+    @Test
+    @DisplayName("no tenant on the call: no-op, the cloud-link state is never consulted")
+    void noOpWithoutTenant() {
+        module.setCloudRuntimeAccess(runtimeAccess);
+
+        Map<String, Object> llm = llm();
+        module.maybeRouteLlmToCloudRelay(llm, null);
+
+        assertThat(llm).doesNotContainKey("provider_kind");
+        verifyNoInteractions(runtimeAccess);
+    }
+
+    @Test
+    @DisplayName("CLOUD selected but the tenant's cloud runtime is not ready: untouched, the direct-key path runs")
+    void noOpWhenCloudRuntimeNotReady() {
+        module.setCloudRuntimeAccess(runtimeAccess);
+        when(runtimeAccess.isCloudSelected(TENANT)).thenReturn(true);
+        when(runtimeAccess.resolveCloudRuntime(TENANT)).thenReturn(Optional.empty());
+
+        Map<String, Object> llm = llm();
+        module.maybeRouteLlmToCloudRelay(llm, TENANT);
 
         assertThat(llm).doesNotContainKey("provider_kind");
         assertThat(llm.get("model")).isEqualTo("gemini-3.1-flash-lite");
@@ -90,7 +141,7 @@ class BrowserAgentModuleCloudRelayTest {
     @DisplayName("no runtime-access bean (non-CE / tests): no-op")
     void noOpWhenNoBean() {
         Map<String, Object> llm = llm();
-        module.maybeRouteLlmToCloudRelay(llm);
+        module.maybeRouteLlmToCloudRelay(llm, TENANT);
         assertThat(llm).doesNotContainKey("provider_kind");
     }
 
@@ -101,7 +152,7 @@ class BrowserAgentModuleCloudRelayTest {
         Map<String, Object> llm = llm();
         llm.put("api_key", "sk-direct");
 
-        module.maybeRouteLlmToCloudRelay(llm);
+        module.maybeRouteLlmToCloudRelay(llm, TENANT);
 
         assertThat(llm).doesNotContainKey("provider_kind");
         verifyNoInteractions(runtimeAccess);
@@ -116,7 +167,7 @@ class BrowserAgentModuleCloudRelayTest {
         llm.put("bridge_url", "http://custom-bridge:9000");
         llm.put("model", "m");
 
-        module.maybeRouteLlmToCloudRelay(llm);
+        module.maybeRouteLlmToCloudRelay(llm, TENANT);
 
         assertThat(llm.get("bridge_url")).isEqualTo("http://custom-bridge:9000");
         verifyNoInteractions(runtimeAccess);
@@ -128,7 +179,7 @@ class BrowserAgentModuleCloudRelayTest {
         module.setCloudRuntimeAccess(runtimeAccess);
         Map<String, Object> llm = new HashMap<>();
         llm.put("model", "gemini-3.1-flash-lite"); // no provider
-        module.maybeRouteLlmToCloudRelay(llm);
+        module.maybeRouteLlmToCloudRelay(llm, TENANT);
         assertThat(llm).doesNotContainKey("provider_kind");
         verifyNoInteractions(runtimeAccess);
     }

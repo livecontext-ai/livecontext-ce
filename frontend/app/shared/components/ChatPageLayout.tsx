@@ -23,11 +23,6 @@ import { HomeModeSwitch } from '@/components/chat/HomeModeSwitch';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { HomeQuickOpenButton } from '@/components/chat/HomeQuickOpenButton';
 
-type StreamError = {
-  message: string;
-  retryable?: boolean;
-} | null;
-
 type ToolSelectorProps = ComponentProps<typeof ToolSelector>;
 type HistoryProps = ComponentProps<typeof MessageHistory>;
 type ComposerProps = ComponentProps<typeof MessageComposer>;
@@ -44,8 +39,6 @@ export interface ChatPageLayoutProps {
     isConversationActive: boolean;
     isLoadingConversation: boolean;
     messagesContainerRef: RefObject<HTMLDivElement>;
-    streamLastError: StreamError;
-    attemptStreamReconnection: () => void;
   };
   conversationId?: string | null;
   conversation?: Conversation | null;
@@ -70,8 +63,6 @@ export function ChatPageLayout({
     // shouldRenderHistory and isConversationActive are handled by ChatCore now
     isLoadingConversation,
     messagesContainerRef,
-    streamLastError,
-    attemptStreamReconnection
   } = layoutState;
 
   const router = useRouter();
@@ -250,27 +241,6 @@ export function ChatPageLayout({
             /* Welcome view - special layout with MessageComposer at 25% from top */
             <>
               <div ref={messagesContainerRef} className="flex-1 overflow-y-auto py-4 space-y-4 min-h-0 chat-messages-container relative">
-                {/* Stream error banner - sticky at top */}
-                {streamLastError && (
-                  <div className="sticky top-0 z-20 mx-auto max-w-4xl px-2 w-full">
-                    <div className="rounded-[18px] flex items-center justify-center py-2 px-4 mb-4 bg-red-50 dark:bg-red-900/20 shadow-sm">
-                      <div className="flex items-center space-x-2 text-red-700 dark:text-red-300">
-                        <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                        <span className="text-sm">
-                          Stream error: {streamLastError.message}
-                        </span>
-                        {streamLastError.retryable && (
-                          <button
-                            onClick={attemptStreamReconnection}
-                            className="text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
-                          >
-                            Retry
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
 
                 <div className="mx-auto w-full flex flex-col">
                   <div className="flex flex-col w-full">

@@ -69,6 +69,35 @@ class WorkflowEpochServiceEpochStatusTest {
         }
     }
 
+    // ── The windowed timeline ─────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("The windowed timeline is oldest first, badged, and measured over ITS epochs only")
+    void latestTimestampsAreSortedBadgedAndMeasuredOverTheWindow() {
+        org.mockito.Mockito.when(repository.listLatestEpochTimestamps("run-1", 2)).thenReturn(List.of(
+                closed(8, state(Set.of("mcp:a"), Set.of("mcp:b"), Set.of())),
+                closed(7, state(Set.of("mcp:a"), Set.of(), Set.of()))));
+        org.mockito.Mockito.when(stepDataRepository.findEpochWorkWindowsInRange("run-1", 7, 8)).thenReturn(List.of(
+                new com.apimarketplace.orchestrator.persistence.EpochWorkWindowProjection(
+                        "run-1", 7, Instant.parse("2026-08-02T09:07:00Z"), Instant.parse("2026-08-02T09:07:04Z"))));
+
+        List<EpochTimestampRow> rows = service.listLatestEpochTimestamps("run-1", 2);
+
+        assertThat(rows).extracting(EpochTimestampRow::epoch, EpochTimestampRow::status, EpochTimestampRow::workDurationMs)
+                .containsExactly(Tuple.tuple(7, "COMPLETED", 4_000L), Tuple.tuple(8, "FAILED", null));
+        // The whole-run aggregate is what this method exists to avoid.
+        org.mockito.Mockito.verify(stepDataRepository, org.mockito.Mockito.never()).findEpochWorkWindows(org.mockito.ArgumentMatchers.anyCollection());
+    }
+
+    @Test
+    @DisplayName("An empty window reads no step rows")
+    void emptyWindowReadsNoStepRows() {
+        org.mockito.Mockito.when(repository.listLatestEpochTimestamps("run-1", 60)).thenReturn(List.of());
+
+        assertThat(service.listLatestEpochTimestamps("run-1", 60)).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(stepDataRepository);
+    }
+
     // ── The verdict itself ────────────────────────────────────────────────────
 
     @Test

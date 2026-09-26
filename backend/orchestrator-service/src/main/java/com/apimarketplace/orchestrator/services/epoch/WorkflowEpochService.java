@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -352,7 +353,28 @@ public class WorkflowEpochService {
     public List<EpochTimestampRow> listEpochTimestamps(String runId) {
         List<EpochTimelineRow> rows = repository.listEpochTimestamps(runId);
         if (rows.isEmpty()) return List.of();
-        Map<Integer, Long> workByEpoch = getEpochWorkDurations(runId);
+        return toTimestampRows(rows, getEpochWorkDurations(runId));
+    }
+
+    /**
+     * {@link #listEpochTimestamps} for the {@code limit} most recent epochs only, oldest first,
+     * same figures. Reads (and deserializes the state of) those epochs alone, and measures their
+     * work window over their own step rows only: a long-lived schedule holds ~10k epochs a week.
+     */
+    public List<EpochTimestampRow> listLatestEpochTimestamps(String runId, int limit) {
+        List<EpochTimelineRow> rows = new ArrayList<>(repository.listLatestEpochTimestamps(runId, limit));
+        if (rows.isEmpty()) return List.of();
+        rows.sort(java.util.Comparator.comparingInt(EpochTimelineRow::epoch));
+        Map<Integer, Long> workByEpoch = new HashMap<>();
+        for (EpochWorkWindowProjection window : stepDataRepository.findEpochWorkWindowsInRange(
+                runId, rows.get(0).epoch(), rows.get(rows.size() - 1).epoch())) {
+            Long millis = window.durationMs();
+            if (window.epoch() != null && millis != null) workByEpoch.put(window.epoch(), millis);
+        }
+        return toTimestampRows(rows, workByEpoch);
+    }
+
+    private List<EpochTimestampRow> toTimestampRows(List<EpochTimelineRow> rows, Map<Integer, Long> workByEpoch) {
         return rows.stream()
                 .map(row -> new EpochTimestampRow(row.epoch(), row.startedAt(), row.endedAt())
                         .withWorkDurationMs(workByEpoch.get(row.epoch()))

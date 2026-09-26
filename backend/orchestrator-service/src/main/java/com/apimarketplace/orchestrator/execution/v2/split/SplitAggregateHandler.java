@@ -74,6 +74,7 @@ public class SplitAggregateHandler {
     private final OutputSchemaMapper outputSchemaMapper;
     private final SplitAwareNodeExecutor splitAwareNodeExecutor;
     private final StepOutputService stepOutputService;
+    private final SplitContextRehydrator rehydrator;
 
     public SplitAggregateHandler(SplitContextManager contextManager,
                                  TemplateEngine templateEngine,
@@ -90,6 +91,7 @@ public class SplitAggregateHandler {
         // Durable per-item output fallback (split→aggregate race / post-restart).
         // @Lazy + null-tolerant: unit tests that don't exercise the fallback pass null.
         this.stepOutputService = stepOutputService;
+        this.rehydrator = new SplitContextRehydrator(contextManager, stepOutputService);
     }
 
     /**
@@ -151,6 +153,11 @@ public class SplitAggregateHandler {
             int workflowItemIndex,
             ExecutionContext context,
             Map<String, ExecutionNode> nodeMap) {
+
+        // Absent from this pod, or left behind by an older epoch: rebuild it from the split's
+        // persisted output BEFORE any lookup, so neither the stale copy nor the any-context
+        // fallback below (which can hand back an unrelated split) is used.
+        rehydrator.ensureContext(runId, nodeId, workflowItemIndex, nodeMap, context);
 
         // Try BFS traversal first (works with full nodeMap)
         Optional<SplitContext> splitContextOpt = contextManager.findActiveContext(

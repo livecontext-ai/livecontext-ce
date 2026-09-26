@@ -372,7 +372,7 @@ public class CloudLlmRelayController {
         if (cloudUserId == null) {
             return ValidationResult.error(HttpStatus.UNAUTHORIZED, "AUTHENTICATION_REQUIRED");
         }
-        // Linked AND paid: a suspended link (plan not paid) answers CLOUD_LINK_PLAN_REQUIRED,
+        // Linked AND paid: a link whose account is not paid answers CLOUD_LINK_PLAN_REQUIRED,
         // an unlinked one CE_LINK_NOT_ACTIVE; both bodies come from the shared CeLinkRefusal.
         CeLinkAccessResult access = authClient.ceLinkAccess(String.valueOf(cloudUserId), installId);
         if (access == null || !access.isActive()) {

@@ -3,6 +3,8 @@ package com.apimarketplace.orchestrator.services;
 import com.apimarketplace.orchestrator.domain.workflow.RunStatus;
 import com.apimarketplace.orchestrator.persistence.WorkflowStepDataRepository;
 import com.apimarketplace.orchestrator.repository.AggregatedStepProjection;
+import com.apimarketplace.orchestrator.repository.EpochAggregatedStepProjection;
+import com.apimarketplace.orchestrator.repository.EpochElapsedProjection;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +33,11 @@ public class StepAggregationService {
 
     /**
      * Aggregated step data record.
+     *
+     * <p>{@code totalExecutionTimeMs} ADDS UP the node's rows (the work done). {@code elapsedMs}
+     * is how long the node held its epoch: per-iteration spans, summed (see
+     * {@code WorkflowStepDataRepository#getElapsedByRunIdAndEpochRange}). Only the per-epoch
+     * aggregations fill it; null elsewhere and when nothing was timed.
      */
     public record AggregatedStep(
         String alias,
@@ -39,8 +46,18 @@ public class StepAggregationService {
         Instant startTime,
         Instant endTime,
         Map<String, Integer> statusCounts,
-        long totalExecutionTimeMs
-    ) {}
+        long totalExecutionTimeMs,
+        Long elapsedMs
+    ) {
+        public AggregatedStep(String alias, String status, String toolId, Instant startTime, Instant endTime,
+                              Map<String, Integer> statusCounts, long totalExecutionTimeMs) {
+            this(alias, status, toolId, startTime, endTime, statusCounts, totalExecutionTimeMs, null);
+        }
+
+        AggregatedStep withElapsedMs(Long elapsed) {
+            return new AggregatedStep(alias, status, toolId, startTime, endTime, statusCounts, totalExecutionTimeMs, elapsed);
+        }
+    }
 
     /**
      * Gets aggregated steps for a run, grouped by step alias.
@@ -107,6 +124,19 @@ public class StepAggregationService {
      * @return List of aggregated steps for the given epoch, or empty if run not found
      */
     public Optional<List<AggregatedStep>> getAggregatedSteps(String runId, int epoch) {
+        return getAggregatedSteps(runId, epoch, false);
+    }
+
+    /**
+     * {@link #getAggregatedSteps(String, int)} plus each node's {@code elapsedMs} (how long it held
+     * the epoch), for the Run tab's per-epoch step list. A separate call on purpose: it costs one
+     * more query, which the internal per-epoch callers (showcase snapshots, epoch loops) never read.
+     */
+    public Optional<List<AggregatedStep>> getAggregatedStepsWithElapsed(String runId, int epoch) {
+        return getAggregatedSteps(runId, epoch, true);
+    }
+
+    private Optional<List<AggregatedStep>> getAggregatedSteps(String runId, int epoch, boolean withElapsed) {
         long startMs = System.currentTimeMillis();
         logger.info("Getting aggregated steps for runId: {}, epoch: {}", runId, epoch);
 
@@ -125,10 +155,13 @@ public class StepAggregationService {
 
         Map<String, List<AggregatedStepProjection>> byAlias = projections.stream()
             .collect(Collectors.groupingBy(AggregatedStepProjection::getStepAlias));
+        Map<String, Long> elapsedByAlias = withElapsed
+            ? elapsedByEpochAndAlias(runId, epoch, epoch).getOrDefault(epoch, Map.of())
+            : Map.of();
 
         List<AggregatedStep> aggregatedSteps = new ArrayList<>();
         for (Map.Entry<String, List<AggregatedStepProjection>> entry : byAlias.entrySet()) {
-            aggregatedSteps.add(buildAggregatedStep(entry.getKey(), entry.getValue()));
+            aggregatedSteps.add(buildAggregatedStep(entry.getKey(), entry.getValue()).withElapsedMs(elapsedByAlias.get(entry.getKey())));
         }
 
         aggregatedSteps.sort((a, b) -> {
@@ -144,6 +177,63 @@ public class StepAggregationService {
         logger.info("Returning {} aggregated steps for runId: {}, epoch: {}, queryTimeMs={}",
             aggregatedSteps.size(), runId, epoch, elapsed);
         return Optional.of(aggregatedSteps);
+    }
+
+    /**
+     * The per-epoch aggregation of {@link #getAggregatedSteps(String, int)} for every epoch of a
+     * range, in ONE query. Epochs that produced no step row are absent from both maps.
+     *
+     * @param stepsByEpoch    epoch -> its aggregated steps, same shape and statuses as the
+     *                        single-epoch call
+     * @param failureMessages epoch -> alias -> one error message of that node's FAILED rows
+     */
+    public record EpochRangeAggregation(
+        Map<Integer, List<AggregatedStep>> stepsByEpoch,
+        Map<Integer, Map<String, String>> failureMessages
+    ) {}
+
+    /**
+     * Aggregates the steps of every epoch in {@code [fromEpoch, toEpoch]} in a single pass.
+     * Callers must have checked that the run exists and is in the caller's scope.
+     */
+    public EpochRangeAggregation getAggregatedStepsByEpochRange(String runId, int fromEpoch, int toEpoch) {
+        if (fromEpoch > toEpoch) return new EpochRangeAggregation(Map.of(), Map.of());
+        List<EpochAggregatedStepProjection> projections =
+            workflowStepDataRepository.getAggregatedStepsByRunIdAndEpochRange(runId, fromEpoch, toEpoch);
+
+        Map<Integer, Map<String, List<AggregatedStepProjection>>> grouped = new TreeMap<>();
+        Map<Integer, Map<String, String>> failureMessages = new HashMap<>();
+        for (EpochAggregatedStepProjection row : projections) {
+            if (row.getEpoch() == null || row.getStepAlias() == null) continue;
+            grouped.computeIfAbsent(row.getEpoch(), e -> new LinkedHashMap<>())
+                .computeIfAbsent(row.getStepAlias(), a -> new ArrayList<>())
+                .add(row);
+            String status = row.getStatus() != null ? row.getStatus().toUpperCase() : "";
+            if (row.getErrorMessage() != null && (status.equals("FAILED") || status.equals("ERROR") || status.equals("FAILURE"))) {
+                failureMessages.computeIfAbsent(row.getEpoch(), e -> new HashMap<>())
+                    .putIfAbsent(row.getStepAlias(), row.getErrorMessage());
+            }
+        }
+
+        Map<Integer, Map<String, Long>> elapsed = grouped.isEmpty() ? Map.of() : elapsedByEpochAndAlias(runId, fromEpoch, toEpoch);
+        Map<Integer, List<AggregatedStep>> stepsByEpoch = new TreeMap<>();
+        grouped.forEach((epoch, byAlias) -> {
+            Map<String, Long> epochElapsed = elapsed.getOrDefault(epoch, Map.of());
+            List<AggregatedStep> steps = new ArrayList<>(byAlias.size());
+            byAlias.forEach((alias, rows) -> steps.add(buildAggregatedStep(alias, rows).withElapsedMs(epochElapsed.get(alias))));
+            stepsByEpoch.put(epoch, steps);
+        });
+        return new EpochRangeAggregation(stepsByEpoch, failureMessages);
+    }
+
+    /** epoch -> alias -> elapsed ms, from the per-iteration span query. */
+    private Map<Integer, Map<String, Long>> elapsedByEpochAndAlias(String runId, int fromEpoch, int toEpoch) {
+        Map<Integer, Map<String, Long>> out = new HashMap<>();
+        for (EpochElapsedProjection row : workflowStepDataRepository.getElapsedByRunIdAndEpochRange(runId, fromEpoch, toEpoch)) {
+            if (row.getEpoch() == null || row.getStepAlias() == null || row.getElapsedMs() == null) continue;
+            out.computeIfAbsent(row.getEpoch(), e -> new HashMap<>()).put(row.getStepAlias(), Math.max(0, row.getElapsedMs()));
+        }
+        return out;
     }
 
     /**
@@ -198,7 +288,7 @@ public class StepAggregationService {
 
             // Accumulate sum of individual execution times
             Long sumExec = row.getSumExecutionTimeMs();
-            logger.info("[buildAggregatedStep] row: alias={}, status={}, count={}, sumExecMs={}, minStart={}, maxEnd={}",
+            logger.debug("[buildAggregatedStep] row: alias={}, status={}, count={}, sumExecMs={}, minStart={}, maxEnd={}",
                 row.getStepAlias(), row.getStatus(), row.getCount(), sumExec, rowStart, rowEnd);
             if (sumExec != null) {
                 totalExecMs += sumExec;
@@ -381,6 +471,9 @@ public class StepAggregationService {
         logger.info("[toResponseMap] alias={}, totalExecMs={}, spanMs={}, startTime={}, endTime={}, statusCounts={}",
             step.alias(), execMs, spanMs, step.startTime(), step.endTime(), step.statusCounts());
         map.put("executionTimeMs", execMs);
+        if (step.elapsedMs() != null) {
+            map.put("elapsedMs", step.elapsedMs());
+        }
 
         return map;
     }

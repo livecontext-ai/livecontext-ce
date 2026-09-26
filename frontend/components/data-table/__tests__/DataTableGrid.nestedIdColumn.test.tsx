@@ -188,8 +188,8 @@ describe('DataTableGrid - nested `id` is a data column, not the fixed ID lane', 
     expect(idCell!.className).not.toContain('sticky');
   });
 
-  it('keeps the workflow ROOT id pinned - the backend emits it as the row index, first column', () => {
-    // At root the columns come from the backend, which always emits `id` (the step's row index) as
+  it('keeps the workflow ROOT id pinned - the backend emits it as the first column', () => {
+    // At root the columns come from the backend, which always emits `id` (the row's coordinates) as
     // FIELD_ORDER[0]. It is the identity lane there whether or not the view asked for one, so
     // treating "no showIdColumn" as "ordinary data column" would unpin a step root's own ID.
     const viewConfig = createViewConfig(WORKFLOW_CONTEXT, false, '');

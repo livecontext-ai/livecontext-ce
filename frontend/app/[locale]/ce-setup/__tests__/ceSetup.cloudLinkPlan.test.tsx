@@ -80,7 +80,7 @@ describe('CE setup step 1 - paid-plan cloud link', () => {
     renderPage();
 
     const banner = await screen.findByTestId('cloud-link-plan-required-banner');
-    expect(banner).toHaveTextContent('Your LiveContext Cloud link needs a paid plan');
+    expect(banner).toHaveTextContent('Cloud models need a paid plan');
     expect(screen.getByRole('link', { name: /View cloud plans/i })).toHaveAttribute(
       'href',
       'https://livecontext.ai/app/settings/pricing',

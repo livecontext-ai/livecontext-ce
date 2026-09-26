@@ -14,7 +14,11 @@
 
 import React, { createContext, useContext, useReducer, useRef, useCallback, useMemo, useEffect, useState, ReactNode } from 'react';
 import { unifiedApiService } from '@/lib/api';
-import { is402Error, is413StorageError } from '@/lib/api/error-utils';
+import { is402Error, is413StorageError, isPlanLimitError, isAuthError } from '@/lib/api/error-utils';
+import { isInactiveAccountError } from '@/lib/api/api-client';
+
+/** Stream error code the backend uses when it replays an already-failed turn to a new subscriber. */
+const SNAPSHOT_REPLAY_ERROR_CODE = 'SNAPSHOT_REPLAY';
 
 /** Detect LLM API key errors from backend error messages. */
 function isApiKeyError(message: string): boolean {
@@ -31,6 +35,7 @@ import { showMissingApiKeyModal } from '@/components/billing/MissingApiKeyModal'
 // different pages to send the reader to, told apart by the sentence the provider wrote.
 import { isOwnKeyRejection } from '@/lib/billing/ownKeyRejection';
 import { showAgentErrorModal } from '@/components/billing/AgentErrorModal';
+import { SEND_FAILED_CODE } from '@/lib/chat/agentErrorKind';
 import { handleCeRelayError } from '@/lib/billing/ceRelayErrorModals';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { getModelsCache, getEffectiveDefaultModel, getEffectiveDefaultProvider } from '@/hooks/useModels';
@@ -1228,6 +1233,10 @@ interface StreamRefs {
   // operation took over. Prevents a slow reconnect from mutating the refs of - or
   // dispatching a stale terminal onto - a stream that started while it was in flight.
   generation: number;
+  // The stream whose failure was already shown in the error modal. The backend replays a
+  // failed turn (SNAPSHOT_REPLAY) when the socket resubscribes; that replay must open the
+  // modal only if this client never saw the failure (it happened while disconnected).
+  errorShownForStreamId: string | null;
 }
 
 export function StreamingProvider({ children }: { children: ReactNode }) {
@@ -1253,6 +1262,7 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
         model: getEffectiveDefaultModel() ?? '',
         streamId: null,
         generation: 0,
+        errorShownForStreamId: null,
       };
       streamRefsMap.current.set(conversationId, refs);
     }
@@ -1707,10 +1717,18 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
             showMissingApiKeyModal(isOwnKeyRejection(errorMsg) ? 'own-key' : 'platform');
             error.retryable = false;
           } else {
-            // Generic unexpected agent/relay error (e.g. "Provider not configured", a
-            // transient provider/relay hiccup): surface a friendly "try again" modal
-            // instead of failing silently. Edition-agnostic (Cloud and CE).
-            showAgentErrorModal();
+            // Any other agent/relay/provider failure: the error modal is the only surface
+            // (the chat renders no error banner), so hand it the verbatim failure text and
+            // code; it explains the kind of failure and keeps the raw text as detail.
+            // A SNAPSHOT_REPLAY is the backend re-sending a turn that already failed when the
+            // socket resubscribes: re-announce it only if THIS client never showed that
+            // failure (it happened while the socket was down), never twice.
+            const failedStreamId = eventStreamId || boundStreamId || null;
+            const alreadyShown = failedStreamId !== null && refs.errorShownForStreamId === failedStreamId;
+            if (!(mapped.errorCode === SNAPSHOT_REPLAY_ERROR_CODE && alreadyShown)) {
+              showAgentErrorModal({ message: errorMsg, code: mapped.errorCode });
+              refs.errorShownForStreamId = failedStreamId;
+            }
           }
 
           dispatch({ type: 'ERROR', conversationId, error, streamId: eventStreamId || boundStreamId || undefined });
@@ -1929,6 +1947,13 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
         return null;
       }
 
+      // The chat renders no error banner, so a send that failed for any other reason must
+      // open the error modal, or the user sees nothing at all. Three refusals are already
+      // handled by apiClient with their own global surface (plan-limit toast, inactive-
+      // account restore screen, sign-in redirect on 401): stacking the modal would duplicate them.
+      if (!isPlanLimitError(error) && !isInactiveAccountError(error) && !isAuthError(error)) {
+        showAgentErrorModal({ message: errorMsg, code: SEND_FAILED_CODE });
+      }
       const errorConvId = conversationId || tempId;
       const streamError: StreamError = {
         message: errorMsg,

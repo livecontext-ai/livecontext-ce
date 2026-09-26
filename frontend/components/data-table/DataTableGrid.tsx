@@ -12,13 +12,14 @@ import { renderVisualCellContent } from '@/components/data-table/cells';
 import { formatUtcDateTime } from '@/lib/utils/dateFormatters';
 import { StatusBadge, mapBackendStatusToStatusType } from '@/components/ui/StatusBadge';
 import { AddRowForm } from '@/components/data-table/AddRowForm';
-import { calculateCheckboxColumnWidth, COLUMN_REVEAL_CELL_CLASS, COLUMN_REVEAL_HEAD_CLASS, ROW_REVEAL_CLASS, FIXED_COLUMN_WIDTH, MIN_ID_COLUMN_WIDTH, MAX_CHECKBOX_COLUMN_WIDTH } from '@/components/data-table/tableStyles';
+import { calculateCheckboxColumnWidth, COLUMN_REVEAL_CELL_CLASS, COLUMN_REVEAL_HEAD_CLASS, ROW_REVEAL_CLASS, FIXED_COLUMN_WIDTH, MIN_ID_COLUMN_WIDTH, MIN_WORKFLOW_ID_LANE_WIDTH, MAX_CHECKBOX_COLUMN_WIDTH } from '@/components/data-table/tableStyles';
 import { FIXED_COLUMNS } from '@/components/data-table/hooks/useColumnOperations';
 import { idIsHiddenBehindCheckbox } from '@/components/data-table/viewConfig';
 import { PreviewActionMenu } from '@/components/chat/PreviewActionMenu';
 import { Button } from '@/components/ui/button';
 import { getRenderer, NoData } from '@/components/data-table/columnRenderers';
 import { displayIdOf, serializeEditValue } from '@/components/data-table/utils/dataTableUtils';
+import { WorkflowRowIdHint } from '@/components/data-table/WorkflowRowIdHint';
 import { LoadOlderSentinel } from '@/components/agent-fleet/LoadOlderSentinel';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -241,15 +242,18 @@ export function DataTableGrid({ controller, workflowContext, jsonPath, dataSourc
     const shown = rows.map(row => ({ id: displayIdOf(row) }));
     const raw = calculateCheckboxColumnWidth(shown, displayRows as Array<{ type?: string; parentId?: number }>);
     const px = parseInt(raw, 10) || MIN_ID_COLUMN_WIDTH;
-    const clamped = Math.max(MIN_ID_COLUMN_WIDTH, Math.min(MAX_CHECKBOX_COLUMN_WIDTH, px));
+    // The run-logs lane also carries the "i" hint next to its header, so short ids ("21") must
+    // not squeeze the header below its type icon + label + hint.
+    const floor = viewConfig.idIsRowLevel ? MIN_WORKFLOW_ID_LANE_WIDTH : MIN_ID_COLUMN_WIDTH;
+    const clamped = Math.max(floor, Math.min(MAX_CHECKBOX_COLUMN_WIDTH, px));
     return `${clamped}px`;
-  }, [rows, displayRows, workflowContext]);
+  }, [rows, displayRows, workflowContext, viewConfig.idIsRowLevel]);
 
   /**
    * Is this column the FIXED ID lane (pinned left, clamped to `idColumnWidth`)?
    *
    * True when the view builds one itself (`showIdColumn`), and at workflow ROOT, where the backend
-   * always emits `id` as the step's row index and as its first column - it is the identity lane
+   * always emits `id` as the row's coordinates and as its first column - it is the identity lane
    * there whether or not the view asked for one.
    *
    * False while drilling into a nested path, where the columns come from the DATA: `id` is then an
@@ -466,6 +470,8 @@ export function DataTableGrid({ controller, workflowContext, jsonPath, dataSourc
                             <span className="truncate" title={col.header_name}>
                               {col.header_name}
                             </span>
+                            {/* Run logs only: the id there is execution coordinates, which need a key. */}
+                            {workflowContext && isIdLane(col.field) && <WorkflowRowIdHint />}
                             {/* Per-column kebab menu - replaces the inline select-checkbox + edit-pencil to
                               * avoid being clipped by sticky right-aligned columns. The menu uses a portal
                               * (PreviewActionMenu), so it always renders above everything else. The trigger
@@ -917,7 +923,7 @@ export function DataTableGrid({ controller, workflowContext, jsonPath, dataSourc
                                   that decides which id a row SHOWS, it rejects a non-scalar value
                                   (an object here unmounts the whole table as an invalid React
                                   child), and it keeps the cell and the export in agreement. */}
-                              <span className="text-sm font-mono text-theme-secondary">{displayIdOf(row)}</span>
+                              <span className="block truncate text-sm font-mono text-theme-secondary" title={String(displayIdOf(row))}>{displayIdOf(row)}</span>
                             </td>
                           );
                         }

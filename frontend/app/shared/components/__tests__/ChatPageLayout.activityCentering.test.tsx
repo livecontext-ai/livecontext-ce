@@ -78,8 +78,6 @@ function renderLayout() {
         isConversationActive: true,
         isLoadingConversation: false,
         messagesContainerRef: { current: null },
-        streamLastError: null,
-        attemptStreamReconnection: vi.fn(),
       } as never}
       conversationId="conv-1"
     />,

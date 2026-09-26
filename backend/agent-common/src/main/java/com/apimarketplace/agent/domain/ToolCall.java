@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.domain;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Builder;
 
 import java.util.Map;
@@ -27,5 +28,23 @@ public record ToolCall(
     /**
      * Index in the response (for parallel tool calls)
      */
-    Integer index
-) {}
+    Integer index,
+
+    /**
+     * Opaque provider token that must be echoed back with this call in the next request.
+     * Gemini attaches a {@code thoughtSignature} to each function call and rejects the
+     * follow-up turn (HTTP 400) when it is missing. Null for every other provider.
+     *
+     * <p>Only the live agent loop keeps it (it reuses the provider's own ToolCall objects).
+     * Paths that rebuild calls from storage or another DTO (async resume, persisted chat
+     * history, the workflow agent node, CLI sessions) drop it, and GeminiProvider then sends
+     * the validator bypass value Google documents for exactly that case.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    String thoughtSignature
+) {
+
+    public ToolCall(String id, String toolName, Map<String, Object> arguments, Integer index) {
+        this(id, toolName, arguments, index, null);
+    }
+}

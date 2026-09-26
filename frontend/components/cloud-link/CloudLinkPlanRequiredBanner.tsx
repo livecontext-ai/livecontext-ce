@@ -1,10 +1,11 @@
 'use client';
 
 /**
- * CE only: the linked LiveContext Cloud account is not on a paid plan, so the cloud refuses
- * every link-gated call (status.planRequired, set by the backend when register or heartbeat
- * answered 403 CLOUD_LINK_PLAN_REQUIRED). The link is KEPT: paying on the cloud restores it
- * automatically, so the only action offered is the cloud pricing page, in a new tab.
+ * CE only: status.planRequired, set by the backend when register or heartbeat answered 403
+ * CLOUD_LINK_PLAN_REQUIRED. The current cloud lets any plan link and never answers that on
+ * register or heartbeat (only the paid relays do, and they open the plan-required modal), so
+ * this shows only against a cloud that still did. The only action offered is the cloud pricing
+ * page, in a new tab.
  *
  * Hosts: the settings cloud-account page and the ce-setup wizard (step 1, once linked).
  * The sidebar shows a compact badge with the same destination instead.

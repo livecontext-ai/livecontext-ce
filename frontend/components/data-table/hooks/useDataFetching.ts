@@ -76,6 +76,23 @@ const ORCHESTRATOR_URL = '/api/proxy';
 const TENANT_ID = 'anonymous'; // Backend uses X-User-ID from JWT
 
 /**
+ * The parent step row's execution coordinates, carried onto every nested item while drilling
+ * into a step output. The `@` prefix keeps them apart from an item's own `epoch`-like field;
+ * the headers match the root-level columns the backend sends (ColumnDefinitionService).
+ */
+const STEP_CONTEXT_COLUMNS = [
+  { field: '@epoch', source: 'epoch', header: 'Epoch' },
+  { field: '@spawn', source: 'spawn', header: 'Spawn' },
+  { field: '@iteration', source: 'iteration', header: 'Iteration' },
+] as const;
+
+function stepContextOf(stepRow: Record<string, any>): Record<string, number> {
+  const context: Record<string, number> = {};
+  for (const { field, source } of STEP_CONTEXT_COLUMNS) context[field] = stepRow[source] ?? 0;
+  return context;
+}
+
+/**
  * Map backend column type to local type
  */
 function mapBackendType(backendType: string): 'text' | 'number' | 'date' | 'boolean' | 'json' {
@@ -182,6 +199,8 @@ export function useDataFetching({
   const [tableLoading, setTableLoading] = useState(false);
   const [loadingColumns, setLoadingColumns] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // `_rowId`s of the step rows already on screen, to skip the ones an appended page repeats.
+  const loadedStepRowIdsRef = useRef<Set<number>>(new Set());
 
   // Snapshot mode: seed pagination once and keep it static.
   useEffect(() => {
@@ -757,7 +776,18 @@ export function useDataFetching({
       }
 
       const detailed: DetailedStepDataResponse = await detailedResponse.json();
-      const detailedRows = detailed.rows || [];
+      // Pages are newest first with an offset, so rows that arrive while older pages load push
+      // already-shown rows onto the next page. Drop those on append: the same `_rowId` twice would
+      // share one grid key (and one selection / hover state), and nested items would repeat.
+      const isAppend = append && page > 1;
+      if (!isAppend) loadedStepRowIdsRef.current = new Set();
+      const detailedRows = (detailed.rows || []).filter((rowData: Record<string, any>) => {
+        const rowKey = rowData._rowId;
+        if (rowKey == null) return true;
+        if (isAppend && loadedStepRowIdsRef.current.has(rowKey)) return false;
+        loadedStepRowIdsRef.current.add(rowKey);
+        return true;
+      });
 
       if (jsonPath) {
         // Collect data keys from navigated content
@@ -781,9 +811,23 @@ export function useDataFetching({
           }
         });
 
-        // Filter out internal _ prefixed keys (context injection markers)
-        const dataColumns: ColumnDefinition[] = Array.from(allKeys)
-          .filter(key => !key.startsWith('_'))
+        // Where each nested item comes from: the parent step row's epoch / spawn / iteration,
+        // always first, so a drilled-in value is never read without its execution coordinates.
+        const contextColumns: ColumnDefinition[] = STEP_CONTEXT_COLUMNS.map(({ field, header }) => ({
+          col_id: field,
+          field,
+          header_name: header,
+          type: 'number' as const,
+          editable: false,
+          sortable: true,
+          filterable: true,
+          isNavigable: false,
+        }));
+
+        // Filter out internal _ prefixed keys (context injection markers), and an item's own key
+        // named like a context column: the context value takes that slot, one column per field.
+        const dataColumns: ColumnDefinition[] = [...contextColumns, ...Array.from(allKeys)
+          .filter(key => !key.startsWith('_') && !STEP_CONTEXT_COLUMNS.some(c => c.field === key))
           .map(key => ({
             col_id: key,
             field: key,
@@ -793,7 +837,7 @@ export function useDataFetching({
             sortable: true,
             filterable: true,
             isNavigable: false,
-          }));
+          }))];
 
         if (append && page > 1) {
           setColumns(previous => mergeInOrder(previous, dataColumns));
@@ -804,14 +848,23 @@ export function useDataFetching({
 
         // Navigate into jsonPath within each row from ALL rows
         const normalizedRows: DataSourceItemRow[] = [];
-        // Sequential ID for sub-table rows. In append mode, offset by page so the synthetic
-        // IDs from a later page can't collide with earlier-page IDs (used as React keys and
-        // as selection keys). A 100000-wide stride is plenty: detailed page size is capped
-        // at 500 and each row expands to at most ~tens of nested children in practice.
+        // Sequential ID for sub-table rows: a React / selection key ONLY, never shown (the row
+        // shows its own id or `_displayId`). In append mode, offset by page so the synthetic
+        // IDs from a later page can't collide with earlier-page IDs. A 100000-wide stride is
+        // plenty: detailed page size is capped at 500 and each row expands to at most ~tens of
+        // nested children in practice.
         let seqId = (append && page > 1) ? page * 100000 + 1 : 1;
 
-        detailedRows.forEach((rowData: Record<string, any>, rowIndex: number) => {
+        detailedRows.forEach((rowData: Record<string, any>) => {
           const nestedData = navigateToPath(rowData, jsonPath);
+          // The parent step row's coordinates travel with every item it
+          // expands into. The seqId below is only a unique React / selection key and is never
+          // shown: an item without its own `id` SHOWS `<parent id>:<index>` (e.g. "21:3" = index 3,
+          // 0-based like the coordinates; a colon, because the dots of a
+          // parent id are its coordinates).
+          const context = stepContextOf(rowData);
+          const contextKeys = STEP_CONTEXT_COLUMNS.map(c => c.field);
+          const parentId = rowData.id;
 
           if (nestedData === undefined || nestedData === null) {
             return;
@@ -827,13 +880,14 @@ export function useDataFetching({
                 id: rowId,
                 data_source_id: 0,
                 tenant_id: TENANT_ID,
-                data: { ...data, array_index: itemIndex },
+                data: { ...data, ...context, array_index: itemIndex },
                 priority: 0,
                 created_at: rowData.startTime || new Date().toISOString(),
                 updated_at: null,
-                // array_index is a position this view adds, never stored data - declared like the
-                // identity so a writer takes back everything the read path wrote.
-                _injectedDataKeys: [...injectedDataKeys, 'array_index'],
+                // array_index and the context are what this view adds, never stored data - declared
+                // like the identity so a writer takes back everything the read path wrote.
+                _injectedDataKeys: [...injectedDataKeys, ...contextKeys, 'array_index'],
+                _displayId: parentId != null ? `${parentId}:${itemIndex}` : undefined,
                 _jsonPath: jsonPath,
                 _isWorkflowStep: true,
               });
@@ -845,11 +899,12 @@ export function useDataFetching({
               id: rowId,
               data_source_id: 0,
               tenant_id: TENANT_ID,
-              data,
+              data: { ...data, ...context },
               priority: 0,
               created_at: rowData.startTime || new Date().toISOString(),
               updated_at: null,
-              _injectedDataKeys: injectedDataKeys,
+              _injectedDataKeys: [...injectedDataKeys, ...contextKeys],
+              _displayId: parentId ?? undefined,
               _jsonPath: jsonPath,
               _isWorkflowStep: true,
             });
@@ -860,11 +915,12 @@ export function useDataFetching({
               id: rowId,
               data_source_id: 0,
               tenant_id: TENANT_ID,
-              data: { id: rowId, value: nestedData },
+              data: { id: rowId, value: nestedData, ...context },
               priority: 0,
               created_at: rowData.startTime || new Date().toISOString(),
               updated_at: null,
-              _injectedDataKeys: ['id'],
+              _injectedDataKeys: ['id', ...contextKeys],
+              _displayId: parentId ?? undefined,
               _jsonPath: jsonPath,
               _isWorkflowStep: true,
             });
@@ -894,7 +950,10 @@ export function useDataFetching({
       applyDetailedColumns(detailed, append && page > 1);
 
       const normalizedRows: DataSourceItemRow[] = detailedRows.map((rowData: Record<string, any>, rowIndex: number) => ({
-        id: rowData.id || rowIndex + 1,
+        // The row's technical key (unique). The SHOWN id is data.id: its coordinates, e.g. "20.0.2".
+        // Fallback (a row without its key): its position over ALL pages, so appended pages cannot
+        // repeat a key.
+        id: rowData._rowId ?? (page - 1) * pageSize + rowIndex + 1,
         data_source_id: 0,
         tenant_id: TENANT_ID,
         data: rowData,

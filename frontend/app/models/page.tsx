@@ -32,7 +32,7 @@ type ModelsPageProps = {
 };
 
 const DESCRIPTION =
-  `Every model LiveContext runs: ${MODEL_CATALOG_STATS.distinctModels} models from ` +
+  `The AI models of the LiveContext catalog: ${MODEL_CATALOG_STATS.distinctModels} models from ` +
   `${MODEL_CATALOG_STATS.directProviders} providers plus ${MODEL_CATALOG_STATS.aggregatorModels} more through ` +
   'OpenRouter, with their release date, context window, list price and capabilities, ' +
   'on one chronological page.';
@@ -56,7 +56,7 @@ export async function generateMetadata({ searchParams }: ModelsPageProps) {
     ...base,
     title: `${label} models`,
     description:
-      `The ${count} ${label} models LiveContext runs, with their release date, context window, ` +
+      `The ${count} ${label} models of the LiveContext catalog, with their release date, context window, ` +
       'list price per million tokens and capabilities.',
     // Self-canonical, not a canonical back to /models: a provider view is a real
     // subset a visitor can want, not a duplicate of the full list.
@@ -74,7 +74,7 @@ export default async function ModelsPage({ searchParams }: ModelsPageProps) {
           <span className="docs-eyebrow">AI</span>
           <h1 className="docs-h1">Models</h1>
           <p className="docs-lead">
-            Every model LiveContext can run, and when each one landed. Bring your own key and pay the
+            The AI models of the LiveContext catalog, and when each one landed. Bring your own key and pay the
             provider directly, or run on ours and pay in credits. Swap the model on any agent, workflow
             step or chat without touching anything else you built.
           </p>

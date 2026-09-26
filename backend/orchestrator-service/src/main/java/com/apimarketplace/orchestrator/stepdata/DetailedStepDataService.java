@@ -128,16 +128,13 @@ public class DetailedStepDataService {
         String toolId = firstEntity.getToolId();
 
         int totalRows = Math.toIntExact(entityPage.getTotalElements());
-        int startIndex = (page - 1) * pageSize;
 
-        // Map entities to rows with output data
-        // Row index is 1-based and accounts for pagination (startIndex + position + 1)
+        // Map entities to rows with output data. Each row carries its own identity (its execution
+        // coordinates), so nothing here depends on the page, the filters or the rows around it.
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (int i = 0; i < pageEntities.size(); i++) {
-            WorkflowStepDataEntity entity = pageEntities.get(i);
+        for (WorkflowStepDataEntity entity : pageEntities) {
             Map<String, Object> outputData = loadOutputData(entity);
-            int rowIndex = startIndex + i + 1; // 1-based index across all pages
-            Map<String, Object> row = rowMapper.mapToRow(entity, outputData, rowIndex);
+            Map<String, Object> row = rowMapper.mapToRow(entity, outputData);
             preserveNullOutputFields(row);
             rows.add(row);
         }

@@ -15,6 +15,14 @@ public interface SkillBundleRepository extends JpaRepository<SkillBundleEntity, 
 
     Optional<SkillBundleEntity> findFirstByActiveTrue();
 
+    /**
+     * Checksum of the active bundle, without loading its payload. Cloud: the ETag a CE poll is
+     * compared against (304 when it matches). CE: the checksum it holds, sent as
+     * {@code If-None-Match}.
+     */
+    @Query("SELECT b.checksum FROM SkillBundleEntity b WHERE b.active = true")
+    Optional<String> findActiveChecksum();
+
     Optional<SkillBundleEntity> findTopByOrderByVersionDesc();
 
     /**

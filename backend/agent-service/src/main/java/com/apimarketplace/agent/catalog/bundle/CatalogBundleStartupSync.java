@@ -21,10 +21,14 @@ import org.springframework.stereotype.Component;
  *       can't run against a half-built context.</li>
  *   <li><b>On a daemon thread, through the injected scheduler bean</b>: the fetch +
  *       apply does network I/O, so a slow/unreachable cloud must never delay readiness -
- *       the work runs off the event thread. It calls {@code scheduler.tick()} on the
- *       Spring proxy (NOT a self-invocation) so the {@code @SchedulerLock} on {@code tick()}
+ *       the work runs off the event thread. It calls {@code scheduler.tickIfDue()} on the
+ *       Spring proxy (NOT a self-invocation) so the {@code @SchedulerLock} on it
  *       still fires and the startup sync can't race the cron tick or a peer pod. The
  *       scheduler swallows all errors, so the thread is fire-and-forget.</li>
+ *   <li><b>{@code tickIfDue}, not {@code tick}</b>: the startup sync honours the poll
+ *       backoff, otherwise an install caught in a restart loop (a crash during apply, say)
+ *       would download the bundle again on every boot - the loop the backoff exists to
+ *       break.</li>
  * </ul>
  */
 @Slf4j
@@ -40,7 +44,7 @@ public class CatalogBundleStartupSync {
         Thread t = new Thread(() -> {
             try {
                 log.info("Catalog bundle sync: running initial sync on startup");
-                scheduler.tick();
+                scheduler.tickIfDue();
             } catch (Exception e) {
                 // tick() already persists its own failures; this is belt-and-braces so a
                 // startup-sync error never escapes the daemon thread.

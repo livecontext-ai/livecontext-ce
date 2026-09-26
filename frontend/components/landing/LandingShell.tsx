@@ -457,14 +457,15 @@ export function LandingFooter({ siteBaseUrl, labels = DEFAULT_SHELL_LABELS }: { 
             click from an integration page and vice versa. */}
         <FooterIntegrations siteBaseUrl={siteBaseUrl} heading={labels.integrations} allLabel={labels.allIntegrations} />
         {/* The families the platform runs on. Named rather than counted: "275 models" tells
-            a visitor nothing, "Claude, GPT, Gemini, DeepSeek" answers the question they came
-            with. Each is checked against the catalogue seed by wellKnownModels.test.ts.
+            a visitor nothing, "Claude, GPT, Gemini, Grok" answers the question they came
+            with. Each is checked against the /models data by wellKnownModels.test.ts,
+            never against what the cloud hosts today.
             The destination is /models, not the docs: the column pointed at the docs because
             no public page listed the models, which stopped being true when /models shipped.
             A visitor clicking "Claude" wants the list and its prices, not the BYOK setup
             guide, and /models links on to the docs for the setup half. Each family carries
-            its OWN provider filter, so the families are distinct destinations rather than one URL
-            printed several times, and "DeepSeek" lands on DeepSeek. */}
+            its OWN provider filter, so the eight are eight destinations rather than one URL
+            printed eight times, and "Grok" lands on Grok. */}
         <div>
           <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>{labels.models}</p>
           <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>

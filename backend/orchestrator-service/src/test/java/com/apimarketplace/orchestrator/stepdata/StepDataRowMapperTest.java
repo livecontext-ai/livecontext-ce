@@ -55,9 +55,9 @@ class StepDataRowMapperTest {
         void shouldIncludeCommonFields() {
             WorkflowStepDataEntity entity = createEntity(NodeType.MCP);
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
-            assertThat(row).containsEntry("id", 1);
+            assertThat(row).containsEntry("id", "1");
             assertThat(row).containsEntry("status", "COMPLETED");
             assertThat(row).containsEntry("epoch", 1);
             // itemIndex=0 (default) is not included - only meaningful values (>0)
@@ -68,11 +68,25 @@ class StepDataRowMapperTest {
         }
 
         @Test
+        @DisplayName("Always emits epoch, spawn and iteration, as 0 when the entity holds null")
+        void shouldAlwaysEmitExecutionCoordinates() {
+            WorkflowStepDataEntity entity = createEntity(NodeType.MCP);
+            entity.setEpoch(null);
+            entity.setSpawn(null);
+            entity.setIteration(null);
+
+            Map<String, Object> row = mapper.mapToRow(entity, null);
+
+            // A null here used to drop the key, and with it the whole column from the logs table.
+            assertThat(row).containsEntry("epoch", 0).containsEntry("spawn", 0).containsEntry("iteration", 0);
+        }
+
+        @Test
         @DisplayName("Should calculate duration when start and end time present")
         void shouldCalculateDuration() {
             WorkflowStepDataEntity entity = createEntity(NodeType.MCP);
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row.get("durationMs")).isEqualTo(5000L);
         }
@@ -83,7 +97,7 @@ class StepDataRowMapperTest {
             WorkflowStepDataEntity entity = createEntity(NodeType.MCP);
             entity.setStartTime(null);
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row.get("durationMs")).isNull();
         }
@@ -94,7 +108,7 @@ class StepDataRowMapperTest {
             WorkflowStepDataEntity entity = createEntity(NodeType.MCP);
             entity.setErrorMessage("Connection timed out");
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("errorMessage", "Connection timed out");
         }
@@ -104,7 +118,7 @@ class StepDataRowMapperTest {
         void shouldNotIncludeErrorWhenNull() {
             WorkflowStepDataEntity entity = createEntity(NodeType.MCP);
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).doesNotContainKey("errorMessage");
         }
@@ -114,7 +128,7 @@ class StepDataRowMapperTest {
         void shouldIncludeEpochZero() {
             WorkflowStepDataEntity entity = createEntityWithEpoch(NodeType.MCP, 0);
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("epoch", 0);
         }
@@ -125,7 +139,7 @@ class StepDataRowMapperTest {
             WorkflowStepDataEntity entity = createEntity(NodeType.MCP);
             entity.setEpoch(null);
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("epoch", 0);
         }
@@ -145,7 +159,7 @@ class StepDataRowMapperTest {
                 "items_spawned", 5
             ));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("triggerType", "webhook");
             assertThat(row).containsEntry("itemsSpawned", 5);
@@ -158,7 +172,7 @@ class StepDataRowMapperTest {
             WorkflowStepDataEntity entity = createEntity(NodeType.TRIGGER);
             entity.setToolId("webhook-trigger");
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("triggerType", "webhook");
         }
@@ -169,7 +183,7 @@ class StepDataRowMapperTest {
             WorkflowStepDataEntity entity = createEntity(NodeType.TRIGGER);
             entity.setToolId(null);
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("triggerType", "unknown");
         }
@@ -181,7 +195,7 @@ class StepDataRowMapperTest {
             entity.setToolId("webhook-trigger");
             Map<String, Object> outputData = Map.of("output", Map.of("body", "hello", "headers", Map.of("x-key", "val")));
 
-            Map<String, Object> row = mapper.mapToRow(entity, outputData, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, outputData);
 
             assertThat(row).containsKey("output");
             @SuppressWarnings("unchecked")
@@ -195,7 +209,7 @@ class StepDataRowMapperTest {
             WorkflowStepDataEntity entity = createEntity(NodeType.TRIGGER);
             entity.setToolId("webhook-trigger");
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).doesNotContainKey("output");
         }
@@ -217,7 +231,7 @@ class StepDataRowMapperTest {
                 "condition_resolved", "150 > 100"
             ));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("selectedBranch", "if");
             assertThat(row).containsEntry("conditionExpression", "{{x > 100}}");
@@ -233,7 +247,7 @@ class StepDataRowMapperTest {
             entity.setSelectedBranch("if");
             Map<String, Object> outputData = Map.of("output", Map.of("selected_branch", "if", "result", true));
 
-            Map<String, Object> row = mapper.mapToRow(entity, outputData, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, outputData);
 
             assertThat(row).containsKey("output");
             @SuppressWarnings("unchecked")
@@ -257,7 +271,7 @@ class StepDataRowMapperTest {
                 "selected_case", "case_0"
             ));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("selectedBranch", "case_0");
             assertThat(row).containsEntry("switchExpression", "{{status}}");
@@ -275,7 +289,7 @@ class StepDataRowMapperTest {
                 "evaluations", List.of(Map.of("branch", "case_1", "case_label", "Active", "selected", true))
             ));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsKey("cases");
         }
@@ -287,7 +301,7 @@ class StepDataRowMapperTest {
             entity.setSelectedBranch("case_1");
             Map<String, Object> outputData = Map.of("output", Map.of("matched_case", "case_1"));
 
-            Map<String, Object> row = mapper.mapToRow(entity, outputData, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, outputData);
 
             assertThat(row).containsKey("output");
             @SuppressWarnings("unchecked")
@@ -312,7 +326,7 @@ class StepDataRowMapperTest {
                 "skipped_branches", List.of("Low")
             ));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("selectedBranch", "choice_0");
             assertThat(row).containsKey("evaluations");
@@ -338,7 +352,7 @@ class StepDataRowMapperTest {
                 "max_iterations", 5
             ));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("conditionResolved", "15 > 10");
             assertThat(row).containsKey("evaluations");
@@ -359,7 +373,7 @@ class StepDataRowMapperTest {
                 "loop_condition", "{{i < 10}}"
             ));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("loopIteration", 3);
             assertThat(row).containsEntry("loopId", "loop-1");
@@ -380,7 +394,7 @@ class StepDataRowMapperTest {
             entity.setMetadata(Map.of("max_iterations", 5));
             Map<String, Object> outputData = Map.of("output", Map.of("carry", "accumulated"));
 
-            Map<String, Object> row = mapper.mapToRow(entity, outputData, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, outputData);
 
             assertThat(row).containsKey("output");
             @SuppressWarnings("unchecked")
@@ -406,7 +420,7 @@ class StepDataRowMapperTest {
                 "spawn_parallel_items", false
             ));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("totalItems", 10);
             assertThat(row).containsEntry("processedItems", 3);
@@ -423,7 +437,7 @@ class StepDataRowMapperTest {
             entity.setMetadata(Map.of("item_count", 3));
             Map<String, Object> outputData = Map.of("output", Map.of("current_item", "item_0", "items", List.of("a", "b", "c")));
 
-            Map<String, Object> row = mapper.mapToRow(entity, outputData, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, outputData);
 
             assertThat(row).containsKey("output");
             @SuppressWarnings("unchecked")
@@ -445,7 +459,7 @@ class StepDataRowMapperTest {
             entity.setMergeReceivedBranches(List.of("mcp:step_a", "mcp:step_b"));
             entity.setMergeSkippedBranches(List.of("mcp:step_c"));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("mergeStrategy", "combine_all");
             assertThat(row).containsEntry("predecessorsCompleted", 2);
@@ -461,7 +475,7 @@ class StepDataRowMapperTest {
             entity.setMergeReceivedBranches(null);
             entity.setMergeSkippedBranches(null);
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             // When both branch lists are null, predecessor counts are not included
             assertThat(row).doesNotContainKey("predecessorsCompleted");
@@ -483,7 +497,7 @@ class StepDataRowMapperTest {
             ));
             entity.setMetadata(metadata);
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             @SuppressWarnings("unchecked")
             List<String> waitingFor = (List<String>) row.get("waitingFor");
@@ -503,7 +517,7 @@ class StepDataRowMapperTest {
                 "branches", List.of("mcp:task_a", "mcp:task_b")
             ));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("branchesCount", 2);
             assertThat(row).containsKey("branches");
@@ -531,7 +545,7 @@ class StepDataRowMapperTest {
                 "output", Map.of("response", "Classified as: A")
             );
 
-            Map<String, Object> row = mapper.mapToRow(entity, outputData, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, outputData);
 
             assertThat(row).containsEntry("model", "gpt-4");
             assertThat(row).containsEntry("provider", "openai");
@@ -551,7 +565,7 @@ class StepDataRowMapperTest {
                 "content", "Direct content response"
             );
 
-            Map<String, Object> row = mapper.mapToRow(entity, outputData, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, outputData);
 
             assertThat(row).containsEntry("response", "Direct content response");
         }
@@ -567,7 +581,7 @@ class StepDataRowMapperTest {
             innerOutput.put("confidence", 0.95);
             Map<String, Object> outputData = Map.of("output", innerOutput);
 
-            Map<String, Object> row = mapper.mapToRow(entity, outputData, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, outputData);
 
             // response extracted for convenience
             assertThat(row).containsEntry("response", "classified as A");
@@ -585,7 +599,7 @@ class StepDataRowMapperTest {
             WorkflowStepDataEntity entity = createEntity(NodeType.AGENT);
             entity.setMetadata(Map.of());
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).doesNotContainKey("output");
             assertThat(row).doesNotContainKey("response");
@@ -604,7 +618,7 @@ class StepDataRowMapperTest {
             entity.setToolId("my-api/search");
             entity.setInputData(Map.of("query", "test"));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("httpStatus", 200);
             assertThat(row).containsEntry("toolName", "search");
@@ -617,7 +631,7 @@ class StepDataRowMapperTest {
             WorkflowStepDataEntity entity = createEntity(NodeType.MCP);
             entity.setToolId("simple-tool");
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("toolName", "simple-tool");
             assertThat(row.get("apiName")).isNull();
@@ -633,7 +647,7 @@ class StepDataRowMapperTest {
                 "apiName", "Custom API"
             ));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("toolName", "Custom Tool");
             assertThat(row).containsEntry("apiName", "Custom API");
@@ -650,7 +664,7 @@ class StepDataRowMapperTest {
                 )
             ));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("mappingsCount", 1);
             assertThat(row).containsKey("mappings");
@@ -663,7 +677,7 @@ class StepDataRowMapperTest {
             entity.setToolId("core__wait__5s");
             entity.setInputData(Map.of("duration", 5000));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("waitDuration", 5000);
             assertThat(row).containsEntry("actualWait", 5000L);
@@ -680,7 +694,7 @@ class StepDataRowMapperTest {
                 "output", Map.of("rows_affected", 5)
             );
 
-            Map<String, Object> row = mapper.mapToRow(entity, outputData, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, outputData);
 
             assertThat(row).containsEntry("operation", "INSERT");
             assertThat(row).containsEntry("dataSourceName", "my_table");
@@ -695,7 +709,7 @@ class StepDataRowMapperTest {
             entity.setHttpStatus(200);
             entity.setInputData(Map.of("method", "GET", "url", "https://api.example.com"));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("method", "GET");
             assertThat(row).containsEntry("url", "https://api.example.com");
@@ -714,7 +728,7 @@ class StepDataRowMapperTest {
             WorkflowStepDataEntity entity = createEntity(null);
             entity.setInputData(Map.of("key", "value"));
 
-            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, null);
 
             assertThat(row).containsEntry("input", Map.of("key", "value"));
         }
@@ -725,7 +739,7 @@ class StepDataRowMapperTest {
             WorkflowStepDataEntity entity = createEntity(null);
             Map<String, Object> outputData = Map.of("output", Map.of("result", "done"));
 
-            Map<String, Object> row = mapper.mapToRow(entity, outputData, 1);
+            Map<String, Object> row = mapper.mapToRow(entity, outputData);
 
             assertThat(row).containsKey("output");
             @SuppressWarnings("unchecked")
@@ -779,7 +793,7 @@ class StepDataRowMapperTest {
                     entity.setToolId("crud/op");
                 }
 
-                Map<String, Object> row = mapper.mapToRow(entity, standardOutputData, 1);
+                Map<String, Object> row = mapper.mapToRow(entity, standardOutputData);
 
                 assertThat(row)
                     .as("NodeType %s should include 'output' key", nodeType)
@@ -805,7 +819,7 @@ class StepDataRowMapperTest {
                 WorkflowStepDataEntity entity = createEntity(nodeType);
                 if (nodeType == NodeType.MCP) entity.setToolId("api/tool");
 
-                Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+                Map<String, Object> row = mapper.mapToRow(entity, null);
 
                 assertThat(row)
                     .as("NodeType %s should NOT include 'output' key when outputData is null", nodeType)
@@ -815,29 +829,54 @@ class StepDataRowMapperTest {
     }
 
     @Nested
-    @DisplayName("legacy mapToRow(entity, outputData)")
-    class LegacyMapToRowTests {
+    @DisplayName("row id = execution coordinates")
+    class CoordinateIdTests {
 
-        @Test
-        @DisplayName("Should use itemNumber from entity as row id when available")
-        void shouldUseItemNumberFromEntity() {
+        private WorkflowStepDataEntity at(Integer epoch, Integer spawn, Integer iteration, Integer itemIndex) {
             WorkflowStepDataEntity entity = createEntity(NodeType.MCP);
-            entity.setItemNumber(42);
-
-            Map<String, Object> row = mapper.mapToRow(entity, null);
-
-            assertThat(row).containsEntry("id", 42);
+            entity.setId(987654L);
+            entity.setEpoch(epoch);
+            entity.setSpawn(spawn);
+            entity.setIteration(iteration);
+            entity.setItemIndex(itemIndex);
+            return entity;
         }
 
         @Test
-        @DisplayName("Should fall back to entity id as row id when itemNumber is null")
-        void shouldFallBackToEntityId() {
-            WorkflowStepDataEntity entity = createEntity(NodeType.MCP);
-            entity.setItemNumber(null);
+        @DisplayName("A plain execution shows its epoch - epoch 21 is '21', never a position in the view")
+        void plainExecutionIsItsEpoch() {
+            assertThat(mapper.mapToRow(at(21, 0, 0, 0), null)).containsEntry("id", "21");
+        }
 
-            Map<String, Object> row = mapper.mapToRow(entity, null);
+        @Test
+        @DisplayName("Trailing zero coordinates are dropped, inner ones kept so every position stays unambiguous")
+        void trailingZerosDropped() {
+            assertThat(mapper.mapToRow(at(20, 1, 0, 0), null)).containsEntry("id", "20.1");
+            assertThat(mapper.mapToRow(at(20, 0, 2, 0), null)).containsEntry("id", "20.0.2");
+            assertThat(mapper.mapToRow(at(20, 0, 0, 3), null)).containsEntry("id", "20.0.0.3");
+            assertThat(mapper.mapToRow(at(20, 1, 2, 3), null)).containsEntry("id", "20.1.2.3");
+        }
 
-            assertThat(row).containsEntry("id", 1); // id is 1L -> intValue() = 1
+        @Test
+        @DisplayName("Null coordinates read as 0, including a null epoch")
+        void nullCoordinatesAreZero() {
+            assertThat(mapper.mapToRow(at(null, null, null, null), null)).containsEntry("id", "0");
+        }
+
+        @Test
+        @DisplayName("The id ignores itemNumber and the database id (the old sources of 'ID 1' / '20001')")
+        void idIgnoresItemNumberAndDbId() {
+            WorkflowStepDataEntity entity = at(5, 0, 0, 0);
+            entity.setItemNumber(42);
+
+            assertThat(mapper.mapToRow(entity, null)).containsEntry("id", "5");
+        }
+
+        @Test
+        @DisplayName("The database id travels separately as the hidden row key")
+        void databaseIdIsTheHiddenRowKey() {
+            assertThat(mapper.mapToRow(at(5, 0, 0, 0), null))
+                    .containsEntry(StepDataRowMapper.ROW_KEY_FIELD, 987654L);
         }
     }
 }

@@ -4,15 +4,16 @@
  * <p>The CE "Connect to Cloud" button opens {@code /<locale>/onboarding?ce_link=1&client_id=..&
  * redirect_uri=..&state=..&code_challenge=..&code_challenge_method=S256} on the cloud instead of
  * the bare Keycloak authorization, so a new account first completes the cloud onboarding (email
- * verification, profile) and a paid plan. This module is the ONE place that:
+ * verification, profile). Any plan, FREE included, may link; only cloud models, web search and
+ * cloud integrations need a paid plan, and that is decided per call. This module is the ONE
+ * place that:
  * <ol>
  *   <li>validates those parameters (strictly: anything unexpected rejects the whole link),</li>
  *   <li>keeps them in {@code sessionStorage} so they survive the sign-in redirect, the
- *       FirstLoginGuard redirect, the email-verification step, a reload and a Stripe checkout
- *       (all same-tab navigations),</li>
- *   <li>rebuilds the Keycloak authorization URL from THIS app's own Keycloak configuration, and</li>
- *   <li>decides, from {@code GET /api/ce-link/eligibility}, whether to continue to Keycloak or
- *       to the pricing page.</li>
+ *       FirstLoginGuard redirect, the email-verification step and a reload (all same-tab
+ *       navigations),</li>
+ *   <li>rebuilds the Keycloak authorization URL from THIS app's own Keycloak configuration and
+ *       hands the browser to it once the onboarding is complete.</li>
  * </ol>
  *
  * <p><b>No open redirect.</b> Nothing from the query is used as a navigation target: the
@@ -25,7 +26,6 @@
  */
 
 import { IS_CE } from '@/lib/edition';
-import { ceLinkService, type CeLinkEligibility } from '@/lib/api/ce-link.service';
 import { assignLocation } from '@/lib/navigation/assignLocation';
 
 /** sessionStorage key holding the pending link (JSON). */
@@ -258,29 +258,23 @@ export function buildCeLinkAuthorizeUrl(
   return `${root}/realms/${encodeURIComponent(keycloak.realm)}/protocol/openid-connect/auth?${query.toString()}`;
 }
 
-/** Where a signed-in user without a paid plan is sent while a CE link is pending. */
-export function ceLinkPricingPath(locale: string): string {
-  return `/${locale}/app/settings/pricing?ce_link=1`;
-}
-
 /**
  * - {@code none}: no pending link in this tab (or CE build): the caller does what it did before.
- * - {@code redirected}: eligible; the pending link was cleared and the browser sent to Keycloak.
- * - {@code plan_required}: not eligible; the link stays pending until a paid plan exists.
- * - {@code error}: the eligibility check or the Keycloak configuration failed; the link stays pending.
+ * - {@code redirected}: the pending link was cleared and the browser sent to Keycloak.
+ * - {@code error}: the Keycloak configuration is unusable; the link stays pending.
  */
-export type CeLinkContinuation = 'none' | 'redirected' | 'plan_required' | 'error';
+export type CeLinkContinuation = 'none' | 'redirected' | 'error';
 
 export interface ContinueCeLinkOptions {
-  fetchEligibility?: () => Promise<CeLinkEligibility>;
   navigate?: (url: string) => void;
   keycloak?: KeycloakLinkConfig;
 }
 
 /**
- * Continue a pending CE link: ask the cloud whether the user may link, then either hand the
- * browser to Keycloak (the SSO session is live, so no password or second factor again) or
- * report {@code plan_required}. Keycloak redirects to the CE callback, which completes the link.
+ * Continue a pending CE link once the onboarding is complete: hand the browser to Keycloak (the
+ * SSO session is live, so no password or second factor again), which redirects to the CE
+ * callback that completes the link. No plan check: any plan may link. The cloud still refuses
+ * the register of an account that did not complete the onboarding (CLOUD_LINK_ONBOARDING_REQUIRED).
  */
 export async function continuePendingCeLink(
   options: ContinueCeLinkOptions = {},
@@ -288,16 +282,7 @@ export async function continuePendingCeLink(
   const keycloak = options.keycloak ?? keycloakConfigFromEnv();
   const link = loadPendingCeLink(keycloak.clientId);
   if (!link) return 'none';
-  const fetchEligibility = options.fetchEligibility ?? (() => ceLinkService.eligibility());
   const navigate = options.navigate ?? assignLocation;
-
-  let eligibility: CeLinkEligibility;
-  try {
-    eligibility = await fetchEligibility();
-  } catch {
-    return 'error';
-  }
-  if (!eligibility?.eligible) return 'plan_required';
 
   const authorizeUrl = buildCeLinkAuthorizeUrl(link, keycloak);
   if (!authorizeUrl) return 'error';

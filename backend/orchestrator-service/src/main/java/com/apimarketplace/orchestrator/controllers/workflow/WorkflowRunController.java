@@ -7,6 +7,7 @@ import com.apimarketplace.orchestrator.domain.execution.SignalWaitEntity;
 import com.apimarketplace.orchestrator.repository.SignalWaitRepository;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
 import com.apimarketplace.orchestrator.services.StepAggregationService;
+import com.apimarketplace.orchestrator.services.analysis.RunAnalysisService;
 import com.apimarketplace.orchestrator.services.WorkflowManagementService;
 import com.apimarketplace.orchestrator.services.epoch.WorkflowEpochService;
 import com.apimarketplace.orchestrator.services.resume.AgentRunStopService;
@@ -59,6 +60,9 @@ public class WorkflowRunController {
 
     @Autowired
     private StepAggregationService stepAggregationService;
+
+    @Autowired
+    private RunAnalysisService runAnalysisService;
 
     @Autowired
     private StepRerunService stepRerunService;
@@ -194,7 +198,7 @@ public class WorkflowRunController {
 
             Optional<List<StepAggregationService.AggregatedStep>> aggregatedOpt =
                 epoch != null
-                    ? stepAggregationService.getAggregatedSteps(runId, epoch)
+                    ? stepAggregationService.getAggregatedStepsWithElapsed(runId, epoch)
                     : stepAggregationService.getAggregatedSteps(runId);
 
             if (aggregatedOpt.isEmpty()) {
@@ -228,6 +232,36 @@ public class WorkflowRunController {
             logger.error("Error getting aggregated steps for runId: {}", runId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("error", "Internal server error: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * The run analysis view: the most recent epochs of a run (default 60, max 200), each with its
+     * outcome, work duration, credit cost and per-node status and duration. One call feeds the
+     * whole Analysis tab (KPIs, per-epoch chart, nodes x epochs grid, epoch comparison).
+     */
+    @GetMapping("/runs/{runId}/analysis")
+    @Transactional(readOnly = true)
+    public ResponseEntity<?> getRunAnalysis(
+            @PathVariable("runId") String runId,
+            @RequestParam(value = "limit", required = false) Integer limit,
+            @RequestHeader(value = "X-User-ID", required = false) String tenantId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+        // Cross-tenant guard - see getRunState.
+        if (tenantId == null || tenantId.isBlank()) {
+            return ResponseEntity.status(401).build();
+        }
+        try {
+            Optional<WorkflowRunEntity> run = workflowRunRepository.findByRunIdPublic(runId);
+            if (run.isEmpty() || !WorkflowControllerHelper.isRunInScope(run.get(), tenantId, orgId)) {
+                logger.warn("Run analysis request denied: runId={} tenantId={} orgId={}", runId, tenantId, orgId);
+                return ResponseEntity.notFound().build();
+            }
+            return ResponseEntity.ok(runAnalysisService.analyze(run.get(), limit));
+        } catch (Exception e) {
+            logger.error("Error building run analysis for runId: {}", runId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("error", "Internal server error"));
         }
     }
 

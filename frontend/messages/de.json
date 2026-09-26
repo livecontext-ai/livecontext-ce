@@ -361,6 +361,16 @@
     "unshare": "Freigabe aufheben"
   },
   "dataTable": {
+    "workflowRowId": {
+      "label": "So liest du diese ID",
+      "intro": "Die ID zeigt, wo diese Zeile ausgeführt wurde: epoch.spawn.iteration.item, also die Werte der Spalten daneben (sie beginnen bei 0). Nullen am Ende werden weggelassen.",
+      "exampleEpoch": "Epoche 21",
+      "exampleSpawn": "Epoche 20, Spawn 1 (eine Wiederholung)",
+      "exampleIteration": "Epoche 20, Iteration 2",
+      "exampleItem": "Epoche 20, Element-Index 3",
+      "exampleNested": "Index 3 in der Ausgabe von Zeile 21",
+      "sameId": "Eine ID ist nicht eindeutig: ein Warten und sein Abschluss oder zwei verschiedene Trigger können dieselbe haben."
+    },
     "deleteColumns": "Spalten löschen",
     "deleteColumnsConfirm": "Sind Sie sicher, dass Sie {count} ausgewählte Spalte(n) löschen möchten? Diese Aktion kann nicht rückgängig gemacht werden.",
     "dragToReorganize": "Zum Neuanordnen der Spalte ziehen",
@@ -591,7 +601,8 @@
     "deleteAgentTitle": "Agent löschen",
     "deleteAgentConfirm": "Möchten Sie \"{name}\" wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
     "deleteDatasourceTitle": "Datenquelle löschen",
-    "deleteDatasourceConfirm": "Möchten Sie \"{name}\" wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden."
+    "deleteDatasourceConfirm": "Möchten Sie \"{name}\" wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
+    "analysisTab": "Analyse"
   },
   "platformStatus": {
     "headline": {
@@ -1237,7 +1248,8 @@
         "running": "Läuft",
         "skipped": "Übersprungen",
         "started": "Gestartet",
-        "stillRunning": "Läuft noch"
+        "stillRunning": "Läuft noch",
+        "totalWork": "Gesamtarbeit (Elemente addiert)"
       }
     },
     "cancelRun": {
@@ -1332,6 +1344,72 @@
       "scopeAll": "alle Epochen",
       "scopeEpoch": "Epoche {epoch}",
       "budgetBlockedMessageCumulative": "{spent} von {budget} ausgegeben, und dieses Limit wird nie zurückgesetzt. Es wurde kein neuer Lauf gestartet; erhöhen Sie das Limit oder ändern Sie die Zurücksetzung, um fortzufahren."
+    },
+    "runAnalysis": {
+      "window": "Angezeigte Epochen",
+      "windowOption": "Letzte {count}",
+      "windowOf": "Letzte {shown} von {total, plural, one {# Epoche} other {# Epochen}}",
+      "refresh": "Aktualisieren",
+      "loading": "Analyse wird geladen",
+      "error": "Die Analyse konnte nicht geladen werden.",
+      "retry": "Erneut versuchen",
+      "empty": "Es ist noch keine Epoche gelaufen. Starten Sie den Workflow, um seine Analyse zu sehen.",
+      "kpi": {
+        "epochs": "Epochen",
+        "successRate": "Erfolgsquote",
+        "failedCount": "{count} fehlgeschlagen",
+        "noSettled": "Noch keine beendet",
+        "avgDuration": "Durchschnittliche Dauer",
+        "maxDuration": "max. {value}",
+        "credits": "Kosten",
+        "perEpoch": "{value} pro Epoche",
+        "noCost": "Keine Kosten erfasst"
+      },
+      "chart": {
+        "title": "Dauer und Kosten pro Epoche",
+        "duration": "Dauer",
+        "cost": "Kosten"
+      },
+      "grid": {
+        "title": "Knoten pro Epoche",
+        "colorBy": "Färben nach",
+        "byStatus": "Status",
+        "byDuration": "Dauer",
+        "failures": "{count} fehlgeschlagen",
+        "partials": "{count} teilweise",
+        "average": "Ø {value}",
+        "items": "{count} Ausführungen",
+        "totalWork": "Gesamtarbeit {value}"
+      },
+      "legend": {
+        "ok": "Erfolgreich",
+        "failed": "Fehlgeschlagen",
+        "partial": "Teilweise",
+        "skipped": "Übersprungen",
+        "running": "Läuft",
+        "waiting": "Wartet",
+        "none": "Nicht ausgeführt",
+        "fast": "Schnell",
+        "slow": "Langsam"
+      },
+      "insight": {
+        "failing": "{node} ist in {count} von {total, plural, one {# Epoche} other {# Epochen}} fehlgeschlagen.",
+        "epochFailures": "{count, plural, one {# Epoche ist} other {# Epochen sind}} ohne fehlgeschlagenen Knotenschritt fehlgeschlagen: Öffnen Sie die Ausführungs-Logs, um den Grund zu sehen.",
+        "lastError": "Letzter Fehler: {error}",
+        "slower": "{node} ist seit Epoche {epoch} langsamer: {before}, dann {after}.",
+        "none": "Kein Fehler in diesen Epochen."
+      },
+      "compare": {
+        "title": "Zwei Epochen vergleichen",
+        "hint": "Klicken Sie auf einen Balken oder eine Zelle, um die zu vergleichende Epoche zu wählen.",
+        "reference": "Referenz",
+        "node": "Knoten",
+        "epoch": "Epoche #{epoch}",
+        "showOnCanvas": "Epoche {epoch} auf dem Canvas anzeigen",
+        "total": "Gesamt",
+        "notRun": "Nicht ausgeführt",
+        "needTwo": "Zum Vergleichen werden mindestens zwei Epochen benötigt."
+      }
     }
   },
   "workflowRelations": {
@@ -2098,9 +2176,55 @@
       "restoreFailed": "Ihr Konto konnte nicht reaktiviert werden. Bitte versuchen Sie es erneut."
     },
     "agentError": {
-      "title": "Etwas ist schiefgelaufen",
-      "description": "Bei der Ausführung ist ein Fehler aufgetreten. Bitte versuchen Sie es gleich noch einmal.",
-      "retry": "Erneut versuchen"
+      "close": "Schließen",
+      "gotIt": "Verstanden",
+      "technicalDetails": "Technische Details",
+      "kinds": {
+        "interrupted": {
+          "title": "Die Antwort wurde unterbrochen",
+          "description": "Der Dienst wurde neu gestartet, während der Assistent antwortete. Die Teilantwort wurde gespeichert. Senden Sie Ihre Nachricht erneut, um fortzufahren."
+        },
+        "providerBilling": {
+          "title": "Der KI-Anbieter hat die Anfrage aus Abrechnungsgründen abgelehnt",
+          "description": "Das Konto, mit dem dieses Modell aufgerufen wird, hat beim Anbieter kein Guthaben mehr. Wählen Sie ein anderes Modell oder laden Sie das Anbieterkonto auf, wenn Sie Ihren eigenen Schlüssel verwenden."
+        },
+        "rateLimit": {
+          "title": "Zu viele Anfragen an dieses Modell",
+          "description": "Der Anbieter begrenzt, wie oft dieses Modell aufgerufen werden kann. Warten Sie eine Minute und senden Sie Ihre Nachricht erneut, oder wählen Sie ein anderes Modell."
+        },
+        "contextTooLong": {
+          "title": "Diese Unterhaltung ist zu lang für das Modell",
+          "description": "Die Unterhaltung und ihre Anhänge übersteigen, was dieses Modell auf einmal lesen kann. Beginnen Sie eine neue Unterhaltung, entfernen Sie große Anhänge oder wählen Sie ein Modell mit größerem Kontext."
+        },
+        "contentBlocked": {
+          "title": "Der Anbieter hat diese Anfrage blockiert",
+          "description": "Die Sicherheitsfilter des Anbieters haben diese Nachricht oder ihre Antwort abgelehnt. Formulieren Sie Ihre Anfrage um und versuchen Sie es erneut."
+        },
+        "modelUnavailable": {
+          "title": "Dieses Modell ist nicht verfügbar",
+          "description": "Der Anbieter stellt dieses Modell nicht mehr bereit, oder es kann nicht für den Chat verwendet werden. Wählen Sie in der Modellauswahl ein anderes Modell."
+        },
+        "providerUnavailable": {
+          "title": "Der KI-Anbieter ist vorübergehend nicht erreichbar",
+          "description": "Der Anbieter des Modells ist überlastet oder hat eine Störung. Versuchen Sie es in einigen Augenblicken erneut oder wählen Sie ein anderes Modell."
+        },
+        "network": {
+          "title": "Die Verbindung zum Modell wurde unterbrochen",
+          "description": "Die Verbindung ist abgebrochen oder hat eine Zeitüberschreitung erreicht, bevor die Antwort fertig war. Senden Sie Ihre Nachricht erneut."
+        },
+        "providerRejected": {
+          "title": "Das Modell hat die Anfrage abgelehnt",
+          "description": "Der Anbieter hat die Anfrage so, wie sie an dieses Modell gesendet wurde, abgelehnt. Das liegt meist an einer Inkompatibilität zwischen der Plattform und genau diesem Modell, nicht an Ihrer Nachricht. Wählen Sie vorerst ein anderes Modell."
+        },
+        "sendFailed": {
+          "title": "Ihre Nachricht konnte nicht gesendet werden",
+          "description": "Der Server konnte Ihre Nachricht nicht annehmen. Senden Sie sie gleich erneut und laden Sie die Seite neu, wenn der Fehler bestehen bleibt."
+        },
+        "unknown": {
+          "title": "Etwas ist schiefgelaufen",
+          "description": "Bei der Ausführung ist ein Fehler aufgetreten. Bitte versuchen Sie es in Kürze erneut."
+        }
+      }
     },
     "missingApiKey": {
       "title": "API-Schlüssel erforderlich",
@@ -3741,6 +3865,8 @@
       "subscriptionRequired": "Die Cloud-Nutzung erfordert ein aktives kostenpflichtiges Abonnement im verknüpften Cloud-Konto. Ein kostenloses Konto kann weitergeleitete Aufrufe nicht bezahlen.",
       "viewPlans": "Tarife ansehen",
       "linkRequired": "Verknüpfen Sie ein Cloud-Konto, bevor Sie zu Cloud wechseln.",
+      "onboardingRequired": "Ihr LiveContext-Cloud-Konto ist noch nicht vollständig eingerichtet (E-Mail-Bestätigungscode und Profil). Schließen Sie die Einrichtung in LiveContext Cloud ab und wechseln Sie dann erneut.",
+      "notReady": "LiveContext Cloud ist gerade nicht erreichbar, daher wurde nicht gewechselt. Ihre Installation bleibt verbunden: Versuchen Sie es gleich noch einmal.",
       "saveError": "Die Quelle der Integrations-Zugangsdaten konnte nicht aktualisiert werden.",
       "cloudCovers": "Das gilt auch für die Generierung: Bilder, Video, Ton, Sprache und Musik laufen über die Anbieterschlüssel des Cloud-Kontos und werden dort in Credits abgerechnet, pro Sekunde oder pro Datei, zum für jedes Modell veröffentlichten Preis."
     },
@@ -3752,6 +3878,9 @@
       "connectedAs": "Verbunden als {username}",
       "label": "LLM-Quelle",
       "linkRequired": "Verknüpfen Sie ein Cloud-Konto, bevor Sie zu Cloud wechseln.",
+      "planRequired": "Cloud-Modelle erfordern einen kostenpflichtigen Plan im verbundenen Cloud-Konto. Die Installation bleibt verbunden: Wählen Sie einen Plan und wechseln Sie erneut, oder behalten Sie Ihre API-Schlüssel.",
+      "onboardingRequired": "Ihr LiveContext-Cloud-Konto ist noch nicht vollständig eingerichtet (E-Mail-Bestätigungscode und Profil). Schließen Sie die Einrichtung in LiveContext Cloud ab und wechseln Sie dann erneut.",
+      "notReady": "LiveContext Cloud ist gerade nicht erreichbar, daher wurde nicht gewechselt. Ihre Installation bleibt verbunden: Versuchen Sie es gleich noch einmal.",
       "saveError": "Die LLM-Quelle konnte nicht aktualisiert werden."
     },
     "executionLinks": {
@@ -15510,25 +15639,16 @@
   "ceCloudLink": {
     "expired": "Die Verbindung ist abgelaufen, klicken Sie erneut auf Verbinden.",
     "planRequired": {
-      "title": "Ihre LiveContext Cloud-Verknüpfung benötigt einen kostenpflichtigen Tarif",
-      "body": "Für die Verknüpfung einer selbst gehosteten Installation mit LiveContext Cloud ist ein kostenpflichtiger Tarif im Cloud-Konto erforderlich. Wählen Sie einen Tarif, und diese Installation verbindet sich automatisch wieder, ohne erneute Verknüpfung.",
+      "title": "Cloud-Modelle erfordern einen kostenpflichtigen Plan",
+      "body": "Diese Installation ist mit LiveContext Cloud verbunden. Cloud-Modelle, Websuche und Cloud-Integrationen erfordern einen kostenpflichtigen Plan im Cloud-Konto. Wählen Sie einen Plan, und sie funktionieren sofort, ohne erneute Verknüpfung.",
       "cta": "Cloud-Tarife ansehen",
       "sidebarBadge": "Bezahltarif erforderlich"
     },
     "planRequiredModal": {
       "title": "Kostenpflichtiger Tarif erforderlich",
-      "description": "Diese Installation ist mit einem LiveContext Cloud-Konto ohne kostenpflichtigen Tarif verknüpft, daher hat die Cloud die Anfrage abgelehnt. Wählen Sie einen Tarif in LiveContext Cloud, und diese Installation verbindet sich automatisch wieder.",
+      "description": "Diese Installation ist mit einem LiveContext-Cloud-Konto ohne kostenpflichtigen Plan verbunden. Cloud-Modelle, Websuche und Cloud-Integrationen erfordern einen. Wählen Sie einen Plan in LiveContext Cloud, und sie funktionieren sofort: Die Installation bleibt verbunden.",
       "cta": "Cloud-Tarife ansehen",
       "close": "Schließen"
-    },
-    "cloud": {
-      "returning": "Zurück zu Ihrer selbst gehosteten Installation.",
-      "pricingBannerTitle": "Die Verknüpfung Ihrer selbst gehosteten Installation erfordert einen kostenpflichtigen Tarif",
-      "pricingBannerBody": "Wählen Sie unten einen Tarif. Sobald Ihr Abonnement aktiv ist, werden Sie zu Ihrer Installation zurückgeleitet, um die Verbindung abzuschließen.",
-      "pricingBannerContinue": "Ich habe einen Bezahltarif, weiter",
-      "pricingBannerStillRequired": "Ihr aktueller Tarif ist noch kein kostenpflichtiger Tarif. Wählen Sie einen Tarif, um fortzufahren.",
-      "pricingBannerNoPending": "Diese Verbindungsanfrage ist nicht mehr verfügbar. Klicken Sie in Ihrer selbst gehosteten Installation erneut auf Verbinden.",
-      "pricingBannerError": "Ihr Tarif konnte nicht überprüft werden. Bitte versuchen Sie es erneut."
     }
   }
 }

@@ -13,11 +13,11 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
  *       otherwise null (no info leak).</li>
  *   <li>401 {@code error="INSTALL_ID_REQUIRED"} when header missing; or
  *       {@code error="LINK_REVOKED"} when the existing row is REVOKED.</li>
- *   <li>403 {@code error="CLOUD_LINK_PLAN_REQUIRED"} when the caller's governing plan is not
- *       paid ({@link #planRequired}). The controller does NOT serialize this record for that
- *       branch: it sends the shared {@link CeLinkRefusal#planRequiredBody} so register answers
- *       exactly like every other link-gated endpoint. {@code planCode} is carried for it and
- *       never serialized.</li>
+ *   <li>403 {@code error="CLOUD_LINK_ONBOARDING_REQUIRED"} when the caller has not completed
+ *       the cloud onboarding, email verification included ({@link #onboardingRequired}). The
+ *       controller does NOT serialize this record for that branch: it sends the shared
+ *       {@link CeLinkRefusal#onboardingRequiredBody}. The plan is never checked here: any plan,
+ *       FREE included, may link.</li>
  * </ul>
  * Constant-time 400ms enforcement (PR3d filter) covers all branches.
  */
@@ -25,23 +25,22 @@ public record CeLinkRegisterResponse(
         boolean registered,
         String error,
         String boundToEmail,
-        String scopes,
-        @JsonIgnore String planCode
+        String scopes
 ) {
     public static CeLinkRegisterResponse ok(String scopes) {
-        return new CeLinkRegisterResponse(true, null, null, scopes, null);
+        return new CeLinkRegisterResponse(true, null, null, scopes);
     }
 
     public static CeLinkRegisterResponse alreadyBound(String boundToEmailMasked) {
-        return new CeLinkRegisterResponse(false, "ALREADY_BOUND", boundToEmailMasked, null, null);
+        return new CeLinkRegisterResponse(false, "ALREADY_BOUND", boundToEmailMasked, null);
     }
 
-    public static CeLinkRegisterResponse planRequired(String planCode) {
-        return new CeLinkRegisterResponse(false, CeLinkRefusal.PLAN_REQUIRED_ERROR, null, null, planCode);
+    public static CeLinkRegisterResponse onboardingRequired() {
+        return new CeLinkRegisterResponse(false, CeLinkRefusal.ONBOARDING_REQUIRED_ERROR, null, null);
     }
 
     @JsonIgnore
-    public boolean isPlanRequired() {
-        return CeLinkRefusal.PLAN_REQUIRED_ERROR.equals(error);
+    public boolean isOnboardingRequired() {
+        return CeLinkRefusal.ONBOARDING_REQUIRED_ERROR.equals(error);
     }
 }

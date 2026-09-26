@@ -5,7 +5,6 @@ import com.apimarketplace.auth.domain.CeLinkAudit;
 import com.apimarketplace.auth.domain.CeLinkHeartbeat;
 import com.apimarketplace.auth.repository.CeLinkHeartbeatRepository;
 import com.apimarketplace.auth.repository.CeLinkRepository;
-import com.apimarketplace.common.plan.CeLinkAccessResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -31,12 +30,8 @@ import java.util.UUID;
  *   <li>Emit an audit row per §1 #27 cadence: {@code NETWORK_CHANGE} on IP change, otherwise
  *       {@code HEARTBEAT} when (last_audited_at older than 24h) OR (count_since_audit >= 1000).
  *       The cadence keeps the audit table bounded under stable-IP load.</li>
- *   <li>Plan check ({@link CeLinkService#planAccess}). {@link Outcome#PLAN_REQUIRED} → controller
- *       403 {@code CLOUD_LINK_PLAN_REQUIRED}. Runs AFTER the heartbeat is recorded, on purpose:
- *       a suspended link is still alive, and a link that stopped recording heartbeats would be
- *       revoked by the liveness retention sweep, turning a temporary suspension into a
- *       permanent loss. The plan NEVER revokes a link and never logs the user out: a paid
- *       account that falls back to FREE is suspended and comes back by itself when it pays.</li>
+ *   <li>No plan check: any plan, FREE included, keeps a live link. Only the paid relays
+ *       (LLM, web search, catalog) look at the plan, through {@link CeLinkService#linkAccess}.</li>
  * </ol>
  *
  * <p>Audit cadence design note: we emit on (a) IP change (security signal),
@@ -59,18 +54,15 @@ public class CeLinkHeartbeatService {
     private final CeLinkHeartbeatRepository heartbeatRepository;
     private final IpHashService ipHashService;
     private final CeLinkAuditService auditService;
-    private final CeLinkService ceLinkService;
 
     public CeLinkHeartbeatService(CeLinkRepository ceLinkRepository,
                                   CeLinkHeartbeatRepository heartbeatRepository,
                                   IpHashService ipHashService,
-                                  CeLinkAuditService auditService,
-                                  CeLinkService ceLinkService) {
+                                  CeLinkAuditService auditService) {
         this.ceLinkRepository = ceLinkRepository;
         this.heartbeatRepository = heartbeatRepository;
         this.ipHashService = ipHashService;
         this.auditService = auditService;
-        this.ceLinkService = ceLinkService;
     }
 
     /**
@@ -78,14 +70,14 @@ public class CeLinkHeartbeatService {
      * persisted in plaintext; immediately HMAC-hashed.
      */
     @Transactional
-    public Result heartbeat(Long callerUserId, UUID installId, String ceVersion, String clientIp) {
+    public Outcome heartbeat(Long callerUserId, UUID installId, String ceVersion, String clientIp) {
         Optional<CeLink> linkOpt = ceLinkRepository.findByInstallIdAndUserId(installId, callerUserId);
         if (linkOpt.isEmpty()) {
-            return Result.of(Outcome.NOT_FOUND);
+            return Outcome.NOT_FOUND;
         }
         CeLink link = linkOpt.get();
         if (link.getStatus() != CeLink.Status.ACTIVE) {
-            return Result.of(Outcome.REVOKED);
+            return Outcome.REVOKED;
         }
 
         IpHashService.HashResult fresh = ipHashService.hashWithCurrent(installId, clientIp);
@@ -133,15 +125,7 @@ public class CeLinkHeartbeatService {
         heartbeatRepository.saveAndFlush(existing);
         log.debug("Heartbeat installId={} userId={} ipChanged={} emitAudit={}",
                 installId, callerUserId, ipChanged, emitAudit);
-
-        // Suspend, never revoke (see class Javadoc): the heartbeat above is already recorded.
-        CeLinkAccessResult access = ceLinkService.planAccess(callerUserId);
-        if (!access.isActive()) {
-            log.debug("Heartbeat installId={} userId={} suspended - plan {} is not paid",
-                    installId, callerUserId, access.planCode());
-            return new Result(Outcome.PLAN_REQUIRED, access.planCode());
-        }
-        return Result.of(Outcome.OK);
+        return Outcome.OK;
     }
 
     /** Result of one heartbeat call. Mapped 1:1 to HTTP status by the controller. */
@@ -151,21 +135,7 @@ public class CeLinkHeartbeatService {
         /** install_id is not in caller's namespace. → 404 (no enumeration oracle). */
         NOT_FOUND,
         /** Link exists but was revoked. → 410 GONE so CE stops heartbeating. */
-        REVOKED,
-        /**
-         * Heartbeat persisted, but the governing plan is not paid: the link is SUSPENDED
-         * (kept ACTIVE, not revoked). → 403 {@code CLOUD_LINK_PLAN_REQUIRED}.
-         */
-        PLAN_REQUIRED
+        REVOKED
     }
 
-    /**
-     * One heartbeat's outcome plus, for {@link Outcome#PLAN_REQUIRED}, the plan code the
-     * refusal names.
-     */
-    public record Result(Outcome outcome, String planCode) {
-        static Result of(Outcome outcome) {
-            return new Result(outcome, null);
-        }
-    }
 }

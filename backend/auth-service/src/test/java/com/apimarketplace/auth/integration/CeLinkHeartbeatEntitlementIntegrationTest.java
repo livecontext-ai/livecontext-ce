@@ -9,6 +9,7 @@ import com.apimarketplace.auth.domain.OrganizationRole;
 import com.apimarketplace.auth.domain.Plan;
 import com.apimarketplace.auth.domain.Subscription;
 import com.apimarketplace.auth.domain.User;
+import com.apimarketplace.auth.domain.UserOnboarding;
 import com.apimarketplace.auth.repository.BillingCustomerRepository;
 import com.apimarketplace.auth.repository.CeLinkHeartbeatRepository;
 import com.apimarketplace.auth.repository.CeLinkRepository;
@@ -16,6 +17,7 @@ import com.apimarketplace.auth.repository.OrganizationMemberRepository;
 import com.apimarketplace.auth.repository.OrganizationRepository;
 import com.apimarketplace.auth.repository.PlanRepository;
 import com.apimarketplace.auth.repository.SubscriptionRepository;
+import com.apimarketplace.auth.repository.UserOnboardingRepository;
 import com.apimarketplace.auth.repository.UserRepository;
 import com.apimarketplace.auth.service.CeLinkActiveRowCache;
 import com.apimarketplace.auth.service.CeLinkActiveRowCachePublisher;
@@ -23,21 +25,19 @@ import com.apimarketplace.auth.service.CeLinkAuditService;
 import com.apimarketplace.auth.service.CeLinkHeartbeatService;
 import com.apimarketplace.auth.service.CeLinkService;
 import com.apimarketplace.auth.service.IpHashService;
+import com.apimarketplace.auth.service.OnboardingService;
 import com.apimarketplace.auth.service.PlanResolutionService;
-import com.apimarketplace.auth.web.CeLinkController;
 import com.apimarketplace.common.plan.CeLinkAccess;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.time.LocalDateTime;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -50,16 +50,16 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
- * The CE cloud link is PAID-ONLY, end to end against a real DB (H2 PostgreSQL-compat, full
- * Spring context) and the REAL {@link PlanResolutionService}: the governing plan is the plan
- * of the owner of the user's DEFAULT workspace (never the request's active workspace), read from
- * real subscription and membership rows.
- *
- * <p>Replaces the former "heartbeat revokes the link when the subscription is lost" test: that
- * behavior is gone on purpose. An account that falls back to a non-paid plan is SUSPENDED
- * (every link-gated call refused with PLAN_REQUIRED) and restored by itself when it pays again;
- * the heartbeat never revokes the link (which also logged the user out of Keycloak) and keeps
- * recording liveness so the retention sweep does not revoke it either.
+ * The CE cloud link, end to end against a real DB (H2 PostgreSQL-compat, full Spring context),
+ * the REAL {@link PlanResolutionService} and the REAL {@link OnboardingService}:
+ * <ul>
+ *   <li>any plan, FREE included, may link: register and heartbeat never look at the plan, and a
+ *       plan change never revokes the link (which would also log the user out of Keycloak);</li>
+ *   <li>register needs a completed cloud onboarding, email code included;</li>
+ *   <li>the paid relays read {@link CeLinkService#linkAccess}: PLAN_REQUIRED until the governing
+ *       plan (the plan of the owner of the user's DEFAULT workspace, never the request's active
+ *       workspace) is paid, ACTIVE as soon as it is, with no re-link.</li>
+ * </ul>
  *
  * <p>The keycloak-gated services are constructed manually (they do not load under the embedded
  * test profile), with the plan cache disabled (TTL 0) so each call reads the database. The
@@ -67,7 +67,7 @@ import static org.mockito.Mockito.verify;
  * H2 type mismatch).
  */
 @IntegrationTest
-@DisplayName("CE cloud link - paid plans only (real DB, real plan resolution)")
+@DisplayName("CE cloud link - any plan links, paid relays need a paid plan (real DB, real plan + onboarding)")
 class CeLinkHeartbeatEntitlementIntegrationTest {
 
     private static final AtomicInteger SEQ = new AtomicInteger();
@@ -81,6 +81,8 @@ class CeLinkHeartbeatEntitlementIntegrationTest {
     @Autowired private CeLinkRepository ceLinkRepository;
     @Autowired private CeLinkHeartbeatRepository ceLinkHeartbeatRepository;
     @Autowired private PlanResolutionService planResolutionService;
+    @Autowired private OnboardingService onboardingService;
+    @Autowired private UserOnboardingRepository onboardingRepository;
 
     private CeLinkService ceLinkService;
     private CeLinkHeartbeatService heartbeatService;
@@ -109,9 +111,9 @@ class CeLinkHeartbeatEntitlementIntegrationTest {
         ceLinkService = new CeLinkService(
                 ceLinkRepository, ceLinkHeartbeatRepository, lockTolerantUsers, auditService,
                 mock(CeLinkActiveRowCache.class), mock(CeLinkActiveRowCachePublisher.class),
-                eventPublisher, planResolutionService, 0);
+                eventPublisher, planResolutionService, onboardingService, 0);
         heartbeatService = new CeLinkHeartbeatService(
-                ceLinkRepository, ceLinkHeartbeatRepository, ipHashService, auditService, ceLinkService);
+                ceLinkRepository, ceLinkHeartbeatRepository, ipHashService, auditService);
     }
 
     @Test
@@ -121,29 +123,29 @@ class CeLinkHeartbeatEntitlementIntegrationTest {
         subscribe(owner, "PRO");
         ceLinkRepository.saveAndFlush(new CeLink(INSTALL, owner.getId(), "Laptop"));
 
-        assertThat(heartbeatService.heartbeat(owner.getId(), INSTALL, CE_VERSION, IP).outcome())
+        assertThat(heartbeatService.heartbeat(owner.getId(), INSTALL, CE_VERSION, IP))
                 .isEqualTo(CeLinkHeartbeatService.Outcome.OK);
         assertThat(ceLinkService.linkAccess(owner.getId(), INSTALL).access()).isEqualTo(CeLinkAccess.ACTIVE);
     }
 
     @Test
-    @DisplayName("regression: an ACTIVE FREE subscription no longer counts - the link answers PLAN_REQUIRED")
-    void activeFreeSubscriptionIsPlanRequired() {
+    @DisplayName("regression: a FREE account keeps a live link (heartbeat OK, never revoked) while the paid relays answer PLAN_REQUIRED")
+    void freeAccountIsLinkedButPaidRelaysNeedAPlan() {
         User owner = userOwningDefaultWorkspace();
         subscribe(owner, "FREE");
         ceLinkRepository.saveAndFlush(new CeLink(INSTALL, owner.getId(), "Laptop"));
 
-        CeLinkHeartbeatService.Result result = heartbeatService.heartbeat(owner.getId(), INSTALL, CE_VERSION, IP);
-
-        assertThat(result.outcome()).isEqualTo(CeLinkHeartbeatService.Outcome.PLAN_REQUIRED);
-        assertThat(result.planCode()).isEqualTo("FREE");
+        assertThat(heartbeatService.heartbeat(owner.getId(), INSTALL, CE_VERSION, IP))
+                .isEqualTo(CeLinkHeartbeatService.Outcome.OK);
+        assertThat(ceLinkService.userOwnsActiveLink(owner.getId(), INSTALL)).isTrue();
         assertThat(ceLinkService.linkAccess(owner.getId(), INSTALL).access())
                 .isEqualTo(CeLinkAccess.PLAN_REQUIRED);
+        assertThat(ceLinkService.linkAccess(owner.getId(), INSTALL).isLinked()).isTrue();
     }
 
     @Test
-    @DisplayName("regression: losing the paid plan SUSPENDS (link kept ACTIVE, heartbeat recorded, no revoke), paying again RESTORES")
-    void downgradeSuspendsThenUpgradeRestores() {
+    @DisplayName("regression: losing the paid plan keeps the link (heartbeat OK, no revoke), only the paid relays close; paying again reopens them")
+    void downgradeClosesPaidRelaysOnlyThenUpgradeReopens() {
         User owner = userOwningDefaultWorkspace();
         Subscription paid = subscribe(owner, "PRO");
         ceLinkRepository.saveAndFlush(new CeLink(INSTALL, owner.getId(), "Laptop"));
@@ -152,23 +154,20 @@ class CeLinkHeartbeatEntitlementIntegrationTest {
         paid.setStatus("canceled");
         subscriptionRepository.saveAndFlush(paid);
 
-        CeLinkHeartbeatService.Result suspended =
-                heartbeatService.heartbeat(owner.getId(), INSTALL, CE_VERSION, IP);
-
-        assertThat(suspended.outcome()).isEqualTo(CeLinkHeartbeatService.Outcome.PLAN_REQUIRED);
+        assertThat(heartbeatService.heartbeat(owner.getId(), INSTALL, CE_VERSION, IP))
+                .isEqualTo(CeLinkHeartbeatService.Outcome.OK);
         CeLink link = ceLinkRepository.findById(INSTALL).orElseThrow();
         assertThat(link.getStatus()).isEqualTo(CeLink.Status.ACTIVE);
         assertThat(link.getRevokeReason()).isNull();
-        // Liveness still recorded, so the retention sweep keeps the suspended link.
         assertThat(ceLinkHeartbeatRepository.findById(INSTALL)).isPresent();
+        assertThat(ceLinkService.linkAccess(owner.getId(), INSTALL).access())
+                .isEqualTo(CeLinkAccess.PLAN_REQUIRED);
         // No revoke event, hence no Keycloak logout.
         verify(eventPublisher, never()).publishEvent(any());
 
-        // The account pays again: restored with no re-link.
+        // The account pays again: the paid relays reopen with no re-link.
         subscribe(owner, "STARTER");
 
-        assertThat(heartbeatService.heartbeat(owner.getId(), INSTALL, CE_VERSION, IP).outcome())
-                .isEqualTo(CeLinkHeartbeatService.Outcome.OK);
         assertThat(ceLinkService.linkAccess(owner.getId(), INSTALL).access()).isEqualTo(CeLinkAccess.ACTIVE);
     }
 
@@ -188,7 +187,7 @@ class CeLinkHeartbeatEntitlementIntegrationTest {
     }
 
     @Test
-    @DisplayName("regression: browsing a paid TEAM workspace (X-Organization-ID) with a FREE DEFAULT workspace is refused, and eligibility agrees")
+    @DisplayName("regression: browsing a paid TEAM workspace (X-Organization-ID) with a FREE DEFAULT workspace does not open the paid relays")
     void activePaidWorkspaceDoesNotOverrideFreeDefault() {
         User teamOwner = newUser();
         subscribe(teamOwner, "TEAM");
@@ -204,31 +203,72 @@ class CeLinkHeartbeatEntitlementIntegrationTest {
         request.addHeader("X-Organization-ID", team.getId().toString());
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         try {
-            // Old code resolved the request workspace (TEAM) and answered ACTIVE / eligible here,
-            // while the CE, whose calls carry no active-workspace claim, got the FREE default.
+            // Old code resolved the request workspace (TEAM) and answered ACTIVE here, while the
+            // CE, whose calls carry no active-workspace claim, got the FREE default.
             assertThat(ceLinkService.linkAccess(member.getId(), INSTALL).access())
                     .isEqualTo(CeLinkAccess.PLAN_REQUIRED);
-            ResponseEntity<Map<String, Object>> eligibility =
-                    new CeLinkController(ceLinkService, heartbeatService, null, null, null).eligibility(member.getId());
-            assertThat(eligibility.getBody())
-                    .containsEntry("eligible", false)
-                    .containsEntry("planCode", "FREE")
-                    .containsEntry("reason", "PLAN_REQUIRED");
         } finally {
             RequestContextHolder.resetRequestAttributes();
         }
     }
 
     @Test
-    @DisplayName("a FREE account cannot register a new install: nothing is written")
-    void freeAccountRegisterWritesNothing() {
+    @DisplayName("regression: a FREE account that finished the onboarding registers a new install")
+    void onboardedFreeAccountRegisters() {
         User owner = userOwningDefaultWorkspace();
         subscribe(owner, "FREE");
+        completeOnboarding(owner);
 
         var response = ceLinkService.register(owner.getId(), INSTALL, CE_VERSION, "Laptop",
                 com.apimarketplace.auth.service.RequestAuditContext.none());
 
-        assertThat(response.isPlanRequired()).isTrue();
+        assertThat(response.registered()).isTrue();
+        assertThat(ceLinkRepository.findById(INSTALL)).isPresent();
+    }
+
+    @Test
+    @DisplayName("regression: an account with an unverified email (bare Keycloak sign-up) cannot register, even on a paid plan: nothing is written")
+    void unverifiedAccountRegisterWritesNothing() {
+        User owner = userOwningDefaultWorkspace();
+        subscribe(owner, "PRO");
+        // Even a completed onboarding row does not count while the email is unverified.
+        onboardingRepository.saveAndFlush(completedOnboardingRow(owner));
+
+        var response = ceLinkService.register(owner.getId(), INSTALL, CE_VERSION, "Laptop",
+                com.apimarketplace.auth.service.RequestAuditContext.none());
+
+        assertThat(response.isOnboardingRequired()).isTrue();
+        assertThat(ceLinkRepository.findById(INSTALL)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a verified account that SKIPPED the onboarding steps registers: the web app counts a skip as done")
+    void verifiedAndSkippedOnboardingRegisters() {
+        User owner = userOwningDefaultWorkspace();
+        owner.setEmailVerified(true);
+        userRepository.saveAndFlush(owner);
+        UserOnboarding skipped = new UserOnboarding(owner, "celink-skip-" + owner.getId());
+        skipped.markSkipped();
+        onboardingRepository.saveAndFlush(skipped);
+
+        var response = ceLinkService.register(owner.getId(), INSTALL, CE_VERSION, "Laptop",
+                com.apimarketplace.auth.service.RequestAuditContext.none());
+
+        assertThat(response.registered()).isTrue();
+        assertThat(ceLinkRepository.findById(INSTALL)).isPresent();
+    }
+
+    @Test
+    @DisplayName("a verified account that has not finished the onboarding cannot register either")
+    void verifiedButNotOnboardedRegisterWritesNothing() {
+        User owner = userOwningDefaultWorkspace();
+        owner.setEmailVerified(true);
+        userRepository.saveAndFlush(owner);
+
+        var response = ceLinkService.register(owner.getId(), INSTALL, CE_VERSION, "Laptop",
+                com.apimarketplace.auth.service.RequestAuditContext.none());
+
+        assertThat(response.isOnboardingRequired()).isTrue();
         assertThat(ceLinkRepository.findById(INSTALL)).isEmpty();
     }
 
@@ -251,6 +291,19 @@ class CeLinkHeartbeatEntitlementIntegrationTest {
                 new Organization("Solo", "solo-" + UUID.randomUUID(), true, user));
         memberRepository.saveAndFlush(new OrganizationMember(org, user, OrganizationRole.OWNER, true));
         return user;
+    }
+
+    /** The state the cloud onboarding leaves behind: email verified and onboarding completed. */
+    private void completeOnboarding(User user) {
+        user.setEmailVerified(true);
+        userRepository.saveAndFlush(user);
+        onboardingRepository.saveAndFlush(completedOnboardingRow(user));
+    }
+
+    private static UserOnboarding completedOnboardingRow(User user) {
+        UserOnboarding onboarding = new UserOnboarding(user, "celink-" + user.getId());
+        onboarding.setOnboardingCompleted(true);
+        return onboarding;
     }
 
     private Subscription subscribe(User user, String planCode) {

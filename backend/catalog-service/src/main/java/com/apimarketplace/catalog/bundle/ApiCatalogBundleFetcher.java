@@ -17,7 +17,11 @@ import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import com.apimarketplace.common.scheduling.BundlePollBackoff;
+
 import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
 
 /**
  * CE-side HTTP client that fetches the currently active API-catalog bundle
@@ -79,7 +83,14 @@ public class ApiCatalogBundleFetcher {
         this.cloudUrl = cloudUrl == null ? "" : cloudUrl.trim();
     }
 
-    public record FetchResult(Status status, ApiCatalogSignedBundle bundle, String detail) {
+    /**
+     * @param retryAfter the cloud's {@code Retry-After} on a refused request (429 / 503), or
+     *                   null. The scheduler turns it into a longer backoff, never a shorter one.
+     */
+    public record FetchResult(Status status, ApiCatalogSignedBundle bundle, String detail, Duration retryAfter) {
+        public FetchResult(Status status, ApiCatalogSignedBundle bundle, String detail) {
+            this(status, bundle, detail, null);
+        }
         public static FetchResult fetched(ApiCatalogSignedBundle b) { return new FetchResult(Status.FETCHED, b, null); }
         public static FetchResult noActive()                        { return new FetchResult(Status.NO_ACTIVE, null, null); }
         public static FetchResult notModified()                     { return new FetchResult(Status.NOT_MODIFIED, null, null); }
@@ -139,9 +150,17 @@ public class ApiCatalogBundleFetcher {
                 // Cloud has no active bundle - not an error, nothing to apply yet.
                 return FetchResult.noActive();
             }
-            return FetchResult.httpError("HTTP " + e.getStatusCode().value() + " from " + url);
+            return new FetchResult(Status.HTTP_ERROR, null,
+                    "HTTP " + e.getStatusCode().value() + " from " + url, retryAfterOf(e));
         } catch (RestClientException e) {
             return FetchResult.networkError(e.getClass().getSimpleName() + ": " + e.getMessage());
         }
+    }
+
+    /** The {@code Retry-After} a refusing cloud sent (429 throttle, 503), or null. */
+    static Duration retryAfterOf(HttpStatusCodeException e) {
+        HttpHeaders h = e.getResponseHeaders();
+        return h == null ? null
+                : BundlePollBackoff.parseRetryAfter(h.getFirst(HttpHeaders.RETRY_AFTER), Instant.now());
     }
 }

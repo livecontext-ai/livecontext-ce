@@ -216,10 +216,11 @@ public class CeCatalogCloudRelay {
             // The code is kept verbatim in the text: the CE frontend matches on it to open its
             // "paid plan required" dialog.
             case "CLOUD_LINK_PLAN_REQUIRED" -> "CLOUD_LINK_PLAN_REQUIRED: the LiveContext Cloud account "
-                    + "linked to this install is not on a paid plan, so platform credentials via "
-                    + "LiveContext Cloud are suspended. Ask the install administrator to choose a paid "
-                    + "plan for the linked cloud account (the install reconnects automatically), or "
-                    + "configure a local credential for this integration.";
+                    + "linked to this install is not on a paid plan, and platform credentials via "
+                    + "LiveContext Cloud need one. The install stays linked: ask the install "
+                    + "administrator to choose a paid plan for the linked cloud account (it works "
+                    + "right away, nothing to reconnect), or configure a local credential for this "
+                    + "integration.";
             case "CE_LINK_NOT_ACTIVE" -> "This install's cloud link is no longer active. Ask the install "
                     + "administrator to reconnect the cloud account in settings, or configure a local "
                     + "credential for this integration.";

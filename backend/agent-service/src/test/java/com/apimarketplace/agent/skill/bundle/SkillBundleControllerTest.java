@@ -5,7 +5,6 @@ import com.apimarketplace.agent.domain.SkillBundleEntity;
 import com.apimarketplace.agent.repository.SkillBundleSyncStatusRepository;
 import com.apimarketplace.auth.client.AuthClient;
 import com.apimarketplace.common.plan.CeLinkAccessResult;
-import com.apimarketplace.common.plan.CeLinkRefusal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -87,7 +86,7 @@ class SkillBundleControllerTest {
     @Test
     @DisplayName("latest: no cloud identity -> 401")
     void latestUnauthenticated() {
-        ResponseEntity<?> resp = controller.latestSignedBundle(null, "install-1");
+        ResponseEntity<?> resp = controller.latestSignedBundle(null, "install-1", null);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         verify(bundleService, never()).getActiveSignedBundle();
     }
@@ -96,24 +95,24 @@ class SkillBundleControllerTest {
     @DisplayName("latest: a cloud user that does not own an active link -> 403")
     void latestNotLinked() {
         when(authClient.ceLinkAccess("cloud-u", "install-1")).thenReturn(CeLinkAccessResult.notLinked());
-        ResponseEntity<?> resp = controller.latestSignedBundle("cloud-u", "install-1");
+        ResponseEntity<?> resp = controller.latestSignedBundle("cloud-u", "install-1", null);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         verify(bundleService, never()).getActiveSignedBundle();
     }
 
     @Test
-    @DisplayName("latest and by-version: a linked account that is not on a paid plan -> 403 CLOUD_LINK_PLAN_REQUIRED")
-    void downloadsRefusedWhenPlanRequired() {
+    @DisplayName("regression: latest and by-version serve a linked account on ANY plan (FREE included) - a bundle spends no cloud money")
+    void downloadsServedToFreeLinkedAccount() {
         when(authClient.ceLinkAccess("cloud-u", "install-1")).thenReturn(CeLinkAccessResult.planRequired("FREE"));
+        SignedSkillBundle bundle = new SignedSkillBundle(100, 1, "c", "s", "k", "i", 3, 50, "p");
+        when(bundleService.getActiveSignedBundle()).thenReturn(Optional.of(bundle));
+        when(bundleService.getSignedBundleByVersion(100L)).thenReturn(Optional.of(bundle));
 
-        ResponseEntity<?> latest = controller.latestSignedBundle("cloud-u", "install-1");
+        ResponseEntity<?> latest = controller.latestSignedBundle("cloud-u", "install-1", null);
         ResponseEntity<?> byVersion = controller.signedBundleByVersion("cloud-u", "install-1", 100L);
 
-        assertThat(latest.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-        assertThat(latest.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
-        assertThat(byVersion.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-        assertThat(byVersion.getBody()).isEqualTo(CeLinkRefusal.planRequiredBody("FREE"));
-        verify(bundleService, never()).getActiveSignedBundle();
+        assertThat(latest.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(byVersion.getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 
     @Test
@@ -122,8 +121,48 @@ class SkillBundleControllerTest {
         when(authClient.ceLinkAccess("cloud-u", "install-1")).thenReturn(CeLinkAccessResult.active("PRO"));
         when(bundleService.getActiveSignedBundle())
                 .thenReturn(Optional.of(new SignedSkillBundle(100, 1, "c", "s", "k", "i", 3, 50, "p")));
-        ResponseEntity<?> resp = controller.latestSignedBundle("cloud-u", "install-1");
+        ResponseEntity<?> resp = controller.latestSignedBundle("cloud-u", "install-1", null);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    @DisplayName("latest: a linked install already holding the active bundle gets a bodiless 304, the payload is never built")
+    void latestNotModifiedWhenChecksumMatches() {
+        when(authClient.ceLinkAccess("cloud-u", "install-1")).thenReturn(CeLinkAccessResult.active("PRO"));
+        when(bundleService.getActiveChecksum()).thenReturn(Optional.of("c"));
+
+        ResponseEntity<?> resp = controller.latestSignedBundle("cloud-u", "install-1", "\"c\"");
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_MODIFIED);
+        assertThat(resp.getHeaders().getETag()).isEqualTo("\"c\"");
+        assertThat(resp.getHeaders().getCacheControl()).contains("private");
+        // Skill bundles re-snapshot every global skill at serve time: the 304 skips that work.
+        verify(bundleService, never()).getActiveSignedBundle();
+    }
+
+    @Test
+    @DisplayName("latest: a stale checksum gets the bundle, tagged with its ETag")
+    void latestServesWhenChecksumDiffers() {
+        when(authClient.ceLinkAccess("cloud-u", "install-1")).thenReturn(CeLinkAccessResult.active("PRO"));
+        when(bundleService.getActiveChecksum()).thenReturn(Optional.of("new"));
+        when(bundleService.getActiveSignedBundle())
+                .thenReturn(Optional.of(new SignedSkillBundle(101, 1, "new", "s", "k", "i", 3, 50, "p")));
+
+        ResponseEntity<?> resp = controller.latestSignedBundle("cloud-u", "install-1", "\"old\"");
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getHeaders().getETag()).isEqualTo("\"new\"");
+    }
+
+    @Test
+    @DisplayName("latest: the link gate runs before the 304 - an unlinked caller with a matching ETag is refused")
+    void latestGateBeforeNotModified() {
+        when(authClient.ceLinkAccess("cloud-u", "install-1")).thenReturn(CeLinkAccessResult.notLinked());
+
+        ResponseEntity<?> resp = controller.latestSignedBundle("cloud-u", "install-1", "\"c\"");
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        verify(bundleService, never()).getActiveChecksum();
     }
 
     @Test
@@ -131,7 +170,7 @@ class SkillBundleControllerTest {
     void latestLinkedNoBundle() {
         when(authClient.ceLinkAccess("cloud-u", "install-1")).thenReturn(CeLinkAccessResult.active("PRO"));
         when(bundleService.getActiveSignedBundle()).thenReturn(Optional.empty());
-        ResponseEntity<?> resp = controller.latestSignedBundle("cloud-u", "install-1");
+        ResponseEntity<?> resp = controller.latestSignedBundle("cloud-u", "install-1", null);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 

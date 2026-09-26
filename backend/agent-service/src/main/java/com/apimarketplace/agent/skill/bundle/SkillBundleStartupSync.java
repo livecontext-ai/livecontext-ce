@@ -13,7 +13,11 @@ import org.springframework.stereotype.Component;
  * {@code skill.bundle.sync.enabled=true} as {@link SkillBundleSyncScheduler}. Mirrors
  * {@code com.apimarketplace.agent.catalog.bundle.CatalogBundleStartupSync}: fires on
  * {@link ApplicationReadyEvent} (after Flyway + bean init) on a daemon thread, calling
- * {@code scheduler.tick()} on the Spring proxy so the {@code @SchedulerLock} still fires.
+ * {@code scheduler.tickIfDue()} on the Spring proxy so the {@code @SchedulerLock} still fires.
+ *
+ * <p>{@code tickIfDue}, not {@code tick}: the startup sync honours the poll backoff, otherwise an
+ * install caught in a restart loop (a crash during apply, say) would download the bundle again on
+ * every boot, which is exactly the loop the backoff exists to break.
  */
 @Slf4j
 @Component
@@ -28,7 +32,7 @@ public class SkillBundleStartupSync {
         Thread t = new Thread(() -> {
             try {
                 log.info("Skill bundle sync: running initial sync on startup");
-                scheduler.tick();
+                scheduler.tickIfDue();
             } catch (Exception e) {
                 log.warn("Skill bundle startup sync failed (already persisted): {}", e.getMessage());
             }

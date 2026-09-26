@@ -5,7 +5,6 @@ import com.apimarketplace.auth.domain.CeLinkAudit;
 import com.apimarketplace.auth.domain.CeLinkHeartbeat;
 import com.apimarketplace.auth.repository.CeLinkHeartbeatRepository;
 import com.apimarketplace.auth.repository.CeLinkRepository;
-import com.apimarketplace.common.plan.CeLinkAccessResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,7 +23,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,7 +35,6 @@ class CeLinkHeartbeatServiceTest {
     @Mock private CeLinkHeartbeatRepository heartbeatRepository;
     @Mock private IpHashService ipHashService;
     @Mock private CeLinkAuditService auditService;
-    @Mock private CeLinkService ceLinkService;
 
     private CeLinkHeartbeatService service;
 
@@ -49,10 +46,7 @@ class CeLinkHeartbeatServiceTest {
     @BeforeEach
     void setUp() {
         service = new CeLinkHeartbeatService(ceLinkRepository, heartbeatRepository, ipHashService,
-                auditService, ceLinkService);
-        // Default: the governing plan is paid, so the existing heartbeat behavior is exercised.
-        // Lenient - the NOT_FOUND / already-REVOKED paths return before the check.
-        lenient().when(ceLinkService.planAccess(CALLER_ID)).thenReturn(CeLinkAccessResult.active("PRO"));
+                auditService);
     }
 
     @Test
@@ -60,7 +54,7 @@ class CeLinkHeartbeatServiceTest {
     void not_found_when_install_unknown() {
         when(ceLinkRepository.findByInstallIdAndUserId(INSTALL, CALLER_ID)).thenReturn(Optional.empty());
 
-        CeLinkHeartbeatService.Outcome outcome = service.heartbeat(CALLER_ID, INSTALL, CE_VERSION, IP).outcome();
+        CeLinkHeartbeatService.Outcome outcome = service.heartbeat(CALLER_ID, INSTALL, CE_VERSION, IP);
 
         assertThat(outcome).isEqualTo(CeLinkHeartbeatService.Outcome.NOT_FOUND);
         verify(heartbeatRepository, never()).saveAndFlush(any());
@@ -74,7 +68,7 @@ class CeLinkHeartbeatServiceTest {
         revoked.revoke(CeLink.RevokeReason.USER, CALLER_ID);
         when(ceLinkRepository.findByInstallIdAndUserId(INSTALL, CALLER_ID)).thenReturn(Optional.of(revoked));
 
-        CeLinkHeartbeatService.Outcome outcome = service.heartbeat(CALLER_ID, INSTALL, CE_VERSION, IP).outcome();
+        CeLinkHeartbeatService.Outcome outcome = service.heartbeat(CALLER_ID, INSTALL, CE_VERSION, IP);
 
         assertThat(outcome).isEqualTo(CeLinkHeartbeatService.Outcome.REVOKED);
         verify(heartbeatRepository, never()).saveAndFlush(any());
@@ -82,56 +76,23 @@ class CeLinkHeartbeatServiceTest {
     }
 
     @Test
-    @DisplayName("regression: a link whose account is not on a paid plan is SUSPENDED, never revoked and never logged out")
-    void plan_required_suspends_without_revoking() {
+    @DisplayName("regression: any plan keeps a live link - the heartbeat answers OK and records liveness without ever looking at the plan")
+    void heartbeat_is_ok_whatever_the_plan() {
+        // The service has no plan collaborator at all any more: a FREE account's install used
+        // to be answered 403 CLOUD_LINK_PLAN_REQUIRED here, while only the paid relays (LLM,
+        // web search, catalog) may look at the plan.
         CeLink link = new CeLink(INSTALL, CALLER_ID, "L");
         when(ceLinkRepository.findByInstallIdAndUserId(INSTALL, CALLER_ID)).thenReturn(Optional.of(link));
-        when(ceLinkService.planAccess(CALLER_ID)).thenReturn(CeLinkAccessResult.planRequired("FREE"));
         when(heartbeatRepository.findById(INSTALL)).thenReturn(Optional.empty());
         when(ipHashService.hashWithCurrent(INSTALL, IP)).thenReturn(new IpHashService.HashResult("hash-v1", 1));
 
-        CeLinkHeartbeatService.Result result = service.heartbeat(CALLER_ID, INSTALL, CE_VERSION, IP);
+        CeLinkHeartbeatService.Outcome outcome = service.heartbeat(CALLER_ID, INSTALL, CE_VERSION, IP);
 
-        assertThat(result.outcome()).isEqualTo(CeLinkHeartbeatService.Outcome.PLAN_REQUIRED);
-        assertThat(result.planCode()).isEqualTo("FREE");
-        // The old code revoked here (SYSTEM) and the revoke event logged the user out of Keycloak.
-        verify(ceLinkService, never()).adminRevoke(any(), any(), any(), any());
-        verify(ceLinkService, never()).revoke(any(), any(), any());
+        assertThat(outcome).isEqualTo(CeLinkHeartbeatService.Outcome.OK);
         assertThat(link.getStatus()).isEqualTo(CeLink.Status.ACTIVE);
-    }
-
-    @Test
-    @DisplayName("a suspended link still RECORDS its heartbeat, so the liveness retention sweep never revokes it")
-    void plan_required_still_records_heartbeat() {
-        when(ceLinkRepository.findByInstallIdAndUserId(INSTALL, CALLER_ID))
-                .thenReturn(Optional.of(new CeLink(INSTALL, CALLER_ID, "L")));
-        when(ceLinkService.planAccess(CALLER_ID)).thenReturn(CeLinkAccessResult.planRequired("CREDIT_PACK"));
-        when(heartbeatRepository.findById(INSTALL)).thenReturn(Optional.empty());
-        when(ipHashService.hashWithCurrent(INSTALL, IP)).thenReturn(new IpHashService.HashResult("hash-v1", 1));
-
-        CeLinkHeartbeatService.Result result = service.heartbeat(CALLER_ID, INSTALL, CE_VERSION, IP);
-
-        assertThat(result.outcome()).isEqualTo(CeLinkHeartbeatService.Outcome.PLAN_REQUIRED);
-        assertThat(result.planCode()).isEqualTo("CREDIT_PACK");
         ArgumentCaptor<CeLinkHeartbeat> saved = ArgumentCaptor.forClass(CeLinkHeartbeat.class);
         verify(heartbeatRepository).saveAndFlush(saved.capture());
         assertThat(saved.getValue().getLastSeenAt()).isNotNull();
-    }
-
-    @Test
-    @DisplayName("a suspended link answers OK again on the first heartbeat after the account pays (no re-link)")
-    void suspended_link_is_restored_after_upgrade() {
-        when(ceLinkRepository.findByInstallIdAndUserId(INSTALL, CALLER_ID))
-                .thenReturn(Optional.of(new CeLink(INSTALL, CALLER_ID, "L")));
-        when(ceLinkService.planAccess(CALLER_ID))
-                .thenReturn(CeLinkAccessResult.planRequired("FREE"), CeLinkAccessResult.active("PRO"));
-        when(heartbeatRepository.findById(INSTALL)).thenReturn(Optional.empty());
-        when(ipHashService.hashWithCurrent(INSTALL, IP)).thenReturn(new IpHashService.HashResult("hash-v1", 1));
-
-        assertThat(service.heartbeat(CALLER_ID, INSTALL, CE_VERSION, IP).outcome())
-                .isEqualTo(CeLinkHeartbeatService.Outcome.PLAN_REQUIRED);
-        assertThat(service.heartbeat(CALLER_ID, INSTALL, CE_VERSION, IP).outcome())
-                .isEqualTo(CeLinkHeartbeatService.Outcome.OK);
     }
 
     @Test
@@ -143,7 +104,7 @@ class CeLinkHeartbeatServiceTest {
         when(ipHashService.hashWithCurrent(INSTALL, IP))
                 .thenReturn(new IpHashService.HashResult("hash-v1", 1));
 
-        CeLinkHeartbeatService.Outcome outcome = service.heartbeat(CALLER_ID, INSTALL, CE_VERSION, IP).outcome();
+        CeLinkHeartbeatService.Outcome outcome = service.heartbeat(CALLER_ID, INSTALL, CE_VERSION, IP);
 
         assertThat(outcome).isEqualTo(CeLinkHeartbeatService.Outcome.OK);
 

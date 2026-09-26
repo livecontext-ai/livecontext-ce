@@ -21,6 +21,7 @@ import type {
   StepRerunResponse,
   StepAttemptRecord,
   AggregatedStepTiming,
+  RunAnalysis,
   EpochSignalInfo,
   EpochState
 } from './types';
@@ -456,6 +457,15 @@ export class ExecutionService {
       `/v2/workflows/dag/instances/${runId}/steps/aggregated`,
       params
     );
+  }
+
+  /**
+   * The run analysis: the `limit` most recent epochs (server default 60, max 200), each with
+   * its outcome, work duration, cost and per-node cells. Feeds the Analysis tab in one call.
+   */
+  async getRunAnalysis(runId: string, limit?: number): Promise<RunAnalysis> {
+    const params = limit !== undefined ? { params: { limit: String(limit) } } : {};
+    return apiClient.get<RunAnalysis>(`/v2/workflows/dag/runs/${runId}/analysis`, params);
   }
 
   /**

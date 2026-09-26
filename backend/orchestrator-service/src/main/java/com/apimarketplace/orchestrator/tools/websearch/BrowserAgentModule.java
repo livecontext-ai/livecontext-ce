@@ -216,6 +216,14 @@ public class BrowserAgentModule extends WebJobModule {
         this.cloudRuntimeAccess = cloudRuntimeAccess;
     }
 
+    /** Signs the relay tenant for the CE shim; null in tests that do not exercise the relay. */
+    private BrowserAgentRelayTenantSigner relayTenantSigner;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setRelayTenantSigner(BrowserAgentRelayTenantSigner relayTenantSigner) {
+        this.relayTenantSigner = relayTenantSigner;
+    }
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setOwnKeyFeatureGate(OwnKeyFeatureGate ownKeyFeatureGate) {
         this.ownKeyFeatureGate = ownKeyFeatureGate;
@@ -476,12 +484,17 @@ public class BrowserAgentModule extends WebJobModule {
             // ToolExecutionContext, and the chat-tool dispatcher forwards the
             // gateway-injected X-User-ID header into the same field.
             String userId = (context != null) ? context.tenantId() : null;
-            // Cloud-linked installs relay the browser agent's LLM through the cloud (same as
-            // chat/workflow agents + web_search) rather than a direct provider key. This mutates
-            // llmCopy to a bridge route pointing at the CE OpenAI shim; injectLlmApiKey then skips
-            // the direct-key lookup (its provider_kind=="bridge" early return). When not linked
-            // this is a no-op and the direct-key path below runs unchanged.
-            maybeRouteLlmToCloudRelay(llmCopy);
+            // The relay identity is ours to set, never the caller's: a tool or node parameter must
+            // not be able to name whose cloud link pays (or carry the shim's secret).
+            llmCopy.remove("relay_tenant_id");
+            llmCopy.remove("relay_tenant_sig");
+            llmCopy.remove("relay_secret");
+            // A tenant whose LLM source is CLOUD relays the browser agent's LLM through the cloud
+            // (same as chat/workflow agents + web_search) rather than a direct provider key. This
+            // mutates llmCopy to a bridge route pointing at the CE OpenAI shim; injectLlmApiKey then
+            // skips the direct-key lookup (its provider_kind=="bridge" early return). On its own
+            // keys (linked or not) this is a no-op and the direct-key path below runs unchanged.
+            maybeRouteLlmToCloudRelay(llmCopy, userId);
             // Cloud: honor model execution links before resolving a key, or the run
             // executes on the exact provider key the admin linked away from.
             maybeApplyExecutionLink(llmCopy);
@@ -1201,7 +1214,7 @@ public class BrowserAgentModule extends WebJobModule {
      * </ul>
      */
     /**
-     * When the install is cloud-linked, reroute the browser agent's LLM to the cloud relay by
+     * When the calling tenant's LLM source is CLOUD, reroute the browser agent's LLM to the cloud relay by
      * turning the {@code llm} block into a bridge route targeting the CE OpenAI shim
      * ({@code /api/browser-agent/llm}), which forwards to {@code /api/ce-llm/complete} and bills the
      * linked cloud account - the same relay the chat/workflow agents and web_search use. The model
@@ -1209,10 +1222,12 @@ public class BrowserAgentModule extends WebJobModule {
      * the shim as the {@code X-LLM-Provider} header, so pricing/observability keep the real model.
      *
      * <p>No-op (leaving the direct-key path in {@link #injectLlmApiKey}) when: the runtime-access
-     * bean is absent (non-CE / tests), the install is not linked, an explicit bridge route or direct
-     * {@code api_key} was already provided, or provider/model are missing.
+     * bean is absent (non-CE / tests), there is no tenant, the tenant's LLM source is not CLOUD (a
+     * linked install on its own keys, which is every FREE account: the cloud relay would refuse it),
+     * the cloud runtime is not ready, an explicit bridge route or direct {@code api_key} was already
+     * provided, or provider/model are missing. Same per-tenant rule as {@code BrowserAgentNode}.
      */
-    void maybeRouteLlmToCloudRelay(Map<String, Object> llm) {
+    void maybeRouteLlmToCloudRelay(Map<String, Object> llm, String tenantId) {
         if (cloudRuntimeAccess == null) {
             return;
         }
@@ -1228,8 +1243,18 @@ public class BrowserAgentModule extends WebJobModule {
         if (provider.isEmpty() || model.isEmpty()) {
             return; // let applyDefaultLlmIfNeeded / the direct-key path handle incomplete blocks
         }
-        if (cloudRuntimeAccess.resolveActiveCloudRuntime().isEmpty()) {
-            return; // not linked - keep the direct-key path
+        if (tenantId == null || tenantId.isBlank() || relayTenantSigner == null) {
+            return; // no tenant to read the source of, or nothing to sign it with - direct-key path
+        }
+        try {
+            if (!cloudRuntimeAccess.isCloudSelected(tenantId)
+                    || cloudRuntimeAccess.resolveCloudRuntime(tenantId).isEmpty()) {
+                return; // own keys selected (any plan may link, only CLOUD relays) or not ready
+            }
+        } catch (RuntimeException e) {
+            log.warn("BrowserAgentModule: could not resolve the cloud-link state for tenant {}: {}",
+                    tenantId, e.getMessage());
+            return;
         }
         String shimUrl = environment != null
                 ? environment.getProperty("browser-agent.llm-relay.internal-url", DEFAULT_LLM_SHIM_URL)
@@ -1237,6 +1262,11 @@ public class BrowserAgentModule extends WebJobModule {
         String secret = environment != null ? environment.getProperty("websearch.gateway-secret", "") : "";
         llm.put("provider_kind", "bridge");
         llm.put("bridge_url", shimUrl);
+        // The runner forwards it as X-Browser-Agent-Tenant-Id, so the shim relays on THIS tenant's
+        // link. An install can hold several links (any plan may link): the newest one may be
+        // another user's, FREE or billed to someone else.
+        llm.put("relay_tenant_id", tenantId);
+        llm.put("relay_tenant_sig", relayTenantSigner.sign(tenantId));
         // Leave llm.model CLEAN (unqualified) so browser-use, pricing and observability all see the
         // real model. The provider stays in llm.provider; the runner's BridgeChatClient forwards it
         // to the shim as the X-LLM-Provider header, so the shim can bill the right provider without
@@ -1247,7 +1277,7 @@ public class BrowserAgentModule extends WebJobModule {
             // shim). Blank secret (CE default) => open internal, cloud-link-gated endpoint.
             llm.put("relay_secret", secret);
         }
-        log.info("BrowserAgentModule: cloud-linked - routing browser agent LLM via cloud relay "
+        log.info("BrowserAgentModule: LLM source CLOUD - routing browser agent LLM via cloud relay "
                 + "(provider={}, model={})", provider, model);
     }
 

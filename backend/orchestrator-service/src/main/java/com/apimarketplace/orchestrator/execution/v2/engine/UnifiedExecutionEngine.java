@@ -117,6 +117,16 @@ public class UnifiedExecutionEngine {
     // Optional: plain unit-test construction leaves it null and executes unchanged.
     private com.apimarketplace.orchestrator.services.credit.NodeCreditGate nodeCreditGate;
 
+    // Rebuilds a split context this pod does not hold (cross-pod resume) before a split-scope node
+    // runs. Optional: plain unit-test construction leaves it null and executes unchanged.
+    private com.apimarketplace.orchestrator.execution.v2.split.SplitContextRehydrator splitContextRehydrator;
+
+    @Autowired(required = false)
+    public void setSplitContextRehydrator(
+            com.apimarketplace.orchestrator.execution.v2.split.SplitContextRehydrator splitContextRehydrator) {
+        this.splitContextRehydrator = splitContextRehydrator;
+    }
+
     @Autowired(required = false)
     public void setNodeCreditGate(
             com.apimarketplace.orchestrator.services.credit.NodeCreditGate nodeCreditGate) {
@@ -1221,6 +1231,13 @@ public class UnifiedExecutionEngine {
 
         // Build node map for split context lookups (from ALL roots)
         Map<String, ExecutionNode> nodeMap = buildNodeMapFromAllRoots(tree);
+
+        // Every resume (signal, async delivery, step-by-step request) comes through here and can land
+        // on a pod that did not run the split this node sits in, or that still holds an older epoch's
+        // context for it. Rebuild it before any split-scope decision below reads memory.
+        if (splitContextRehydrator != null) {
+            splitContextRehydrator.ensureContext(runId, nodeId, itemIndex, nodeMap, context);
+        }
 
         // Initialize context
         logger.info("[V2StepByStep] Initializing context for nodeId={}", nodeId);

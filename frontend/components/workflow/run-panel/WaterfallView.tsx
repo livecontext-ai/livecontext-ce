@@ -2,13 +2,12 @@
 
 import type { Node } from 'reactflow';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { parseUtcAware } from '@/lib/utils/dateFormatters';
 import { getIconSlug, NodeIcon, nodeIconRadiusClass } from '@/app/workflows/builder/components/nodes/shared';
 import { findNodeClassById } from '@/app/workflows/builder/nodes/nodeClasses';
 import type { BuilderNodeData } from '@/app/workflows/builder/types';
 import { StepRowActions } from '@/components/workflow/StepRowActions';
 import { StepTooltipContent } from './StepTooltipContent';
-import { deriveEffectiveStatus, formatCompactDuration, getBarColor, type StepEntry } from './runFormatting';
+import { deriveEffectiveStatus, formatCompactDuration, getBarColor, stepDisplayDurationMs, type StepEntry } from './runFormatting';
 
 interface WaterfallViewProps {
   steps: StepEntry[];
@@ -25,15 +24,8 @@ interface WaterfallViewProps {
 export function WaterfallView({ steps, findNodeForStep, showCumulative, workflowId, isStepByStep, isRunActive }: WaterfallViewProps) {
   const entries = steps
     .map(s => {
-      // When viewing all epochs, prefer cumulative totalExecutionTimeMs
-      const preferTotal = showCumulative && s.totalExecutionTimeMs != null;
-      const durationMs = preferTotal
-        ? s.totalExecutionTimeMs!
-        : s.executionTimeMs != null
-        ? s.executionTimeMs
-        : s.startTime
-          ? Math.max(0, (s.endTime ? parseUtcAware(s.endTime).getTime() : Date.now()) - parseUtcAware(s.startTime).getTime())
-          : 0;
+      // null = no honest figure (skipped, never timed): the row shows no gauge and no "<1s".
+      const durationMs = stepDisplayDurationMs(s, !!showCumulative);
       const matchedNode = findNodeForStep(s.alias);
       const matchedData = matchedNode?.data;
       const nodeClass = matchedData ? findNodeClassById(matchedData.id || '') : null;
@@ -45,13 +37,12 @@ export function WaterfallView({ steps, findNodeForStep, showCumulative, workflow
 
   if (entries.length === 0) return null;
 
-  const maxDuration = Math.max(...entries.map(e => e.durationMs), 1);
+  const maxDuration = Math.max(...entries.map(e => e.durationMs ?? 0), 1);
 
   return (
     <div className="py-0.5">
       {entries.map(entry => {
-        const barPct = Math.max(5, (entry.durationMs / maxDuration) * 100);
-        const hasBackendTiming = entry.durationMs != null;
+        const barPct = entry.durationMs == null ? 0 : Math.max(5, (entry.durationMs / maxDuration) * 100);
         const sourceStep = steps.find(s => s.alias === entry.alias)!;
         return (
           <Tooltip key={entry.alias} delayDuration={150}>
@@ -105,7 +96,7 @@ export function WaterfallView({ steps, findNodeForStep, showCumulative, workflow
             </div>
             {/* Duration */}
             <span className="min-w-[40px] text-right text-xs tabular-nums text-gray-500 dark:text-gray-400 shrink-0">
-              {(hasBackendTiming || entry.durationMs > 0) ? formatCompactDuration(entry.durationMs) : ''}
+              {entry.durationMs != null ? formatCompactDuration(entry.durationMs) : ''}
             </span>
           </div>
           </TooltipTrigger>

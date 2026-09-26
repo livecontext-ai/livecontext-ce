@@ -2,6 +2,7 @@ package com.apimarketplace.publication.controller;
 
 import com.apimarketplace.publication.service.CloudLinkService;
 import com.apimarketplace.agent.cloud.CloudLlmSource;
+import com.apimarketplace.common.plan.CeLinkRefusal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -147,6 +148,8 @@ public class CloudLinkController {
                     .body(Map.of("error", "CLOUD_LINK_REQUIRED"));
         } catch (CloudLinkService.CloudLinkPlanRequiredException e) {
             return planRequired(e);
+        } catch (CloudLinkService.CloudLinkOnboardingRequiredException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(CeLinkRefusal.onboardingRequiredBody());
         } catch (IllegalStateException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("error", "CLOUD_LINK_NOT_READY"));
@@ -170,6 +173,8 @@ public class CloudLinkController {
                     .body(Map.of("error", "CLOUD_LINK_REQUIRED"));
         } catch (CloudLinkService.CloudLinkPlanRequiredException e) {
             return planRequired(e);
+        } catch (CloudLinkService.CloudLinkOnboardingRequiredException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(CeLinkRefusal.onboardingRequiredBody());
         } catch (IllegalStateException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("error", "CLOUD_LINK_NOT_READY"));
@@ -185,8 +190,9 @@ public class CloudLinkController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("error", CloudLinkService.PLAN_REQUIRED_ERROR);
         body.put("planCode", e.getPlanCode());
-        body.put("message", "Linking a self-hosted install to LiveContext Cloud requires a paid plan. "
-                + "Choose a plan on LiveContext Cloud and your install reconnects automatically.");
+        body.put("message", "Cloud models, web search and cloud integrations require a paid "
+                + "LiveContext Cloud plan. Your install stays linked: choose a plan on LiveContext Cloud "
+                + "and they work right away.");
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body);
     }
 

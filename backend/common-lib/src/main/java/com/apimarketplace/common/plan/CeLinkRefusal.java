@@ -13,10 +13,12 @@ import java.util.Map;
  *
  * <ul>
  *   <li>Not linked: {@code 403 {"error":"CE_LINK_NOT_ACTIVE"}} (unchanged wire shape).</li>
- *   <li>Linked but the account is not on a paid plan:
- *       {@code 403 {"error":"CLOUD_LINK_PLAN_REQUIRED","planCode":"FREE","message":"..."}}.
+ *   <li>Linked but the account is not on a paid plan, on a paid relay (LLM, web search,
+ *       catalog): {@code 403 {"error":"CLOUD_LINK_PLAN_REQUIRED","planCode":"FREE","message":"..."}}.
  *       The {@code message} is there for installs already in the field that do not know
  *       the code: they surface the cloud's error text as is.</li>
+ *   <li>Register by an account that has not finished the cloud onboarding (email code
+ *       included): {@code 403 {"error":"CLOUD_LINK_ONBOARDING_REQUIRED","message":"..."}}.</li>
  * </ul>
  */
 public final class CeLinkRefusal {
@@ -24,14 +26,22 @@ public final class CeLinkRefusal {
     /** Error code: the caller owns no ACTIVE link to the install. */
     public static final String NOT_LINKED_ERROR = "CE_LINK_NOT_ACTIVE";
 
-    /** Error code: the link is suspended because the governing plan is not paid. */
+    /** Error code: linked, but a paid relay needs a paid plan. */
     public static final String PLAN_REQUIRED_ERROR = "CLOUD_LINK_PLAN_REQUIRED";
 
     /** Human-readable explanation sent with {@link #PLAN_REQUIRED_ERROR}. */
     public static final String PLAN_REQUIRED_MESSAGE =
-            "Linking a self-hosted install to LiveContext Cloud requires a paid plan. "
-                    + "Choose a plan at https://livecontext.ai/app/settings/pricing "
-                    + "and your install reconnects automatically.";
+            "Cloud models, web search and cloud integrations from a self-hosted install require "
+                    + "a paid LiveContext Cloud plan. Your install stays linked: choose a plan at "
+                    + "https://livecontext.ai/app/settings/pricing and they work right away.";
+
+    /** Error code: the account has not completed the cloud onboarding, so it may not link yet. */
+    public static final String ONBOARDING_REQUIRED_ERROR = "CLOUD_LINK_ONBOARDING_REQUIRED";
+
+    /** Human-readable explanation sent with {@link #ONBOARDING_REQUIRED_ERROR}. */
+    public static final String ONBOARDING_REQUIRED_MESSAGE =
+            "Finish setting up your LiveContext Cloud account (email verification and profile) at "
+                    + "https://livecontext.ai/onboarding, then this install links automatically.";
 
     private CeLinkRefusal() {
     }
@@ -60,6 +70,14 @@ public final class CeLinkRefusal {
         return body;
     }
 
+    /** The {@code CLOUD_LINK_ONBOARDING_REQUIRED} body. */
+    public static Map<String, Object> onboardingRequiredBody() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", ONBOARDING_REQUIRED_ERROR);
+        body.put("message", ONBOARDING_REQUIRED_MESSAGE);
+        return body;
+    }
+
     /** The {@code CE_LINK_NOT_ACTIVE} body. */
     public static Map<String, Object> notLinkedBody() {
         Map<String, Object> body = new LinkedHashMap<>();
@@ -68,8 +86,20 @@ public final class CeLinkRefusal {
     }
 
     /**
-     * The 403 to send for {@code result}, or {@code null} when the call may proceed.
-     * A null result is treated as not linked (fail closed).
+     * The 403 for an endpoint that only needs a LINK (model and skill bundles: they spend no
+     * cloud money), or {@code null} when the call may proceed. A linked account on any plan
+     * passes; a null result is treated as not linked (fail closed).
+     */
+    public static ResponseEntity<Map<String, Object>> linkOnlyResponse(CeLinkAccessResult result) {
+        if (result != null && result.isLinked()) {
+            return null;
+        }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(notLinkedBody());
+    }
+
+    /**
+     * The 403 for a PAID relay (LLM, web search, catalog) for {@code result}, or {@code null}
+     * when the call may proceed. A null result is treated as not linked (fail closed).
      */
     public static ResponseEntity<Map<String, Object>> response(CeLinkAccessResult result) {
         if (result != null && result.isActive()) {

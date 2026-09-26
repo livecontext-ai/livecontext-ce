@@ -269,6 +269,56 @@ class ApiCatalogBundleControllerTest {
     }
 
     @Test
+    @DisplayName("/latest (200 and 304) is publicly cacheable for 5 minutes, so an edge cache can absorb the fleet")
+    void latestIsEdgeCacheable() {
+        when(service.getActiveRawBundle()).thenReturn(Optional.of(rawBundle("cs")));
+        when(service.getActiveBundleMetadata()).thenReturn(Optional.of(meta("cs", 1)));
+
+        String full = controller.latestSignedBundle(null).getHeaders().getCacheControl();
+        String notModified = controller.latestSignedBundle("\"cs\"").getHeaders().getCacheControl();
+
+        assertThat(full).contains("public").contains("max-age=300");
+        // The 304 must carry the same policy, or an edge revalidation would drop the cached copy.
+        assertThat(notModified).isEqualTo(full);
+    }
+
+    @Test
+    @DisplayName("sync-status shows the poll backoff, so an operator can see why the scheduled sync is quiet")
+    void syncStatusExposesBackoff() {
+        com.apimarketplace.catalog.domain.ApiCatalogBundleSyncStatusEntity row =
+                new com.apimarketplace.catalog.domain.ApiCatalogBundleSyncStatusEntity();
+        java.time.Instant waitUntil = java.time.Instant.parse("2026-09-26T18:00:00Z");
+        row.setBackoffLevel(4);
+        row.setNextAttemptAt(waitUntil);
+        when(syncStatusRepo.findById(com.apimarketplace.catalog.domain.ApiCatalogBundleSyncStatusEntity.SINGLETON_ID))
+                .thenReturn(Optional.of(row));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) controller.syncStatus("ADMIN").getBody();
+
+        assertThat(body).containsEntry("backoffLevel", 4);
+        assertThat(body).containsEntry("nextAttemptAt", waitUntil);
+    }
+
+    @Test
+    @DisplayName("/{version} is immutable once built, so it may be cached for a day")
+    void versionIsImmutable() {
+        when(service.getRawBundleByVersion(1L)).thenReturn(Optional.of(rawBundle("cs")));
+
+        String cc = controller.signedBundleByVersion(1L).getHeaders().getCacheControl();
+
+        assertThat(cc).contains("public").contains("max-age=86400").contains("immutable");
+    }
+
+    @Test
+    @DisplayName("A 404 carries no cache policy: an edge must not remember 'no bundle' for five minutes")
+    void notFoundIsNotCacheable() {
+        when(service.getActiveRawBundle()).thenReturn(Optional.empty());
+
+        assertThat(controller.latestSignedBundle(null).getHeaders().getCacheControl()).isNull();
+    }
+
+    @Test
     @DisplayName("A caller that sends no validator costs no identity lookup - that is every reader shipped so far")
     void noValidatorMeansNoMetadataQuery() {
         when(service.getActiveRawBundle()).thenReturn(Optional.of(rawBundle("cs")));
@@ -417,12 +467,29 @@ class ApiCatalogBundleControllerTest {
         when(syncStatusRepo.findById(ApiCatalogBundleSyncStatusEntity.SINGLETON_ID))
                 .thenReturn(Optional.of(row));
 
+        when(scheduler.tick()).thenReturn(true);
+
         ResponseEntity<?> resp = controller.syncNow("ADMIN");
 
         verify(scheduler).tick();
         @SuppressWarnings("unchecked")
         Map<String, Object> body = (Map<String, Object>) resp.getBody();
         assertThat(body).containsEntry("lastAppliedVersion", 7L);
+        assertThat(body).containsEntry("syncInProgress", false);
+    }
+
+    @Test
+    @DisplayName("syncNow while a sync is already running says so: the row it returns is not this click's result")
+    void syncNowReportsSyncInProgress() {
+        when(schedulerProvider.getIfAvailable()).thenReturn(scheduler);
+        when(scheduler.tick()).thenReturn(false);
+        when(syncStatusRepo.findById(ApiCatalogBundleSyncStatusEntity.SINGLETON_ID))
+                .thenReturn(Optional.of(new ApiCatalogBundleSyncStatusEntity()));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) controller.syncNow("ADMIN").getBody();
+
+        assertThat(body).containsEntry("syncInProgress", true);
     }
 
     @Test

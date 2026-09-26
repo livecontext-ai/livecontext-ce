@@ -5,7 +5,7 @@
  * transition, so the drawer popped in with no motion. Closed, it now stays rendered
  * off-canvas (`-translate-x-full`) and invisible, and the transform is transitioned.
  * The desktop (md:) column must keep its layout: static when the mobile flag is off,
- * relative when on, never translated, and animated on its width as before.
+ * relative when on, never translated, and animated on its width like the right side panel.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -40,13 +40,28 @@ describe('appSidebarClasses (mobile slide)', () => {
   });
 
   it('transitions translate (Tailwind v4), the inline drag transform, and visibility', () => {
-    expect(classes(false)).toContain('transition-[translate,transform,visibility]');
+    expect(classes(false)).toContain('transition-[translate,transform,visibility]!');
+  });
+
+  // Regression: globals.css has an UNLAYERED `* { transition-property: color, ..., transform, ... }`
+  // rule, which beats every Tailwind utility. Without the important modifier the real computed
+  // transition list had neither `width` nor `translate`: measured in Chromium, the desktop
+  // collapse and the mobile slide both jumped in a single frame.
+  it('marks every transition utility important so the global * transition rule cannot override it', () => {
+    for (const open of [true, false]) {
+      for (const collapsed of [true, false]) {
+        const transitionUtilities = classes(open, collapsed).filter((c) => /^(md:)?(transition|duration|ease)-/.test(c));
+        expect(transitionUtilities.length).toBeGreaterThan(0);
+        for (const c of transitionUtilities) expect(c.endsWith('!'), c).toBe(true);
+      }
+    }
   });
 
   it('leaves the desktop column untranslated, visible and width-animated', () => {
     for (const open of [true, false]) {
       const c = classes(open);
-      expect(c).toEqual(expect.arrayContaining(['md:translate-x-0', 'md:visible', 'md:transition-all', 'md:duration-700']));
+      // Width, 300 ms ease-in-out: the same motion as the right side panel.
+      expect(c).toEqual(expect.arrayContaining(['md:translate-x-0', 'md:visible', 'md:transition-[width]!', 'duration-300!', 'md:ease-in-out!']));
     }
     expect(classes(false, true)).toContain('md:w-16');
     expect(classes(false, false)).toContain('md:w-64');

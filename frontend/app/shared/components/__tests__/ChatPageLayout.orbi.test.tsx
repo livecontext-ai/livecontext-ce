@@ -76,8 +76,6 @@ function renderLayout(welcome: boolean, composerProps: Record<string, unknown>) 
         isConversationActive: !welcome,
         isLoadingConversation: false,
         messagesContainerRef: { current: null },
-        streamLastError: null,
-        attemptStreamReconnection: vi.fn(),
       } as never}
       conversationId={welcome ? null : 'conv-1'}
     />,

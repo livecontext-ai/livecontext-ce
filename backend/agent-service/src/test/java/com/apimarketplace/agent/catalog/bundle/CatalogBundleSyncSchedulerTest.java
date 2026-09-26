@@ -48,6 +48,7 @@ class CatalogBundleSyncSchedulerTest {
     @Mock private CatalogBundleVerifier verifier;
     @Mock private CatalogBundleApplier applier;
     @Mock private CatalogBundleSyncStatusRepository syncStatusRepo;
+    @Mock private com.apimarketplace.agent.repository.CatalogBundleRepository bundleRepo;
     @Mock private TrustedKeyRegistry trustedKeys;
     @Mock private CatalogBundleTrustBootstrap trustBootstrap;
     @Mock private ObjectProvider<CloudLlmRuntimeAccess> runtimeAccessProvider;
@@ -101,14 +102,14 @@ class CatalogBundleSyncSchedulerTest {
         when(trustedKeys.hasKeys()).thenReturn(false);
         when(trustBootstrap.bootstrapTrust())
                 .thenReturn(CatalogBundleTrustBootstrap.Result.pinned("livecontext-prod-v1"));
-        when(fetcher.fetchLatest(any()))
+        when(fetcher.fetchLatest(any(), any()))
                 .thenReturn(new CatalogBundleFetcher.FetchResult(
                         CatalogBundleFetcher.Status.NO_ACTIVE, null, null));
 
         scheduler.tick();
 
         verify(trustBootstrap).bootstrapTrust();
-        verify(fetcher).fetchLatest(any());
+        verify(fetcher).fetchLatest(any(), any());
         CatalogBundleSyncStatusEntity saved = captureSaved();
         // NO_ACTIVE is recorded by the downstream path - crucially NOT TRUST_UNCONFIGURED.
         assertThat(saved.getLastFetchStatus()).isEqualTo("NO_ACTIVE");
@@ -118,7 +119,7 @@ class CatalogBundleSyncSchedulerTest {
     @DisplayName("Linked + key already pinned → TOFU bootstrap NOT attempted, fetch proceeds")
     void alreadyPinnedSkipsBootstrap() {
         when(trustedKeys.hasKeys()).thenReturn(true);
-        when(fetcher.fetchLatest(any()))
+        when(fetcher.fetchLatest(any(), any()))
                 .thenReturn(new CatalogBundleFetcher.FetchResult(
                         CatalogBundleFetcher.Status.NO_ACTIVE, null, null));
 
@@ -127,7 +128,7 @@ class CatalogBundleSyncSchedulerTest {
         // A pinned key (operator env or earlier TOFU) must never trigger a re-fetch of the
         // signing key - requirement 1: bootstrap only when the registry is empty.
         verifyNoInteractions(trustBootstrap);
-        verify(fetcher).fetchLatest(any());
+        verify(fetcher).fetchLatest(any(), any());
     }
 
     @Test
@@ -168,7 +169,7 @@ class CatalogBundleSyncSchedulerTest {
     @DisplayName("FETCHED + verify OK + apply APPLIED → scheduler writes no extra status row")
     void happyPathNoDoubleWrite() {
         when(trustedKeys.hasKeys()).thenReturn(true);
-        when(fetcher.fetchLatest(any()))
+        when(fetcher.fetchLatest(any(), any()))
                 .thenReturn(new CatalogBundleFetcher.FetchResult(
                         CatalogBundleFetcher.Status.FETCHED, bundle, null));
         when(verifier.verify(bundle))
@@ -187,7 +188,7 @@ class CatalogBundleSyncSchedulerTest {
     @DisplayName("FETCHED + verify OK + apply ALREADY_APPLIED → scheduler writes no extra status row")
     void idempotentPathNoDoubleWrite() {
         when(trustedKeys.hasKeys()).thenReturn(true);
-        when(fetcher.fetchLatest(any()))
+        when(fetcher.fetchLatest(any(), any()))
                 .thenReturn(new CatalogBundleFetcher.FetchResult(
                         CatalogBundleFetcher.Status.FETCHED, bundle, null));
         when(verifier.verify(bundle))
@@ -204,7 +205,7 @@ class CatalogBundleSyncSchedulerTest {
     @DisplayName("FETCHED + verifier SIGNATURE_INVALID → failure row, applier never called")
     void signatureInvalid() {
         when(trustedKeys.hasKeys()).thenReturn(true);
-        when(fetcher.fetchLatest(any()))
+        when(fetcher.fetchLatest(any(), any()))
                 .thenReturn(new CatalogBundleFetcher.FetchResult(
                         CatalogBundleFetcher.Status.FETCHED, bundle, null));
         when(verifier.verify(bundle))
@@ -224,7 +225,7 @@ class CatalogBundleSyncSchedulerTest {
     @DisplayName("FETCHED + applier returns APPLY_FAILED → failure row persisted")
     void applyFailedResult() {
         when(trustedKeys.hasKeys()).thenReturn(true);
-        when(fetcher.fetchLatest(any()))
+        when(fetcher.fetchLatest(any(), any()))
                 .thenReturn(new CatalogBundleFetcher.FetchResult(
                         CatalogBundleFetcher.Status.FETCHED, bundle, null));
         when(verifier.verify(bundle))
@@ -244,7 +245,7 @@ class CatalogBundleSyncSchedulerTest {
     @DisplayName("Applier throws unexpectedly → caught, APPLY_FAILED persisted")
     void applierThrows() {
         when(trustedKeys.hasKeys()).thenReturn(true);
-        when(fetcher.fetchLatest(any()))
+        when(fetcher.fetchLatest(any(), any()))
                 .thenReturn(new CatalogBundleFetcher.FetchResult(
                         CatalogBundleFetcher.Status.FETCHED, bundle, null));
         when(verifier.verify(bundle))
@@ -268,7 +269,7 @@ class CatalogBundleSyncSchedulerTest {
         existing.setConsecutiveFailures(3); // prior failures persist until a real success
         when(syncStatusRepo.findById(CatalogBundleSyncStatusEntity.SINGLETON_ID))
                 .thenReturn(Optional.of(existing));
-        when(fetcher.fetchLatest(any()))
+        when(fetcher.fetchLatest(any(), any()))
                 .thenReturn(new CatalogBundleFetcher.FetchResult(
                         CatalogBundleFetcher.Status.NO_ACTIVE, null, null));
 
@@ -288,7 +289,7 @@ class CatalogBundleSyncSchedulerTest {
         existing.setConsecutiveFailures(2);
         when(syncStatusRepo.findById(CatalogBundleSyncStatusEntity.SINGLETON_ID))
                 .thenReturn(Optional.of(existing));
-        when(fetcher.fetchLatest(any()))
+        when(fetcher.fetchLatest(any(), any()))
                 .thenReturn(new CatalogBundleFetcher.FetchResult(
                         CatalogBundleFetcher.Status.HTTP_ERROR, null, "HTTP 500"));
 
@@ -304,7 +305,7 @@ class CatalogBundleSyncSchedulerTest {
     @DisplayName("NETWORK_ERROR → failure row persisted")
     void networkError() {
         when(trustedKeys.hasKeys()).thenReturn(true);
-        when(fetcher.fetchLatest(any()))
+        when(fetcher.fetchLatest(any(), any()))
                 .thenReturn(new CatalogBundleFetcher.FetchResult(
                         CatalogBundleFetcher.Status.NETWORK_ERROR, null, "Connection refused"));
 
@@ -320,7 +321,7 @@ class CatalogBundleSyncSchedulerTest {
     @DisplayName("NOT_CONFIGURED → failure row persisted")
     void notConfigured() {
         when(trustedKeys.hasKeys()).thenReturn(true);
-        when(fetcher.fetchLatest(any()))
+        when(fetcher.fetchLatest(any(), any()))
                 .thenReturn(new CatalogBundleFetcher.FetchResult(
                         CatalogBundleFetcher.Status.NOT_CONFIGURED, null, "cloud-url empty"));
 
@@ -337,7 +338,7 @@ class CatalogBundleSyncSchedulerTest {
         when(trustedKeys.hasKeys()).thenReturn(true);
         when(syncStatusRepo.findById(CatalogBundleSyncStatusEntity.SINGLETON_ID))
                 .thenReturn(Optional.empty());
-        when(fetcher.fetchLatest(any()))
+        when(fetcher.fetchLatest(any(), any()))
                 .thenReturn(new CatalogBundleFetcher.FetchResult(
                         CatalogBundleFetcher.Status.NETWORK_ERROR, null, "timeout"));
 
@@ -376,21 +377,36 @@ class CatalogBundleSyncSchedulerTest {
     }
 
     @Test
-    @DisplayName("Regression: @Scheduled and @SchedulerLock sit on the SAME method (tick)")
+    @DisplayName("Regression: @Scheduled and @SchedulerLock sit on the SAME method (tickIfDue), and the manual tick() holds the same lock")
     void schedulerLockSitsOnScheduledEntryPoint() throws NoSuchMethodException {
-        // C1 regression guard: if a future refactor splits tick() into a
-        // lock-less entry + a @SchedulerLock-annotated helper (invoked via
+        // C1 regression guard: if a future refactor splits the scheduled entry
+        // into a lock-less method + a @SchedulerLock-annotated helper (invoked via
         // this.x()), AOP will not fire on the scheduled path and every pod
         // will race on deactivateAll() + save(active=true). Catching it here
         // is cheap - reproducing it in prod is not.
-        java.lang.reflect.Method tick =
+        java.lang.reflect.Method scheduledEntry =
+                CatalogBundleSyncScheduler.class.getDeclaredMethod("tickIfDue");
+        assertThat(scheduledEntry.isAnnotationPresent(org.springframework.scheduling.annotation.Scheduled.class))
+                .as("@Scheduled must be on tickIfDue()")
+                .isTrue();
+        net.javacrumbs.shedlock.spring.annotation.SchedulerLock scheduledLock =
+                scheduledEntry.getAnnotation(net.javacrumbs.shedlock.spring.annotation.SchedulerLock.class);
+        assertThat(scheduledLock)
+                .as("@SchedulerLock must be on tickIfDue() - self-invocation would bypass AOP")
+                .isNotNull();
+
+        // The manual "sync now" entry bypasses the backoff but must still serialise against
+        // the scheduled one: same lock NAME, and it must never be scheduled itself (a
+        // scheduled tick() would ignore the backoff on every firing).
+        java.lang.reflect.Method manualEntry =
                 CatalogBundleSyncScheduler.class.getDeclaredMethod("tick");
-        assertThat(tick.isAnnotationPresent(org.springframework.scheduling.annotation.Scheduled.class))
-                .as("@Scheduled must be on tick()")
-                .isTrue();
-        assertThat(tick.isAnnotationPresent(net.javacrumbs.shedlock.spring.annotation.SchedulerLock.class))
-                .as("@SchedulerLock must be on tick() - self-invocation would bypass AOP")
-                .isTrue();
+        assertThat(manualEntry.isAnnotationPresent(org.springframework.scheduling.annotation.Scheduled.class))
+                .as("tick() is the manual entry and must not be scheduled")
+                .isFalse();
+        net.javacrumbs.shedlock.spring.annotation.SchedulerLock manualLock =
+                manualEntry.getAnnotation(net.javacrumbs.shedlock.spring.annotation.SchedulerLock.class);
+        assertThat(manualLock).as("@SchedulerLock must be on tick()").isNotNull();
+        assertThat(manualLock.name()).isEqualTo(scheduledLock.name());
     }
 
     private CatalogBundleSyncStatusEntity captureSaved() {

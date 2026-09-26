@@ -52,8 +52,9 @@ export const PAYG_USD_PER_1K = 1.25;
  *
  * <p>Rates are USD per 1M tokens, copied from ONE named row of the shipped model
  * catalogue: {@link PRICING_BASIS_MODEL_ID} as the {@link PRICING_BASIS_PROVIDER}
- * provider serves it. Two rows carry that model id and this is the DEARER one (the
- * other, on qwen, is 0.20 / 0.40): within a class the copy names by family, the page
+ * provider serves it: the DeepSeek Flash the cloud actually runs. Until 2026-09-26 it was
+ * the dated `deepseek-v4-flash` row, which left the shipped catalogue in that day's
+ * cleanup at the same price; within a class the copy names by family, the page
  * must err upward.
  *
  * <p>THE ONE THING TO KNOW BEFORE EDITING THESE FOUR NUMBERS. They are a COPY of a row
@@ -82,13 +83,13 @@ export const PRICING_BASIS_RATES = {
 } as const;
 
 /** The catalogue row {@link PRICING_BASIS_RATES} is copied from, and its provider. */
-export const PRICING_BASIS_MODEL_ID = 'deepseek-v4-flash';
+export const PRICING_BASIS_MODEL_ID = 'deepseek-flash';
 export const PRICING_BASIS_PROVIDER = 'deepseek';
 
 /**
  * How the COPY names that row. A family name, not the catalogue id: the sentences say
  * "a lightweight model such as {basisModel}", which is an example of a class rather
- * than a model the reader is being told to select, and "deepseek-v4-flash" in a plan
+ * than a model the reader is being told to select, and "deepseek-flash" in a plan
  * card reads as a setting. Six locales quote this string, untranslated.
  */
 export const PRICING_BASIS_MODEL = 'DeepSeek Flash';

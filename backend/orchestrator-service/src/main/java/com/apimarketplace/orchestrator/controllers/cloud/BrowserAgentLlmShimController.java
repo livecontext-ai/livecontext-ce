@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.controllers.cloud;
 import com.apimarketplace.agent.cloud.CloudLlmRelayRequest;
 import com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess;
 import com.apimarketplace.agent.cloud.CloudLlmRuntimeCredentials;
+import com.apimarketplace.orchestrator.tools.websearch.BrowserAgentRelayTenantSigner;
 import com.apimarketplace.orchestrator.tools.websearch.CloudBrowserAgentLlmRelayClient;
 import com.apimarketplace.agent.domain.CompletionRequest;
 import com.apimarketplace.agent.domain.CompletionResponse;
@@ -33,9 +34,15 @@ import java.util.Optional;
  * billed on the linked cloud account. This closes the gap where the browser agent was the only
  * LLM consumer that required a <i>direct</i> provider key.
  *
- * <p>Flow: {@code BrowserAgentModule} (when {@link CloudLlmRuntimeAccess#resolveActiveCloudRuntime()}
- * is present) routes the runner's {@code llm} block to {@code provider_kind="bridge"} +
- * {@code bridge_url=<this endpoint>}. browser-use's {@code BridgeChatClient} then POSTs an OpenAI
+ * <p>Flow: {@code BrowserAgentModule} (when the calling tenant's LLM source is CLOUD and its
+ * {@link CloudLlmRuntimeAccess#resolveCloudRuntime(String)} is ready) routes the runner's {@code llm}
+ * block to {@code provider_kind="bridge"} + {@code bridge_url=<this endpoint>} and names the tenant,
+ * which the runner forwards in {@code X-Browser-Agent-Tenant-Id} with the orchestrator's signature
+ * in {@code X-Browser-Agent-Tenant-Sig} ({@link BrowserAgentRelayTenantSigner}); the relay then runs
+ * on THAT tenant's link. An install can hold several links (any plan may link), so the install's
+ * newest link would be the wrong account, possibly FREE or billed to another user. A call without a
+ * valid signed tenant is refused (401): this endpoint is reachable without a user session, and an
+ * unsigned tenant would let any caller pick whose paid link a relay runs on. browser-use's {@code BridgeChatClient} then POSTs an OpenAI
  * chat-completions payload here; we translate it to a {@link CompletionRequest} (system text,
  * conversation turns, and vision {@code image_url} parts &rarr; {@link MessageAttachment}s), relay it
  * via {@link CloudBrowserAgentLlmRelayClient}, and translate the {@link CompletionResponse} back to
@@ -48,8 +55,8 @@ import java.util.Optional;
  * {@code X-Browser-Agent-Relay-Secret} header. It is deliberately NOT carried in
  * {@code Authorization}: the CE monolith security filter would reject a non-JWT bearer with 401
  * before this controller runs, so a custom header is used and passes through to us. Blank secret
- * (single-host CE default) leaves the endpoint open on the internal network - it is cloud-link
- * gated ({@code resolveActiveCloudRuntime}) and never reachable without an active link.
+ * (single-host CE default) adds nothing on top of the signed tenant, which alone decides whose
+ * link is used; there is no install-wide fallback.
  */
 @Slf4j
 @RestController
@@ -59,11 +66,14 @@ public class BrowserAgentLlmShimController {
     private final CloudBrowserAgentLlmRelayClient relayClient;
     private final CloudLlmRuntimeAccess runtimeAccess;
     private final String gatewaySecret;
+    private final BrowserAgentRelayTenantSigner tenantSigner;
 
     public BrowserAgentLlmShimController(CloudBrowserAgentLlmRelayClient relayClient,
                                          ObjectProvider<CloudLlmRuntimeAccess> runtimeAccessProvider,
-                                         @Value("${websearch.gateway-secret:}") String gatewaySecret) {
+                                         @Value("${websearch.gateway-secret:}") String gatewaySecret,
+                                         BrowserAgentRelayTenantSigner tenantSigner) {
         this.relayClient = relayClient;
+        this.tenantSigner = tenantSigner;
         // Optional: absent in a standalone cloud orchestrator (no cloud-link there). When null, the
         // endpoint returns "cloud link not active" - but BrowserAgentModule only routes here when a
         // link IS active, so in practice the bean is present wherever this is called.
@@ -75,6 +85,8 @@ public class BrowserAgentLlmShimController {
     public ResponseEntity<?> chatCompletions(
             @RequestHeader(value = "X-Browser-Agent-Relay-Secret", required = false) String relaySecretHeader,
             @RequestHeader(value = "X-LLM-Provider", required = false) String providerHeader,
+            @RequestHeader(value = "X-Browser-Agent-Tenant-Id", required = false) String tenantHeader,
+            @RequestHeader(value = "X-Browser-Agent-Tenant-Sig", required = false) String tenantSigHeader,
             @RequestBody Map<String, Object> body) {
 
         if (gatewaySecret != null && !gatewaySecret.isBlank()) {
@@ -84,8 +96,20 @@ public class BrowserAgentLlmShimController {
             }
         }
 
-        Optional<CloudLlmRuntimeCredentials> credsOpt =
-                runtimeAccess == null ? Optional.empty() : runtimeAccess.resolveActiveCloudRuntime();
+        // Only a tenant the orchestrator signed: the relay runs on that tenant's own link, never on
+        // one a caller names, and never on the install's newest link.
+        String tenant = tenantHeader == null ? null : tenantHeader.trim();
+        if (!tenantSigner.verify(tenant, tenantSigHeader)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", Map.of("message", "unsigned or invalid relay tenant", "type", "auth")));
+        }
+        Optional<CloudLlmRuntimeCredentials> credsOpt;
+        try {
+            credsOpt = runtimeAccess == null ? Optional.empty() : runtimeAccess.resolveCloudRuntime(tenant);
+        } catch (RuntimeException e) {
+            log.warn("Browser-agent LLM shim: cloud-link state unreadable for tenant {}: {}", tenant, e.getMessage());
+            credsOpt = Optional.empty();
+        }
         if (credsOpt.isEmpty()) {
             // Only reached when linked; a missing link here means the install unlinked mid-run.
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)

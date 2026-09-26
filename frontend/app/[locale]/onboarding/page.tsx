@@ -30,10 +30,8 @@ import {
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { APP_SUGGESTIONS_FLAG, armWelcomeGift } from '@/lib/onboarding/welcomeGiftHandoff';
 import { leaveForChat } from '@/lib/navigation/leaveForChat';
-import { assignLocation } from '@/lib/navigation/assignLocation';
 import {
   captureCeLinkFromSearch,
-  ceLinkPricingPath,
   continuePendingCeLink,
   hasPendingCeLink,
 } from '@/lib/cloud-link/pendingCeLink';
@@ -494,26 +492,24 @@ export default function OnboardingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStep, pageState]);
 
-  // Redirect on completion. A pending CE link (cloud only) takes precedence over the chat:
-  // eligible -> Keycloak, which returns to the self-hosted install; no paid plan (or the check
-  // failed) -> the pricing page, whose banner explains why and can re-check.
+  // Redirect on completion. A pending CE link (cloud only) takes precedence over the chat: the
+  // browser goes to Keycloak, which returns to the self-hosted install. Any plan may link, so
+  // there is no pricing detour; a broken Keycloak configuration falls back to the chat.
   useEffect(() => {
     if (pageState !== 'completed') return;
     if (IS_CE || !hasPendingCeLink()) {
       navigateToChat();
       return;
     }
-    // Once per page: the eligibility answer decides a full-page navigation either way.
+    // Once per page: the continuation is a full-page navigation.
     if (ceLinkContinuationStartedRef.current) return;
     ceLinkContinuationStartedRef.current = true;
     continuePendingCeLink().then((outcome) => {
-      if (outcome === 'plan_required' || outcome === 'error') {
-        assignLocation(ceLinkPricingPath(locale));
-      } else if (outcome === 'none') {
+      if (outcome !== 'redirected') {
         navigateToChat();
       }
     });
-  }, [pageState, navigateToChat, locale]);
+  }, [pageState, navigateToChat]);
 
   // Check display name
   const checkDisplayName = useCallback(async (name: string) => {

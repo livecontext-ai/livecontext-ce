@@ -6,9 +6,12 @@ import com.apimarketplace.agent.repository.CatalogBundleSyncStatusRepository;
 import com.apimarketplace.auth.client.AuthClient;
 import com.apimarketplace.common.plan.CeLinkRefusal;
 import com.apimarketplace.common.web.AdminRoleGuard;
+import com.apimarketplace.common.web.BundleEtags;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -29,9 +32,8 @@ import java.util.Optional;
  * bearer token (injecting {@code X-User-ID}) and the handler additionally checks
  * {@code authClient.ceLinkAccess} on the {@code X-LiveContext-Install-Id}
  * header - mirroring the LLM relay ({@code CloudLlmRelayController}). Catalog
- * freshness is therefore a benefit of being cloud-linked on a paid plan: an UNLINKED
- * install gets 401/403 CE_LINK_NOT_ACTIVE, a link whose account is not on a paid plan
- * gets 403 CLOUD_LINK_PLAN_REQUIRED, never the bundle. Only {@code /api/catalog-bundles/signing-key} stays
+ * freshness is therefore a benefit of being cloud-linked, on any plan (FREE included): an
+ * UNLINKED install gets 401/403 CE_LINK_NOT_ACTIVE, never the bundle. Only {@code /api/catalog-bundles/signing-key} stays
  * public (trust bootstrap of the Ed25519 public key). Trust is defence-in-depth:
  * the bearer gates WHO may fetch, the signature (verified offline against the
  * operator-pinned key) proves WHAT was fetched. A dedicated
@@ -44,6 +46,13 @@ public class CatalogBundleController {
 
     /** Same header the LLM relay uses to carry the CE install id (see CloudLlmRelayController). */
     static final String INSTALL_HEADER = "X-LiveContext-Install-Id";
+
+    /**
+     * The download is gated on the caller's cloud link, so no shared cache (Cloudflare included)
+     * may ever store it: {@code private}. {@code no-cache} keeps the client revalidating with its
+     * ETag instead of trusting a stale copy.
+     */
+    static final CacheControl PRIVATE_NO_CACHE = CacheControl.noCache().cachePrivate();
 
     private final CatalogBundleService bundleService;
     private final CatalogBundleSigner signer;
@@ -83,9 +92,9 @@ public class CatalogBundleController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("error", "AUTHENTICATION_REQUIRED"));
         }
-        // Linked AND paid (shared refusal bodies): a suspended link answers
-        // CLOUD_LINK_PLAN_REQUIRED, an unlinked one CE_LINK_NOT_ACTIVE.
-        return CeLinkRefusal.response(authClient.ceLinkAccess(cloudUserId, installId));
+        // Linked, on ANY plan: a bundle spends no cloud money, so a FREE account's link gets it
+        // too. Only an unlinked install is refused (CE_LINK_NOT_ACTIVE, shared body).
+        return CeLinkRefusal.linkOnlyResponse(authClient.ceLinkAccess(cloudUserId, installId));
     }
 
     /** Admin: build a new bundle (is_active=false) from the current catalog. */
@@ -290,11 +299,27 @@ public class CatalogBundleController {
     @GetMapping("/api/catalog-bundles/latest")
     public ResponseEntity<?> latestSignedBundle(
             @RequestHeader(value = "X-User-ID", required = false) String cloudUserId,
-            @RequestHeader(value = INSTALL_HEADER, required = false) String installId) {
+            @RequestHeader(value = INSTALL_HEADER, required = false) String installId,
+            @RequestHeader(value = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch) {
         ResponseEntity<?> denied = denyIfNotLinked(cloudUserId, installId);
         if (denied != null) return denied;
+        // A CE that already applied the active model-catalog bundle presents its checksum: answer a
+        // bodiless 304 instead of re-sending the payload every quarter hour. Only looked up when
+        // a validator was sent, so a caller without one pays no extra query.
+        if (ifNoneMatch != null && !ifNoneMatch.isBlank()) {
+            Optional<String> active = bundleService.getActiveChecksum();
+            if (active.isPresent() && BundleEtags.matches(ifNoneMatch, active.get())) {
+                return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+                        .eTag(BundleEtags.quoted(active.get()))
+                        .cacheControl(PRIVATE_NO_CACHE)
+                        .build();
+            }
+        }
         Optional<SignedBundle> bundle = bundleService.getActiveSignedBundle();
-        return bundle.<ResponseEntity<?>>map(ResponseEntity::ok)
+        return bundle.<ResponseEntity<?>>map(b -> ResponseEntity.ok()
+                        .eTag(BundleEtags.quoted(b.checksum()))
+                        .cacheControl(PRIVATE_NO_CACHE)
+                        .body(b))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -310,7 +335,10 @@ public class CatalogBundleController {
         ResponseEntity<?> denied = denyIfNotLinked(cloudUserId, installId);
         if (denied != null) return denied;
         Optional<SignedBundle> bundle = bundleService.getSignedBundleByVersion(version);
-        return bundle.<ResponseEntity<?>>map(ResponseEntity::ok)
+        return bundle.<ResponseEntity<?>>map(b -> ResponseEntity.ok()
+                        .eTag(BundleEtags.quoted(b.checksum()))
+                        .cacheControl(PRIVATE_NO_CACHE)
+                        .body(b))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -343,6 +371,10 @@ public class CatalogBundleController {
         out.put("lastFetchStatus", row.getLastFetchStatus());
         out.put("lastFetchError", row.getLastFetchError());
         out.put("consecutiveFailures", row.getConsecutiveFailures());
+        // Poll backoff: why the scheduled sync may be quiet for a while after failures. A manual
+        // sync ignores it. backoffLevel 0 and a null nextAttemptAt mean no wait.
+        out.put("backoffLevel", row.getBackoffLevel());
+        out.put("nextAttemptAt", row.getNextAttemptAt());
         out.put("updatedAt", row.getUpdatedAt());
         out.put("schedulerEnabled", schedulerProvider.getIfAvailable() != null);
         // In-flight state so the UI resumes its loading indicator after a page

@@ -7,9 +7,12 @@ import com.apimarketplace.agent.repository.SkillBundleSyncStatusRepository;
 import com.apimarketplace.auth.client.AuthClient;
 import com.apimarketplace.common.plan.CeLinkRefusal;
 import com.apimarketplace.common.web.AdminRoleGuard;
+import com.apimarketplace.common.web.BundleEtags;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -28,8 +31,7 @@ import java.util.Optional;
  * {@code agent-model-config} gateway rule). CE downloads under {@code /api/skill-bundles/*}
  * are GATED behind an active cloud link (gateway validates the cloud-link bearer ->
  * {@code X-User-ID}; the handler checks {@code authClient.ceLinkAccess} on
- * {@code X-LiveContext-Install-Id}: linked AND on a paid plan, else 403 CE_LINK_NOT_ACTIVE
- * or CLOUD_LINK_PLAN_REQUIRED). Only {@code /api/skill-bundles/signing-key} is public
+ * {@code X-LiveContext-Install-Id}: linked, on any plan, else 403 CE_LINK_NOT_ACTIVE). Only {@code /api/skill-bundles/signing-key} is public
  * (trust bootstrap); signature verification stays as defence-in-depth.
  */
 @Slf4j
@@ -38,6 +40,13 @@ public class SkillBundleController {
 
     /** Same header the LLM relay + catalog bundle use to carry the CE install id. */
     static final String INSTALL_HEADER = "X-LiveContext-Install-Id";
+
+    /**
+     * The download is gated on the caller's cloud link, so no shared cache (Cloudflare included)
+     * may ever store it: {@code private}. {@code no-cache} keeps the client revalidating with its
+     * ETag instead of trusting a stale copy.
+     */
+    static final CacheControl PRIVATE_NO_CACHE = CacheControl.noCache().cachePrivate();
 
     private final SkillBundleService bundleService;
     private final CatalogBundleSigner signer;
@@ -64,9 +73,9 @@ public class SkillBundleController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("error", "AUTHENTICATION_REQUIRED"));
         }
-        // Linked AND paid (shared refusal bodies): a suspended link answers
-        // CLOUD_LINK_PLAN_REQUIRED, an unlinked one CE_LINK_NOT_ACTIVE.
-        return CeLinkRefusal.response(authClient.ceLinkAccess(cloudUserId, installId));
+        // Linked, on ANY plan: a bundle spends no cloud money, so a FREE account's link gets it
+        // too. Only an unlinked install is refused (CE_LINK_NOT_ACTIVE, shared body).
+        return CeLinkRefusal.linkOnlyResponse(authClient.ceLinkAccess(cloudUserId, installId));
     }
 
     /** Admin: build a new bundle (is_active=false) from the current global skills. */
@@ -160,11 +169,27 @@ public class SkillBundleController {
     @GetMapping("/api/skill-bundles/latest")
     public ResponseEntity<?> latestSignedBundle(
             @RequestHeader(value = "X-User-ID", required = false) String cloudUserId,
-            @RequestHeader(value = INSTALL_HEADER, required = false) String installId) {
+            @RequestHeader(value = INSTALL_HEADER, required = false) String installId,
+            @RequestHeader(value = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch) {
         ResponseEntity<?> denied = denyIfNotLinked(cloudUserId, installId);
         if (denied != null) return denied;
+        // A CE that already applied the active skill bundle presents its checksum: answer a
+        // bodiless 304 instead of re-sending the payload every quarter hour. Only looked up when
+        // a validator was sent, so a caller without one pays no extra query.
+        if (ifNoneMatch != null && !ifNoneMatch.isBlank()) {
+            Optional<String> active = bundleService.getActiveChecksum();
+            if (active.isPresent() && BundleEtags.matches(ifNoneMatch, active.get())) {
+                return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+                        .eTag(BundleEtags.quoted(active.get()))
+                        .cacheControl(PRIVATE_NO_CACHE)
+                        .build();
+            }
+        }
         Optional<SignedSkillBundle> bundle = bundleService.getActiveSignedBundle();
-        return bundle.<ResponseEntity<?>>map(ResponseEntity::ok)
+        return bundle.<ResponseEntity<?>>map(b -> ResponseEntity.ok()
+                        .eTag(BundleEtags.quoted(b.checksum()))
+                        .cacheControl(PRIVATE_NO_CACHE)
+                        .body(b))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -177,7 +202,10 @@ public class SkillBundleController {
         ResponseEntity<?> denied = denyIfNotLinked(cloudUserId, installId);
         if (denied != null) return denied;
         Optional<SignedSkillBundle> bundle = bundleService.getSignedBundleByVersion(version);
-        return bundle.<ResponseEntity<?>>map(ResponseEntity::ok)
+        return bundle.<ResponseEntity<?>>map(b -> ResponseEntity.ok()
+                        .eTag(BundleEtags.quoted(b.checksum()))
+                        .cacheControl(PRIVATE_NO_CACHE)
+                        .body(b))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -203,6 +231,10 @@ public class SkillBundleController {
         out.put("lastFetchStatus", row.getLastFetchStatus());
         out.put("lastFetchError", row.getLastFetchError());
         out.put("consecutiveFailures", row.getConsecutiveFailures());
+        // Poll backoff: why the scheduled sync may be quiet for a while after failures. A manual
+        // sync ignores it. backoffLevel 0 and a null nextAttemptAt mean no wait.
+        out.put("backoffLevel", row.getBackoffLevel());
+        out.put("nextAttemptAt", row.getNextAttemptAt());
         out.put("updatedAt", row.getUpdatedAt());
         out.put("schedulerEnabled", schedulerProvider.getIfAvailable() != null);
         return out;

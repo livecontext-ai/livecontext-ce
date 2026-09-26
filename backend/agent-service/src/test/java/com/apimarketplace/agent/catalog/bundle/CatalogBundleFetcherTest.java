@@ -58,7 +58,7 @@ class CatalogBundleFetcherTest {
     @Test
     @DisplayName("Empty cloud-url → NOT_CONFIGURED without HTTP call")
     void notConfigured() {
-        CatalogBundleFetcher.FetchResult r = fetcher("").fetchLatest(CREDS);
+        CatalogBundleFetcher.FetchResult r = fetcher("").fetchLatest(CREDS, null);
 
         assertThat(r.status()).isEqualTo(CatalogBundleFetcher.Status.NOT_CONFIGURED);
         assertThat(r.bundle()).isNull();
@@ -71,7 +71,7 @@ class CatalogBundleFetcherTest {
         SignedBundle sb = sample();
         stubExchange(ResponseEntity.ok(sb));
 
-        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example").fetchLatest(CREDS);
+        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example").fetchLatest(CREDS, null);
 
         assertThat(r.status()).isEqualTo(CatalogBundleFetcher.Status.FETCHED);
         assertThat(r.bundle()).isSameAs(sb);
@@ -85,7 +85,7 @@ class CatalogBundleFetcherTest {
         when(restTemplate.exchange(eq(URL), eq(HttpMethod.GET), captor.capture(), eq(SignedBundle.class)))
                 .thenReturn(ResponseEntity.ok(sample()));
 
-        fetcher("https://cloud.example").fetchLatest(CREDS);
+        fetcher("https://cloud.example").fetchLatest(CREDS, null);
 
         HttpHeaders sent = captor.getValue().getHeaders();
         assertThat(sent.getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo("Bearer tok-123");
@@ -97,7 +97,7 @@ class CatalogBundleFetcherTest {
     void trailingSlashNormalised() {
         stubExchange(ResponseEntity.ok(sample()));
 
-        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example///").fetchLatest(CREDS);
+        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example///").fetchLatest(CREDS, null);
 
         assertThat(r.status()).isEqualTo(CatalogBundleFetcher.Status.FETCHED);
     }
@@ -107,7 +107,7 @@ class CatalogBundleFetcherTest {
     void emptyBody() {
         stubExchange(ResponseEntity.ok().body(null));
 
-        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example").fetchLatest(CREDS);
+        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example").fetchLatest(CREDS, null);
 
         assertThat(r.status()).isEqualTo(CatalogBundleFetcher.Status.HTTP_ERROR);
         assertThat(r.detail()).contains("empty body");
@@ -120,7 +120,7 @@ class CatalogBundleFetcherTest {
                 .thenThrow(HttpClientErrorException.create(
                         HttpStatus.NOT_FOUND, "Not Found", null, null, null));
 
-        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example").fetchLatest(CREDS);
+        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example").fetchLatest(CREDS, null);
 
         assertThat(r.status()).isEqualTo(CatalogBundleFetcher.Status.NO_ACTIVE);
     }
@@ -132,7 +132,7 @@ class CatalogBundleFetcherTest {
                 .thenThrow(HttpClientErrorException.create(
                         HttpStatus.FORBIDDEN, "Forbidden", null, null, null));
 
-        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example").fetchLatest(CREDS);
+        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example").fetchLatest(CREDS, null);
 
         assertThat(r.status()).isEqualTo(CatalogBundleFetcher.Status.HTTP_ERROR);
         assertThat(r.detail()).contains("403");
@@ -145,7 +145,7 @@ class CatalogBundleFetcherTest {
                 .thenThrow(HttpServerErrorException.create(
                         HttpStatus.INTERNAL_SERVER_ERROR, "oops", null, null, null));
 
-        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example").fetchLatest(CREDS);
+        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example").fetchLatest(CREDS, null);
 
         assertThat(r.status()).isEqualTo(CatalogBundleFetcher.Status.HTTP_ERROR);
         assertThat(r.detail()).contains("500");
@@ -157,7 +157,7 @@ class CatalogBundleFetcherTest {
         when(restTemplate.exchange(eq(URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(SignedBundle.class)))
                 .thenThrow(new ResourceAccessException("I/O error: Connection refused"));
 
-        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example").fetchLatest(CREDS);
+        CatalogBundleFetcher.FetchResult r = fetcher("https://cloud.example").fetchLatest(CREDS, null);
 
         assertThat(r.status()).isEqualTo(CatalogBundleFetcher.Status.NETWORK_ERROR);
         assertThat(r.detail()).contains("Connection refused");

@@ -28,7 +28,10 @@ vi.mock('next-intl', () => ({
 }));
 vi.mock('@/lib/edition', () => ({ IS_CE: false, IS_CLOUD: true, IS_MANAGED_CLOUD: true }));
 vi.mock('@/lib/api/orchestrator/credential.service', () => ({ credentialService }));
-vi.mock('@/lib/api/cloud-link.service', () => ({ cloudLinkService: { getStatus: vi.fn(), setLlmSource: vi.fn() } }));
+vi.mock('@/lib/api/cloud-link.service', () => ({
+  cloudLinkService: { getStatus: vi.fn(), setLlmSource: vi.fn() },
+  cloudSourceErrorKey: vi.fn(() => null),
+}));
 vi.mock('@/hooks/useModels', () => ({ clearModelsCache: vi.fn() }));
 vi.mock('@/lib/analytics/analytics', () => ({ track: vi.fn() }));
 vi.mock('../components/UserKeysPanel', () => ({

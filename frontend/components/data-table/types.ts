@@ -18,6 +18,12 @@ export interface DataSourceItemRow {
    * through the normalizer.
    */
   _injectedDataKeys?: string[];
+  /**
+   * The identity to SHOW when the item carries no `id` of its own, in place of the synthetic
+   * `id` (which only has to be unique for React keys). Nested workflow-step rows set it to the
+   * parent step row's id (its coordinates), `<parent id>:<position>` for an array item.
+   */
+  _displayId?: string | number;
 }
 
 export interface PaginationResponse<T> {

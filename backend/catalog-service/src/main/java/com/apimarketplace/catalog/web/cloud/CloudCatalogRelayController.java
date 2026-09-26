@@ -197,8 +197,8 @@ public class CloudCatalogRelayController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("error", "AUTHENTICATION_REQUIRED"));
         }
-        // Linked AND paid (shared refusal bodies): a suspended link answers
-        // CLOUD_LINK_PLAN_REQUIRED, an unlinked one CE_LINK_NOT_ACTIVE; null = proceed.
+        // A paid relay: linked AND paid (shared refusal bodies). A link whose account is not
+        // paid answers CLOUD_LINK_PLAN_REQUIRED, an unlinked one CE_LINK_NOT_ACTIVE; null = proceed.
         return CeLinkRefusal.response(authClient.ceLinkAccess(String.valueOf(cloudUserId), installId));
     }
 

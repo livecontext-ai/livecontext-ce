@@ -27,8 +27,13 @@ public record CeLinkAccessResult(CeLinkAccess access, String planCode) {
         return new CeLinkAccessResult(CeLinkAccess.PLAN_REQUIRED, planCode);
     }
 
-    /** Linked AND paid: the only state in which a link-gated call may proceed. */
+    /** Linked AND paid: the only state in which a paid relay call (LLM, web search, catalog) may proceed. */
     public boolean isActive() {
         return access == CeLinkAccess.ACTIVE;
+    }
+
+    /** Linked, whatever the plan: enough for the calls that spend no cloud money (bundles). */
+    public boolean isLinked() {
+        return access != CeLinkAccess.NOT_LINKED;
     }
 }

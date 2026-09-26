@@ -44,6 +44,7 @@ import {
 import {
   cloudLinkService,
   CLOUD_NO_SUBSCRIPTION,
+  cloudSourceErrorKey,
   cloudSubscriptionPays,
   type CloudLinkStatus,
 } from '@/lib/api/cloud-link.service';
@@ -113,7 +114,14 @@ function ThisInstallSection() {
       // No model-cache clear: integration credentials do not affect the model catalog.
     } catch (err) {
       console.error('Failed to save CE integration credential source:', err);
-      setCatalogError(useCloud ? tCatalog('linkRequired') : tCatalog('saveError'));
+      const reason = cloudSourceErrorKey(err, source);
+      setCatalogError(reason === 'planRequired'
+        ? tCatalog('subscriptionRequired')
+        : reason === 'onboardingRequired'
+          ? tCatalog('onboardingRequired')
+          : reason === 'notReady'
+            ? tCatalog('notReady')
+            : useCloud ? tCatalog('linkRequired') : tCatalog('saveError'));
     } finally {
       setCatalogSaving(false);
     }

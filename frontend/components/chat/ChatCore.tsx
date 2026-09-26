@@ -365,9 +365,6 @@ export function ChatCore({
     (streamStatus === 'streaming' || streamStatus === 'completed' || streamStatus === 'stopped'))
     || hasAdditionalActivities;
 
-  // Get stream error for error banner
-  const streamError = currentStreamState?.error;
-
   // Check if streaming content matches the last message (to avoid duplicates)
   // Use robust comparison that handles whitespace and thinking marker differences
   const lastMessage = messages[messages.length - 1];
@@ -1148,27 +1145,6 @@ export function ChatCore({
         ref={messagesContainerRef}
         className="flex-1 overflow-y-auto py-4 space-y-4 min-h-0 chat-messages-container relative"
       >
-        {/* Stream error banner */}
-        {streamError && (
-          <div className="sticky top-0 z-20 mx-auto max-w-4xl px-2 w-full">
-            <div className="rounded-[18px] flex items-center justify-center py-2 px-4 mb-4 bg-red-50 dark:bg-red-900/20 shadow-sm">
-              <div className="flex items-center space-x-2 text-red-700 dark:text-red-300">
-                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                <span className="text-sm">
-                  Stream error: {streamError.message}
-                </span>
-                {streamError.retryable && (
-                  <button
-                    onClick={() => conversationId && streaming.checkAndReconnect(conversationId)}
-                    className="text-xs px-2 py-1 bg-red-100 dark:bg-red-800 text-red-700 dark:text-red-200 rounded hover:bg-red-200 dark:hover:bg-red-700 transition-colors"
-                  >
-                    Retry
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
 
         <div className={`mx-auto max-w-4xl w-full px-2${showWelcomeLayout ? ' h-full' : ''}`}>
           {showWelcomeLayout ? (

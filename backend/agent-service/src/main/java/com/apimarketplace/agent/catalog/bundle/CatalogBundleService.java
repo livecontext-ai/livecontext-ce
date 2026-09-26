@@ -172,6 +172,16 @@ public class CatalogBundleService {
     }
 
     /**
+     * Checksum of the active bundle, read without its payload: the ETag a CE poll presenting
+     * {@code If-None-Match} is compared against. Matching it answers 304 whatever the payload
+     * check below would say, which is the same outcome for the CE (it keeps the bundle it has).
+     */
+    @Transactional(readOnly = true)
+    public Optional<String> getActiveChecksum() {
+        return bundleRepository.findActiveChecksum();
+    }
+
+    /**
      * Return the envelope for the currently active bundle, re-signing the
      * payload from the live table. The persisted {@code checksum} is verified
      * against the freshly computed one - if the live table was tampered with

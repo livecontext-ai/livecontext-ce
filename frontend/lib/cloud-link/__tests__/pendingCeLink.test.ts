@@ -13,10 +13,6 @@ vi.mock('@/lib/edition', () => ({
     return edition.isCe;
   },
 }));
-const eligibilityMock = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/api/ce-link.service', () => ({
-  ceLinkService: { eligibility: () => eligibilityMock() },
-}));
 const assignMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/navigation/assignLocation', () => ({ assignLocation: (u: string) => assignMock(u) }));
 
@@ -25,7 +21,6 @@ import {
   PENDING_CE_LINK_TTL_MS,
   buildCeLinkAuthorizeUrl,
   captureCeLinkFromSearch,
-  ceLinkPricingPath,
   clearPendingCeLink,
   continuePendingCeLink,
   hasPendingCeLink,
@@ -73,7 +68,6 @@ function link(overrides: Partial<PendingCeLink> = {}): PendingCeLink {
 beforeEach(() => {
   edition.isCe = false;
   sessionStorage.clear();
-  eligibilityMock.mockReset();
   assignMock.mockReset();
 });
 afterEach(() => sessionStorage.clear());
@@ -242,15 +236,13 @@ describe('buildCeLinkAuthorizeUrl', () => {
 });
 
 describe('continuePendingCeLink', () => {
-  it('returns none and asks nothing when no link is pending', async () => {
+  it('returns none and navigates nowhere when no link is pending', async () => {
     expect(await continuePendingCeLink({ keycloak: KC })).toBe('none');
-    expect(eligibilityMock).not.toHaveBeenCalled();
     expect(assignMock).not.toHaveBeenCalled();
   });
 
-  it('eligible: clears the pending link and navigates to the rebuilt Keycloak URL', async () => {
+  it('pending link: clears it and navigates to the rebuilt Keycloak URL, with no plan check (any plan may link)', async () => {
     savePendingCeLink(link());
-    eligibilityMock.mockResolvedValue({ eligible: true, planCode: 'PRO', reason: null });
 
     expect(await continuePendingCeLink({ keycloak: KC })).toBe('redirected');
     expect(assignMock).toHaveBeenCalledTimes(1);
@@ -258,50 +250,18 @@ describe('continuePendingCeLink', () => {
     expect(hasPendingCeLink()).toBe(false);
   });
 
-  it('not eligible: keeps the link pending and does not navigate', async () => {
+  it('no usable Keycloak config: error, link kept, no navigation', async () => {
     savePendingCeLink(link());
-    eligibilityMock.mockResolvedValue({ eligible: false, planCode: 'FREE', reason: 'PLAN_REQUIRED' });
-
-    expect(await continuePendingCeLink({ keycloak: KC })).toBe('plan_required');
-    expect(assignMock).not.toHaveBeenCalled();
-    expect(loadPendingCeLink(CLIENT_ID)).not.toBeNull();
-  });
-
-  it('a malformed eligibility answer is not eligible (fails closed)', async () => {
-    savePendingCeLink(link());
-    eligibilityMock.mockResolvedValue(undefined);
-    expect(await continuePendingCeLink({ keycloak: KC })).toBe('plan_required');
-    expect(assignMock).not.toHaveBeenCalled();
-  });
-
-  it('eligibility request failure: error, link kept, no navigation', async () => {
-    savePendingCeLink(link());
-    eligibilityMock.mockRejectedValue(new Error('503'));
-    expect(await continuePendingCeLink({ keycloak: KC })).toBe('error');
-    expect(assignMock).not.toHaveBeenCalled();
-    expect(loadPendingCeLink(CLIENT_ID)).not.toBeNull();
-  });
-
-  it('eligible but no Keycloak config: error, link kept, no navigation', async () => {
-    savePendingCeLink(link());
-    eligibilityMock.mockResolvedValue({ eligible: true, planCode: 'PRO', reason: null });
     expect(await continuePendingCeLink({ keycloak: { ...KC, url: undefined } })).toBe('error');
     expect(assignMock).not.toHaveBeenCalled();
     expect(loadPendingCeLink(CLIENT_ID)).not.toBeNull();
   });
 
-  it('uses injected collaborators when given', async () => {
+  it('uses the injected navigate when given', async () => {
     savePendingCeLink(link());
     const navigate = vi.fn();
-    const fetchEligibility = vi.fn().mockResolvedValue({ eligible: true, planCode: 'TEAM', reason: null });
-    expect(await continuePendingCeLink({ keycloak: KC, navigate, fetchEligibility })).toBe('redirected');
+    expect(await continuePendingCeLink({ keycloak: KC, navigate })).toBe('redirected');
     expect(navigate).toHaveBeenCalledTimes(1);
     expect(assignMock).not.toHaveBeenCalled();
-  });
-});
-
-describe('ceLinkPricingPath', () => {
-  it('points at the locale pricing page with the ce_link flag', () => {
-    expect(ceLinkPricingPath('fr')).toBe('/fr/app/settings/pricing?ce_link=1');
   });
 });

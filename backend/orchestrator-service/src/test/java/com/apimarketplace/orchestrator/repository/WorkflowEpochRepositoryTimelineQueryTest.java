@@ -98,6 +98,24 @@ class WorkflowEpochRepositoryTimelineQueryTest {
         assertThat(row.epochStateJson()).isNull();
     }
 
+    @Test
+    @DisplayName("The windowed listing reads the N most recent header rows only, with the same projection")
+    void latestListingIsBoundedNewestFirst() {
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Object> args = ArgumentCaptor.forClass(Object.class);
+        when(jdbcTemplate.query(sql.capture(), any(RowMapper.class), args.capture(), args.capture()))
+                .thenReturn(List.of());
+
+        repo.listLatestEpochTimestamps("run-A", 60);
+
+        String q = sql.getValue().toLowerCase();
+        assertThat(q).contains("epoch_state").contains("is_active").contains("started_at").contains("closed_at");
+        assertThat(q).contains("entry_type = 'epoch_header'").contains("run_id = ?");
+        // Newest first and LIMITED in SQL: a long-lived schedule must not load every epoch.
+        assertThat(q).contains("order by epoch desc").contains("limit ?");
+        assertThat(args.getAllValues()).containsExactly("run-A", 60);
+    }
+
     @SuppressWarnings("unchecked")
     private RowMapper<WorkflowEpochRepository.EpochTimelineRow> captureMapper() {
         ArgumentCaptor<RowMapper<WorkflowEpochRepository.EpochTimelineRow>> mapper =

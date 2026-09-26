@@ -49,7 +49,7 @@ describe('CloudLinkPlanRequiredModal', () => {
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText('Paid plan required')).toBeInTheDocument();
-    expect(screen.getByText(/reconnects automatically/i)).toBeInTheDocument();
+    expect(screen.getByText(/the install stays linked/i)).toBeInTheDocument();
     const link = screen.getByRole('link', { name: /View cloud plans/i });
     expect(link).toHaveAttribute('href', 'https://livecontext.ai/app/settings/pricing');
     expect(link).toHaveAttribute('target', '_blank');

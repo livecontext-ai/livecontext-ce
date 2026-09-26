@@ -361,6 +361,16 @@
     }
   },
   "dataTable": {
+    "workflowRowId": {
+      "label": "Comment lire cet ID",
+      "intro": "L'ID indique où cette ligne s'est exécutée : epoch.spawn.itération.item, soit les valeurs des colonnes voisines (elles commencent à 0). Les zéros de fin sont omis.",
+      "exampleEpoch": "epoch 21",
+      "exampleSpawn": "epoch 20, spawn 1 (une relance)",
+      "exampleIteration": "epoch 20, itération 2",
+      "exampleItem": "epoch 20, item d'index 3",
+      "exampleNested": "index 3 dans la sortie de la ligne 21",
+      "sameId": "Un ID n'est pas unique : une attente et sa fin, ou deux déclencheurs différents, peuvent partager le même."
+    },
     "deleteColumns": "Supprimer les colonnes",
     "deleteColumnsConfirm": "Voulez-vous vraiment supprimer {count} colonne(s) sélectionnée(s) ? Cette action est irréversible.",
     "dragToReorganize": "Glisser pour réorganiser la colonne",
@@ -591,7 +601,8 @@
     "deleteAgentTitle": "Supprimer l'agent",
     "deleteAgentConfirm": "Êtes-vous sûr de vouloir supprimer \"{name}\" ? Cette action est irréversible.",
     "deleteDatasourceTitle": "Supprimer la source de données",
-    "deleteDatasourceConfirm": "Êtes-vous sûr de vouloir supprimer \"{name}\" ? Cette action est irréversible."
+    "deleteDatasourceConfirm": "Êtes-vous sûr de vouloir supprimer \"{name}\" ? Cette action est irréversible.",
+    "analysisTab": "Analyse"
   },
   "platformStatus": {
     "headline": {
@@ -1256,7 +1267,8 @@
         "duration": "Durée",
         "stillRunning": "Toujours en cours",
         "cumulative": "cumulé",
-        "executions": "Exécutions"
+        "executions": "Exécutions",
+        "totalWork": "Travail total (éléments additionnés)"
       }
     },
     "cancelRun": {
@@ -1337,6 +1349,72 @@
       "scopeAll": "toutes les époques",
       "scopeEpoch": "époque {epoch}",
       "budgetBlockedMessageCumulative": "Dépensé {spent} sur {budget}, et ce plafond ne se remet jamais à zéro. Aucun nouveau run n'a démarré ; relevez le plafond ou changez sa remise à zéro pour continuer."
+    },
+    "runAnalysis": {
+      "window": "Époques affichées",
+      "windowOption": "{count} dernières",
+      "windowOf": "{shown, plural, one {Dernière époque} other {# dernières époques}} sur {total}",
+      "refresh": "Actualiser",
+      "loading": "Chargement de l'analyse",
+      "error": "Impossible de charger l'analyse.",
+      "retry": "Réessayer",
+      "empty": "Aucune époque n'a encore tourné. Lancez le workflow pour voir son analyse.",
+      "kpi": {
+        "epochs": "Époques",
+        "successRate": "Réussite",
+        "failedCount": "{count} en échec",
+        "noSettled": "Aucune terminée",
+        "avgDuration": "Durée moyenne",
+        "maxDuration": "max {value}",
+        "credits": "Coût",
+        "perEpoch": "{value} par époque",
+        "noCost": "Aucun coût enregistré"
+      },
+      "chart": {
+        "title": "Durée et coût par époque",
+        "duration": "Durée",
+        "cost": "Coût"
+      },
+      "grid": {
+        "title": "Nœuds par époque",
+        "colorBy": "Couleur selon",
+        "byStatus": "Statut",
+        "byDuration": "Durée",
+        "failures": "{count} en échec",
+        "partials": "{count} partiel{count, plural, one {} other {s}}",
+        "average": "moy. {value}",
+        "items": "{count} exécutions",
+        "totalWork": "travail total {value}"
+      },
+      "legend": {
+        "ok": "Réussi",
+        "failed": "Échec",
+        "partial": "Partiel",
+        "skipped": "Sauté",
+        "running": "En cours",
+        "waiting": "En attente",
+        "none": "Non exécuté",
+        "fast": "Rapide",
+        "slow": "Lent"
+      },
+      "insight": {
+        "failing": "{node} a échoué dans {count, plural, one {# époque} other {# époques}} sur {total}.",
+        "epochFailures": "{count, plural, one {# époque a échoué} other {# époques ont échoué}} sans étape de nœud en échec : ouvrez les logs de l'exécution pour en voir la raison.",
+        "lastError": "Dernière erreur : {error}",
+        "slower": "{node} ralentit depuis l'époque {epoch} : {before} puis {after}.",
+        "none": "Aucun échec sur ces époques."
+      },
+      "compare": {
+        "title": "Comparer deux époques",
+        "hint": "Cliquez sur une barre ou une case pour choisir l'époque à comparer.",
+        "reference": "Référence",
+        "node": "Nœud",
+        "epoch": "Époque n°{epoch}",
+        "showOnCanvas": "Afficher l'époque {epoch} sur le canvas",
+        "total": "Total",
+        "notRun": "Non exécuté",
+        "needTwo": "Il faut au moins deux époques pour comparer."
+      }
     }
   },
   "workflowRelations": {
@@ -2180,9 +2258,55 @@
       "restoreFailed": "Nous n'avons pas pu réactiver votre compte. Veuillez réessayer."
     },
     "agentError": {
-      "title": "Une erreur est survenue",
-      "description": "Une erreur s'est produite pendant l'exécution. Réessayez dans un instant.",
-      "retry": "Réessayer"
+      "close": "Fermer",
+      "gotIt": "Compris",
+      "technicalDetails": "Détails techniques",
+      "kinds": {
+        "interrupted": {
+          "title": "La réponse a été interrompue",
+          "description": "Le service a redémarré pendant que l'assistant répondait. La réponse partielle a été enregistrée. Renvoyez votre message pour continuer."
+        },
+        "providerBilling": {
+          "title": "Le fournisseur d'IA a refusé la requête pour une raison de facturation",
+          "description": "Le compte utilisé pour appeler ce modèle n'a plus de crédit chez son fournisseur. Choisissez un autre modèle, ou rechargez le compte du fournisseur si vous utilisez votre propre clé."
+        },
+        "rateLimit": {
+          "title": "Trop de requêtes vers ce modèle",
+          "description": "Le fournisseur limite la fréquence des appels à ce modèle. Patientez une minute puis renvoyez votre message, ou choisissez un autre modèle."
+        },
+        "contextTooLong": {
+          "title": "Cette conversation est trop longue pour le modèle",
+          "description": "La conversation et ses pièces jointes dépassent ce que ce modèle peut lire en une fois. Commencez une nouvelle conversation, retirez les pièces jointes volumineuses, ou choisissez un modèle avec un contexte plus large."
+        },
+        "contentBlocked": {
+          "title": "Le fournisseur a bloqué cette requête",
+          "description": "Les filtres de sécurité du fournisseur ont refusé ce message ou sa réponse. Reformulez votre demande et réessayez."
+        },
+        "modelUnavailable": {
+          "title": "Ce modèle n'est pas disponible",
+          "description": "Le fournisseur ne propose plus ce modèle, ou il ne peut pas être utilisé pour le chat. Choisissez un autre modèle dans le sélecteur."
+        },
+        "providerUnavailable": {
+          "title": "Le fournisseur d'IA est temporairement indisponible",
+          "description": "Le fournisseur du modèle est surchargé ou subit une panne. Réessayez dans quelques instants, ou choisissez un autre modèle."
+        },
+        "network": {
+          "title": "La connexion au modèle a été perdue",
+          "description": "La connexion a été coupée ou a expiré avant la fin de la réponse. Renvoyez votre message."
+        },
+        "providerRejected": {
+          "title": "Le modèle a refusé la requête",
+          "description": "Le fournisseur a refusé la requête telle qu'elle a été envoyée à ce modèle. Cela vient en général d'une incompatibilité entre la plateforme et ce modèle précis, pas de votre message. Choisissez un autre modèle pour le moment."
+        },
+        "sendFailed": {
+          "title": "Votre message n'a pas pu être envoyé",
+          "description": "Le serveur n'a pas pu prendre en charge votre message. Renvoyez-le dans un instant, et rechargez la page si l'erreur persiste."
+        },
+        "unknown": {
+          "title": "Une erreur s'est produite",
+          "description": "Une erreur est survenue pendant l'exécution. Veuillez réessayer dans un instant."
+        }
+      }
     },
     "missingApiKey": {
       "title": "Clé API requise",
@@ -3547,6 +3671,9 @@
       "byokHint": "Les appels aux modèles API utilisent les clés configurées sur cette instance.",
       "connectedAs": "Connecté en tant que {username}",
       "linkRequired": "Liez un compte Cloud avant de basculer sur Cloud.",
+      "planRequired": "Les modèles cloud nécessitent un forfait payant sur le compte cloud lié. L'installation reste liée : choisissez un forfait puis rebasculez, ou gardez vos clés API.",
+      "onboardingRequired": "Votre compte LiveContext Cloud n'a pas terminé sa configuration (code de vérification de l'e-mail et profil). Terminez-la sur LiveContext Cloud, puis rebasculez.",
+      "notReady": "LiveContext Cloud est injoignable pour le moment, le changement n'a donc pas été fait. Votre installation reste liée : réessayez dans un instant.",
       "saveError": "Échec de la mise à jour de la source LLM."
     },
     "catalogSource": {
@@ -3558,6 +3685,8 @@
       "subscriptionRequired": "Utiliser le Cloud nécessite un abonnement payant actif sur votre compte cloud lié. Un compte gratuit ne peut pas payer les appels relayés.",
       "viewPlans": "Voir les offres",
       "linkRequired": "Liez un compte Cloud avant de basculer sur Cloud.",
+      "onboardingRequired": "Votre compte LiveContext Cloud n'a pas terminé sa configuration (code de vérification de l'e-mail et profil). Terminez-la sur LiveContext Cloud, puis rebasculez.",
+      "notReady": "LiveContext Cloud est injoignable pour le moment, le changement n'a donc pas été fait. Votre installation reste liée : réessayez dans un instant.",
       "saveError": "Échec de la mise à jour de la source des identifiants d'intégration.",
       "cloudCovers": "Cela couvre aussi la génération : images, vidéo, son, voix et musique passent par les clés fournisseur du compte cloud et y sont facturées en crédits, à la seconde ou au fichier, au prix publié pour chaque modèle."
     },
@@ -15510,25 +15639,16 @@
   "ceCloudLink": {
     "expired": "La connexion a expiré, cliquez à nouveau sur Connecter.",
     "planRequired": {
-      "title": "Votre liaison LiveContext Cloud nécessite un forfait payant",
-      "body": "Lier une installation auto-hébergée à LiveContext Cloud nécessite un forfait payant sur le compte cloud. Choisissez un forfait et cette installation se reconnecte automatiquement, sans rien avoir à relier.",
+      "title": "Les modèles cloud nécessitent un forfait payant",
+      "body": "Cette installation est liée à LiveContext Cloud. Les modèles cloud, la recherche web et les intégrations cloud nécessitent un forfait payant sur le compte cloud. Choisissez un forfait et ils fonctionnent aussitôt, sans rien avoir à relier.",
       "cta": "Voir les forfaits cloud",
       "sidebarBadge": "Forfait payant requis"
     },
     "planRequiredModal": {
       "title": "Forfait payant requis",
-      "description": "Cette installation est liée à un compte LiveContext Cloud qui n'a pas de forfait payant, le cloud a donc refusé la requête. Choisissez un forfait sur LiveContext Cloud et cette installation se reconnecte automatiquement.",
+      "description": "Cette installation est liée à un compte LiveContext Cloud qui n'a pas de forfait payant. Les modèles cloud, la recherche web et les intégrations cloud en nécessitent un. Choisissez un forfait sur LiveContext Cloud et ils fonctionnent aussitôt : l'installation reste liée.",
       "cta": "Voir les forfaits cloud",
       "close": "Fermer"
-    },
-    "cloud": {
-      "returning": "Retour vers votre installation auto-hébergée.",
-      "pricingBannerTitle": "Lier votre installation auto-hébergée nécessite un forfait payant",
-      "pricingBannerBody": "Choisissez un forfait ci-dessous. Une fois votre abonnement actif, vous revenez sur votre installation pour terminer la connexion.",
-      "pricingBannerContinue": "J'ai un forfait payant, continuer",
-      "pricingBannerStillRequired": "Votre forfait actuel n'est pas encore un forfait payant. Choisissez un forfait pour continuer.",
-      "pricingBannerNoPending": "Cette demande de connexion n'est plus disponible. Cliquez à nouveau sur Connecter depuis votre installation auto-hébergée.",
-      "pricingBannerError": "Impossible de vérifier votre forfait. Veuillez réessayer."
     }
   }
 }

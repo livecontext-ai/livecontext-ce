@@ -19,10 +19,10 @@ export function showCloudLinkPlanRequiredModal() {
 }
 
 /**
- * CE-only modal shown when a call relayed to the linked LiveContext Cloud account (LLM, catalog,
- * web search, bundles) is refused with CLOUD_LINK_PLAN_REQUIRED: the cloud account is not on a
- * paid plan. The link is kept, so the only remedy is choosing a plan on the cloud, after which
- * the install reconnects by itself. Opens the cloud pricing page in a new tab. Gated to CE so a
+ * CE-only modal shown when a paid relay to the linked LiveContext Cloud account (LLM, catalog,
+ * web search) is refused with CLOUD_LINK_PLAN_REQUIRED: the cloud account is not on a paid plan.
+ * Any plan may link, so the link is untouched; the only remedy is choosing a plan on the cloud,
+ * after which those calls work right away. Opens the cloud pricing page in a new tab. Gated to CE so a
  * stray dispatch in a Cloud build is a no-op. Same pattern as ModelNotManagedModal.
  */
 export default function CloudLinkPlanRequiredModal() {

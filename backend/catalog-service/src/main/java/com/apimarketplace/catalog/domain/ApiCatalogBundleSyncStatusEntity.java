@@ -42,6 +42,19 @@ public class ApiCatalogBundleSyncStatusEntity {
     @Column(name = "consecutive_failures", nullable = false)
     private int consecutiveFailures;
 
+    /**
+     * Poll backoff (V539). Mapped read-only: written only by the repository's
+     * {@code updateBackoff}, so a whole-row save of this entity (failure bookkeeping, the
+     * applier's success status) can never overwrite it. See
+     * {@code com.apimarketplace.common.scheduling.BundlePollBackoff}.
+     */
+    @Column(name = "backoff_level", nullable = false, insertable = false, updatable = false,
+            columnDefinition = "integer default 0 not null")
+    private int backoffLevel;
+
+    @Column(name = "next_attempt_at", insertable = false, updatable = false)
+    private Instant nextAttemptAt;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
 
@@ -68,4 +81,12 @@ public class ApiCatalogBundleSyncStatusEntity {
 
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+
+    public int getBackoffLevel() { return backoffLevel; }
+    /** In-memory only (the column is not updatable); for tests and freshly built rows. */
+    public void setBackoffLevel(int backoffLevel) { this.backoffLevel = backoffLevel; }
+
+    public Instant getNextAttemptAt() { return nextAttemptAt; }
+    /** In-memory only (the column is not updatable); for tests and freshly built rows. */
+    public void setNextAttemptAt(Instant nextAttemptAt) { this.nextAttemptAt = nextAttemptAt; }
 }

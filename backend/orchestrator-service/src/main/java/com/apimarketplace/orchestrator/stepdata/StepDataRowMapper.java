@@ -14,19 +14,21 @@ import java.util.*;
 @Component
 public class StepDataRowMapper {
 
+    /** The row's own technical id: a unique key for the grid, never shown (underscore = hidden). */
+    static final String ROW_KEY_FIELD = "_rowId";
+
     /**
      * Map an entity to a row with node-specific fields.
      *
      * @param entity      The step data entity
      * @param outputData  The output data from storage (can be null)
-     * @param rowIndex    The 1-based row index for display (used as fallback for itemNumber)
      * @return Map of field name to value
      */
-    public Map<String, Object> mapToRow(WorkflowStepDataEntity entity, Map<String, Object> outputData, int rowIndex) {
+    public Map<String, Object> mapToRow(WorkflowStepDataEntity entity, Map<String, Object> outputData) {
         Map<String, Object> row = new LinkedHashMap<>();
 
         // Common fields
-        addCommonFields(row, entity, rowIndex);
+        addCommonFields(row, entity);
 
         // Node-specific fields
         NodeType nodeType = entity.getNodeType();
@@ -59,29 +61,39 @@ public class StepDataRowMapper {
     }
 
     /**
-     * Map an entity to a row with node-specific fields (legacy - uses entity ID for itemNumber).
-     *
-     * @param entity      The step data entity
-     * @param outputData  The output data from storage (can be null)
-     * @return Map of field name to value
+     * The id a row SHOWS: where it ran, as {@code epoch.spawn.iteration.item} with trailing zero
+     * coordinates dropped - "21" is epoch 21, "20.0.2" is iteration 2 of epoch 20, "20.1" its
+     * rerun (spawn 1). Derived from the row alone, so no page, filter, new row or retention purge
+     * can ever change it. Two rows at the same coordinates (a wait, then its completion) share it.
      */
-    public Map<String, Object> mapToRow(WorkflowStepDataEntity entity, Map<String, Object> outputData) {
-        // Use itemNumber from entity, or fall back to entity ID
-        int displayNumber = entity.getItemNumber() != null ? entity.getItemNumber() : entity.getId().intValue();
-        return mapToRow(entity, outputData, displayNumber);
+    static String coordinateId(WorkflowStepDataEntity entity) {
+        int[] parts = {
+                orZero(entity.getEpoch()), orZero(entity.getSpawn()),
+                orZero(entity.getIteration()), orZero(entity.getItemIndex())};
+        int length = parts.length;
+        while (length > 1 && parts[length - 1] == 0) length--;
+        StringBuilder id = new StringBuilder().append(parts[0]);
+        for (int i = 1; i < length; i++) id.append('.').append(parts[i]);
+        return id.toString();
     }
 
-    private void addCommonFields(Map<String, Object> row, WorkflowStepDataEntity entity, int rowIndex) {
-        row.put("id", rowIndex);
+    private static int orZero(Integer value) {
+        return value != null ? value : 0;
+    }
+
+    private void addCommonFields(Map<String, Object> row, WorkflowStepDataEntity entity) {
+        row.put("id", coordinateId(entity));
+        putIfNotNull(row, ROW_KEY_FIELD, entity.getId());
         putIfNotNull(row, "status", entity.getStatus());
         putIfNotNull(row, "toolId", entity.getToolId());
         putIfNotNull(row, "nodeType", entity.getNodeType() != null ? entity.getNodeType().name() : null);
         putIfNotNull(row, "normalizedKey", entity.getNormalizedKey());
 
-        // epoch: always include (even epoch 0 - the very first epoch)
+        // epoch / spawn / iteration: always include (0 is a real coordinate, and the columns
+        // must never disappear - they are what tells the reader where a row comes from).
         row.put("epoch", entity.getEpoch() != null ? entity.getEpoch() : 0);
-        putIfNotNull(row, "spawn", entity.getSpawn());
-        putIfNotNull(row, "iteration", entity.getIteration());
+        row.put("spawn", entity.getSpawn() != null ? entity.getSpawn() : 0);
+        row.put("iteration", entity.getIteration() != null ? entity.getIteration() : 0);
         putIfNotNull(row, "triggerId", entity.getTriggerId());
 
         if (entity.getStartTime() != null) {

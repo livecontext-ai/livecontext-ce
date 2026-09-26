@@ -12,6 +12,9 @@ export const MAX_CHECKBOX_COLUMN_WIDTH = 120; // px
 // Minimum width for standalone ID column (workflow tables without checkbox)
 export const MIN_ID_COLUMN_WIDTH = 48; // px
 
+// Minimum width for the run-logs ID lane: 16 padding + 14 type icon + 8 gap + "ID" + 8 gap + 14 hint icon
+export const MIN_WORKFLOW_ID_LANE_WIDTH = 88; // px
+
 // Common cell padding classes
 export const CELL_PADDING = {
   checkbox: 'px-1',

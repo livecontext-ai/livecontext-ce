@@ -336,9 +336,9 @@ public class AuthClient {
     }
 
     /**
-     * Cloud-side "linked AND paid" check for every CE-link-gated relay: true only when
-     * {@link #ceLinkAccess} answers {@link CeLinkAccess#ACTIVE}. A suspended link (the
-     * account fell back to a non-paid plan) answers false. Callers that must tell the CE
+     * Cloud-side "linked AND paid" check for the paid relays (LLM, web search, catalog): true
+     * only when {@link #ceLinkAccess} answers {@link CeLinkAccess#ACTIVE}. A link whose account
+     * is not on a paid plan answers false (the link itself stays valid). Callers that must tell the CE
      * WHY (plan required vs not linked) use {@link #ceLinkAccess} and
      * {@link com.apimarketplace.common.plan.CeLinkRefusal}.
      */
@@ -348,7 +348,7 @@ public class AuthClient {
 
     /**
      * Resolve what {@code userId} may do through the CE link of {@code installId}: ACTIVE
-     * (linked and paid), PLAN_REQUIRED (linked, suspended until the account pays) or
+     * (linked and paid), PLAN_REQUIRED (linked, but no paid relay until the account pays) or
      * NOT_LINKED. Fail-closed: a malformed id, a transport failure or a non-2xx answer is
      * NOT_LINKED. An auth-service that predates the {@code reason} field is read through its
      * {@code active} flag alone.

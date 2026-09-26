@@ -6,7 +6,7 @@ import { InfoPopover } from "@/components/ui/info-popover";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { credentialService } from "@/lib/api/orchestrator/credential.service";
-import { cloudLinkService, type CloudLinkStatus } from "@/lib/api/cloud-link.service";
+import { cloudLinkService, cloudSourceErrorKey, type CloudLinkStatus } from "@/lib/api/cloud-link.service";
 import { clearModelsCache } from "@/hooks/useModels";
 import { Button } from "@/components/ui/button";
 import { useLocale, useTranslations } from "next-intl";
@@ -264,7 +264,14 @@ export default function AiProvidersPage() {
       clearModelsCache();
     } catch (err) {
       console.error("Failed to save CE LLM source:", err);
-      setSourceError(source === "CLOUD" ? t("cloudSource.linkRequired") : t("cloudSource.saveError"));
+      const reason = cloudSourceErrorKey(err, source);
+      setSourceError(reason === "planRequired"
+        ? t("cloudSource.planRequired")
+        : reason === "onboardingRequired"
+          ? t("cloudSource.onboardingRequired")
+          : reason === "notReady"
+            ? t("cloudSource.notReady")
+            : source === "CLOUD" ? t("cloudSource.linkRequired") : t("cloudSource.saveError"));
     } finally {
       setSourceSaving(null);
     }

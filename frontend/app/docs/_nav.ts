@@ -50,7 +50,7 @@ export const DOCS_NAV: DocsNavSection[] = [
       { title: 'Node reference', href: '/nodes', keywords: ['decision', 'switch', 'split', 'code', 'http request', 'sub-workflow', 'media', 'email', 'ssh', 'database'] },
       { title: 'Triggers', href: '/triggers', keywords: ['webhook', 'schedule', 'cron', 'form', 'manual', 'error trigger'] },
       { title: 'Interfaces & apps', href: '/interfaces', keywords: ['html', 'page', 'iframe', 'application', 'js_template'] },
-      { title: 'Runs & execution', href: '/runs', keywords: ['history', 'epoch', 'step by step', 'approval', 'cancel', 're-run', 'debug'] },
+      { title: 'Runs & execution', href: '/runs', keywords: ['history', 'epoch', 'step by step', 'approval', 'cancel', 're-run', 'debug', 'logs', 'spawn', 'iteration'] },
     ],
   },
   {

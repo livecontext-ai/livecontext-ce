@@ -80,7 +80,7 @@ class DetailedStepDataServiceFilterTest {
                         invocation.getArgument(5)));
         // Row mapper / column derivation are exercised when we have rows; stub
         // them lightly so the service can finish building the response.
-        when(rowMapper.mapToRow(any(), any(), any(Integer.class))).thenReturn(Map.of());
+        when(rowMapper.mapToRow(any(), any())).thenReturn(Map.of());
         when(columnDefinitionService.deriveColumnsFromRows(any())).thenReturn(List.of());
     }
 

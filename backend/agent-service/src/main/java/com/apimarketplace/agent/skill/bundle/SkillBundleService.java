@@ -164,6 +164,16 @@ public class SkillBundleService {
         return saved;
     }
 
+    /**
+     * Checksum of the active bundle, read without its payload: the ETag a CE poll presenting
+     * {@code If-None-Match} is compared against. Matching it answers 304 whatever the payload
+     * check below would say, which is the same outcome for the CE (it keeps the bundle it has).
+     */
+    @Transactional(readOnly = true)
+    public Optional<String> getActiveChecksum() {
+        return bundleRepository.findActiveChecksum();
+    }
+
     @Transactional(readOnly = true)
     public Optional<SignedSkillBundle> getActiveSignedBundle() {
         return bundleRepository.findFirstByActiveTrue().map(this::toSignedBundle);

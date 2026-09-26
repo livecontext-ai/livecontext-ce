@@ -73,6 +73,17 @@ public interface WorkflowStepDataRepository extends JpaRepository<WorkflowStepDa
            """)
     List<EpochWorkWindowProjection> findEpochWorkWindows(@Param("runIds") Collection<String> runIds);
 
+    /** {@link #findEpochWorkWindows} for ONE run and a range of epochs, so a windowed caller reads only its window. */
+    @Query("""
+           SELECT new com.apimarketplace.orchestrator.persistence.EpochWorkWindowProjection(
+                      w.runId, w.epoch, MIN(w.startTime), MAX(w.endTime))
+           FROM WorkflowStepDataEntity w
+           WHERE w.runId = :runId AND w.epoch BETWEEN :fromEpoch AND :toEpoch
+           GROUP BY w.runId, w.epoch
+           """)
+    List<EpochWorkWindowProjection> findEpochWorkWindowsInRange(
+            @Param("runId") String runId, @Param("fromEpoch") int fromEpoch, @Param("toEpoch") int toEpoch);
+
     /**
      * Projection of {@code output_storage_id} values for a workflow run - no JSONB columns
      * loaded. Used by {@code RunCloneService} for the "collect storage IDs to clone/delete"
@@ -544,6 +555,86 @@ public interface WorkflowStepDataRepository extends JpaRepository<WorkflowStepDa
         """, nativeQuery = true)
     List<com.apimarketplace.orchestrator.repository.AggregatedStepProjection> getAggregatedStepsByRunIdAndEpoch(
         @Param("runId") String runId, @Param("epoch") int epoch);
+
+    /**
+     * {@link #getAggregatedStepsByRunIdAndEpoch} for a RANGE of epochs in one pass, one row per
+     * (epoch, alias, status). Feeds the run analysis grid (nodes x epochs), which would otherwise
+     * cost one round trip per epoch.
+     *
+     * <p>Same spawn supersession as the per-epoch query, and the same NULL-epoch handling: the
+     * inner filter admits legacy NULL-epoch rows when the range covers epoch 0, so they can raise
+     * the max spawn of an epoch-0 coordinate exactly as they do there, while the outer
+     * {@code t.epoch IS NOT NULL} keeps them out of the answer. Unlike the per-epoch form, the
+     * epoch predicate stays sargable on {@code idx_wsd_resolution} for every non-zero range.
+     *
+     * <p>{@code errorMessage} is one representative message per (epoch, alias, status) group,
+     * meaningful on the FAILED rows only.
+     */
+    @Query(value = """
+        SELECT t.epoch as epoch, t.step_alias as "stepAlias", t.status as status, COUNT(*) as count,
+               MIN(t.tool_id) as "toolId", MIN(t.start_time) as "minStartTime", MAX(t.end_time) as "maxEndTime",
+               CAST(GREATEST(COALESCE(SUM(GREATEST((EXTRACT(EPOCH FROM t.end_time) - EXTRACT(EPOCH FROM t.start_time)) * 1000, 0)), 0), 0) AS BIGINT) as "sumExecutionTimeMs",
+               MAX(t.error_message) as "errorMessage"
+        FROM (
+            SELECT w.step_alias, w.status, w.tool_id, w.start_time, w.end_time, w.epoch, w.error_message,
+                   COALESCE(w.spawn, 0) AS spawn_norm,
+                   MAX(COALESCE(w.spawn, 0)) OVER (
+                       PARTITION BY w.step_alias,
+                                    COALESCE(w.trigger_id, ''),
+                                    COALESCE(w.epoch, 0),
+                                    COALESCE(w.iteration, 0),
+                                    COALESCE(w.item_index, 0)) AS max_spawn
+            FROM workflow_step_data w
+            WHERE w.run_id = :runId AND w.step_alias IS NOT NULL
+              AND (w.epoch BETWEEN :fromEpoch AND :toEpoch OR (w.epoch IS NULL AND :fromEpoch <= 0))
+        ) t
+        WHERE t.epoch IS NOT NULL AND t.spawn_norm = t.max_spawn
+        GROUP BY t.epoch, t.step_alias, t.status
+        """, nativeQuery = true)
+    List<com.apimarketplace.orchestrator.repository.EpochAggregatedStepProjection> getAggregatedStepsByRunIdAndEpochRange(
+        @Param("runId") String runId, @Param("fromEpoch") int fromEpoch, @Param("toEpoch") int toEpoch);
+
+    /**
+     * How long each node HELD each epoch of a range, one row per (epoch, alias).
+     *
+     * <p>Neither of the two obvious figures answers that. The summed row durations of
+     * {@link #getAggregatedStepsByRunIdAndEpochRange} add up split items that ran in PARALLEL
+     * (ten 5 s items read 50 s), and the first-start-to-last-end span counts, for a loop body,
+     * every other node of every iteration in between (10 iterations of A then B read ~19 s for
+     * A, whose own work is 10 s). So the span is taken PER ITERATION (and per trigger), where
+     * rows can only be parallel items, and those spans are summed, iterations being sequential.
+     *
+     * <p>Only the node's LATEST attempt in the epoch is timed: rows of the highest spawn of the
+     * (epoch, alias, trigger). The per-coordinate supersession of the query above keeps, for a
+     * split rerun with fewer items or a loop rerun with fewer iterations, the untouched old-spawn
+     * rows, and mixing them into a span measured from the old start to the new end read hours.
+     * Same NULL-epoch handling as above; rows still running (no end) or never timed contribute
+     * nothing, and a node with no timed row is absent.
+     */
+    @Query(value = """
+        SELECT e.epoch as epoch, e.step_alias as "stepAlias", CAST(SUM(e.span_ms) AS BIGINT) as "elapsedMs"
+        FROM (
+            SELECT t.epoch, t.step_alias,
+                   GREATEST((EXTRACT(EPOCH FROM MAX(t.end_time)) - EXTRACT(EPOCH FROM MIN(t.start_time))) * 1000, 0) AS span_ms
+            FROM (
+                SELECT w.step_alias, w.start_time, w.end_time, w.epoch, w.trigger_id, w.iteration,
+                       COALESCE(w.spawn, 0) AS spawn_norm,
+                       MAX(COALESCE(w.spawn, 0)) OVER (
+                           PARTITION BY w.step_alias,
+                                        COALESCE(w.trigger_id, ''),
+                                        COALESCE(w.epoch, 0)) AS latest_spawn
+                FROM workflow_step_data w
+                WHERE w.run_id = :runId AND w.step_alias IS NOT NULL
+                  AND (w.epoch BETWEEN :fromEpoch AND :toEpoch OR (w.epoch IS NULL AND :fromEpoch <= 0))
+            ) t
+            WHERE t.epoch IS NOT NULL AND t.spawn_norm = t.latest_spawn
+              AND t.start_time IS NOT NULL AND t.end_time IS NOT NULL
+            GROUP BY t.epoch, t.step_alias, COALESCE(t.trigger_id, ''), COALESCE(t.iteration, 0)
+        ) e
+        GROUP BY e.epoch, e.step_alias
+        """, nativeQuery = true)
+    List<com.apimarketplace.orchestrator.repository.EpochElapsedProjection> getElapsedByRunIdAndEpochRange(
+        @Param("runId") String runId, @Param("fromEpoch") int fromEpoch, @Param("toEpoch") int toEpoch);
 
     // === OPTIMIZED QUERIES FOR INTERFACE RENDER ===
 

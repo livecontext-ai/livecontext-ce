@@ -3,6 +3,8 @@ package com.apimarketplace.publication.service;
 import com.apimarketplace.publication.domain.CeCloudLinkEntity;
 import com.apimarketplace.publication.repository.CeCloudLinkRepository;
 import com.apimarketplace.agent.cloud.CloudLlmSource;
+import com.apimarketplace.common.plan.CeLinkRefusal;
+import com.apimarketplace.common.plan.PlanTier;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -37,14 +39,16 @@ public class CloudLinkService {
     private static final int GCM_TAG_LENGTH = 128;
     /**
      * Default lifetime of a pending OAuth flow (state + PKCE verifier). Two hours, not minutes: a new
-     * cloud account goes through the cloud onboarding (email verification, steps) and then a paid
-     * checkout before Keycloak redirects back here, so a short TTL expired the flow under a user who
-     * was simply signing up. Overridable with {@code cloud-link.pending-auth-ttl}.
+     * cloud account goes through the cloud onboarding (email verification, steps) before Keycloak
+     * redirects back here, and a user may leave that half done for a while, so a short TTL expired
+     * the flow under a user who was simply signing up. Overridable with
+     * {@code cloud-link.pending-auth-ttl}.
      */
     static final Duration DEFAULT_PENDING_AUTH_FLOW_TTL = Duration.ofHours(2);
     /**
-     * Error code the cloud answers (HTTP 403) on every CE-link-gated endpoint when the bound cloud
-     * account is not on a paid plan. The link is SUSPENDED, never revoked: paying again restores it.
+     * Error code the cloud answers (HTTP 403) on the paid relays (LLM, web search, catalog) when the
+     * bound cloud account is not on a paid plan. Any plan may link, so the current cloud no longer
+     * answers it on register or heartbeat; when an older one did, the link was kept, never revoked.
      */
     public static final String PLAN_REQUIRED_ERROR = "CLOUD_LINK_PLAN_REQUIRED";
     private static final String DEFAULT_FRONTEND_CALLBACK_PATH = "/app/settings/cloud-account";
@@ -253,8 +257,9 @@ public class CloudLinkService {
                 + "&state=" + state;
 
         // Entry point through the CLOUD onboarding: a new account first verifies its email and
-        // completes the onboarding steps, then (linking needs a paid plan) goes through pricing, and
-        // only then does the cloud web app send the browser to Keycloak with these same PKCE values.
+        // completes the onboarding steps (the cloud refuses to register an install for an account
+        // that has not), and only then does the cloud web app send the browser to Keycloak with these
+        // same PKCE values. Any plan may link; only the paid relays look at the plan.
         // The cloud rebuilds the authorize URL from its own Keycloak config, so only the OAuth
         // parameters travel here, each URL-encoded.
         String startUrl = webUrl + "/onboarding?ce_link=1"
@@ -381,6 +386,21 @@ public class CloudLinkService {
         if (CloudLlmSource.CLOUD.name().equals(registered.getLlmSource())) {
             return true;
         }
+        // Any plan may link, but the cloud LLM relay answers 403 CLOUD_LINK_PLAN_REQUIRED to an
+        // unpaid account: switching a FREE install to CLOUD would break the chat it already had on
+        // its own keys. It stays BYOK; the user can pick CLOUD once the account pays.
+        EntitlementFetch plan = fetchEntitlement(registered);
+        if (plan.entitlement() == null || !PlanTier.isPaid(plan.entitlement().planCode())) {
+            if (plan.failed() && plan.entitlement() == null) {
+                logger.warn("CE cloud link registered for tenant {} but the cloud plan could not be read: LLM "
+                        + "source left on BYOK (select Cloud in Settings > AI Providers once the cloud answers)",
+                        tenantId);
+            } else {
+                logger.info("CE cloud link registered for tenant {} but the cloud account is not on a paid "
+                        + "plan: LLM source left on BYOK", tenantId);
+            }
+            return true;
+        }
         registered.setLlmSource(CloudLlmSource.CLOUD.name());
         cloudLinkRepository.save(registered);
         return true;
@@ -443,6 +463,12 @@ public class CloudLinkService {
          * the heartbeat tick (or a user action), never an immediate retry.
          */
         PLAN_REQUIRED,
+        /**
+         * 403 CLOUD_LINK_ONBOARDING_REQUIRED: the cloud account has not completed the cloud
+         * onboarding (email code included). NOT registered, nothing stamped; the heartbeat tick
+         * retries and succeeds once the onboarding is done on the cloud.
+         */
+        ONBOARDING_REQUIRED,
         /** Any other non-2xx answer that did not throw: nothing stamped. */
         NOT_REGISTERED
     }
@@ -453,7 +479,8 @@ public class CloudLinkService {
      * heartbeat scheduler picks it up. On 409 ALREADY_BOUND the row is also marked
      * registered (the install_id is already in the cloud registry - no further work).
      * On 403 CLOUD_LINK_PLAN_REQUIRED the row is marked plan-required (see
-     * {@link #markPlanRequired}) and stays unregistered. Any other failure still throws.
+     * {@link #markPlanRequired}) and stays unregistered. On 403 CLOUD_LINK_ONBOARDING_REQUIRED
+     * nothing is written. Any other failure still throws.
      */
     public RegisterOutcome registerWithCloud(CeCloudLinkEntity link) {
         String accessToken = getCloudAccessToken(link.getTenantId());
@@ -491,6 +518,12 @@ public class CloudLinkService {
                     link.getTenantId(), link.getInstallId());
             return RegisterOutcome.ALREADY_BOUND;
         } catch (org.springframework.web.client.HttpClientErrorException.Forbidden forbidden) {
+            if (isOnboardingRequired(forbidden)) {
+                logger.warn("CE cloud link register refused: the cloud account has not completed the cloud "
+                                + "onboarding (tenant={} installId={}). Retried on the heartbeat tick.",
+                        link.getTenantId(), link.getInstallId());
+                return RegisterOutcome.ONBOARDING_REQUIRED;
+            }
             Optional<String> planCode = planRequiredPlanCode(forbidden);
             if (planCode.isEmpty()) {
                 throw forbidden;
@@ -501,6 +534,55 @@ public class CloudLinkService {
                     link.getTenantId(), link.getInstallId(), planCode.get());
             return RegisterOutcome.PLAN_REQUIRED;
         }
+    }
+
+    /** Whether a 403 carries {@code CLOUD_LINK_ONBOARDING_REQUIRED} (plain token match, JSON or not). */
+    boolean isOnboardingRequired(org.springframework.web.client.HttpStatusCodeException e) {
+        try {
+            String raw = e.getResponseBodyAsString(StandardCharsets.UTF_8);
+            return raw != null && raw.contains(CeLinkRefusal.ONBOARDING_REQUIRED_ERROR);
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * The link to switch to a CLOUD source: registered (registering it now if needed) AND owned by
+     * a paid cloud account ({@link PlanTier#isPaid}), since every CLOUD source is a paid relay.
+     * Refuses with {@link CloudLinkOnboardingRequiredException}, {@link CloudLinkPlanRequiredException},
+     * or a plain {@link IllegalStateException} (answered 409 NOT_READY) when the register did not go
+     * through for another reason or the cloud plan cannot be read right now: an outage is never
+     * reported as "choose a plan".
+     */
+    private CeCloudLinkEntity requireRegisteredPaidLink(Long tenantId, CeCloudLinkEntity link) {
+        if (link.getRegisteredAt() == null) {
+            RegisterOutcome registered = registerWithCloud(link);
+            if (registered == RegisterOutcome.ONBOARDING_REQUIRED) {
+                throw new CloudLinkOnboardingRequiredException();
+            }
+            if (registered == RegisterOutcome.PLAN_REQUIRED) {
+                throw new CloudLinkPlanRequiredException(link.getPlanRequiredPlanCode());
+            }
+            link = cloudLinkRepository.findByTenantId(tenantId)
+                    .orElseThrow(() -> new CloudAccountNotLinkedException("No cloud account linked"));
+            if (link.getRegisteredAt() == null) {
+                throw new IllegalStateException("Cloud link is not registered");
+            }
+        }
+        EntitlementFetch plan = fetchEntitlement(link);
+        CloudEntitlement entitlement = plan.entitlement();
+        if (entitlement == null && plan.failed()) {
+            throw new IllegalStateException("The cloud plan cannot be read right now");
+        }
+        if (entitlement == null || !PlanTier.isPaid(entitlement.planCode())) {
+            // The cloud's entitlements answer NO_SUBSCRIPTION ("__NONE__") for a FREE account: the
+            // refusal names it FREE, like the cloud's own CLOUD_LINK_PLAN_REQUIRED body does.
+            String planCode = entitlement == null || PlanTier.NO_SUBSCRIPTION.equals(entitlement.planCode())
+                    ? PlanTier.FREE
+                    : entitlement.planCode();
+            throw new CloudLinkPlanRequiredException(planCode);
+        }
+        return link;
     }
 
     /**
@@ -594,8 +676,18 @@ public class CloudLinkService {
      * code is authoritative ("no cloud plan"): returns {@code null} and clears any stale cached value.
      */
     public CloudEntitlement fetchCloudEntitlement(CeCloudLinkEntity link) {
+        return fetchEntitlement(link).entitlement();
+    }
+
+    /**
+     * {@link #fetchCloudEntitlement} plus whether the cloud could be asked at all: {@code failed}
+     * is true when the call threw (the entitlement is then the last known-good one, or null).
+     */
+    private record EntitlementFetch(CloudEntitlement entitlement, boolean failed) {}
+
+    private EntitlementFetch fetchEntitlement(CeCloudLinkEntity link) {
         if (link == null || link.getRegisteredAt() == null) {
-            return null;
+            return new EntitlementFetch(null, false);
         }
         String installId = String.valueOf(link.getInstallId());
         try {
@@ -614,19 +706,19 @@ public class CloudLinkService {
                     String cadence = body.hasNonNull("cadence") ? body.get("cadence").asText() : null;
                     CloudEntitlement e = new CloudEntitlement(planCode.asText(), creditTierIndex, cadence);
                     lastGoodCloudEntitlement.put(installId, e);
-                    return e;
+                    return new EntitlementFetch(e, false);
                 }
             }
             // Cloud responded but without a usable plan code → authoritative "no cloud plan"; drop
             // any stale cached value so we never keep serving an entitlement the cloud dropped.
             lastGoodCloudEntitlement.remove(installId);
-            return null;
+            return new EntitlementFetch(null, false);
         } catch (RuntimeException e) {
             logger.warn("CE cloud entitlements fetch failed for tenant={} installId={}: {}",
                     link.getTenantId(), installId, e.getMessage());
             // Transient outage: serve the last known-good entitlement instead of collapsing to FREE.
             // Null only if the cloud has never returned a usable plan for this install.
-            return lastGoodCloudEntitlement.get(installId);
+            return new EntitlementFetch(lastGoodCloudEntitlement.get(installId), true);
         }
     }
 
@@ -1120,16 +1212,8 @@ public class CloudLinkService {
             throw new CloudAccountNotLinkedException("No cloud account linked");
         }
         CeCloudLinkEntity link = existing.get();
-        if (normalized == CloudLlmSource.CLOUD && link.getRegisteredAt() == null) {
-            RegisterOutcome registered = registerWithCloud(link);
-            if (registered == RegisterOutcome.PLAN_REQUIRED) {
-                throw new CloudLinkPlanRequiredException(link.getPlanRequiredPlanCode());
-            }
-            link = cloudLinkRepository.findByTenantId(tenantId)
-                    .orElseThrow(() -> new CloudAccountNotLinkedException("No cloud account linked"));
-            if (link.getRegisteredAt() == null) {
-                throw new IllegalStateException("Cloud link is not registered");
-            }
+        if (normalized == CloudLlmSource.CLOUD) {
+            link = requireRegisteredPaidLink(tenantId, link);
         }
         link.setCatalogSource(normalized.name());
         cloudLinkRepository.save(link);
@@ -1146,16 +1230,8 @@ public class CloudLinkService {
             throw new CloudAccountNotLinkedException("No cloud account linked");
         }
         CeCloudLinkEntity link = existing.get();
-        if (normalized == CloudLlmSource.CLOUD && link.getRegisteredAt() == null) {
-            RegisterOutcome registered = registerWithCloud(link);
-            if (registered == RegisterOutcome.PLAN_REQUIRED) {
-                throw new CloudLinkPlanRequiredException(link.getPlanRequiredPlanCode());
-            }
-            link = cloudLinkRepository.findByTenantId(tenantId)
-                    .orElseThrow(() -> new CloudAccountNotLinkedException("No cloud account linked"));
-            if (link.getRegisteredAt() == null) {
-                throw new IllegalStateException("Cloud link is not registered");
-            }
+        if (normalized == CloudLlmSource.CLOUD) {
+            link = requireRegisteredPaidLink(tenantId, link);
         }
         link.setLlmSource(normalized.name());
         cloudLinkRepository.save(link);
@@ -1510,13 +1586,25 @@ public class CloudLinkService {
         private final String planCode;
 
         public CloudLinkPlanRequiredException(String planCode) {
-            super(PLAN_REQUIRED_ERROR + ": linking a self-hosted install to LiveContext Cloud requires a paid plan");
+            super(PLAN_REQUIRED_ERROR + ": cloud models, web search and cloud integrations require a paid "
+                    + "LiveContext Cloud plan");
             this.planCode = planCode;
         }
 
         /** Plan code the cloud reported (e.g. FREE), or null when it sent none. */
         public String getPlanCode() {
             return planCode;
+        }
+    }
+
+    /**
+     * The cloud refused to register this install with 403 {@code CLOUD_LINK_ONBOARDING_REQUIRED}:
+     * the cloud account has not completed the cloud onboarding (email code included).
+     */
+    public static class CloudLinkOnboardingRequiredException extends IllegalStateException {
+        public CloudLinkOnboardingRequiredException() {
+            super(CeLinkRefusal.ONBOARDING_REQUIRED_ERROR
+                    + ": finish setting up the LiveContext Cloud account (email verification and profile) first");
         }
     }
 }

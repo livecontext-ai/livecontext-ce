@@ -124,6 +124,19 @@ class CloudLinkControllerTest {
         }
 
         @Test
+        @DisplayName("regression: PUT /llm-source returns 403 CLOUD_LINK_ONBOARDING_REQUIRED (not a 500) when the cloud account has not finished its onboarding")
+        void onboardingRequiredIs403ForLlmSource() {
+            when(cloudLinkService.setLlmSource(TENANT_ID, CloudLlmSource.CLOUD))
+                    .thenThrow(new CloudLinkService.CloudLinkOnboardingRequiredException());
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.setLlmSource(TENANT_ID, Map.of("source", "CLOUD"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(response.getBody()).isEqualTo(com.apimarketplace.common.plan.CeLinkRefusal.onboardingRequiredBody());
+        }
+
+        @Test
         @DisplayName("PUT /llm-source returns 403 CLOUD_LINK_PLAN_REQUIRED (not 409 NOT_READY) when the cloud account needs a paid plan")
         void shouldReturnPlanRequiredWhenCloudAccountIsNotPaid() {
             when(cloudLinkService.setLlmSource(TENANT_ID, CloudLlmSource.CLOUD))
@@ -204,6 +217,19 @@ class CloudLinkControllerTest {
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
             assertThat(response.getBody()).containsEntry("error", "CLOUD_LINK_NOT_READY");
+        }
+
+        @Test
+        @DisplayName("regression: PUT /catalog-source returns 403 CLOUD_LINK_ONBOARDING_REQUIRED (not a 500) when the cloud account has not finished its onboarding")
+        void onboardingRequiredIs403ForCatalogSource() {
+            when(cloudLinkService.setCatalogSource(TENANT_ID, CloudLlmSource.CLOUD))
+                    .thenThrow(new CloudLinkService.CloudLinkOnboardingRequiredException());
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.setCatalogSource(TENANT_ID, Map.of("source", "CLOUD"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(response.getBody()).isEqualTo(com.apimarketplace.common.plan.CeLinkRefusal.onboardingRequiredBody());
         }
 
         @Test

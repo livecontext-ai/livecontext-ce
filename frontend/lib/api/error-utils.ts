@@ -59,6 +59,17 @@ export function is402Error(error: unknown): boolean {
 }
 
 /**
+ * Detects the 409 plan-resource-limit refusal. apiClient already announces it with its own
+ * global `plan-limit-exceeded` event (toast/upgrade surface), so callers must not stack a
+ * second, generic error surface on top of it.
+ */
+export function isPlanLimitError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const { status, code } = error as { status?: unknown; code?: unknown };
+  return status === 409 && code === 'PLAN_RESOURCE_LIMIT_EXCEEDED';
+}
+
+/**
  * Detects if an error is a storage quota exceeded error (413 - storage full)
  */
 export function is413StorageError(error: unknown): boolean {
@@ -86,10 +97,14 @@ export function is413StorageError(error: unknown): boolean {
 function errorText(error: unknown): string {
   if (!error) return '';
   if (typeof error === 'string') return error;
-  if (error instanceof Error) return error.message || '';
+  // An apiClient ApiError keeps the backend body's human `message` as its message and the
+  // machine token (the body's `error`) in `code`: read both, or a CLOUD_LINK_* refusal whose
+  // body carries a readable message would never be recognised.
+  const code = typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : '';
+  if (error instanceof Error) return [error.message || '', code].filter(Boolean).join(' ');
   if (typeof error === 'object') {
     const o = error as { message?: unknown; error?: unknown };
-    return String(o.message ?? o.error ?? '');
+    return [String(o.message ?? o.error ?? ''), code].filter(Boolean).join(' ');
   }
   return '';
 }
@@ -143,13 +158,24 @@ export function isModelNotSupportedError(error: unknown): boolean {
 export const CLOUD_LINK_PLAN_REQUIRED_CODE = 'CLOUD_LINK_PLAN_REQUIRED';
 
 /**
- * CE cloud-relay: the linked cloud account is not on a paid plan, so the cloud refused a
- * link-gated call (LLM relay, catalog relay, web search relay, bundle download). The CE
+ * CE cloud-relay: the linked cloud account is not on a paid plan, so the cloud refused a paid
+ * relay call (LLM relay, catalog relay, web search relay), or the switch of a source to Cloud. The CE
  * surfaces the cloud body verbatim, so the token survives in every error shape, exactly like
  * {@code INSUFFICIENT_CREDITS} and {@code MODEL_NOT_SUPPORTED}.
  */
 export function isCloudLinkPlanRequiredError(error: unknown): boolean {
   return errorText(error).includes(CLOUD_LINK_PLAN_REQUIRED_CODE);
+}
+
+/** Machine token the cloud answers when the linked cloud account has not finished its onboarding. */
+export const CLOUD_LINK_ONBOARDING_REQUIRED_CODE = 'CLOUD_LINK_ONBOARDING_REQUIRED';
+
+/**
+ * CE: the linked cloud account has not completed the cloud onboarding (email code, profile), so
+ * the cloud has not registered this install and a source cannot be switched to Cloud yet.
+ */
+export function isCloudLinkOnboardingRequiredError(error: unknown): boolean {
+  return errorText(error).includes(CLOUD_LINK_ONBOARDING_REQUIRED_CODE);
 }
 
 /**

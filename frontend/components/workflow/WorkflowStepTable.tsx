@@ -10,6 +10,7 @@ import { StatusBadge, type StatusType } from '@/components/ui/StatusBadge';
 import { useStepData } from '@/app/workflows/builder/hooks/useStepData';
 import { useStepCompletionInvalidation } from '@/app/workflows/builder/hooks/useStepCompletionInvalidation';
 import type { DataSourceItemRow, ServerFilters } from '@/components/data-table/types';
+import { displayIdOf } from '@/components/data-table/utils/dataTableUtils';
 
 export interface WorkflowStepTableProps {
   workflowId: string;
@@ -37,13 +38,24 @@ const STATUS_OPTIONS: StatusType[] = [
 const ALL_STATUSES = '__all__';
 const ALL_EPOCHS = '__all__';
 
-function rowMatchesSearch(row: DataSourceItemRow, query: string): boolean {
+/**
+ * Matches what the row SHOWS: its displayed id ("20.0.2", "21:3") and its visible values, the
+ * `@epoch` / `@spawn` / `@iteration` context included. Hidden keys (`_rowId`, the technical row id)
+ * and the two injected values no column shows (a synthetic `id`, `array_index`) are skipped, or
+ * typing "55" would match rows by an id nobody can see.
+ */
+const HIDDEN_INJECTED_KEYS = new Set(['id', 'array_index']);
+
+export function rowMatchesSearch(row: DataSourceItemRow, query: string): boolean {
   if (!query) return true;
   const needle = query.toLowerCase();
+  if (String(displayIdOf(row)).toLowerCase().includes(needle)) return true;
   const data = (row as { data?: Record<string, unknown> }).data;
   if (!data) return false;
-  for (const value of Object.values(data)) {
-    if (value == null) continue;
+  const injected = new Set(row._injectedDataKeys ?? []);
+  for (const [key, value] of Object.entries(data)) {
+    if (value == null || key.startsWith('_')) continue;
+    if (injected.has(key) && HIDDEN_INJECTED_KEYS.has(key)) continue;
     if (typeof value === 'string') {
       if (value.toLowerCase().includes(needle)) return true;
     } else if (typeof value === 'number' || typeof value === 'boolean') {

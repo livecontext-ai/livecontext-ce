@@ -361,6 +361,16 @@
     "unshare": "取消分享"
   },
   "dataTable": {
+    "workflowRowId": {
+      "label": "如何阅读此 ID",
+      "intro": "ID 表示该行的运行位置：epoch.spawn.iteration.item，即旁边各列的值（从 0 开始计数）。末尾的零会被省略。",
+      "exampleEpoch": "第 21 轮 epoch",
+      "exampleSpawn": "第 20 轮 epoch，spawn 1（一次重跑）",
+      "exampleIteration": "第 20 轮 epoch，iteration 2",
+      "exampleItem": "第 20 轮 epoch，项索引 3",
+      "exampleNested": "第 21 行输出中索引为 3 的项",
+      "sameId": "ID 并不唯一：一次等待及其完成，或两个不同的触发器，可能共用同一个 ID。"
+    },
     "deleteColumns": "删除列",
     "deleteColumnsConfirm": "您确定要删除 {count} 个选中的列吗？此操作无法撤销。",
     "dragToReorganize": "拖动以重新排列列",
@@ -591,7 +601,8 @@
     "deleteInterfaceTitle": "删除界面",
     "deleteWorkflowConfirm": "您确定要删除 \"{name}\" 吗？此操作无法撤销。",
     "deleteFailed": "无法删除“{name}”。请重试。",
-    "deleteWorkflowTitle": "删除工作流"
+    "deleteWorkflowTitle": "删除工作流",
+    "analysisTab": "分析"
   },
   "platformStatus": {
     "headline": {
@@ -1237,7 +1248,8 @@
         "running": "运行中",
         "skipped": "已跳过",
         "started": "已开始",
-        "stillRunning": "仍在运行"
+        "stillRunning": "仍在运行",
+        "totalWork": "总工作量(各项累加)"
       }
     },
     "cancelRun": {
@@ -1332,6 +1344,72 @@
       "scopeAll": "所有轮次",
       "scopeEpoch": "轮次 {epoch}",
       "budgetBlockedMessageCumulative": "已花费 {spent}，共 {budget}，且此上限从不重置。未启动新的运行；请提高上限或更改其重置方式以继续。"
+    },
+    "runAnalysis": {
+      "window": "显示的周期",
+      "windowOption": "最近 {count} 个",
+      "windowOf": "最近 {shown} 个周期,共 {total} 个",
+      "refresh": "刷新",
+      "loading": "正在加载分析",
+      "error": "无法加载分析。",
+      "retry": "重试",
+      "empty": "尚无周期运行。运行工作流后即可查看分析。",
+      "kpi": {
+        "epochs": "周期",
+        "successRate": "成功率",
+        "failedCount": "{count} 个失败",
+        "noSettled": "尚无已完成的周期",
+        "avgDuration": "平均持续时间",
+        "maxDuration": "最长 {value}",
+        "credits": "费用",
+        "perEpoch": "每周期 {value}",
+        "noCost": "未记录费用"
+      },
+      "chart": {
+        "title": "每个周期的持续时间和费用",
+        "duration": "持续时间",
+        "cost": "费用"
+      },
+      "grid": {
+        "title": "各周期的节点",
+        "colorBy": "着色依据",
+        "byStatus": "状态",
+        "byDuration": "持续时间",
+        "failures": "{count} 次失败",
+        "partials": "{count} 次部分成功",
+        "average": "平均 {value}",
+        "items": "{count} 次执行",
+        "totalWork": "总工作量 {value}"
+      },
+      "legend": {
+        "ok": "成功",
+        "failed": "失败",
+        "partial": "部分成功",
+        "skipped": "已跳过",
+        "running": "运行中",
+        "waiting": "等待中",
+        "none": "未执行",
+        "fast": "快",
+        "slow": "慢"
+      },
+      "insight": {
+        "failing": "{node} 在 {total} 个周期中失败了 {count} 次。",
+        "epochFailures": "有 {count} 个周期失败,但没有失败的节点步骤:请打开运行日志查看原因。",
+        "lastError": "最近的错误:{error}",
+        "slower": "{node} 从周期 {epoch} 起变慢:{before},之后 {after}。",
+        "none": "这些周期中没有失败。"
+      },
+      "compare": {
+        "title": "比较两个周期",
+        "hint": "点击柱形或单元格以选择要比较的周期。",
+        "reference": "参考",
+        "node": "节点",
+        "epoch": "周期 #{epoch}",
+        "showOnCanvas": "在画布上显示周期 {epoch}",
+        "total": "总计",
+        "notRun": "未执行",
+        "needTwo": "至少需要两个周期才能比较。"
+      }
     }
   },
   "workflowRelations": {
@@ -2098,9 +2176,55 @@
       "restoreFailed": "无法恢复您的账户，请重试。"
     },
     "agentError": {
-      "title": "出了点问题",
-      "description": "运行时发生错误。请稍后重试。",
-      "retry": "重试"
+      "close": "关闭",
+      "gotIt": "知道了",
+      "technicalDetails": "技术详情",
+      "kinds": {
+        "interrupted": {
+          "title": "回答被中断",
+          "description": "助手回答时服务重启了。已保存部分回答。请重新发送消息以继续。"
+        },
+        "providerBilling": {
+          "title": "AI 提供商因计费原因拒绝了请求",
+          "description": "用于调用此模型的账户在提供商处已无余额。请选择其他模型，如果使用的是您自己的密钥，请为该提供商账户充值。"
+        },
+        "rateLimit": {
+          "title": "对此模型的请求过多",
+          "description": "提供商正在限制此模型的调用频率。请等待一分钟后重新发送消息，或选择其他模型。"
+        },
+        "contextTooLong": {
+          "title": "此对话对该模型来说太长",
+          "description": "对话及其附件超出了此模型一次能读取的范围。请开始新对话、移除较大的附件，或选择上下文更大的模型。"
+        },
+        "contentBlocked": {
+          "title": "提供商拦截了此请求",
+          "description": "提供商的安全过滤器拒绝了此消息或其回答。请换一种说法后重试。"
+        },
+        "modelUnavailable": {
+          "title": "此模型不可用",
+          "description": "提供商已不再提供此模型，或该模型不能用于聊天。请在模型选择器中选择其他模型。"
+        },
+        "providerUnavailable": {
+          "title": "AI 提供商暂时不可用",
+          "description": "模型提供商负载过高或出现故障。请稍后重试，或选择其他模型。"
+        },
+        "network": {
+          "title": "与模型的连接已断开",
+          "description": "在回答完成前连接中断或超时。请重新发送消息。"
+        },
+        "providerRejected": {
+          "title": "模型拒绝了请求",
+          "description": "提供商拒绝了发送给此模型的请求。这通常是平台与该特定模型之间的不兼容造成的，而不是您的消息有问题。请暂时选择其他模型。"
+        },
+        "sendFailed": {
+          "title": "消息未能发送",
+          "description": "服务器未能接收您的消息。请稍后重新发送，如果仍然失败，请刷新页面。"
+        },
+        "unknown": {
+          "title": "出现了问题",
+          "description": "运行时发生错误。请稍后重试。"
+        }
+      }
     },
     "missingApiKey": {
       "title": "需要 API 密钥",
@@ -3741,6 +3865,8 @@
       "subscriptionRequired": "使用云端需要已关联的云账户拥有有效的付费订阅。免费账户无法支付转发的调用。",
       "viewPlans": "查看套餐",
       "linkRequired": "切换到 Cloud 之前请先关联一个 Cloud 账户。",
+      "onboardingRequired": "你的 LiveContext Cloud 账户尚未完成设置（邮箱验证码和个人资料）。请在 LiveContext Cloud 完成设置后再次切换。",
+      "notReady": "暂时无法连接 LiveContext Cloud，因此未完成切换。安装仍保持关联：请稍后重试。",
       "saveError": "更新集成凭据来源失败。",
       "cloudCovers": "这同样涵盖生成：图像、视频、音效、语音和音乐都使用云账户的服务商密钥运行，并在云端按积分计费，按秒或按文件，价格为各模型的公布价。"
     },
@@ -3752,6 +3878,9 @@
       "connectedAs": "已连接为 {username}",
       "label": "LLM 来源",
       "linkRequired": "切换到 Cloud 之前请先关联一个 Cloud 账户。",
+      "planRequired": "云端模型需要关联的云账户开通付费套餐。安装仍保持关联：选择套餐后再次切换，或继续使用 API 密钥。",
+      "onboardingRequired": "你的 LiveContext Cloud 账户尚未完成设置（邮箱验证码和个人资料）。请在 LiveContext Cloud 完成设置后再次切换。",
+      "notReady": "暂时无法连接 LiveContext Cloud，因此未完成切换。安装仍保持关联：请稍后重试。",
       "saveError": "更新 LLM 来源失败。"
     },
     "executionLinks": {
@@ -15510,25 +15639,16 @@
   "ceCloudLink": {
     "expired": "连接已过期，请重新点击连接。",
     "planRequired": {
-      "title": "您的 LiveContext Cloud 关联需要付费套餐",
-      "body": "将自托管实例关联到 LiveContext Cloud 需要云端账户拥有付费套餐。选择套餐后，此实例会自动重新连接，无需重新关联。",
+      "title": "云端模型需要付费套餐",
+      "body": "此安装已关联 LiveContext Cloud。云端模型、网页搜索和云端集成需要云账户开通付费套餐。选择套餐后即可立即使用，无需重新关联。",
       "cta": "查看云端套餐",
       "sidebarBadge": "需要付费套餐"
     },
     "planRequiredModal": {
       "title": "需要付费套餐",
-      "description": "此实例关联的 LiveContext Cloud 账户没有付费套餐，因此云端拒绝了该请求。在 LiveContext Cloud 上选择套餐后，此实例会自动重新连接。",
+      "description": "此安装关联的 LiveContext Cloud 账户没有付费套餐。云端模型、网页搜索和云端集成需要付费套餐。在 LiveContext Cloud 选择套餐后即可立即使用：安装仍保持关联。",
       "cta": "查看云端套餐",
       "close": "关闭"
-    },
-    "cloud": {
-      "returning": "正在返回您的自托管实例。",
-      "pricingBannerTitle": "关联您的自托管实例需要付费套餐",
-      "pricingBannerBody": "请在下方选择套餐。订阅生效后，您将返回自己的实例以完成连接。",
-      "pricingBannerContinue": "我已有付费套餐，继续",
-      "pricingBannerStillRequired": "您当前的套餐还不是付费套餐。请选择套餐以继续。",
-      "pricingBannerNoPending": "此连接请求已失效。请在您的自托管实例上重新点击连接。",
-      "pricingBannerError": "无法核实您的套餐，请重试。"
     }
   }
 }

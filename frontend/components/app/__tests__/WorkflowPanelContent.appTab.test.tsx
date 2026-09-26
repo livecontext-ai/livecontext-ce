@@ -34,7 +34,8 @@ vi.mock('@/lib/hooks/useMonthlyCreditsCannotPay', () => ({
   useMonthlyCreditsCannotPay: () => ({ blocked: false, isLoading: false }),
 }));
 vi.mock('next-intl', () => ({ useTranslations: () => (k: string) => k }));
-vi.mock('@/i18n/navigation', () => ({ usePathname: () => '/app/chat' }));
+const pathnameState = vi.hoisted(() => ({ current: '/app/chat' }));
+vi.mock('@/i18n/navigation', () => ({ usePathname: () => pathnameState.current }));
 
 vi.mock('@/contexts/WorkflowModeContext', () => ({
   WorkflowModeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -104,9 +105,16 @@ vi.mock('@/components/workflow/WorkflowLogsPanelContent', () => ({
     </div>
   ),
 }));
+vi.mock('@/components/workflow/run-panel/RunAnalysisPanelContent', () => ({
+  RunAnalysisPanelContent: ({ runId, onBack }: { runId: string; onBack: () => void }) => (
+    <div data-testid="analysis-child" data-run-id={runId}>
+      <button type="button" onClick={onBack}>Back from analysis</button>
+    </div>
+  ),
+}));
 vi.mock('@/components/workflow/run-panel/RunPanelContent', () => ({
-  RunPanelContent: ({ onOpenLogs }: { onOpenLogs?: () => void }) => (
-    <div data-testid="run-parent">
+  RunPanelContent: ({ onOpenLogs, viewRequest }: { onOpenLogs?: () => void; viewRequest?: { view: string } }) => (
+    <div data-testid="run-parent" data-view-request={viewRequest?.view ?? ''}>
       {onOpenLogs && <button type="button" onClick={onOpenLogs}>Open logs</button>}
     </div>
   ),
@@ -218,6 +226,75 @@ describe('WorkflowPanelContent - Application sub-tab (side-panel workflow)', () 
 
     fireEvent.click(screen.getByRole('button', { name: 'actions.logs' }));
     expect(screen.getByTestId('logs-child')).toHaveTextContent('mcp:fetch');
+  });
+
+  it('offers an Analysis sub-tab right after Run, scoped to the bound run, with a way back to Run', () => {
+    render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+
+    const tabs = screen.getAllByTestId('panel-sub-tab').map(b => b.textContent);
+    expect(tabs.indexOf('sidePanel.analysisTab')).toBe(tabs.indexOf('sidePanel.runTab') + 1);
+    const analysisTab = screen.getByRole('button', { name: 'sidePanel.analysisTab' });
+    expect(analysisTab.querySelector('.lucide-chart-column, .lucide-bar-chart-3')).not.toBeNull();
+
+    fireEvent.click(analysisTab);
+    expect(screen.getByTestId('analysis-child')).toHaveAttribute('data-run-id', 'run-1');
+    expect(analysisTab).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByTestId('run-parent')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back from analysis' }));
+    expect(screen.queryByTestId('analysis-child')).toBeNull();
+    expect(screen.getByTestId('run-parent')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'sidePanel.runTab' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('returns from Analysis and from Logs to the run DETAIL, even after the run history was opened', () => {
+    render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+    // The version chip opens the history level of the Run tab.
+    act(() => {
+      window.dispatchEvent(new CustomEvent('workflowOpenRunPanel', { detail: { workflowId: 'wf-1', view: 'history' } }));
+    });
+    expect(screen.getByTestId('run-parent')).toHaveAttribute('data-view-request', 'history');
+
+    fireEvent.click(screen.getByRole('button', { name: 'sidePanel.analysisTab' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back from analysis' }));
+    expect(screen.getByTestId('run-parent')).toHaveAttribute('data-view-request', 'run');
+
+    // Same for Logs, which had the same stale-level return.
+    act(() => {
+      window.dispatchEvent(new CustomEvent('workflowOpenRunPanel', { detail: { workflowId: 'wf-1', view: 'history' } }));
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'actions.logs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to run' }));
+    expect(screen.getByTestId('run-parent')).toHaveAttribute('data-view-request', 'run');
+  });
+
+  it('has no Analysis sub-tab without a bound run, nor on a marketplace preview', () => {
+    runPanelState.current = { runId: null, runInfo: null, isPreviewOnly: false };
+    const { unmount } = render(<WorkflowPanelContent workflowId="wf-none" workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+    expect(screen.queryByRole('button', { name: 'sidePanel.analysisTab' })).toBeNull();
+    unmount();
+
+    runPanelState.current = { runId: 'run-1', runInfo: { runId: 'run-1', status: 'COMPLETED' }, isPreviewOnly: true };
+    const preview = render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" isPreviewOnly workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+    expect(screen.getByRole('button', { name: 'sidePanel.runTab' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'sidePanel.analysisTab' })).toBeNull();
+    preview.unmount();
+
+    // The preview flag can reach the panel through the bus alone (a showcase run), like the Stop control reads it.
+    const busPreview = render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" isPreviewOnly={false} workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+    expect(screen.queryByRole('button', { name: 'sidePanel.analysisTab' })).toBeNull();
+    busPreview.unmount();
+
+    // A public share page: the visitor has no scope on the owner's analysis.
+    runPanelState.current = { runId: 'run-1', runInfo: { runId: 'run-1', status: 'COMPLETED' }, isPreviewOnly: false };
+    pathnameState.current = '/s/share-token';
+    try {
+      render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+      expect(screen.getByRole('button', { name: 'sidePanel.runTab' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'sidePanel.analysisTab' })).toBeNull();
+    } finally {
+      pathnameState.current = '/app/chat';
+    }
   });
 
   it('opens current run logs directly from their sub-tab before any logs request', () => {

@@ -309,6 +309,14 @@ GATEWAY_PUBLIC_URL=http://192.168.1.50:8080`}</CodeBlock>
             Model and skill updates between releases (see the next section).
           </li>
         </ul>
+        <p>
+          Any cloud plan can link an install, the Free plan included. The cloud account must first finish
+          its setup (email verification code and profile): <strong>Connect to Cloud</strong> takes you
+          through it before it returns to your install. What runs on the cloud&apos;s own keys needs a paid
+          plan on the cloud account: cloud-hosted models, integrations through the cloud&apos;s credentials,
+          and web search through the cloud. Without one the install stays linked, keeps the marketplace,
+          skills, and bundle updates, and uses its own keys.
+        </p>
         <p>Once linked, two switches decide what runs through the cloud:</p>
         <DocsTable
           head={['Switch', 'Where', 'Cloud', 'Local']}
@@ -318,7 +326,7 @@ GATEWAY_PUBLIC_URL=http://192.168.1.50:8080`}</CodeBlock>
             [
               'LLM source',
               'Settings > AI Providers',
-              'API model calls use the linked cloud account. Tools and traces still run locally.',
+              'API model calls use the linked cloud account. Tools and traces still run locally. Needs a paid plan on the cloud account.',
               'API keys: model calls use the keys configured on this install.',
             ],
             [
@@ -532,6 +540,16 @@ docker compose up -d`}</CodeBlock>
               'Switching Integration credentials to Cloud is refused',
               'Relayed calls need an active paid subscription on the linked cloud account.',
               'Subscribe on the cloud account, or keep Local keys and add the credentials on this install.',
+            ],
+            [
+              'Switching the LLM source to Cloud is refused, or cloud models answer "paid plan required"',
+              'Cloud-hosted models need a paid plan on the linked cloud account. The link itself stays in place.',
+              'Choose a plan on the cloud account (it works right away, nothing to reconnect), or keep API keys on this install.',
+            ],
+            [
+              'The install shows as connected but cloud features never start',
+              'The cloud account has not finished its setup (email verification code and profile), so the cloud has not registered the install.',
+              'Sign in to LiveContext Cloud and finish the setup. The install registers by itself within a few minutes.',
             ],
           ]}
         />

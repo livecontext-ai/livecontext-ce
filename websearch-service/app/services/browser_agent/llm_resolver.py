@@ -182,7 +182,9 @@ class BridgeChatClient:
     """
 
     def __init__(self, *, model: str, bridge_url: str, api_key: str | None,
-                 provider: str | None, relay_secret: str | None = None):
+                 provider: str | None, relay_secret: str | None = None,
+                 relay_tenant_id: str | None = None,
+                 relay_tenant_sig: str | None = None):
         self.model = model
         # The bridge IS the upstream - never substitute direct provider
         # endpoints here under any circumstance.
@@ -196,6 +198,12 @@ class BridgeChatClient:
         # filter would reject as a non-JWT bearer). Blank/None => the shim is open on the internal
         # network (cloud-link gated).
         self.relay_secret = relay_secret
+        # The CE tenant whose cloud link the shim must relay on, sent as X-Browser-Agent-Tenant-Id.
+        # An install can hold several links; without it the shim would pick the newest one.
+        self.relay_tenant_id = relay_tenant_id
+        # The orchestrator's signature of that tenant (X-Browser-Agent-Tenant-Sig): the shim refuses
+        # a tenant it did not sign, so no caller can pick whose cloud link pays.
+        self.relay_tenant_sig = relay_tenant_sig
         # Cumulative token usage across every ainvoke on this client. browser-use's
         # TokenCost does not track a custom bridge client (and calculate_cost=False disables
         # it), so the runner reads these accumulators to keep the browser agent's token/cost
@@ -287,6 +295,10 @@ class BridgeChatClient:
         # filter passes it through (an Authorization bearer would be 401'd as a non-JWT).
         if self.relay_secret:
             headers["X-Browser-Agent-Relay-Secret"] = str(self.relay_secret)
+        if self.relay_tenant_id:
+            headers["X-Browser-Agent-Tenant-Id"] = str(self.relay_tenant_id)
+        if self.relay_tenant_sig:
+            headers["X-Browser-Agent-Tenant-Sig"] = str(self.relay_tenant_sig)
         body: dict[str, Any] = {"model": self.model, "messages": wire_messages}
 
         # Structured output: if browser-use passed a pydantic model class,
@@ -403,6 +415,8 @@ def _resolve_llm(llm_cfg: dict[str, Any]) -> Any:
             api_key=api_key,
             provider=provider,
             relay_secret=llm_cfg.get("relay_secret"),
+            relay_tenant_id=llm_cfg.get("relay_tenant_id"),
+            relay_tenant_sig=llm_cfg.get("relay_tenant_sig"),
         )
 
     # ── Direct path ───────────────────────────────────────────────────

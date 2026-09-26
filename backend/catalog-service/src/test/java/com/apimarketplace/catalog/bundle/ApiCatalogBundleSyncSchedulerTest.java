@@ -333,13 +333,13 @@ class ApiCatalogBundleSyncSchedulerTest {
     }
 
     @Test
-    @DisplayName("@Scheduled cron sits on tick(), overridable by property and defaulting to a per-process slot")
+    @DisplayName("@Scheduled cron sits on tickIfDue(), overridable by property and defaulting to a per-process slot")
     void scheduledOnTick() throws NoSuchMethodException {
         java.lang.reflect.Method tick =
-                ApiCatalogBundleSyncScheduler.class.getDeclaredMethod("tick");
+                ApiCatalogBundleSyncScheduler.class.getDeclaredMethod("tickIfDue");
         org.springframework.scheduling.annotation.Scheduled scheduled =
                 tick.getAnnotation(org.springframework.scheduling.annotation.Scheduled.class);
-        assertThat(scheduled).as("@Scheduled must be on tick()").isNotNull();
+        assertThat(scheduled).as("@Scheduled must be on tickIfDue()").isNotNull();
         assertThat(scheduled.cron())
                 .as("the documented property must stay the override")
                 .contains("api-catalog.bundle.sync.cron")
@@ -354,7 +354,7 @@ class ApiCatalogBundleSyncSchedulerTest {
         // its full name. A typo there is not a compile error: it surfaces as a
         // bean-creation failure at startup, and a CE install would then never
         // sync again. Evaluating the annotation's own string is what catches it.
-        String expression = ApiCatalogBundleSyncScheduler.class.getDeclaredMethod("tick")
+        String expression = ApiCatalogBundleSyncScheduler.class.getDeclaredMethod("tickIfDue")
                 .getAnnotation(org.springframework.scheduling.annotation.Scheduled.class)
                 .cron();
         String spel = expression.substring(expression.indexOf(":") + 1, expression.length() - 1);

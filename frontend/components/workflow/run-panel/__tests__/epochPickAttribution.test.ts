@@ -82,6 +82,9 @@ describe('who is allowed to record a pick', () => {
       // from `handleSelect` too, which navigated straight there; every chip opens its
       // menu now, because leaving the page is the one click here with no undo.)
       'components/views/AgendaView.tsx',
+      // "Show on the canvas" in the Analysis tab's epoch comparison: a button the user
+      // clicks to open ONE epoch they are looking at. Never from an effect.
+      'components/workflow/run-panel/RunAnalysisPanelContent.tsx',
       // The epoch selector of the Run panel.
       'components/workflow/run-panel/RunPanelContent.tsx',
       // `selectAllEpochs`, called from the three "fire from here" controls.

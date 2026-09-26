@@ -46,7 +46,7 @@ class SkillBundleFetcherTest {
                 eq(HttpMethod.GET), any(HttpEntity.class), eq(SignedSkillBundle.class)))
                 .thenReturn(ResponseEntity.ok(body));
 
-        SkillBundleFetcher.FetchResult r = fetcher().fetchLatest(creds);
+        SkillBundleFetcher.FetchResult r = fetcher().fetchLatest(creds, null);
 
         assertThat(r.status()).isEqualTo(SkillBundleFetcher.Status.FETCHED);
         assertThat(r.bundle()).isEqualTo(body);
@@ -65,7 +65,7 @@ class SkillBundleFetcherTest {
                 eq(SignedSkillBundle.class)))
                 .thenThrow(new HttpClientErrorException(HttpStatus.NOT_FOUND));
 
-        assertThat(fetcher().fetchLatest(creds).status()).isEqualTo(SkillBundleFetcher.Status.NO_ACTIVE);
+        assertThat(fetcher().fetchLatest(creds, null).status()).isEqualTo(SkillBundleFetcher.Status.NO_ACTIVE);
     }
 
     @Test
@@ -75,7 +75,7 @@ class SkillBundleFetcherTest {
                 eq(SignedSkillBundle.class)))
                 .thenThrow(new HttpClientErrorException(HttpStatus.FORBIDDEN));
 
-        assertThat(fetcher().fetchLatest(creds).status()).isEqualTo(SkillBundleFetcher.Status.HTTP_ERROR);
+        assertThat(fetcher().fetchLatest(creds, null).status()).isEqualTo(SkillBundleFetcher.Status.HTTP_ERROR);
     }
 
     @Test
@@ -85,7 +85,7 @@ class SkillBundleFetcherTest {
                 eq(SignedSkillBundle.class)))
                 .thenThrow(new ResourceAccessException("connection refused"));
 
-        assertThat(fetcher().fetchLatest(creds).status()).isEqualTo(SkillBundleFetcher.Status.NETWORK_ERROR);
+        assertThat(fetcher().fetchLatest(creds, null).status()).isEqualTo(SkillBundleFetcher.Status.NETWORK_ERROR);
     }
 
     @Test
@@ -95,7 +95,7 @@ class SkillBundleFetcherTest {
                 eq(SignedSkillBundle.class)))
                 .thenReturn(ResponseEntity.ok(null));
 
-        assertThat(fetcher().fetchLatest(creds).status()).isEqualTo(SkillBundleFetcher.Status.HTTP_ERROR);
+        assertThat(fetcher().fetchLatest(creds, null).status()).isEqualTo(SkillBundleFetcher.Status.HTTP_ERROR);
     }
 
     @Test
@@ -103,7 +103,7 @@ class SkillBundleFetcherTest {
     void notConfigured() {
         SkillBundleFetcher noUrl = new SkillBundleFetcher(restTemplate, "");
 
-        assertThat(noUrl.fetchLatest(creds).status()).isEqualTo(SkillBundleFetcher.Status.NOT_CONFIGURED);
+        assertThat(noUrl.fetchLatest(creds, null).status()).isEqualTo(SkillBundleFetcher.Status.NOT_CONFIGURED);
         org.mockito.Mockito.verifyNoInteractions(restTemplate);
     }
 }

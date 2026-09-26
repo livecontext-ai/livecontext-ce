@@ -30,12 +30,15 @@ vi.mock('@/lib/api', () => ({
 }));
 
 vi.mock('@/lib/api/error-utils', () => ({
-  is402Error: () => false,
+  is402Error: (e: { status?: number }) => e?.status === 402,
   is413StorageError: () => false,
+  isAuthError: (e: { status?: number }) => e?.status === 401,
+  isPlanLimitError: (e: { status?: number; code?: string }) => e?.status === 409 && e?.code === 'PLAN_RESOURCE_LIMIT_EXCEEDED',
 }));
 
 vi.mock('@/lib/billing/ceRelayErrorModals', () => ({ handleCeRelayError }));
-vi.mock('@/components/billing/InsufficientCreditsModal', () => ({ showInsufficientCreditsModal: vi.fn() }));
+const { showInsufficientCreditsModal } = vi.hoisted(() => ({ showInsufficientCreditsModal: vi.fn() }));
+vi.mock('@/components/billing/InsufficientCreditsModal', () => ({ showInsufficientCreditsModal }));
 vi.mock('@/components/billing/InsufficientStorageModal', () => ({ showInsufficientStorageModal: vi.fn() }));
 vi.mock('@/components/billing/MissingApiKeyModal', () => ({ showMissingApiKeyModal }));
 vi.mock('@/components/billing/AgentErrorModal', () => ({ showAgentErrorModal }));
@@ -60,6 +63,7 @@ vi.mock('@/lib/websocket', () => ({ wsClient: { subscribe: (...a: unknown[]) => 
 vi.mock('@/lib/websocket/ws-client', () => ({ wsClient: { subscribe: (...a: unknown[]) => subscribe(...a) } }));
 
 import { StreamingProvider, useStreaming } from '../StreamingContext';
+import { ApiError } from '@/lib/api/api-client';
 
 const wrapper = ({ children }: { children: ReactNode }) => (
   <StreamingProvider>{children}</StreamingProvider>
@@ -143,6 +147,104 @@ describe('StreamingContext chat error -> CE cloud-relay modal routing', () => {
     expect(handleCeRelayError).toHaveBeenCalled();
     expect(showMissingApiKeyModal).not.toHaveBeenCalled();
     expect(showAgentErrorModal).toHaveBeenCalledTimes(1);
+    // The modal is the only error surface (no chat banner), so it must receive the
+    // verbatim failure text and code to explain the failure to the user.
+    expect(showAgentErrorModal).toHaveBeenCalledWith({ message: 'Bridge returned null response', code: 'STREAM_ERROR' });
     expect(streaming.current.getStreamState('conv-a')?.status).toBe('error');
+  });
+
+  it('opens the agent-error modal with the failure text when sending the message itself fails', async () => {
+    // Before the banner was removed, this path only set the stream error state, which
+    // only the banner displayed. Without the modal the user would see nothing at all.
+    handleCeRelayError.mockReturnValue(false);
+    const { result } = renderHook(() => useStreaming(), { wrapper });
+    await act(async () => {});
+    sendChatMessageWs.mockRejectedValueOnce(new Error('Failed to fetch'));
+
+    await act(async () => {
+      await result.current.sendMessage(baseParams('hi'), {});
+    });
+
+    expect(showMissingApiKeyModal).not.toHaveBeenCalled();
+    expect(showAgentErrorModal).toHaveBeenCalledTimes(1);
+    expect(showAgentErrorModal).toHaveBeenCalledWith({ message: 'Failed to fetch', code: 'SEND_FAILED' });
+    expect(result.current.getStreamState('conv-a')?.status).toBe('error');
+  });
+
+  it('a send failure that is an API-key problem keeps its own modal, not the agent-error modal', async () => {
+    handleCeRelayError.mockReturnValue(false);
+    const { result } = renderHook(() => useStreaming(), { wrapper });
+    await act(async () => {});
+    sendChatMessageWs.mockRejectedValueOnce(new Error('Provider is not configured: invalid api key'));
+
+    await act(async () => {
+      await result.current.sendMessage(baseParams('hi'), {});
+    });
+
+    expect(showMissingApiKeyModal).toHaveBeenCalledTimes(1);
+    expect(showAgentErrorModal).not.toHaveBeenCalled();
+  });
+  it('does not re-open the modal when the backend replays a failure this client already showed', async () => {
+    // A socket resubscribe replays the failed turn (SNAPSHOT_REPLAY, generic placeholder text):
+    // it is the SAME failure, so it must not announce itself a second time.
+    handleCeRelayError.mockReturnValue(false);
+    const streaming = await mountAndSend();
+
+    await act(async () => {
+      deliverWsEvent('conv-a', { streamId: 'sid-1', error: 'HTTP 400: bad request', errorCode: 'STREAM_ERROR' });
+    });
+    await act(async () => {
+      deliverWsEvent('conv-a', { streamId: 'sid-1', error: 'Stream ended with error', errorCode: 'SNAPSHOT_REPLAY' });
+    });
+
+    expect(showAgentErrorModal).toHaveBeenCalledTimes(1);
+    expect(showAgentErrorModal).toHaveBeenCalledWith({ message: 'HTTP 400: bad request', code: 'STREAM_ERROR' });
+    expect(streaming.current.getStreamState('conv-a')?.status).toBe('error');
+  });
+
+  it('shows a replayed failure the client never saw (it failed while the socket was down)', async () => {
+    // Without the old red strip, the replay after reconnecting is the only way the user can
+    // learn that the turn failed while disconnected, so the modal must open for it.
+    handleCeRelayError.mockReturnValue(false);
+    await mountAndSend();
+
+    await act(async () => {
+      deliverWsEvent('conv-a', { streamId: 'sid-1', error: 'Stream ended with error', errorCode: 'SNAPSHOT_REPLAY' });
+    });
+
+    expect(showAgentErrorModal).toHaveBeenCalledTimes(1);
+    expect(showAgentErrorModal).toHaveBeenCalledWith({ message: 'Stream ended with error', code: 'SNAPSHOT_REPLAY' });
+  });
+
+  it.each([
+    ['a 409 plan-limit refusal (apiClient shows its own upgrade surface)', new ApiError('Plan limit reached', 409, 'PLAN_RESOURCE_LIMIT_EXCEEDED')],
+    ['a 429 inactive-account refusal (apiClient shows the restore screen)', new ApiError('Inactive account', 429, 'HTTP_429', { message: 'Inactive account' })],
+    ['a 401 (apiClient sends the user back to sign in)', new ApiError('Unauthorized', 401, 'HTTP_401')],
+  ])('a send refused with %s opens no second, generic modal', async (_label, refusal) => {
+    handleCeRelayError.mockReturnValue(false);
+    const { result } = renderHook(() => useStreaming(), { wrapper });
+    await act(async () => {});
+    sendChatMessageWs.mockRejectedValueOnce(refusal);
+
+    await act(async () => {
+      await result.current.sendMessage(baseParams('hi'), {});
+    });
+
+    expect(showAgentErrorModal).not.toHaveBeenCalled();
+    expect(result.current.getStreamState('conv-a')?.status).toBe('error');
+  });
+
+  it('a 402 send refusal keeps the credits modal and opens no agent-error modal', async () => {
+    handleCeRelayError.mockReturnValue(false);
+    const { result } = renderHook(() => useStreaming(), { wrapper });
+    await act(async () => {});
+    sendChatMessageWs.mockRejectedValueOnce(new ApiError('Payment required', 402, 'HTTP_402'));
+
+    await act(async () => {
+      await result.current.sendMessage(baseParams('hi'), {});
+    });
+
+    expect(showInsufficientCreditsModal).toHaveBeenCalledTimes(1);
+    expect(showAgentErrorModal).not.toHaveBeenCalled();
   });
 });

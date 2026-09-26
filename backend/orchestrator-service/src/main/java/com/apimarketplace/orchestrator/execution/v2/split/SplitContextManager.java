@@ -750,7 +750,8 @@ public class SplitContextManager implements RunScopedCache {
      *
      * <p>NOT for production use: with no epoch this cannot tell a scope belonging to the resume
      * from one an earlier epoch left on this pod, so it keeps the pre-2026-08-14 "already exists
-     * -> skip". Both production callers pass their epoch through
+     * -> skip". Every production caller (signal resume, async delivery, and
+     * {@link SplitContextRehydrator}) passes its epoch through
      * {@link #restoreContext(String, String, Map, int)}, and
      * {@code SplitContextEpochStampInvariantTest} fails the build if a new one does not.
      *
@@ -801,7 +802,10 @@ public class SplitContextManager implements RunScopedCache {
      *       before, a pod that had not run epoch N+1's split kept epoch N's slot; now it drops
      *       it on the first N+1 delivery. It is also the reason the comparison is strictly
      *       "older loses" rather than "different loses": a late delivery for a PAST epoch must
-     *       not take the slot from the epoch currently executing.</li>
+     *       not take the slot from the epoch currently executing. Since 2026-09-26
+     *       {@link SplitContextRehydrator} also calls this from every node execution on a resume
+     *       (not only on deliveries), so an older in-flight epoch on this pod loses its slot at
+     *       the first node of a newer epoch that reads the same split; same trade-off, wider.</li>
      * </ul>
      *
      * <p>An {@link SplitContext#UNKNOWN_EPOCH} on either side keeps the pre-fix skip.
@@ -1044,6 +1048,58 @@ public class SplitContextManager implements RunScopedCache {
     public boolean hasContexts(String runId) {
         Map<String, SplitContext> runContexts = contextsByRun.get(runId);
         return runContexts != null && !runContexts.isEmpty();
+    }
+
+    /**
+     * The split node whose scope {@code nodeId} sits in, read from the GRAPH only (no in-memory
+     * context needed), or {@code null} when none can be found.
+     *
+     * <p>Same traversal and the same scope boundaries as {@link #findActiveContext}: walks
+     * predecessors (port suffixes stripped), stops at an aggregate or a split-aggregation merge
+     * other than the starting node, and returns the first split node reached. It exists for the
+     * pod that has to rebuild a context it never created: the orchestrator runs several replicas,
+     * and a signal resume or an async delivery can execute a split-scope node on a pod whose
+     * memory holds no context for that split.
+     *
+     * @return the split node id (no port), or {@code null}
+     */
+    public static String findUpstreamSplitNodeId(String nodeId, Map<String, ExecutionNode> nodeMap) {
+        if (nodeId == null || nodeMap == null || nodeMap.isEmpty()) {
+            return null;
+        }
+        Set<String> visited = new HashSet<>();
+        Queue<String> queue = new LinkedList<>();
+        queue.add(nodeId);
+        boolean isStartingNode = true;
+
+        while (!queue.isEmpty()) {
+            String currentId = queue.poll();
+            if (!visited.add(currentId)) {
+                continue;
+            }
+            String lookupId = currentId;
+            EdgeRefParser.EdgeRef ref = EdgeRefParser.parse(currentId);
+            if (ref != null && ref.port() != null && !ref.port().isEmpty()) {
+                lookupId = ref.nodeType() + ":" + ref.nodeLabel();
+            }
+            ExecutionNode currentNode = nodeMap.get(lookupId);
+            if (currentNode == null) {
+                continue;
+            }
+            if (!isStartingNode && currentNode.isSplitNode()) {
+                return lookupId;
+            }
+            if (!isStartingNode && currentNode.isAggregateNode()) {
+                return null;
+            }
+            if (!isStartingNode && currentNode.isMergeNode()
+                    && !SplitMergeHandler.isBranchRejoinMerge(lookupId, nodeMap)) {
+                return null;
+            }
+            isStartingNode = false;
+            queue.addAll(currentNode.getPredecessorIds());
+        }
+        return null;
     }
 
     /**

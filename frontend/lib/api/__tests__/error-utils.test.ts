@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
+  isCloudLinkOnboardingRequiredError,
   isCloudLinkPlanRequiredError,
   isCreditExhaustedFailure,
   isInsufficientCloudCreditError,
   isModelNotSupportedError,
+  isPlanLimitError,
 } from '@/lib/api/error-utils';
+import { ApiError } from '@/lib/api/api-client';
+import { cloudSourceErrorKey } from '@/lib/api/cloud-link.service';
 
 /**
  * The CE cloud-relay detectors match a stable machine token the cloud relay emits
@@ -111,5 +115,66 @@ describe('isCloudLinkPlanRequiredError', () => {
     expect(isCloudLinkPlanRequiredError('CE_LINK_NOT_ACTIVE')).toBe(false);
     expect(isCloudLinkPlanRequiredError(null)).toBe(false);
     expect(isCloudLinkPlanRequiredError({})).toBe(false);
+  });
+});
+
+describe('apiClient errors carry the machine token in code, not in message', () => {
+  // What apiClient throws for the CE PUT /cloud-link/llm-source 403: the body's readable
+  // `message` becomes the error message and its `error` token becomes `code`.
+  const planRequired = new ApiError(
+    'Cloud models, web search and cloud integrations require a paid LiveContext Cloud plan.',
+    403, 'CLOUD_LINK_PLAN_REQUIRED', { error: 'CLOUD_LINK_PLAN_REQUIRED', planCode: 'FREE' });
+  const onboardingRequired = new ApiError(
+    'Finish setting up your LiveContext Cloud account.', 403, 'CLOUD_LINK_ONBOARDING_REQUIRED');
+
+  it('regression: a plan-required ApiError with a readable message is recognised (the token lived only in code)', () => {
+    expect(isCloudLinkPlanRequiredError(planRequired)).toBe(true);
+    expect(isCloudLinkOnboardingRequiredError(planRequired)).toBe(false);
+  });
+
+  it('recognises the onboarding refusal in every shape', () => {
+    expect(isCloudLinkOnboardingRequiredError(onboardingRequired)).toBe(true);
+    expect(isCloudLinkOnboardingRequiredError('403: {"error":"CLOUD_LINK_ONBOARDING_REQUIRED"}')).toBe(true);
+    expect(isCloudLinkOnboardingRequiredError({ error: 'CLOUD_LINK_ONBOARDING_REQUIRED' })).toBe(true);
+    expect(isCloudLinkOnboardingRequiredError('CE_LINK_NOT_ACTIVE')).toBe(false);
+    expect(isCloudLinkOnboardingRequiredError(null)).toBe(false);
+  });
+
+  it('the other CE detectors read an ApiError code too, and a plain Error without code is unchanged', () => {
+    expect(isInsufficientCloudCreditError(new ApiError('Not enough credit on the cloud account.', 402, 'INSUFFICIENT_CREDITS'))).toBe(true);
+    expect(isModelNotSupportedError(new ApiError('This model is not managed.', 400, 'MODEL_NOT_SUPPORTED'))).toBe(true);
+    // apiClient's fallback code carries no token, so a generic failure matches nothing.
+    const generic = new ApiError('Something failed', 500, 'HTTP_500');
+    expect(isInsufficientCloudCreditError(generic)).toBe(false);
+    expect(isModelNotSupportedError(generic)).toBe(false);
+    expect(isCloudLinkPlanRequiredError(generic)).toBe(false);
+    expect(isCloudLinkPlanRequiredError(new Error('CLOUD_LINK_PLAN_REQUIRED'))).toBe(true);
+    expect(isCloudLinkPlanRequiredError(new Error('plain failure'))).toBe(false);
+  });
+
+  it('cloudSourceErrorKey: why switching a source to Cloud was refused, never for a switch back to local keys', () => {
+    expect(cloudSourceErrorKey(planRequired, 'CLOUD')).toBe('planRequired');
+    expect(cloudSourceErrorKey(onboardingRequired, 'CLOUD')).toBe('onboardingRequired');
+    expect(cloudSourceErrorKey(new ApiError('Conflict', 409, 'CLOUD_LINK_NOT_READY'), 'CLOUD')).toBe('notReady');
+    expect(cloudSourceErrorKey(new ApiError('Conflict', 409, 'CLOUD_LINK_REQUIRED'), 'CLOUD')).toBeNull();
+    expect(cloudSourceErrorKey(planRequired, 'BYOK')).toBeNull();
+  });
+});
+
+describe('isPlanLimitError', () => {
+  // The backend refusal body is {"error":"PLAN_RESOURCE_LIMIT_EXCEEDED", ...} with NO "code"
+  // field; apiClient builds its ApiError code from errorData.code || errorData.error, which is
+  // the shape reproduced here.
+  it('matches the ApiError apiClient throws for the 409 plan-limit body', () => {
+    const body = { error: 'PLAN_RESOURCE_LIMIT_EXCEEDED', message: 'Workflow limit reached' };
+    const error = new ApiError(body.message, 409, (body as { code?: string }).code || body.error, body);
+    expect(isPlanLimitError(error)).toBe(true);
+  });
+
+  it('does not match another 409, the same code on another status, or non-errors', () => {
+    expect(isPlanLimitError(new ApiError('Conflict', 409, 'HTTP_409'))).toBe(false);
+    expect(isPlanLimitError(new ApiError('x', 400, 'PLAN_RESOURCE_LIMIT_EXCEEDED'))).toBe(false);
+    expect(isPlanLimitError(null)).toBe(false);
+    expect(isPlanLimitError('PLAN_RESOURCE_LIMIT_EXCEEDED')).toBe(false);
   });
 });

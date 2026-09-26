@@ -74,7 +74,7 @@ export function createViewConfig(
     return {
       mode: isModal ? 'workflowModal' : 'workflow',
       isNestedNavigation,
-      // At root the backend emits `id` as the step's row index, and as its first column, so it is
+      // At root the backend emits `id` as the row's coordinates, and as its first column, so it is
       // the identity there whether or not the view asked for a lane. Nested, it is item data.
       idIsRowLevel: showIdColumn || !isNestedNavigation,
       showIdColumn: showIdColumn,

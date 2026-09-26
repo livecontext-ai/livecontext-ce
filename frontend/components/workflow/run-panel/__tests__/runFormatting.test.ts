@@ -4,6 +4,7 @@ import {
   formatCompactDuration,
   getBarColor,
   isRunStatusActive,
+  stepDisplayDurationMs,
 } from '@/components/workflow/run-panel/runFormatting';
 
 describe('getBarColor', () => {
@@ -39,6 +40,99 @@ describe('formatCompactDuration', () => {
   it('pads the seconds/minutes remainder so the column never jitters', () => {
     expect(formatCompactDuration(187_000)).toBe('3m07s');
     expect(formatCompactDuration(7_500_000)).toBe('2h05m');
+  });
+
+  it('never prints a 60 in the seconds slot: the whole figure is rounded before it is split', () => {
+    // Rounding only the remainder printed "1m60s" and "59m60s" for these.
+    expect(formatCompactDuration(119_700)).toBe('2m00s');
+    expect(formatCompactDuration(3_599_700)).toBe('1h00m');
+    expect(formatCompactDuration(59_600)).toBe('1m00s');
+  });
+
+  it('switches to whole seconds before the one-decimal form would print "10.0s"', () => {
+    expect(formatCompactDuration(9_940)).toBe('9.9s');
+    expect(formatCompactDuration(9_960)).toBe('10s');
+  });
+});
+
+describe('stepDisplayDurationMs', () => {
+  const base = {
+    alias: 'mcp:fetch',
+    startTime: '2026-09-26T10:00:00Z',
+    endTime: '2026-09-26T10:01:00Z',
+  };
+
+  it('one epoch: the time the node HELD the epoch, not the summed items of a parallel split', () => {
+    // 10 items x 5 s in parallel: 50 s of work, 5 s held.
+    const step = { ...base, status: 'completed', executionTimeMs: 50_000, elapsedMs: 5_000, statusCounts: { completed: 10 } };
+    expect(stepDisplayDurationMs(step, false)).toBe(5_000);
+  });
+
+  it('one epoch: never the first-start/last-end span, which for a loop body counts the other nodes', () => {
+    // A loop body: bounds a minute apart, 10 iterations of 1 s. Neither 60 s (the span) nor a
+    // recomputation from the bounds: the backend's per-iteration figure.
+    const step = { ...base, status: 'completed', executionTimeMs: 10_000, elapsedMs: 10_000, statusCounts: { completed: 10 } };
+    expect(stepDisplayDurationMs(step, false)).toBe(10_000);
+  });
+
+  it('one epoch from a backend that sends no elapsed time: the reported execution time', () => {
+    const step = { ...base, status: 'completed', executionTimeMs: 1_200 };
+    expect(stepDisplayDurationMs(step, false)).toBe(1_200);
+  });
+
+  it('all epochs: the cumulative total when the backend sends one (negative clamped to 0)', () => {
+    const step = { ...base, status: 'completed', executionTimeMs: 800, totalExecutionTimeMs: 24_000, statusCounts: { completed: 30 } };
+    expect(stepDisplayDurationMs(step, true)).toBe(24_000);
+    expect(stepDisplayDurationMs({ ...step, totalExecutionTimeMs: -5 }, true)).toBe(0);
+  });
+
+  it('all epochs: a single execution stands in for the total only when the node ran once', () => {
+    const once = { ...base, status: 'completed', executionTimeMs: 800, statusCounts: { completed: 1 } };
+    const many = { ...base, status: 'completed', executionTimeMs: 800, statusCounts: { completed: 30 } };
+    // Running and waiting executions count too: two executions is not "ran once".
+    const twoKinds = { ...base, status: 'completed', executionTimeMs: 800, statusCounts: { completed: 1, awaitingSignal: 1 } };
+    expect(stepDisplayDurationMs(once, true)).toBe(800);
+    // One execution drawn next to its neighbours' 30-epoch totals would read 30x too short.
+    expect(stepDisplayDurationMs(many, true)).toBeNull();
+    expect(stepDisplayDurationMs(twoKinds, true)).toBeNull();
+  });
+
+  it('a skipped node has no duration at all, never "<1s"', () => {
+    const step = { ...base, status: 'skipped', executionTimeMs: 0, elapsedMs: 0, statusCounts: { skipped: 4 } };
+    expect(stepDisplayDurationMs(step, false)).toBeNull();
+    expect(stepDisplayDurationMs(step, true)).toBeNull();
+  });
+
+  it('one epoch: a node still executing ticks from its start until part of it has been timed', () => {
+    const now = Date.parse('2026-09-26T10:00:07Z');
+    const noEnd = { ...base, endTime: null, status: 'running' };
+    expect(stepDisplayDurationMs(noEnd, false, now)).toBe(7_000);
+  });
+
+  it('one epoch: a rerun still running, with no timed row of its own, shows nothing rather than hours since the old attempt', () => {
+    const now = Date.parse('2026-09-26T13:00:00Z'); // the old attempt started three hours ago
+    const rerun = { ...base, status: 'running', statusCounts: { completed: 5, running: 5 } };
+    expect(stepDisplayDurationMs(rerun, false, now)).toBeNull();
+  });
+
+  it('one epoch: a loop body between iterations shows its timed iterations, not the time since its first start', () => {
+    // First start 10:00:00, three 1 s iterations done, the other nodes ran in between: 7 s since
+    // the start would count them, then drop to 3 s the moment the node finishes.
+    const now = Date.parse('2026-09-26T10:00:07Z');
+    const loopBody = { ...base, endTime: '2026-09-26T10:00:05Z', status: 'running', elapsedMs: 3_000, statusCounts: { completed: 3, running: 1 } };
+    expect(stepDisplayDurationMs(loopBody, false, now)).toBe(3_000);
+  });
+
+  it('all epochs: a node running now keeps its cumulative total, never "elapsed since the first epoch"', () => {
+    const now = Date.parse('2026-09-27T10:00:00Z'); // a day after the first start
+    const step = { ...base, endTime: null, status: 'running', totalExecutionTimeMs: 4_000, statusCounts: { completed: 3, running: 1 } };
+    expect(stepDisplayDurationMs(step, true, now)).toBe(4_000);
+  });
+
+  it('nothing to say when nothing was timed', () => {
+    const step = { alias: 'mcp:fetch', status: 'completed', startTime: null, endTime: null };
+    expect(stepDisplayDurationMs(step, false)).toBeNull();
+    expect(stepDisplayDurationMs(step, true)).toBeNull();
   });
 });
 

@@ -5,12 +5,9 @@
  * The CE opens /<locale>/onboarding?ce_link=1&client_id&redirect_uri&state&code_challenge&
  * code_challenge_method. The page stores the validated request on arrival (it has to survive
  * the sign-in redirect, the email step and reloads), and where the page used to leave for the
- * chat it now asks GET /api/ce-link/eligibility first:
- *  - eligible     -> the Keycloak authorization rebuilt from the app's own config (SSO, so the
- *                    user is not asked to sign in again) and the pending link is cleared;
- *  - not eligible -> the pricing page with ?ce_link=1, the link kept for after the checkout;
- *  - check failed -> the same pricing page, whose banner can re-check.
- * Without a pending link nothing changes: the chat, and no eligibility call.
+ * chat it goes to the Keycloak authorization rebuilt from the app's own config (SSO, so the user
+ * is not asked to sign in again) and clears the pending link. Any plan, FREE included, may link:
+ * there is no plan check and no pricing detour. Without a pending link nothing changes: the chat.
  */
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
@@ -21,7 +18,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   apiPost: vi.fn(),
-  eligibility: vi.fn(),
   leaveForChat: vi.fn(),
   assignLocation: vi.fn(),
   loginWithRedirect: vi.fn(),
@@ -42,7 +38,6 @@ vi.mock('@/lib/providers/smart-providers', () => ({
   }),
 }));
 vi.mock('@/lib/api', () => ({ apiClient: { get: mocks.apiGet, post: mocks.apiPost } }));
-vi.mock('@/lib/api/ce-link.service', () => ({ ceLinkService: { eligibility: () => mocks.eligibility() } }));
 vi.mock('@/lib/navigation/leaveForChat', () => ({ leaveForChat: (l: string) => mocks.leaveForChat(l) }));
 vi.mock('@/lib/navigation/assignLocation', () => ({ assignLocation: (u: string) => mocks.assignLocation(u) }));
 vi.mock('@/lib/edition', () => ({ IS_CE: false }));
@@ -104,10 +99,9 @@ describe('Onboarding - CE link continuation (cloud)', () => {
     sessionStorage.clear();
   });
 
-  it('already onboarded + eligible: goes to the rebuilt Keycloak authorization, not the chat, and clears the pending link', async () => {
+  it('already onboarded (FREE plan included): goes to the rebuilt Keycloak authorization, not the chat, and clears the pending link', async () => {
     window.history.replaceState({}, '', `/en/onboarding${ceLinkQuery()}`);
     mockOnboardingStatus(false);
-    mocks.eligibility.mockResolvedValue({ eligible: true, planCode: 'PRO', reason: null });
 
     renderPage();
 
@@ -124,30 +118,6 @@ describe('Onboarding - CE link continuation (cloud)', () => {
     expect(sessionStorage.getItem(PENDING_CE_LINK_KEY)).toBeNull();
   });
 
-  it('already onboarded + not eligible: goes to the pricing page with ce_link=1 and keeps the link pending', async () => {
-    window.history.replaceState({}, '', `/en/onboarding${ceLinkQuery()}`);
-    mockOnboardingStatus(false);
-    mocks.eligibility.mockResolvedValue({ eligible: false, planCode: 'FREE', reason: 'PLAN_REQUIRED' });
-
-    renderPage();
-
-    await waitFor(() => expect(mocks.assignLocation).toHaveBeenCalledWith('/en/app/settings/pricing?ce_link=1'));
-    expect(mocks.leaveForChat).not.toHaveBeenCalled();
-    expect(sessionStorage.getItem(PENDING_CE_LINK_KEY)).not.toBeNull();
-  });
-
-  it('eligibility check failure: goes to the pricing page (its banner re-checks), never to Keycloak', async () => {
-    window.history.replaceState({}, '', `/en/onboarding${ceLinkQuery()}`);
-    mockOnboardingStatus(false);
-    mocks.eligibility.mockRejectedValue(new Error('503'));
-
-    renderPage();
-
-    await waitFor(() => expect(mocks.assignLocation).toHaveBeenCalledWith('/en/app/settings/pricing?ce_link=1'));
-    expect(mocks.assignLocation).toHaveBeenCalledTimes(1);
-    expect(mocks.leaveForChat).not.toHaveBeenCalled();
-  });
-
   it('a link stored earlier in the tab (sign-in, FirstLoginGuard or email step in between) still continues without the query', async () => {
     // Captured on a first visit...
     window.history.replaceState({}, '', `/en/onboarding${ceLinkQuery()}`);
@@ -160,7 +130,6 @@ describe('Onboarding - CE link continuation (cloud)', () => {
     // ...then back on the bare onboarding path, finishing onboarding by skipping.
     window.history.replaceState({}, '', '/en/onboarding');
     mocks.apiPost.mockResolvedValue({});
-    mocks.eligibility.mockResolvedValue({ eligible: true, planCode: 'TEAM', reason: null });
     renderPage();
     const skip = await screen.findByText('skipForNow');
     await waitFor(() => expect(skip.closest('button')).not.toBeDisabled());
@@ -173,13 +142,24 @@ describe('Onboarding - CE link continuation (cloud)', () => {
     expect(mocks.leaveForChat).not.toHaveBeenCalled();
   });
 
-  it('without a CE link: leaves for the chat as before and never asks for eligibility', async () => {
+  it('pending link but no usable Keycloak config: falls back to the chat, never to a broken authorize URL, link kept', async () => {
+    vi.stubEnv('NEXT_PUBLIC_KEYCLOAK_URL', '');
+    window.history.replaceState({}, '', `/en/onboarding${ceLinkQuery()}`);
     mockOnboardingStatus(false);
 
     renderPage();
 
     await waitFor(() => expect(mocks.leaveForChat).toHaveBeenCalledWith('en'));
-    expect(mocks.eligibility).not.toHaveBeenCalled();
+    expect(mocks.assignLocation).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(PENDING_CE_LINK_KEY)).not.toBeNull();
+  });
+
+  it('without a CE link: leaves for the chat as before', async () => {
+    mockOnboardingStatus(false);
+
+    renderPage();
+
+    await waitFor(() => expect(mocks.leaveForChat).toHaveBeenCalledWith('en'));
     expect(mocks.assignLocation).not.toHaveBeenCalled();
   });
 
@@ -195,7 +175,6 @@ describe('Onboarding - CE link continuation (cloud)', () => {
 
     await waitFor(() => expect(mocks.leaveForChat).toHaveBeenCalledWith('en'));
     expect(sessionStorage.getItem(PENDING_CE_LINK_KEY)).toBeNull();
-    expect(mocks.eligibility).not.toHaveBeenCalled();
     expect(mocks.assignLocation).not.toHaveBeenCalled();
   });
 

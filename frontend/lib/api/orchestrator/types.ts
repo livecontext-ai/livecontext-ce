@@ -2114,7 +2114,43 @@ export interface AggregatedStepTiming {
   startTime?: string;
   endTime?: string;
   executionTimeMs?: number;
+  /** Per-epoch requests only: how long the node held the epoch (per-iteration spans, summed). */
+  elapsedMs?: number;
   statusCounts?: Record<string, number>;
+}
+
+/** One node of one epoch in the run analysis. `status` uses the aggregated vocabulary (completed, error, partial_success, skipped, running, awaiting_signal, pending). */
+export interface RunAnalysisNodeCell {
+  alias: string;
+  status: string;
+  /** Summed execution time of the node's rows in that epoch: parallel split items are ADDED UP, so this can exceed the elapsed time. */
+  executionTimeMs: number;
+  /** How long the node held the epoch: per loop iteration, the span of its latest attempt; iterations added up. Null when nothing was timed yet. */
+  elapsedMs?: number | null;
+  statusCounts?: Record<string, number>;
+  /** One error message of the node's failed rows in that epoch, bounded to 300 chars. */
+  errorMessage?: string | null;
+}
+
+/** One epoch of the run analysis window. */
+export interface RunAnalysisEpoch {
+  epoch: number;
+  startedAt: string | null;
+  endedAt: string | null;
+  /** First node start to last node end (same figure as the Run tab's epoch list). */
+  workDurationMs?: number | null;
+  /** COMPLETED or FAILED, absent while the epoch is open or ran nothing but its trigger. */
+  status?: string | null;
+  costCredits?: number | null;
+  nodes: RunAnalysisNodeCell[];
+}
+
+/** The run analysis payload: the most recent epochs of a run, oldest first. */
+export interface RunAnalysis {
+  runId: string;
+  /** Every epoch the run has, the window being the last `epochs.length` of them. */
+  totalEpochs: number;
+  epochs: RunAnalysisEpoch[];
 }
 
 /**

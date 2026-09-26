@@ -78,21 +78,83 @@ export interface StepEntry {
   endTime: string | null;
   executionTimeMs?: number;
   totalExecutionTimeMs?: number;
+  /** One epoch only: how long the node held the epoch (see stepDisplayDurationMs). */
+  elapsedMs?: number;
   statusCounts?: StepStatusCounts;
 }
 
-/** `1.4s` / `42s` / `3m07s` / `2h05m` - never wider than 6 chars. */
+/**
+ * `1.4s` / `42s` / `3m07s` / `2h05m` - never wider than 6 chars.
+ *
+ * Rounds the WHOLE figure before splitting it into units. Rounding only the remainder printed
+ * `1m60s` for 119.7 s and `59m60s` for 3599.7 s, and the one-decimal branch printed `10.0s`.
+ */
 export function formatCompactDuration(ms: number): string {
   if (ms < 1000) return '<1s';
   const sec = ms / 1000;
-  if (sec < 10) return `${sec.toFixed(1)}s`;
-  if (sec < 60) return `${Math.round(sec)}s`;
-  const minutes = Math.floor(sec / 60);
-  const remSec = Math.round(sec % 60);
+  if (sec < 9.95) return `${sec.toFixed(1)}s`;
+  const totalSec = Math.round(sec);
+  if (totalSec < 60) return `${totalSec}s`;
+  const minutes = Math.floor(totalSec / 60);
+  const remSec = totalSec % 60;
   if (minutes < 60) return `${minutes}m${String(remSec).padStart(2, '0')}s`;
   const hours = Math.floor(minutes / 60);
   const remainMin = minutes % 60;
   return `${hours}h${String(remainMin).padStart(2, '0')}m`;
+}
+
+/** Total executions a step's status counts report, 0 when it carries none. */
+function executionCount(counts?: StepStatusCounts): number {
+  if (!counts) return 0;
+  return (counts.completed ?? 0) + (counts.failed ?? 0) + (counts.skipped ?? 0)
+    + (counts.running ?? 0) + (counts.awaitingSignal ?? 0);
+}
+
+/**
+ * How long to say a step took, for the step gauge and its tooltip. Null means "no honest
+ * figure": callers render nothing, never `<1s`.
+ *
+ * The backend sends several durations under overlapping names, and this is the one place that
+ * picks among them:
+ * - **All epochs** (`cumulative`): `totalExecutionTimeMs`, the sum over every epoch. The
+ *   single-execution `executionTimeMs` is only an acceptable stand-in when the step ran at most
+ *   once; for a node that ran many times it is ONE execution, and drawing it on the same scale as
+ *   its neighbours' totals made a 30-epoch node look shorter than a one-off.
+ * - **One epoch**: `elapsedMs`, how long the node HELD the epoch, as the backend measures it
+ *   (per loop iteration, the span of its rows; iterations added up). Neither obvious figure
+ *   is right: the per-epoch `executionTimeMs` ADDS UP the rows (ten parallel split items of 5 s
+ *   read 50 s), and `endTime - startTime` counts, for a loop body, every other node of every
+ *   iteration in between. Falls back to `executionTimeMs` from a backend that does not send it.
+ * - **A node still executing in one epoch**: before anything of it was timed, elapsed since its
+ *   start, so it ticks. Once part of it was timed (a loop body between iterations, a split with
+ *   finished items), that timed figure: elapsed-since-first-start would count the other nodes of
+ *   the earlier iterations, then drop when the node finished. Never in the all-epochs view, whose
+ *   first start belongs to the run's first epoch.
+ * - **Skipped only**: null. A skipped node did not run; its rows start and end together and
+ *   printed `<1s`.
+ */
+export function stepDisplayDurationMs(
+  step: Pick<StepEntry, 'status' | 'startTime' | 'endTime' | 'executionTimeMs' | 'totalExecutionTimeMs' | 'statusCounts' | 'elapsedMs'>,
+  cumulative: boolean,
+  now: number = Date.now(),
+): number | null {
+  const effective = deriveEffectiveStatus(step.status, step.statusCounts);
+  if (effective === 'skipped') return null;
+  if (cumulative) {
+    if (step.totalExecutionTimeMs != null) return Math.max(0, step.totalExecutionTimeMs);
+    if (step.executionTimeMs != null && executionCount(step.statusCounts) <= 1) return Math.max(0, step.executionTimeMs);
+    return null;
+  }
+  const start = step.startTime ? parseUtcAware(step.startTime).getTime() : NaN;
+  if (effective === 'running' && step.elapsedMs == null) {
+    // Tick from the start only for a node none of whose rows has finished: otherwise the start is
+    // that of an earlier attempt (a rerun), and "now - start" would read hours.
+    const c = step.statusCounts;
+    const finished = (c?.completed ?? 0) + (c?.failed ?? 0) + (c?.skipped ?? 0);
+    return finished === 0 && !isNaN(start) ? Math.max(0, now - start) : null;
+  }
+  if (step.elapsedMs != null) return Math.max(0, step.elapsedMs);
+  return step.executionTimeMs != null ? Math.max(0, step.executionTimeMs) : null;
 }
 
 /** Tailwind classes for a waterfall duration bar, by effective step status. */

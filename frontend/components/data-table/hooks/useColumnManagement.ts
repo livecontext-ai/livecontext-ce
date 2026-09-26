@@ -86,7 +86,8 @@ export function useColumnManagement({
         col_id: 'id',
         field: 'id',
         header_name: 'ID',
-        type: 'number' as const,
+        // Run-log ids are coordinates ("20.0.2", "21:3"), text for the icon and the formatting.
+        type: 'text' as const,
         editable: false,
         sortable: true,
         filterable: false

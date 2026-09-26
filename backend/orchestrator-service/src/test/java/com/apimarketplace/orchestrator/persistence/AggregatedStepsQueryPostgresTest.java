@@ -104,6 +104,8 @@ class AggregatedStepsQueryPostgresTest {
 
     private String wholeRunSql;
     private String epochSql;
+    private String rangeSql;
+    private String elapsedSql;
     private JdbcTemplate jdbc;
 
     @BeforeAll
@@ -119,6 +121,8 @@ class AggregatedStepsQueryPostgresTest {
 
         wholeRunSql = shippedSql("getAggregatedStepsByRunId", String.class);
         epochSql = shippedSql("getAggregatedStepsByRunIdAndEpoch", String.class, int.class);
+        rangeSql = shippedSql("getAggregatedStepsByRunIdAndEpochRange", String.class, int.class, int.class);
+        elapsedSql = shippedSql("getElapsedByRunIdAndEpochRange", String.class, int.class, int.class);
 
         awaitDatabase();
         DriverManagerDataSource ds = new DriverManagerDataSource(URL, USER, PASSWORD);
@@ -146,7 +150,8 @@ class AggregatedStepsQueryPostgresTest {
                     spawn       INTEGER,
                     iteration   INTEGER,
                     item_index  INTEGER,
-                    trigger_id  VARCHAR(2000)
+                    trigger_id  VARCHAR(2000),
+                    error_message TEXT
                 )
                 """);
     }
@@ -324,7 +329,193 @@ class AggregatedStepsQueryPostgresTest {
                 .contains("SubPlan");
     }
 
+    @Test
+    @DisplayName("the epoch-range query answers, epoch by epoch, exactly what the per-epoch query answers")
+    void rangeMatchesThePerEpochQueryEpochByEpoch() {
+        insert("fetch", "COMPLETED", 1, 0, 0, 0);
+        insert("fetch", "COMPLETED", 2, 0, 0, 0);
+        insert("fetch", "SKIPPED", 2, 1, 0, 0);          // rerun of epoch 2 supersedes its COMPLETED
+        insert("fetch", "COMPLETED", 3, 0, 0, 1);        // two items in epoch 3
+        insert("fetch", "FAILED", 3, 0, 0, 0);
+        insert("branch", "COMPLETED", 3, 0, 1, 0);
+        insert("fetch", "COMPLETED", 4, 0, 0, 0);        // outside the range asked below
+
+        List<Map<String, Object>> range = jdbc.queryForList(bindRange(rangeSql, 1, 3));
+
+        for (int epoch = 1; epoch <= 3; epoch++) {
+            final int e = epoch;
+            List<Map<String, Object>> sliced = range.stream()
+                    .filter(r -> ((Number) r.get("epoch")).intValue() == e)
+                    .map(AggregatedStepsQueryPostgresTest::withoutRangeColumns)
+                    .toList();
+            assertThat(sliced)
+                    .as("epoch %d of the range must equal the per-epoch answer", e)
+                    .containsExactlyInAnyOrderElementsOf(jdbc.queryForList(bind(epochSql, RUN, e)));
+        }
+        assertThat(range).noneMatch(r -> ((Number) r.get("epoch")).intValue() == 4);
+    }
+
+    @Test
+    @DisplayName("the epoch-range query treats legacy NULL-epoch rows as the per-epoch query does")
+    void rangeTreatsNullEpochAsThePerEpochQueryDoes() {
+        insert("node", "COMPLETED", null, 0, 0, 0, TRIGGER);
+        insert("node", "COMPLETED", 0, 0, 0, 0, TRIGGER);
+        insert("node", "SKIPPED", null, 1, 0, 0, TRIGGER);
+        insert("node", "COMPLETED", 1, 0, 0, 0, TRIGGER);
+
+        List<Map<String, Object>> range = jdbc.queryForList(bindRange(rangeSql, 0, 1));
+
+        assertThat(range).as("a NULL epoch never appears as an epoch of its own")
+                .allMatch(r -> r.get("epoch") != null);
+        assertThat(range.stream().filter(r -> ((Number) r.get("epoch")).intValue() == 0).toList())
+                .as("the NULL-epoch spawn-1 row supersedes epoch 0, exactly as in the per-epoch query")
+                .isEmpty();
+        assertThat(jdbc.queryForList(bind(epochSql, RUN, 0))).isEmpty();
+        assertThat(range.stream().filter(r -> ((Number) r.get("epoch")).intValue() == 1).count()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("the epoch-range query carries a failed node's error message")
+    void rangeCarriesTheErrorMessage() {
+        jdbc.update("INSERT INTO workflow_step_data "
+                        + "(run_id, step_alias, tool_id, status, start_time, end_time, epoch, spawn, iteration, item_index, trigger_id, error_message) "
+                        + "VALUES (?, 'fetch', 'tool', 'FAILED', now(), now(), 5, 0, 0, 0, ?, 'HTTP 429')", RUN, TRIGGER);
+
+        Map<String, Object> only = jdbc.queryForList(bindRange(rangeSql, 5, 5)).get(0);
+
+        assertThat(only.get("errorMessage")).isEqualTo("HTTP 429");
+        assertThat(only.get("status")).isEqualTo("FAILED");
+    }
+
+    @Test
+    @DisplayName("the epoch-range query carries no correlated subquery either")
+    void rangeQueryCarriesNoSubplan() {
+        for (int epoch = 0; epoch < 20; epoch++) {
+            insert("node", "COMPLETED", epoch, 0, 0, 0);
+        }
+
+        assertThat(explain(bindRange(rangeSql, 1, 10))).doesNotContain("SubPlan");
+    }
+
+    @Test
+    @DisplayName("elapsed: a loop body adds up its iterations, not the span across the whole loop")
+    void elapsedOfALoopBodyIsTheSumOfItsIterations() {
+        // A runs 1 s per iteration, B runs 1 s after it: A's first start to last end is 5 s,
+        // but A itself only held the epoch 3 s.
+        for (int it = 0; it < 3; it++) {
+            timed("a", 1, it, 0, 0, TRIGGER, "10:00:0" + (2 * it), "10:00:0" + (2 * it + 1));
+            timed("b", 1, it, 0, 0, TRIGGER, "10:00:0" + (2 * it + 1), "10:00:0" + (2 * it + 2));
+        }
+
+        assertThat(elapsed(1, 1)).containsEntry("1|a", 3_000L).containsEntry("1|b", 3_000L);
+    }
+
+    @Test
+    @DisplayName("elapsed: parallel split items in one iteration count once (their span), not summed")
+    void elapsedOfParallelItemsIsTheirSpan() {
+        timed("split", 1, 0, 0, 0, TRIGGER, "10:00:00", "10:00:05");
+        timed("split", 1, 0, 1, 0, TRIGGER, "10:00:01", "10:00:05");
+        timed("split", 1, 0, 2, 0, TRIGGER, "10:00:00", "10:00:04");
+
+        assertThat(elapsed(1, 1)).containsEntry("1|split", 5_000L);
+    }
+
+    @Test
+    @DisplayName("elapsed: a split inside a loop is the span of each iteration's items, summed over iterations")
+    void elapsedOfASplitInsideALoop() {
+        timed("s", 1, 0, 0, 0, TRIGGER, "10:00:00", "10:00:02");
+        timed("s", 1, 0, 1, 0, TRIGGER, "10:00:00", "10:00:03");
+        timed("s", 1, 1, 0, 0, TRIGGER, "10:00:10", "10:00:12");
+        timed("s", 1, 1, 1, 0, TRIGGER, "10:00:10", "10:00:11");
+
+        assertThat(elapsed(1, 1)).containsEntry("1|s", 5_000L);
+    }
+
+    @Test
+    @DisplayName("elapsed: a superseded spawn, a still-running row and other epochs do not count; two triggers add up")
+    void elapsedIgnoresSupersededRunningAndOutOfRangeRows() {
+        timed("n", 2, 0, 0, 0, TRIGGER, "10:00:00", "10:00:09");         // superseded by the rerun below
+        timed("n", 2, 0, 0, 1, TRIGGER, "10:01:00", "10:01:02");         // rerun: 2 s
+        timed("n", 2, 0, 1, 1, TRIGGER, "10:01:00", null);               // still running: nothing
+        timed("n", 2, 0, 0, 0, "trigger:other", "10:02:00", "10:02:01"); // another trigger: +1 s
+        timed("n", 3, 0, 0, 0, TRIGGER, "10:03:00", "10:03:30");         // outside the range
+
+        Map<String, Long> result = elapsed(1, 2);
+        assertThat(result).containsEntry("2|n", 3_000L);
+        assertThat(result).doesNotContainKey("3|n");
+    }
+
+    @Test
+    @DisplayName("elapsed: a rerun with fewer items or iterations is timed on its own rows, not stretched by the old attempt")
+    void elapsedOfAShrunkRerunIgnoresTheOldAttempt() {
+        // First attempt at 09:00: 4 items in iteration 0, plus iteration 1. The rerun at 10:00
+        // (spawn 1) redoes items 0-1 of iteration 0 only. The old items 2-3 and the old iteration 1
+        // are still the latest rows of THEIR coordinate, but they are not this attempt.
+        for (int item = 0; item < 4; item++) {
+            timed("split", 1, 0, item, 0, TRIGGER, "09:00:00", "09:00:05");
+        }
+        timed("split", 1, 1, 0, 0, TRIGGER, "09:00:10", "09:00:15");
+        timed("split", 1, 0, 0, 1, TRIGGER, "10:00:00", "10:00:03");
+        timed("split", 1, 0, 1, 1, TRIGGER, "10:00:00", "10:00:02");
+
+        assertThat(elapsed(1, 1)).containsEntry("1|split", 3_000L);
+    }
+
+    @Test
+    @DisplayName("elapsed: legacy NULL-epoch rows read as epoch 0, and never leak into epochs 1 and up")
+    void elapsedTreatsNullEpochAsEpochZero() {
+        jdbc.update("INSERT INTO workflow_step_data "
+                        + "(run_id, step_alias, tool_id, status, start_time, end_time, epoch, spawn, iteration, item_index, trigger_id) "
+                        + "VALUES (?, 'legacy', 'tool', 'COMPLETED', '2026-01-01 10:00:00+00'::timestamptz, '2026-01-01 10:00:04+00'::timestamptz, NULL, 0, 0, 0, ?)",
+                RUN, TRIGGER);
+        timed("legacy", 1, 0, 0, 0, TRIGGER, "10:01:00", "10:01:01");
+
+        // A NULL epoch is never an epoch of its own, so it is filtered out of the answer...
+        assertThat(elapsed(0, 1)).doesNotContainKey("0|legacy").doesNotContainKey("null|legacy").containsEntry("1|legacy", 1_000L);
+        // ...and a range starting at 1 does not read it at all.
+        assertThat(elapsed(1, 1)).containsEntry("1|legacy", 1_000L);
+    }
+
+    @Test
+    @DisplayName("elapsed: a node whose only row is still running is absent (no figure, never a zero)")
+    void elapsedOfAnUntimedNodeIsAbsent() {
+        timed("running", 1, 0, 0, 0, TRIGGER, "10:00:00", null);
+
+        assertThat(elapsed(1, 1)).doesNotContainKey("1|running");
+    }
+
     // -- helpers --
+
+    /** "epoch|alias" -> elapsedMs of the shipped elapsed query. */
+    private Map<String, Long> elapsed(int fromEpoch, int toEpoch) {
+        Map<String, Long> out = new LinkedHashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList(bindRange(elapsedSql, fromEpoch, toEpoch))) {
+            out.put(r.get("epoch") + "|" + r.get("stepAlias"), ((Number) r.get("elapsedMs")).longValue());
+        }
+        return out;
+    }
+
+    private void timed(String alias, int epoch, int iteration, int item, int spawn, String triggerId, String start, String end) {
+        jdbc.update("INSERT INTO workflow_step_data "
+                        + "(run_id, step_alias, tool_id, status, start_time, end_time, epoch, spawn, iteration, item_index, trigger_id) "
+                        + "VALUES (?, ?, 'tool', 'COMPLETED', ?::timestamptz, ?::timestamptz, ?, ?, ?, ?, ?)",
+                RUN, alias, "2026-01-01 " + start + "+00", end == null ? null : "2026-01-01 " + end + "+00",
+                epoch, spawn, iteration, item, triggerId);
+    }
+
+    private static String bindRange(String sql, int fromEpoch, int toEpoch) {
+        return sql.replace(":runId", "'" + RUN + "'")
+                .replace(":fromEpoch", String.valueOf(fromEpoch))
+                .replace(":toEpoch", String.valueOf(toEpoch));
+    }
+
+    /** A range row minus the two columns the per-epoch query does not select. */
+    private static Map<String, Object> withoutRangeColumns(Map<String, Object> row) {
+        Map<String, Object> copy = new LinkedHashMap<>(row);
+        copy.remove("epoch");
+        copy.remove("errorMessage");
+        return copy;
+    }
 
     /** Rows of the SHIPPED whole-run query, as (alias, status, count) for readable assertions. */
     private List<Map<String, Object>> wholeRun() {

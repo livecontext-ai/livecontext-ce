@@ -50,6 +50,12 @@ public class GeminiProvider extends AbstractLLMProvider {
     /** Google caps models.list at 1000 per page; the default is 50. */
     private static final int MODELS_PAGE_SIZE = 1000;
 
+    /** Part field carrying the opaque token Gemini requires back with its function calls. */
+    static final String THOUGHT_SIGNATURE = "thoughtSignature";
+
+    /** Value Google documents for a function call whose real signature is unavailable. */
+    static final String SKIP_THOUGHT_SIGNATURE_VALIDATOR = "skip_thought_signature_validator";
+
     // Stage 1a.8 - inline-attachment byte cap. See AttachmentSizeGuard#DEFAULT_MAX_INLINE_BYTES
     // for the canonical constant; keep the three provider @Value defaults in lockstep with it.
     @Value("${ai.attachments.max-inline-bytes:262144}")
@@ -654,7 +660,7 @@ public class GeminiProvider extends AbstractLLMProvider {
      * Parse Gemini function calls from a streaming line.
      */
     @SuppressWarnings("unchecked")
-    private List<ToolCall> parseGeminiToolCalls(String line) {
+    List<ToolCall> parseGeminiToolCalls(String line) {
         if (line == null || line.isEmpty()) {
             return null;
         }
@@ -702,6 +708,8 @@ public class GeminiProvider extends AbstractLLMProvider {
                             .toolName(name)
                             .arguments(args)
                             .index(i)
+                            .thoughtSignature(part.hasNonNull(THOUGHT_SIGNATURE)
+                                ? part.get(THOUGHT_SIGNATURE).asText() : null)
                             .build());
                     }
                 }
@@ -850,10 +858,24 @@ public class GeminiProvider extends AbstractLLMProvider {
         List<Map<String, Object>> contents = new ArrayList<>();
 
         if (request.conversationHistory() != null) {
+            boolean previousWasToolResult = false;
             for (Message msg : request.conversationHistory()) {
-                if (msg.role() != Message.Role.SYSTEM) {
-                    contents.add(convertGeminiMessage(msg));
+                if (msg.role() == Message.Role.SYSTEM) {
+                    continue;
                 }
+                Map<String, Object> converted = convertGeminiMessage(msg);
+                boolean isToolResult = msg.role() == Message.Role.TOOL;
+                if (isToolResult && previousWasToolResult) {
+                    // Gemini answers a model turn with ONE user turn holding a functionResponse
+                    // per functionCall, in order; one turn per result is rejected (HTTP 400)
+                    // as soon as the model made parallel calls.
+                    @SuppressWarnings("unchecked")
+                    List<Object> parts = (List<Object>) contents.get(contents.size() - 1).get("parts");
+                    parts.addAll((List<?>) converted.get("parts"));
+                } else {
+                    contents.add(converted);
+                }
+                previousWasToolResult = isToolResult;
             }
         }
 
@@ -868,24 +890,20 @@ public class GeminiProvider extends AbstractLLMProvider {
     }
 
     private Map<String, Object> convertGeminiMessage(Message message) {
-        String role = switch (message.role()) {
-            case USER -> "user";
-            case ASSISTANT -> "model";
-            case TOOL -> "function";
-            default -> "user";
-        };
+        String role = message.role() == Message.Role.ASSISTANT ? "model" : "user";
 
-        // Tool result (function response)
+        // Tool result (function response). Gemini carries functionResponse parts in a
+        // "user" turn: the legacy "function" role is rejected with HTTP 400.
         if (message.role() == Message.Role.TOOL) {
-            return Map.of(
-                "role", "function",
-                "parts", List.of(Map.of(
-                    "functionResponse", Map.of(
-                        "name", message.toolName(),
-                        "response", Map.of("output", message.content())
-                    )
-                ))
-            );
+            // Mutable parts: buildGeminiContents appends the results of parallel calls here.
+            List<Object> parts = new ArrayList<>();
+            parts.add(Map.of(
+                "functionResponse", Map.of(
+                    "name", message.toolName(),
+                    "response", Map.of("output", message.content())
+                )
+            ));
+            return Map.of("role", "user", "parts", parts);
         }
 
         // User message WITH attachments - multimodal content
@@ -903,14 +921,25 @@ public class GeminiProvider extends AbstractLLMProvider {
                 parts.add(Map.of("text", message.content()));
             }
 
-            // Add function calls
+            // Add function calls. Gemini rejects the turn unless the FIRST function call of
+            // the step carries a thoughtSignature (parallel calls: only the first has one).
+            // Echo the signature the model gave; when it was lost (history rebuilt from
+            // storage, tool call not produced by Gemini) send the validator bypass value
+            // Google documents for that case.
+            boolean firstCall = true;
             for (ToolCall tc : message.toolCalls()) {
-                parts.add(Map.of(
-                    "functionCall", Map.of(
-                        "name", tc.toolName(),
-                        "args", tc.arguments() != null ? tc.arguments() : Map.of()
-                    )
+                Map<String, Object> part = new LinkedHashMap<>();
+                part.put("functionCall", Map.of(
+                    "name", tc.toolName(),
+                    "args", tc.arguments() != null ? tc.arguments() : Map.of()
                 ));
+                if (tc.thoughtSignature() != null && !tc.thoughtSignature().isBlank()) {
+                    part.put(THOUGHT_SIGNATURE, tc.thoughtSignature());
+                } else if (firstCall) {
+                    part.put(THOUGHT_SIGNATURE, SKIP_THOUGHT_SIGNATURE_VALIDATOR);
+                }
+                parts.add(part);
+                firstCall = false;
             }
 
             log.debug("Converting ASSISTANT message with {} tool calls to Gemini format", message.toolCalls().size());
@@ -1036,6 +1065,7 @@ public class GeminiProvider extends AbstractLLMProvider {
                             .toolName(name)
                             .arguments(args != null ? args : Map.of())
                             .index(i)
+                            .thoughtSignature(part.get(THOUGHT_SIGNATURE) instanceof String sig ? sig : null)
                             .build());
                     }
                 }

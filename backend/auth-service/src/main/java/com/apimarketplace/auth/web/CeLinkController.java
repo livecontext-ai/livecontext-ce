@@ -11,7 +11,6 @@ import com.apimarketplace.auth.service.CeLinkService;
 import com.apimarketplace.auth.service.IpHashService;
 import com.apimarketplace.auth.service.RequestAuditContext;
 import com.apimarketplace.auth.util.ClientIpExtractor;
-import com.apimarketplace.common.plan.CeLinkAccessResult;
 import com.apimarketplace.common.plan.CeLinkRefusal;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -31,8 +30,6 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -80,8 +77,9 @@ public class CeLinkController {
      *   <li>201 + {@code registered=true} - new binding, or idempotent retry by same user.</li>
      *   <li>409 + {@code error=ALREADY_BOUND} - install_id already owned (possibly by someone else).
      *       {@code boundToEmail} is non-null ONLY when the caller is the prior owner.</li>
-     *   <li>403 + {@code error=CLOUD_LINK_PLAN_REQUIRED} - the caller's governing plan is not paid
-     *       (new register AND idempotent re-register). Shared body, see {@link CeLinkRefusal}.</li>
+     *   <li>403 + {@code error=CLOUD_LINK_ONBOARDING_REQUIRED} - new register by an account that
+     *       has not completed the cloud onboarding (email code included). Nothing is written, so
+     *       the CE's next heartbeat tick registers once the onboarding is done. Any plan may link.</li>
      * </ul>
      */
     @PostMapping("/register")
@@ -94,30 +92,12 @@ public class CeLinkController {
         RequestAuditContext audit = RequestAuditContext.from(httpRequest, ipHashService, body.installId());
         CeLinkRegisterResponse response = service.register(userId, body.installId(), body.ceVersion(),
                 body.label(), audit);
-        if (response.isPlanRequired()) {
+        if (response.isOnboardingRequired()) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(CeLinkRefusal.planRequiredBody(response.planCode()));
+                    .body(CeLinkRefusal.onboardingRequiredBody());
         }
         HttpStatus status = response.registered() ? HttpStatus.CREATED : HttpStatus.CONFLICT;
         return ResponseEntity.status(status).body(response);
-    }
-
-    /**
-     * May the caller link a self-hosted install right now? Read by the cloud onboarding before it
-     * completes a CE link (eligible: continue to the authorize step; not eligible: pricing page).
-     * Same plan rule as register and every relay ({@link CeLinkService#planAccess}): the governing
-     * plan (the owner of the DEFAULT workspace of the user, NOT the workspace active in the
-     * browser, so this answers exactly what register and the relays will) must be paid. Always 200.
-     * {@code {"eligible": bool, "planCode": "...", "reason": "PLAN_REQUIRED" | null}}.
-     */
-    @GetMapping("/eligibility")
-    public ResponseEntity<Map<String, Object>> eligibility(@RequestHeader("X-User-ID") Long userId) {
-        CeLinkAccessResult access = service.planAccess(userId);
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("eligible", access.isActive());
-        body.put("planCode", access.planCode());
-        body.put("reason", access.isActive() ? null : access.access().name());
-        return ResponseEntity.ok(body);
     }
 
     /**
@@ -185,8 +165,7 @@ public class CeLinkController {
      * Persist a heartbeat (doc §3.5). 204 = stored. 404 = install not in
      * caller's namespace (also the masking response for cross-user enumeration).
      * 410 GONE = link was revoked; the CE side should stop heartbeating.
-     * 403 {@code CLOUD_LINK_PLAN_REQUIRED} = heartbeat recorded, but the link is suspended until
-     * the account is on a paid plan again (never revoked for the plan).
+     * The plan is never checked here: a FREE account's link is alive like any other.
      *
      * <p>Caller IP comes from {@link ClientIpExtractor} (X-Forwarded-For chain
      * set by Caddy/Cloudflare) - never persisted in plaintext; immediately
@@ -201,13 +180,11 @@ public class CeLinkController {
     ) {
         String ip = ClientIpExtractor.extract(request);
         log.debug("POST /api/ce-link/{}/heartbeat userId={}", installId, userId);
-        CeLinkHeartbeatService.Result result = heartbeatService.heartbeat(userId, installId, body.ceVersion(), ip);
-        return switch (result.outcome()) {
+        CeLinkHeartbeatService.Outcome outcome = heartbeatService.heartbeat(userId, installId, body.ceVersion(), ip);
+        return switch (outcome) {
             case OK -> ResponseEntity.noContent().build();
             case NOT_FOUND -> ResponseEntity.notFound().build();
             case REVOKED -> ResponseEntity.status(HttpStatus.GONE).build();
-            case PLAN_REQUIRED -> ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(CeLinkRefusal.planRequiredBody(result.planCode()));
         };
     }
 }

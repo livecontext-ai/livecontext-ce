@@ -5,6 +5,7 @@
  */
 
 import { apiClient } from './api-client';
+import { isCloudLinkOnboardingRequiredError, isCloudLinkPlanRequiredError } from './error-utils';
 import type { CreditSummary, CreditHistoryPage } from './services/quota-api.service';
 
 export interface CloudLinkStatus {
@@ -48,10 +49,10 @@ export interface CloudLinkStatus {
    */
   installCloudPlanCode?: string;
   /**
-   * The cloud refused this install's link because the cloud account is not on a paid plan
-   * (register or heartbeat answered 403 CLOUD_LINK_PLAN_REQUIRED). The link itself is KEPT:
-   * paying again on the cloud restores it automatically, with no re-link. Cleared on the next
-   * successful register or heartbeat.
+   * Register or heartbeat answered 403 CLOUD_LINK_PLAN_REQUIRED. The current cloud lets any
+   * plan link and no longer answers that there (only the paid relays check the plan), so this
+   * is set only against a cloud that still did, and cleared by the next successful register or
+   * heartbeat.
    */
   planRequired?: boolean;
   /** The refusing cloud account's plan code (e.g. FREE) when {@link planRequired}, else null. */
@@ -85,14 +86,32 @@ export function cloudSubscriptionPays(cloudPlanCode?: string | null): boolean {
   return cloudPlanCode !== CLOUD_NO_SUBSCRIPTION && cloudPlanCode.toUpperCase() !== 'FREE';
 }
 
+/**
+ * Why switching a CE source to Cloud was refused, from the error the backend answered: the
+ * linked cloud account is not on a paid plan (every Cloud source is a paid relay), or it has not
+ * finished the cloud onboarding, or the cloud cannot be reached right now (409
+ * CLOUD_LINK_NOT_READY). {@code null} for anything else (not linked, a transport error) and for a
+ * switch back to local keys, which never looks at the plan.
+ */
+export function cloudSourceErrorKey(
+  error: unknown,
+  requested: 'CLOUD' | 'BYOK',
+): 'planRequired' | 'onboardingRequired' | 'notReady' | null {
+  if (requested !== 'CLOUD') return null;
+  if (isCloudLinkPlanRequiredError(error)) return 'planRequired';
+  if (isCloudLinkOnboardingRequiredError(error)) return 'onboardingRequired';
+  if ((error as { code?: unknown })?.code === 'CLOUD_LINK_NOT_READY') return 'notReady';
+  return null;
+}
+
 export interface AuthUrlResponse {
   authUrl: string;
   state: string;
   /**
    * Cloud onboarding entry that carries the same OAuth parameters
    * ({@code <cloud web>/onboarding?ce_link=1&...}). A new cloud account completes the
-   * cloud onboarding (email verification, profile, a paid plan) there before the cloud
-   * continues to the very same Keycloak authorization. Absent on an older backend.
+   * cloud onboarding (email verification, profile) there before the cloud continues to the
+   * very same Keycloak authorization. Absent on an older backend.
    */
   startUrl?: string;
 }

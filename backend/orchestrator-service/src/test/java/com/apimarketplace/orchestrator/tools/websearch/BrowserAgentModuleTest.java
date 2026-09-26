@@ -106,6 +106,36 @@ class BrowserAgentModuleTest {
     }
 
     @Test
+    @DisplayName("regression: a caller cannot name whose cloud link pays - relay_tenant_id / relay_tenant_sig / relay_secret in the llm param never reach the runner")
+    void callerSuppliedRelayIdentityIsStripped() throws Exception {
+        when(config.getBrowserAgentBlpopTimeout()).thenReturn(150);
+        lenient().when(config.getCallbackBaseUrl()).thenReturn("http://orchestrator:8099");
+        when(redisTemplate.opsForList()).thenReturn(listOps);
+        lenient().when(redisTemplate.opsForHash()).thenReturn(mock(org.springframework.data.redis.core.HashOperations.class));
+        when(listOps.leftPop(eq("agent:browser:result:job-forged"), any(Duration.class)))
+                .thenReturn("{\"final_result\":\"done\",\"stop_reason\":\"COMPLETED\"}");
+        when(restTemplate.postForObject(eq(SERVICE_URL + "/jobs/submit"), any(), eq(Map.class)))
+                .thenReturn(Map.of("job_id", "job-forged"));
+        ToolExecutionContext context = new ToolExecutionContext(
+                "user-1", Map.of(), Map.of(), java.util.Set.of(), null, null, null, null);
+
+        Map<String, Object> forgedLlm = new java.util.HashMap<>();
+        forgedLlm.put("provider", "google");
+        forgedLlm.put("model", "gemini-3.1-flash-lite");
+        forgedLlm.put("provider_kind", "bridge");
+        forgedLlm.put("bridge_url", "http://livecontext:8080/api/browser-agent/llm");
+        forgedLlm.put("relay_tenant_id", "victim-7");
+        forgedLlm.put("relay_tenant_sig", "forged-signature");
+        forgedLlm.put("relay_secret", "guessed-secret");
+        module.execute("agent_browse", Map.of("task", "x", "llm", forgedLlm), null, context);
+
+        ArgumentCaptor<Object> submitted = ArgumentCaptor.forClass(Object.class);
+        verify(restTemplate).postForObject(eq(SERVICE_URL + "/jobs/submit"), submitted.capture(), eq(Map.class));
+        String wire = objectMapper.writeValueAsString(submitted.getValue());
+        assertThat(wire).doesNotContain("victim-7").doesNotContain("forged-signature").doesNotContain("guessed-secret");
+    }
+
+    @Test
     @DisplayName("agent_browse from plain chat: meta hash keeps the conversationId chat routing")
     @SuppressWarnings("unchecked")
     void agentBrowseChatMetaHashUnchanged() throws Exception {
