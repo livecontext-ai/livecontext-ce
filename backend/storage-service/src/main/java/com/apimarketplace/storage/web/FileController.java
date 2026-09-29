@@ -70,6 +70,21 @@ public class FileController {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     OrgAccessGuard orgAccessGuard;
 
+    /**
+     * Lifetime of a {@link #signedUrlById} link: 4 hours, the showcase and {@code core:public_link}
+     * default. The frontend never renews a link (renewing would reload the iframe and reset the page),
+     * so this has to outlast a run page left open; short enough that a copied link dies on its own.
+     */
+    @org.springframework.beans.factory.annotation.Value("${storage.signed-url.ttl-seconds:14400}")
+    long signedUrlTtlSeconds = 14400;
+
+    /**
+     * Share-link scope checks against orchestrator. Optional for slim unit wiring; when null a
+     * share-link read is refused (fail closed), never served.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    com.apimarketplace.common.web.SharedApplicationScopeClient sharedApplicationScopeClient;
+
     public FileController(FileStorageService fileStorageService,
                           MimeTypeRegistry mimeTypeRegistry,
                           TenantResolver tenantResolver,
@@ -109,6 +124,13 @@ public class FileController {
             HttpServletRequest request) {
 
         String tenantId = tenantResolver.resolve(request);
+        // Org VIEWERs are read-only platform-wide, and an upload is a write that also
+        // consumes the workspace storage quota (same rule as deleteFile below).
+        if (OrgAccessGuard.isRoleWriteBlocked(
+                tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request))) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("error", "VIEWER role cannot upload files"));
+        }
         logger.info("File upload: name={}, size={}, workflow={}, run={}, tenant={}",
             file.getOriginalFilename(), file.getSize(), workflowId, runId, tenantId);
 
@@ -153,6 +175,13 @@ public class FileController {
             HttpServletRequest request) {
 
         String tenantId = tenantResolver.resolve(request);
+        // Org VIEWERs are read-only platform-wide, and an upload is a write that also
+        // consumes the workspace storage quota (same rule as deleteFile below).
+        if (OrgAccessGuard.isRoleWriteBlocked(
+                tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request))) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("error", "VIEWER role cannot upload files"));
+        }
         logger.info("Generic upload: name={}, size={}, category={}, tenant={}",
             file.getOriginalFilename(), file.getSize(), category, tenantId);
 
@@ -249,30 +278,8 @@ public class FileController {
             @RequestParam(defaultValue = "inline") String disposition,
             HttpServletRequest request) {
 
-        if (storageIndex == null) {
-            return ResponseEntity.notFound().build();
-        }
-        String tenantId = tenantResolver.resolve(request);
-        String orgId = tenantResolver.resolveOrgId(request);
-
-        // Org-scoped first (any member of the file's workspace can view it). Then the OWNER
-        // fast-path: the uploader can serve their OWN file regardless of the active workspace - a
-        // browser <img>/<a>/new-tab request cannot carry X-Active-Organization-ID, so the gateway
-        // resolves the caller's DEFAULT org, which may differ from the file's org. Without this,
-        // a user's own file 404s whenever a non-default workspace is active. Mirrors canServeKey.
-        StorageEntity entity = null;
-        if (orgId != null && !orgId.isBlank()) {
-            entity = storageIndex.getEntityByIdForScope(id, tenantId, orgId).orElse(null);
-        }
+        StorageEntity entity = readableEntity(id, request);
         if (entity == null) {
-            entity = storageIndex.getEntityById(id, tenantId).orElse(null);
-        }
-        if (entity == null || entity.getFileName() == null) {
-            // 404 (never 403) - don't leak existence; also reject non-file rows (step-output JSON
-            // blobs have no file name), matching the files-tool "real files only" model.
-            return ResponseEntity.notFound().build();
-        }
-        if (!canAccessFile(request, entity, id)) {
             return ResponseEntity.notFound().build();
         }
 
@@ -322,6 +329,90 @@ public class FileController {
             .header(HttpHeaders.CACHE_CONTROL, "private, max-age=300")
             .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(copy.length))
             .body(body);
+    }
+
+    /**
+     * The file row behind {@code id} when THIS caller may read it, else {@code null}. The one
+     * authorisation for every by-id read: {@link #rawById} streams the bytes, {@link #signedUrlById}
+     * hands out a short-lived link to them, and the two must never disagree on who may see a file.
+     *
+     * <p>Org-scoped first (any member of the file's workspace can view it). Then the OWNER
+     * fast-path: the uploader can serve their OWN file regardless of the active workspace - a
+     * browser {@code <img>}/{@code <a>}/new-tab request cannot carry X-Active-Organization-ID, so
+     * the gateway resolves the caller's DEFAULT org, which may differ from the file's org. Without
+     * this, a user's own file 404s whenever a non-default workspace is active. Mirrors canServeKey.
+     * Non-file rows (step-output JSON blobs have no file name) are refused, matching the files-tool
+     * "real files only" model, and a share-link holder (authenticated AS THE OWNER) only reaches the
+     * shared application's files. Callers answer 404 on null, never 403: existence is not leaked.
+     */
+    private StorageEntity readableEntity(UUID id, HttpServletRequest request) {
+        if (storageIndex == null) {
+            return null;
+        }
+        String tenantId = tenantResolver.resolve(request);
+        String orgId = tenantResolver.resolveOrgId(request);
+        StorageEntity entity = null;
+        if (orgId != null && !orgId.isBlank()) {
+            entity = storageIndex.getEntityByIdForScope(id, tenantId, orgId).orElse(null);
+        }
+        if (entity == null) {
+            entity = storageIndex.getEntityById(id, tenantId).orElse(null);
+        }
+        if (entity == null || entity.getFileName() == null) {
+            return null;
+        }
+        if (!canAccessFile(request, entity, id)) {
+            return null;
+        }
+        if (!com.apimarketplace.common.storage.service.SharedApplicationFileScope.permits(
+                com.apimarketplace.common.web.SharedApplicationScope.from(request),
+                entity, tenantId, orgId, sharedApplicationScopeClient)) {
+            return null;
+        }
+        return entity;
+    }
+
+    /**
+     * A short-lived {@code /api/files/proxy-signed} link to a file the caller may read.
+     *
+     * <p>Why it exists: an interface iframe is sandboxed without same-origin, so it cannot send the
+     * session header, and the frontend therefore inlines every file it shows as a base64
+     * {@code data:} URI. That is right for an icon and ruinous for a video: six 20 MB clips became
+     * several hundred MB of string and the whole page died on {@code RangeError: Invalid string
+     * length}. For media and large files the frontend asks here instead, and the browser streams the
+     * bytes from the signed URL. The link names ONE file, expires on its own, and carries no session
+     * token, which is the property the {@code data:} conversion was protecting.
+     *
+     * <p>Same authorisation as {@link #rawById} ({@link #readableEntity}), so nothing is reachable
+     * here that is not already readable there. 404 when the row is not readable or has no object in
+     * storage (an inline row has nothing to stream); 503 when this installation has no signing
+     * secret, which the frontend treats like any other refusal. The signed URL carries the storage
+     * key (and so the owner's numeric id) exactly as the showcase and {@code core:public_link} links
+     * do; it is handed only to a caller who can already read the file.
+     */
+    @GetMapping("/by-id/{id}/signed-url")
+    public ResponseEntity<Map<String, Object>> signedUrlById(
+            @PathVariable UUID id,
+            @RequestParam(defaultValue = "inline") String disposition,
+            HttpServletRequest request) {
+        StorageEntity entity = readableEntity(id, request);
+        if (entity == null || entity.getS3Key() == null || entity.getS3Key().isBlank()) {
+            return ResponseEntity.notFound().build();
+        }
+        if (!showcaseUrlSigner.isEnabled()) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+        }
+        String dispo = "attachment".equalsIgnoreCase(disposition) ? "attachment" : "inline";
+        long exp = java.time.Instant.now().getEpochSecond() + signedUrlTtlSeconds;
+        String sig = showcaseUrlSigner.sign(entity.getS3Key(), exp, dispo);
+        if (sig == null) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+        }
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .body(Map.of(
+                        "url", com.apimarketplace.common.storage.url.FileProxyUrls.signedPath(entity.getS3Key(), exp, dispo, sig),
+                        "expires_at", exp));
     }
 
     /**
@@ -422,7 +513,8 @@ public class FileController {
             @RequestParam String key,
             @RequestParam long exp,
             @RequestParam(defaultValue = "inline") String disposition,
-            @RequestParam String sig) {
+            @RequestParam String sig,
+            @RequestHeader(value = HttpHeaders.RANGE, required = false) String range) {
 
         long now = java.time.Instant.now().getEpochSecond();
         boolean validSig = showcaseUrlSigner.verify(key, exp, disposition, sig, now);
@@ -437,17 +529,41 @@ public class FileController {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
 
+        String resolvedName = FileNameExtractor.fromStoragePath(key);
+        final String mimeType = mimeTypeRegistry.resolve(resolvedName);
+        if (resolvedName != null && !resolvedName.contains(".") && mimeType != null) {
+            String ext = mimeTypeToExtension(mimeType);
+            if (ext != null) resolvedName = resolvedName + ext;
+        }
+        final String contentDisposition = ContentDispositions.of(
+                "attachment".equalsIgnoreCase(disposition) ? "attachment" : "inline", resolvedName);
+        // A <video> asks for ranges: serve one as 206 so it plays everywhere (Safari/iOS refuse a
+        // 200-only source) and can seek. Anything that is not one satisfiable range gets the whole
+        // file below, which is always a valid answer.
+        String rangeSpec = ByteRanges.singleRange(range);
+        if (rangeSpec != null) {
+            java.util.Optional<com.apimarketplace.storage.service.file.RangedDownload> ranged =
+                    fileStorageService.openStreamRange(key, rangeSpec);
+            if (ranged.isPresent()) {
+                com.apimarketplace.storage.service.file.RangedDownload part = ranged.get();
+                final long partLength = part.body().contentLength();
+                signedOkCounter.increment();
+                ResponseEntity.BodyBuilder partial = SignedProxyHeaders.guard(ResponseEntity.status(HttpStatus.PARTIAL_CONTENT), mimeType)
+                        .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
+                        .header(HttpHeaders.CONTENT_TYPE, mimeType)
+                        .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                        .header(HttpHeaders.CONTENT_RANGE, part.contentRange())
+                        .header(HttpHeaders.CACHE_CONTROL, SignedResponseCacheControl.forExpiry(exp, now));
+                if (partLength >= 0) {
+                    partial.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(partLength));
+                }
+                return partial.body(out -> ClientStreamCopier.copy(part.body(), out, partLength, streamingMetrics,
+                        "signed proxy range key=" + key));
+            }
+        }
+
         return fileStorageService.openStream(key)
             .map(ds -> {
-                String fileName = FileNameExtractor.fromStoragePath(key);
-                String mimeType = mimeTypeRegistry.resolve(fileName);
-                if (fileName != null && !fileName.contains(".") && mimeType != null) {
-                    String ext = mimeTypeToExtension(mimeType);
-                    if (ext != null) fileName = fileName + ext;
-                }
-                String contentDisposition = ContentDispositions.of(
-                        "attachment".equalsIgnoreCase(disposition) ? "attachment" : "inline", fileName);
-
                 final long advertisedLength = ds.contentLength();
                 StreamingResponseBody body = out -> {
                     ClientStreamCopier.copy(ds, out, advertisedLength, streamingMetrics,
@@ -455,9 +571,10 @@ public class FileController {
                 };
 
                 signedOkCounter.increment();
-                ResponseEntity.BodyBuilder builder = ResponseEntity.ok()
+                ResponseEntity.BodyBuilder builder = SignedProxyHeaders.guard(ResponseEntity.ok(), mimeType)
                         .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
                         .header(HttpHeaders.CONTENT_TYPE, mimeType)
+                        .header(HttpHeaders.ACCEPT_RANGES, "bytes")
                         .header(HttpHeaders.CACHE_CONTROL, SignedResponseCacheControl.forExpiry(exp, now));
                 if (advertisedLength >= 0) {
                     builder.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(advertisedLength));

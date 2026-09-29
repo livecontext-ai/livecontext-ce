@@ -121,6 +121,11 @@
       "cloudHint": "Les récompenses arrivent sur votre compte cloud ({username}).",
       "loading": "Chargement de vos informations de parrainage..."
     },
+    "inline": {
+      "toggle": "Vous avez un code ?",
+      "pending": "Code {code} en attente : appliquez-le",
+      "apply": "Appliquer"
+    },
     "redeem": {
       "title": "Utiliser un code",
       "subtitle": "Vous avez un code de parrainage ou promo ? Saisissez-le ici.",
@@ -129,6 +134,15 @@
       "redeeming": "Validation...",
       "successGranted": "Code validé. Votre avantage est maintenant actif.",
       "successPending": "Code appliqué. Votre récompense se débloque une fois votre abonnement confirmé.",
+      "successCredits": "Code activé : {credits} crédits ajoutés à votre solde.",
+      "successPlan": "Code activé : votre compte est en {plan} jusqu'au {until}.",
+      "successCreditsAndPlan": "Code activé : {credits} crédits ajoutés, et votre compte est en {plan} jusqu'au {until}.",
+      "pendingTitle": "Code {code}",
+      "dismiss": "Fermer",
+      "signedOutTitle": "Profitez de votre code",
+      "signedOutBody": "Connectez-vous ou créez un compte gratuit. Votre code sera appliqué automatiquement une fois connecté.",
+      "signedOutBodyWithCode": "Connectez-vous ou créez un compte gratuit. Le code {code} sera appliqué automatiquement une fois connecté.",
+      "signedOutCta": "Se connecter ou créer un compte",
       "errors": {
         "invalidCode": "Ce code n'existe pas.",
         "notRedeemable": "Ce code n'est pas disponible pour le moment.",
@@ -136,6 +150,11 @@
         "exhausted": "Ce code a atteint sa limite d'utilisation.",
         "selfReferral": "Vous ne pouvez pas utiliser votre propre code de parrainage.",
         "alreadyPaid": "Ce code est réservé aux nouveaux abonnements.",
+        "alreadyAttributed": "Votre compte utilise déjà un code partenaire.",
+        "emailNotVerified": "Vérifiez votre adresse e-mail pour utiliser ce code.",
+        "notNewAccount": "Ce code est réservé aux nouveaux comptes.",
+        "nothingToGrant": "Votre compte a déjà ce plan ou un plan supérieur.",
+        "retry": "Impossible d'utiliser ce code pour le moment. Réessayez.",
         "cloudLinkRequired": "Connectez votre compte cloud pour utiliser un code.",
         "generic": "Impossible d'utiliser ce code."
       }
@@ -229,6 +248,7 @@
     "subtitle": "Organisations qui vous ont invité à les rejoindre. Acceptez pour devenir membre.",
     "loadError": "Échec du chargement des invitations.",
     "acceptError": "Impossible d'accepter l'invitation. Le lien est peut-être expiré ou déjà utilisé.",
+    "emailNotVerified": "Vérifiez votre adresse e-mail avant d'accepter ou de refuser une invitation.",
     "declineError": "Impossible de refuser l'invitation. Elle est peut-être expirée ou déjà utilisée.",
     "signInRequired": "Connectez-vous pour voir vos invitations en attente.",
     "emptyState": "Vous n'avez aucune invitation en attente.",
@@ -273,13 +293,32 @@
     "passwordTooShort": "Le mot de passe doit comporter au moins 8 caractères",
     "passwordMismatch": "Les mots de passe ne correspondent pas",
     "invalidTitle": "Invitation indisponible",
-    "invalidBody": "Ce lien d'invitation est invalide, expiré ou a déjà été utilisé."
+    "invalidBody": "Ce lien d'invitation est invalide, expiré ou a déjà été utilisé.",
+    "confirmTitle": "Rejoindre {org} ?",
+    "confirmTitleGeneric": "Rejoindre cet espace de travail ?",
+    "confirmBody": "Vous avez été invité à rejoindre cet espace de travail. Vérifiez l'invitation, puis acceptez-la ou refusez-la.",
+    "workspaceLabel": "Espace de travail",
+    "roleLabel": "Rôle",
+    "invitedByLabel": "Invité par",
+    "acceptCta": "Accepter l'invitation",
+    "declineCta": "Refuser",
+    "decliningTitle": "Refus de l'invitation...",
+    "declinedTitle": "Invitation refusée",
+    "declinedBody": "Vous n'avez pas rejoint cet espace de travail. Vous pouvez fermer cette page.",
+    "declineErrorTitle": "Impossible de refuser cette invitation",
+    "declineFallbackError": "Le refus de l'invitation a échoué. Le lien est peut-être expiré ou déjà utilisé.",
+    "emailNotVerifiedTitle": "Vérifiez d'abord votre e-mail",
+    "emailNotVerifiedBody": "Votre adresse e-mail n'est pas encore vérifiée. Vérifiez-la, puis rouvrez ce lien d'invitation pour l'accepter ou la refuser.",
+    "errorWrongAccount": "Cette invitation a été envoyée à une autre adresse e-mail. Connectez-vous avec l'adresse invitée pour y répondre.",
+    "errorGeneric": "L'invitation n'a pas pu être acceptée. Elle a peut-être expiré ou déjà été utilisée, ou l'espace de travail est complet. Demandez un nouveau lien à la personne qui vous a invité."
   },
   "metadata": {
     "title": "LiveContext - Hub d'outils MCP",
     "description": "Découvrez et utilisez des outils MCP (Model Context Protocol) puissants pour vos projets de développement et d'automatisation."
   },
   "common": {
+    "viewerReadOnlyTitle": "Accès en lecture seule",
+    "viewerReadOnly": "Votre rôle dans cet espace de travail est Lecteur, en lecture seule. Demandez à un propriétaire ou à un administrateur de l’espace si vous devez apporter des modifications.",
     "infoAbout": "À propos de {label}",
     "addToFavorites": "Ajouter aux favoris",
     "removeFromFavorites": "Retirer des favoris",
@@ -951,6 +990,7 @@
     "placeholder": "Écrivez un message...",
     "placeholderOrbi": "Écrivez à Orbi...",
     "orbiPoke": "Chatouiller Orbi",
+    "scrollToBottom": "Revenir au dernier message",
     "send": "Envoyer",
     "stop": "Stop",
     "queue": {
@@ -1335,6 +1375,14 @@
       "config": "Configuration"
     },
     "runInfo": {
+      "epochNav": {
+        "browse": "Parcourir les époques",
+        "previous": "Époque précédente",
+        "next": "Époque suivante",
+        "nextFailure": "Époque en échec suivante",
+        "timeline": "Frise des époques",
+        "summary": "{ok, plural, one {# réussie} other {# réussies}} · {failed} en échec{running, plural, =0 {} other { · # en cours}}{stopped, plural, =0 {} one { · # arrêtée} other { · # arrêtées}}"
+      },
       "costOfThisRun": "Coût de cette exécution",
       "costTooltip": "Coût total de cette exécution sur toutes les époques",
       "budgetReached": "Budget atteint, aucune nouvelle exécution ne démarrera",
@@ -1354,7 +1402,6 @@
       "window": "Époques affichées",
       "windowOption": "{count} dernières",
       "windowOf": "{shown, plural, one {Dernière époque} other {# dernières époques}} sur {total}",
-      "refresh": "Actualiser",
       "loading": "Chargement de l'analyse",
       "error": "Impossible de charger l'analyse.",
       "retry": "Réessayer",
@@ -1406,15 +1453,22 @@
       },
       "compare": {
         "title": "Comparer deux époques",
-        "hint": "Cliquez sur une barre ou une case pour choisir l'époque à comparer.",
+        "hint": "Cliquez sur une barre ou une case pour choisir l'époque à comparer, ou choisissez les deux époques dans l'en-tête du tableau.",
         "reference": "Référence",
+        "chooseReference": "Époque de référence",
+        "chooseTarget": "Époque comparée",
         "node": "Nœud",
         "epoch": "Époque n°{epoch}",
-        "showOnCanvas": "Afficher l'époque {epoch} sur le canvas",
         "total": "Total",
         "notRun": "Non exécuté",
         "needTwo": "Il faut au moins deux époques pour comparer."
       }
+    },
+    "runViews": {
+      "title": "Consulter cette exécution",
+      "choose": "Choisir ce qui est affiché pour cette exécution",
+      "analysisHint": "Tendances, échecs et comparaison des époques",
+      "logsHint": "Entrées et sorties de chaque nœud"
     }
   },
   "workflowRelations": {
@@ -5620,7 +5674,17 @@
         "nodesAll": "Tous les nœuds et intégrations, sans restriction",
         "nodesPublishingTooltip": "Publiez directement depuis un workflow vers les plateformes sociales et vidéo du catalogue, dont YouTube, Instagram, TikTok, X et LinkedIn, et d'autres s'y ajoutent régulièrement.",
         "ownLlmKey": "Exécuter avec vos propres clés API LLM",
-        "ownLlmKeyTooltip": "Enregistrez votre clé OpenAI, Anthropic, Google, Mistral ou DeepSeek et vos agents tournent dessus : le fournisseur vous facture les tokens et LiveContext prélève un forfait par tour d'agent. À partir de Pro sur le cloud."
+        "ownLlmKeyTooltip": "Enregistrez votre clé OpenAI, Anthropic, Google, Mistral ou DeepSeek et vos agents tournent dessus : le fournisseur vous facture les tokens et LiveContext prélève un forfait par tour d'agent. À partir de Pro sur le cloud.",
+        "agentToolkit": "Agents avec mémoire, plafonds de crédits et approbations",
+        "agentToolkitTooltip": "Chaque agent garde sa mémoire d'une exécution à l'autre, peut être tenu à un budget de crédits strict qu'il ne peut pas dépasser, et peut s'arrêter pour demander une approbation humaine. Les sous-workflows, l'agenda de chaque planification et exécution d'agent, et le studio image et vidéo (facturé en crédits) sont aussi inclus dans toutes les offres.",
+        "chatChannels": "Agents et approbations dans vos messageries",
+        "chatChannelsTooltip": "Connectez Telegram, Slack, Discord, WhatsApp ou Microsoft Teams : un agent y pose ses questions, et vous approuvez ou refusez une action sensible en un geste, même quand personne ne regarde l'application.",
+        "channelAlerts": "Alertes dans l'app et dans votre messagerie",
+        "channelAlertsTooltip": "Un workflow en échec, une tâche assignée ou un solde de crédits bas arrive dans la cloche de l'application et dans le canal de messagerie que vous avez connecté, sur toutes les offres. L'envoi de ces alertes par email correspond à la ligne Alertes par email.",
+        "mcpServer": "Serveur MCP intégré",
+        "mcpServerTooltip": "Utilisez vos workflows, agents et intégrations depuis Claude Code, Claude Desktop, Cursor ou tout client MCP compatible Streamable HTTP, avec une clé API personnelle. Sur le cloud comme en auto-hébergé.",
+        "twoFactor": "Authentification à deux facteurs (2FA)",
+        "twoFactorTooltip": "Protégez votre compte cloud avec une application d'authentification, et des codes de récupération à usage unique si vous perdez votre téléphone. Un changement de mot de passe peut vous déconnecter de tous vos autres appareils."
       }
     },
     "compare": {
@@ -5652,7 +5716,7 @@
         "workspaces": "Espaces de travail",
         "analytics": "Analyse",
         "support": "Support",
-        "creditsTooltip": "Environ **{exchangeCredits} crédits** pour un court échange avec un agent configuré, tout son contexte compris, sur un modèle léger comme {basisModel}. Une estimation issue de l'usage réel, pas un plafond ; un modèle haut de gamme coûte davantage."
+        "creditsTooltip": "**{nodeCredits} crédit** par nœud exécuté par un workflow, sur toutes les offres, et environ **{exchangeCredits} crédits** pour un court échange avec un agent configuré, tout son contexte compris, sur un modèle léger comme {basisModel}. Le chiffre de l'agent est une estimation issue de l'usage réel, pas un plafond ; un modèle haut de gamme coûte davantage."
       },
       "values": {
         "creditsFree": "1 000 / mois",
@@ -5742,7 +5806,7 @@
       },
       "conversationCost": {
         "question": "Combien de conversations mes crédits couvrent-ils ?",
-        "answer": "Vous êtes facturé sur les tokens lus et écrits par le modèle, jamais au message : tout dépend donc du travail demandé. Une simple question suivie d'une réponse, sans aucun outil, coûte environ {simpleCredits} crédits. Une conversation où un agent construit un workflow pour vous, environ 5 tours et 45 appels d'outils, coûte environ {agentCredits}, et une construction plus longue coûte proportionnellement plus. Une seule étape de classification dans un workflow en cours revient à environ {classifyCredits}. Calculé sur un modèle léger comme {basisModel} ; un modèle haut de gamme coûte davantage.",
+        "answer": "Vous êtes facturé sur les tokens lus et écrits par le modèle, jamais au message : tout dépend donc du travail demandé. Une simple question suivie d'une réponse, sans aucun outil, coûte environ {simpleCredits} crédits. Une conversation où un agent construit un workflow pour vous, environ 5 tours et 45 appels d'outils, coûte environ {agentCredits}, et une construction plus longue coûte proportionnellement plus. Une seule étape de classification dans un workflow en cours revient à environ {classifyCredits}. Calculé sur un modèle léger comme {basisModel} ; un modèle haut de gamme coûte davantage. Les exécutions de workflow coûtent en plus {nodeCredits} crédit fixe par nœud exécuté, sur toutes les offres.",
         "examplesCaption": "Ce que paient les {credits} crédits inclus dans chaque offre payante :",
         "examples": {
           "simpleChat": {
@@ -6150,6 +6214,7 @@
       "marketplacePurchase": "Achat marketplace",
       "paygTopup": "Recharge de crédits",
       "rewardReferral": "Récompense de parrainage",
+      "rewardCode": "Crédits de code",
       "rewardClawback": "Récompense annulée",
       "manualAdjustment": "Ajustement manuel",
       "planGrant": "Attribution Plan",
@@ -6619,8 +6684,11 @@
       "sidePanelBottomModeFull": "Pleine largeur (sous la barre latérale)",
       "sidePanelBottomModeContent": "Largeur du contenu",
       "timezone": "Fuseau horaire",
-      "timezoneDescription": "Définissez votre fuseau horaire local",
+      "timezoneDescription": "Utilisé pour toutes les dates affichées dans l'application et pour les e-mails que vous recevez.",
       "selectTimezone": "Sélectionner le fuseau horaire",
+      "timezoneDevice": "Suivre cet appareil ({zone})",
+      "timezoneNow": "Il est actuellement {time}.",
+      "timezoneSaveError": "Le fuseau horaire n'a pas pu être enregistré. Réessayez.",
       "creditLimit": "Limite de crédit par défaut",
       "creditLimitDescription": "Nombre de crédits utilisables sans confirmation",
       "chatDefaultsTitle": "Défauts du chat",
@@ -6864,8 +6932,6 @@
         "certificate": "Certificat de signature X.509",
         "certificatePlaceholder": "Collez le certificat PEM de votre fournisseur d'identité",
         "certificateHelp": "Laissez ce champ vide lors d'une modification pour conserver le certificat actuel.",
-        "hideOnLoginPage": "Masquer sur la page de connexion globale",
-        "hideOnLoginPageHelp": "Les utilisateurs se connectent via l'URL SSO du workspace, sans bouton spécifique au tenant sur la page de connexion partagée.",
         "serviceProviderTitle": "Informations du service provider",
         "serviceProviderEntityId": "Entity ID SP",
         "assertionConsumerServiceUrl": "URL ACS",
@@ -11065,9 +11131,9 @@
     "dismiss": "J'ai compris",
     "learnMore": "Voir toutes les mises à jour",
     "latest": {
-      "title": "Vos agents vous joignent dans votre messagerie",
-      "body": "Les agents, les étapes d'approbation et les exécutions sans surveillance n'attendent plus sur une carte que personne ne voit. Connectez Telegram, Slack, Discord, WhatsApp ou Microsoft Teams depuis la page Channels de vos paramètres : une question ou une demande d'approbation arrive dans la conversation que vous lisez déjà, vous répondez depuis celle-ci et l'exécution reprend. Les alertes peuvent aussi sortir de l'application, sur un canal ou par e-mail, dans votre langue (sur le cloud, les alertes par e-mail commencent avec le forfait Starter). Un canal se connecte aussi à la main, sans l'assistant et sans dépenser de crédits.",
-      "mediaAlt": "Deux icônes côte à côte : une bulle de discussion, légendée comme canaux de discussion pour Telegram, Slack, Discord, WhatsApp et Teams, et une cloche, légendée comme alertes par e-mail ou sur un canal"
+      "title": "Parcourez un run époque par époque, dans votre fuseau horaire",
+      "body": "Sur le canevas, la pastille du run déplie désormais une frise de toutes les époques : passez de l'une à l'autre, sautez au prochain échec, et le canevas, l'onglet Analyse et les Logs suivent tous l'époque choisie. L'Analyse compare deux époques côte à côte. Le fuseau horaire et la langue définis dans les paramètres de votre compte s'appliquent maintenant à toutes les dates de l'application et à tous les e-mails que vous recevez, pages de connexion comprises. Et la baguette de mise en page équilibre désormais les branches de part et d'autre d'un embranchement.",
+      "mediaAlt": "Deux icônes côte à côte : une rangée de barres de hauteurs différentes, légendée parcourir un run époque par époque sur le canevas, l'Analyse et les Logs, et une horloge, légendée votre fuseau horaire et votre langue appliqués partout"
     }
   },
   "optionalComponents": {
@@ -12309,7 +12375,7 @@
         },
         "pricing": {
           "question": "Comment fonctionne la tarification ?",
-          "answer": "Il existe une offre gratuite, sans carte bancaire. Les offres payantes sont basées sur des crédits : vous choisissez un palier et vous pouvez plafonner la dépense par agent avec un budget qu’il ne peut pas dépasser. La Community Edition auto-hébergée est gratuite."
+          "answer": "Il existe une offre gratuite, sans carte bancaire. Toutes les offres sont basées sur des crédits, gratuite comprise : chaque nœud exécuté par un workflow coûte 1 crédit, et les agents sont facturés sur les tokens qu’ils consomment. Les offres payantes vous laissent choisir un palier et plafonner la dépense par agent avec un budget qu’il ne peut pas dépasser. La Community Edition auto-hébergée est gratuite."
         },
         "models": {
           "question": "Quels modèles d’IA puis-je utiliser ?",
@@ -12385,7 +12451,7 @@
       },
       "meta": {
         "title": "LiveContext : la plateforme d’automatisation par IA. Chat, workflows, agents, applications.",
-        "description": "Décrivez la tâche dans le chat : LiveContext construit l’automatisation et son application sous vos yeux, l’exécute selon un calendrier et vous laisse partager le résultat sous forme de lien, de PDF ou d’export. Chaque étape visible, un budget par agent, dans le cloud ou auto-hébergé."
+        "description": "Décrivez la tâche dans le chat : LiveContext crée l’automatisation et son app, l’exécute selon un calendrier et partage le résultat. Cloud ou auto-hébergé."
       },
       "hero": {
         "eyebrow": "La plateforme d’automatisation par IA",
@@ -15649,6 +15715,94 @@
       "description": "Cette installation est liée à un compte LiveContext Cloud qui n'a pas de forfait payant. Les modèles cloud, la recherche web et les intégrations cloud en nécessitent un. Choisissez un forfait sur LiveContext Cloud et ils fonctionnent aussitôt : l'installation reste liée.",
       "cta": "Voir les forfaits cloud",
       "close": "Fermer"
+    }
+  },
+  "partnerProgram": {
+    "title": "Programme partenaires",
+    "subtitle": "Des codes créateur pour faire tester le produit, et des codes partenaire avec un partage de revenus pour leur audience.",
+    "selfHosted": {
+      "title": "Indisponible sur une installation auto-hébergée",
+      "body": "Le programme partenaires fonctionne sur l'édition cloud."
+    },
+    "creator": {
+      "title": "Code créateur",
+      "subtitle": "Pour le créateur lui-même : un plan offert et des crédits, à usage unique par défaut.",
+      "submit": "Créer le code créateur"
+    },
+    "partner": {
+      "title": "Code partenaire",
+      "subtitle": "Pour son audience : des crédits pour chaque nouvel utilisateur, et une part de ce que ces utilisateurs paient revient au partenaire.",
+      "submit": "Créer le code partenaire"
+    },
+    "fields": {
+      "code": "Code",
+      "codeAuto": "Généré si vide",
+      "label": "Note interne",
+      "plan": "Plan offert",
+      "planNone": "Aucun (crédits seulement)",
+      "planDays": "Durée du plan (jours)",
+      "credits": "Crédits",
+      "creditsHint": "Ajoutés une fois au solde à l'usage, jamais remis à zéro chaque mois.",
+      "maxUses": "Nombre maximal d'utilisations",
+      "validDays": "Valable pendant (jours)",
+      "validDaysHint": "0 = sans date de fin.",
+      "partnerEmail": "E-mail du compte partenaire",
+      "partnerEmailHint": "Le partenaire doit avoir un compte LiveContext. Un code partenaire par compte.",
+      "audienceCredits": "Crédits pour chaque nouvel utilisateur",
+      "commissionPercent": "Commission (%)",
+      "commissionMonths": "Durée de la commission (mois)",
+      "holdDays": "Délai avant paiement (jours)",
+      "holdDaysHint": "Couvre la période de remboursement : un paiement remboursé annule sa commission.",
+      "partnerMaxUses": "Nombre maximal d'inscriptions (facultatif)",
+      "partnerMaxUsesHint": "Vide = sans limite. Borne ce qu'un lien public peut distribuer."
+    },
+    "list": {
+      "title": "Codes",
+      "loading": "Chargement...",
+      "empty": "Aucun code créateur ou partenaire pour le moment.",
+      "code": "Code",
+      "benefit": "Avantage",
+      "redemptions": "Utilisations",
+      "commissions": "Commissions",
+      "actions": "Actions",
+      "kindPartner": "Partenaire",
+      "kindCreator": "Créateur",
+      "inactive": "Désactivé",
+      "validUntil": "Valable jusqu'au {date}",
+      "partnerBenefit": "{credits} crédits par nouvel utilisateur, {percent} % pendant {months} mois",
+      "creatorBenefitPlan": "{plan} pendant {days} jours + {credits} crédits",
+      "creatorBenefitCredits": "{credits} crédits",
+      "usesOf": "{used} sur {max}",
+      "payingCustomers": "{count, plural, one {# client payant} other {# clients payants}}",
+      "payable": "À payer",
+      "onHold": "En attente",
+      "paid": "Payé",
+      "copyLink": "Copier le lien",
+      "activate": "Activer",
+      "deactivate": "Désactiver",
+      "markPaid": "Marquer payé"
+    },
+    "toasts": {
+      "createdTitle": "Code créé",
+      "failureTitle": "L'action a échoué",
+      "copied": "Lien copié",
+      "paidTitle": "Commissions réglées",
+      "paidMessage": "{lines} lignes marquées payées ({amount})."
+    },
+    "errors": {
+      "adminOnly": "Seuls les administrateurs de la plateforme peuvent gérer le programme partenaires.",
+      "generic": "Une erreur est survenue. Réessayez.",
+      "code_taken": "Ce code est déjà utilisé.",
+      "invalid_code_format": "Un code contient de 3 à 32 lettres, chiffres, tirets ou tirets bas.",
+      "user_not_found": "Aucun compte avec cet e-mail.",
+      "partner_already_has_code": "Ce partenaire a déjà un code partenaire.",
+      "invalid_values": "L'une des valeurs est hors limites.",
+      "unsupported_plan": "Ce plan ne peut pas être offert par un code.",
+      "empty_benefit": "Un code doit donner un plan ou des crédits.",
+      "missing_partner": "Saisissez l'e-mail du compte partenaire.",
+      "not_available_in_ce": "Le programme partenaires n'est pas disponible sur une installation auto-hébergée.",
+      "code_generation_failed": "Impossible de générer un code libre. Réessayez.",
+      "missing_body": "La requête était vide."
     }
   }
 }

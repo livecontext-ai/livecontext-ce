@@ -57,14 +57,11 @@ class ToolResponseControllerIntegrationTest {
     @BeforeEach
     void setUp() {
         ToolResponseController controller = new ToolResponseController(
-                toolResponseService, mappingResolverService, mappingRegistry);
+                toolResponseService, mappingResolverService, mappingRegistry,
+                new CatalogAdminAccess(ADMIN_TOKEN));
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
-        // Spring @Value is not processed by standaloneSetup; inject the admin token directly
-        // so mutation endpoints (POST/PUT/DELETE) pass the admin-gate when callers send
-        // the X-Internal-Admin-Token header with ADMIN_TOKEN.
-        ReflectionTestUtils.setField(controller, "catalogAdminToken", ADMIN_TOKEN);
         objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
     }
@@ -246,8 +243,8 @@ class ToolResponseControllerIntegrationTest {
             // Regression: a k8s secret provisioned with a trailing newline must not
             // silently 403 every legitimate caller sending the trimmed value.
             ToolResponseController paddedController = new ToolResponseController(
-                    toolResponseService, mappingResolverService, mappingRegistry);
-            ReflectionTestUtils.setField(paddedController, "catalogAdminToken", ADMIN_TOKEN + "\n");
+                    toolResponseService, mappingResolverService, mappingRegistry,
+                    new CatalogAdminAccess(ADMIN_TOKEN + "\n"));
             MockMvc paddedMvc = MockMvcBuilders.standaloneSetup(paddedController)
                     .setControllerAdvice(new GlobalExceptionHandler())
                     .build();
@@ -632,4 +629,37 @@ class ToolResponseControllerIntegrationTest {
     }
 
     private static final UUID API_ID = UUID.randomUUID();
+
+    /**
+     * The admin gate is shared with the other global-catalog writes (CatalogAdminAccess):
+     * the gateway-injected ADMIN role is accepted in place of the import token, a plain
+     * signed-in user is still refused. Header names are bound through MockMvc.
+     */
+    @Nested
+    @DisplayName("Admin role on tool-response writes")
+    class AdminRoleTests {
+
+        @Test
+        @DisplayName("DELETE accepts a platform admin without the import token")
+        void deleteAcceptsAdminRole() throws Exception {
+            UUID responseId = UUID.randomUUID();
+
+            mockMvc.perform(delete("/api/tool-responses/{responseId}", responseId)
+                            .header("X-User-Roles", "USER,ADMIN"))
+                    .andExpect(status().is2xxSuccessful());
+
+            verify(toolResponseService).deleteResponse(responseId);
+        }
+
+        @Test
+        @DisplayName("DELETE refuses a plain signed-in user")
+        void deleteRefusesPlainUser() throws Exception {
+            mockMvc.perform(delete("/api/tool-responses/{responseId}", UUID.randomUUID())
+                            .header("X-User-ID", USER_ID)
+                            .header("X-User-Roles", "USER"))
+                    .andExpect(status().isForbidden());
+
+            verify(toolResponseService, never()).deleteResponse(any());
+        }
+    }
 }

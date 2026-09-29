@@ -688,7 +688,8 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
     onShowAttachmentMenu: setShowAttachmentMenu,
     analyzeBadges,
     onRemoveAnalyzeBadge: handleRemoveAnalyzeBadge,
-    showScrollToBottom,
+    // The arrow only means something once there is a message to go back to.
+    showScrollToBottom: showScrollToBottom && messages.length > 0,
     onScrollToBottom: handleScrollToBottom,
     chatConfig,
     onChatConfigChange: handleChatConfigChange,

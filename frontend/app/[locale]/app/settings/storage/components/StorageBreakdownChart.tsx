@@ -13,7 +13,7 @@ import type { StorageHistoryPoint, StorageCategory, StorageBreakdown } from '@/l
 import { mergeStorageHistories } from '../storageAggregation';
 import { storageGrowth, daysUntilFull } from '../storageInsights';
 import { STORAGE_CATEGORY_HEX } from '@/lib/api';
-import { formatUtcDate } from '@/lib/utils/dateFormatters';
+import { formatCalendarDate } from '@/lib/utils/dateFormatters';
 import { useCurrentOrgStore } from '@/lib/stores/current-org-store';
 
 /** Order categories by typical size (largest first) */
@@ -227,7 +227,7 @@ export default function StorageBreakdownChart({ className, currentBreakdown = []
                 }}
                 itemStyle={{ color: 'var(--text-primary)' }}
                 labelStyle={{ color: 'var(--text-primary)' }}
-                labelFormatter={(label: string) => formatUtcDate(label + 'T00:00:00Z')}
+                labelFormatter={(label: string) => formatCalendarDate(label)}
                 formatter={(value: number, name: string) => [
                   formatBytes(value),
                   t(`categories.${name}` as any),

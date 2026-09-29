@@ -926,12 +926,15 @@ class WorkflowBuilderProviderExecuteTest {
         Trigger trigger = mock(Trigger.class);
         WorkflowRunEntity run = mock(WorkflowRunEntity.class);
         stubSuccessfulExecution(entity, trigger, run, Map.of());
+        lenient().when(run.getPlanVersion()).thenReturn(5);
 
         provider.execute("workflow", params(), CTX);
 
         var inOrder = inOrder(conversationEventPublisher, agentWorkflowFireService);
+        // The early event carries the version the run executes, so the page can tell whether the
+        // plan on its canvas is that run's before the (blocking) execute returns.
         inOrder.verify(conversationEventPublisher).publishVisualizationReady(
-                any(), any(), eq("workflow_run"), eq(WF_ID), eq("Execute Test Workflow"), eq("run-1"));
+                any(), any(), eq("workflow_run"), eq(WF_ID), eq("Execute Test Workflow"), eq("run-1"), eq(5));
         inOrder.verify(agentWorkflowFireService).fire(any(), any(), any());
     }
 
@@ -956,7 +959,7 @@ class WorkflowBuilderProviderExecuteTest {
         provider.execute("workflow", params(), CTX);
 
         verify(conversationEventPublisher).publishVisualizationReady(
-                any(), any(), eq("workflow_run"), eq(WF_ID), eq("Error Handler"), eq("run_seed_viz"));
+                any(), any(), eq("workflow_run"), eq(WF_ID), eq("Error Handler"), eq("run_seed_viz"), eq(1));
     }
 
     @Test
@@ -966,7 +969,7 @@ class WorkflowBuilderProviderExecuteTest {
 
         provider.execute("workflow", params(), CTX);
 
-        verify(conversationEventPublisher, never()).publishVisualizationReady(any(), any(), any(), any(), any(), any());
+        verify(conversationEventPublisher, never()).publishVisualizationReady(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test

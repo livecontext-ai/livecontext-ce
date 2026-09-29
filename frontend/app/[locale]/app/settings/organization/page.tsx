@@ -192,8 +192,9 @@ export default function OrganizationSettingsPage() {
         setCurrentOrg(fullOrg);
         setNewName(fullOrg?.name || "");
 
-        // Fetch pending invitations if user can see them
-        if (fullOrg.canInvite !== undefined) {
+        // Pending invitations are OWNER / ADMIN only (the server answers 403 to
+        // MEMBER / VIEWER: the list carries invitee emails and CE accept tokens).
+        if (fullOrg.currentUserRole === "OWNER" || fullOrg.currentUserRole === "ADMIN") {
           try {
             const invitations = await organizationApi.getPendingInvitations(fullOrg.id);
             setPendingInvitations(invitations || []);
@@ -1204,6 +1205,7 @@ export default function OrganizationSettingsPage() {
           onClose={() => setInviteModalOpen(false)}
           orgId={currentOrg.id}
           onInviteSent={fetchData}
+          canInviteAdmin={currentOrg.currentUserRole === "OWNER"}
         />
       )}
 

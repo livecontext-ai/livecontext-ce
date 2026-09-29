@@ -89,7 +89,24 @@ class AccountPurgeSchedulerTest {
 
         verify(purgeService).purgeUser(7L);
         // The address has to be captured before the purge deletes the row it lives on.
-        verify(mailer).sendPurgeConfirmationEmail(eq("user7@test.local"), any());
+        verify(mailer).sendPurgeConfirmationEmail(eq("user7@test.local"), any(), any());
+    }
+
+    @Test
+    @DisplayName("carries the account's LANGUAGE past the purge, or the last mail is always English")
+    void purgeMailKeepsTheLanguage() {
+        // The mailer resolves a language by looking the address up, and this is the one mail sent
+        // AFTER the row it would look up has been deleted. Captured here for the same reason as
+        // the address, on the same lines; without it the final message a person ever receives is
+        // the one guaranteed to be in a language they may not read.
+        User u = user(7L, LocalDateTime.now().minusDays(40), null);
+        u.setLocale("fr");
+        when(userRepository.findAccountsPastGracePeriod(any())).thenReturn(List.of(u));
+        when(purgeService.purgeUser(7L)).thenReturn(true);
+
+        scheduler.purgeExpiredAccounts();
+
+        verify(mailer).sendPurgeConfirmationEmail(eq("user7@test.local"), any(), eq("fr"));
     }
 
     @Test
@@ -121,7 +138,7 @@ class AccountPurgeSchedulerTest {
 
         // purgeUser returns false when the account was restored between selection and purge.
         // Telling that person their data is gone would be both false and alarming.
-        verify(mailer, never()).sendPurgeConfirmationEmail(any(), any());
+        verify(mailer, never()).sendPurgeConfirmationEmail(any(), any(), any());
     }
 
     @Test
@@ -137,8 +154,8 @@ class AccountPurgeSchedulerTest {
 
         // A Keycloak outage on one account must not silently park every later one for a day.
         verify(purgeService).purgeUser(2L);
-        verify(mailer).sendPurgeConfirmationEmail(eq("user2@test.local"), any());
-        verify(mailer, never()).sendPurgeConfirmationEmail(eq("user1@test.local"), any());
+        verify(mailer).sendPurgeConfirmationEmail(eq("user2@test.local"), any(), any());
+        verify(mailer, never()).sendPurgeConfirmationEmail(eq("user1@test.local"), any(), any());
     }
 
     @Test

@@ -428,14 +428,16 @@ class UserResolutionServiceLoginAccountingTest {
     }
 
     @Test
-    @DisplayName("a Google account signing in through workspace SSO is counted as a saml login, not google")
+    @DisplayName("a workspace SSO login is counted as a saml login, whatever the stored provider tag maps to")
     void samlLoginOfGoogleAccountIsCountedAsSaml() {
-        // Keycloak links the workspace SAML IdP to the existing account, so the stored
-        // authProvider stays GOOGLE while THIS authentication came through SAML. Deriving the
-        // method from the stored provider reported every such SSO login as "google".
-        user.setAuthProvider(AuthProvider.GOOGLE);
+        // Only the account the workspace IdP created can sign in through it now (a Google
+        // account reached through SAML is refused, see UserResolutionServiceSamlHardeningTest).
+        // The method of THIS authentication is still read from the token, never the stored tag.
+        user.setAuthProvider(AuthProvider.SAML);
+        user.setSamlIdpAlias("org-aaaaaaaabbbbccccddddeeeeeeeeeeee-saml");
+        ReflectionTestUtils.setField(service, "samlLoginService", mock(OrganizationSamlLoginService.class));
         // Lenient: the fixed code never asks the stored provider on a SAML login.
-        lenient().when(authEventRecorder.providerTag(AuthProvider.GOOGLE)).thenReturn("google");
+        lenient().when(authEventRecorder.providerTag(AuthProvider.SAML)).thenReturn("google");
         when(userRepository.recordAuthenticationIfNewer(eq(USER_ID), any())).thenReturn(1);
 
         service.resolveUser(PROVIDER_ID, sign(new JWTClaimsSet.Builder()

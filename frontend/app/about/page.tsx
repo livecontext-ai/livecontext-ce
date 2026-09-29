@@ -16,7 +16,7 @@ export default function AboutPage() {
   return (
     <LandingShell>
       <div className="mx-auto w-full max-w-4xl px-3 py-4 sm:px-6 md:py-8">
-        <AboutInformationContent />
+        <AboutInformationContent titleAs="h1" />
       </div>
     </LandingShell>
   );

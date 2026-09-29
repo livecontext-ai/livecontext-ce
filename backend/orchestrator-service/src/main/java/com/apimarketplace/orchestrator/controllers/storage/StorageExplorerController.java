@@ -394,6 +394,11 @@ public class StorageExplorerController {
             @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
             @RequestBody Map<String, Object> body) {
 
+        // Org VIEWERs are read-only: the role was received here but never checked.
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(organizationId, orgRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot create folders"));
+        }
         Object nameRaw = body.get("name");
         String name = nameRaw == null ? "" : nameRaw.toString().trim();
         if (name.isEmpty()) {

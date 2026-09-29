@@ -171,6 +171,12 @@ public class WorkflowCrudController {
                 return ResponseEntity.notFound().build();
             }
 
+            // A share-link holder acts as the owner: serve only the shared application's own
+            // workflow, never another workflow of the owner's workspace (404, no existence leak).
+            if (!WorkflowControllerHelper.shareContextPermitsWorkflow(workflow)) {
+                return ResponseEntity.notFound().build();
+            }
+
             String workflowOrgId = workflow.getOrganizationId();
             if (workflowOrgId != null
                     && !orgAccessGuard.canAccess(workflowOrgId, tenantId, "workflow", id.toString(), orgRole)) {

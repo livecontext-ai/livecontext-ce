@@ -111,7 +111,7 @@ services:
     restart: "no"
 
   bridge:
-    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.3.3
+    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.3.4
     container_name: livecontext-bridge
     restart: unless-stopped
     depends_on:
@@ -139,7 +139,7 @@ services:
           memory: 512M
 
   livecontext:
-    image: ghcr.io/livecontext-ai/livecontext-ce:v0.3.3
+    image: ghcr.io/livecontext-ai/livecontext-ce:v0.3.4
     container_name: livecontext-app
     restart: unless-stopped
     depends_on:
@@ -254,6 +254,11 @@ services:
       MAIL_USERNAME: "${MAIL_USERNAME:-}"
       MAIL_PASSWORD: "${MAIL_PASSWORD:-}"
       MAIL_FROM: "${MAIL_FROM:-noreply@livecontext.local}"
+      # The address the account-lifecycle mails tell people to write to. This map is an allow-list
+      # and there is no env_file, so a variable not named here never reaches the container however it
+      # is set: MAIL_SUPPORT was added to .env.example without this line, which made it a knob that
+      # silently did nothing.
+      MAIL_SUPPORT: "${MAIL_SUPPORT:-support@livecontext.ai}"
       # STARTTLS is opportunistic: a local relay that does not advertise it keeps
       # working in plaintext, a real relay gets an encrypted session. Turn it off
       # and a non-local host refuses to boot, on purpose. If your relay presents a
@@ -284,7 +289,12 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1536M
+          # 2 GiB, not 1.5: the JVM runs -Xmx1024m with ZGC, whose heap grows to that full GiB, plus
+          # ~300 MiB of Metaspace/code cache, direct buffers, ~150 threads and GC structures.
+          # Measured 2026-09-28 (e2e-measure, v0.3.3 AND main): 1.53 GiB right after boot,
+          # 1.59-1.61 GiB after a light Playwright load; at 1536M the kernel OOM-killed the app
+          # 11 times in a row during boot. Keep >= 2048M (test_installation_config.py).
+          memory: 2048M
 
   # ── Browser agent (agent_browse) - OPT-IN, heavy (Chromium + browser-use) ──
   # NOT started by a default `up`. Unlike the other services (prebuilt images),
@@ -377,7 +387,7 @@ services:
   # secrets - HTML in, bytes out; reached only by the app over the compose network.
   screenshot-renderer:
     profiles: ["renderer"]
-    image: ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer:v0.3.3
+    image: ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer:v0.3.4
     container_name: livecontext-screenshot-renderer
     restart: unless-stopped
     environment:
@@ -401,7 +411,7 @@ services:
           memory: 1024M
 
   frontend:
-    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.3.3
+    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.3.4
     container_name: livecontext-frontend
     restart: unless-stopped
     depends_on:

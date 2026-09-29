@@ -78,11 +78,10 @@ gateway:
     public-paths:
       - /health
       - /actuator
-      - /api/internal/
+      - /api/internal/           # pod-to-pod, incl. /api/internal/tool-results (agent loop tool-result save)
       - /api/v3/chat/models
       - /api/shared/
       - /api/conversations       # Backend-to-backend: orchestrator saves messages/creates conversations
-      - /api/tool-results       # Backend-to-backend: orchestrator saves tool results
 
 logging:
   level:

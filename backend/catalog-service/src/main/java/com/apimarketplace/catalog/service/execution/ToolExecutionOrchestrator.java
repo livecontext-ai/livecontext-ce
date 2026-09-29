@@ -58,21 +58,31 @@ public class ToolExecutionOrchestrator {
      */
     public Object projectResult(Object rawData, String outputSchemaJson, String executionMode,
                                 java.util.Map<String, String> responseHeaders) {
+        return projectResult(rawData, outputSchemaJson, executionMode, responseHeaders, false);
+    }
+
+    /**
+     * Same, and {@code keepUndeclared} keeps the fields the schema does not declare, for a call
+     * that explicitly selected more fields than the seed declares (see
+     * {@link RequestedFieldSelection}). False projects exactly as the overloads above.
+     */
+    public Object projectResult(Object rawData, String outputSchemaJson, String executionMode,
+                                java.util.Map<String, String> responseHeaders, boolean keepUndeclared) {
         String mode = normalizeMode(executionMode);
         switch (mode) {
             case "sync":
             case "upload":
                 // upload only changes the REQUEST encoding; the response is plain JSON.
-                return outputProjector.project(rawData, outputSchemaJson, responseHeaders);
+                return outputProjector.project(rawData, outputSchemaJson, responseHeaders, keepUndeclared);
             case "async_poll":
                 // The async executor has already returned the resolved result body before this
                 // method is called, so we project it the same way as sync.
-                return outputProjector.project(rawData, outputSchemaJson, responseHeaders);
+                return outputProjector.project(rawData, outputSchemaJson, responseHeaders, keepUndeclared);
             case "streaming":
                 // StreamingResponseHandler has already aggregated the SSE chunks into a
                 // {chunks, chunk_count, terminated, truncated, error?} envelope. Project
                 // it through OutputProjector so the tool's outputSchema can shape each chunk.
-                return outputProjector.project(rawData, outputSchemaJson, responseHeaders);
+                return outputProjector.project(rawData, outputSchemaJson, responseHeaders, keepUndeclared);
             default:
                 // Unknown mode - fail-fast instead of silent passthrough.
                 log.error("ToolExecutionOrchestrator: unknown execution mode '{}'", mode);

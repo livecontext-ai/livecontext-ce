@@ -13,6 +13,7 @@ import com.apimarketplace.catalog.service.generation.RelayedGenerationMeasuremen
 import com.apimarketplace.catalog.service.exception.InsufficientCreditsException;
 import com.apimarketplace.catalog.service.exception.ToolNotFoundException;
 import com.apimarketplace.catalog.service.execution.BinaryResponseHandler;
+import com.apimarketplace.catalog.service.execution.RequestedFieldSelection;
 import com.apimarketplace.catalog.service.execution.ToolExecutionOrchestrator;
 import com.apimarketplace.catalog.service.relay.CeCatalogCloudRelay;
 import com.apimarketplace.credential.client.CredentialClient;
@@ -439,13 +440,29 @@ public class ToolExecutionManager {
                 // is a no-op and returns the data unchanged. Running AFTER
                 // dehydration means {@code valueToTree}'s base64 sniffing
                 // can't corrupt the b64 leaves - they're FileRef Maps now.
+                boolean callerSelectedFields = RequestedFieldSelection.isRequested(parameters);
+                // What response_schema's skeleton learns from. For a widened call it is the
+                // DEFAULT projection of the same answer, set below, never the widened one. Only
+                // the cached (chat) path saves a skeleton, so nothing else pays for it.
+                Object skeletonData = null;
                 if (success && resultData != null && context.getOutputSchemaJson() != null) {
                     try {
+                        if (callerSelectedFields && cacheEnabled) {
+                            skeletonData = toolExecutionOrchestrator.projectResult(
+                                resultData,
+                                context.getOutputSchemaJson(),
+                                context.getExecutionMode(),
+                                responseHeadersOf(executionResult),
+                                false);
+                        }
                         resultData = toolExecutionOrchestrator.projectResult(
                             resultData,
                             context.getOutputSchemaJson(),
                             context.getExecutionMode(),
-                            responseHeadersOf(executionResult)
+                            responseHeadersOf(executionResult),
+                            // A caller that selected fields (tweet.fields, $select, expand...)
+                            // gets them back even when the seed's schema does not declare them.
+                            callerSelectedFields
                         );
                     } catch (Exception projectorEx) {
                         log.warn("OutputProjector failed for tool {}: {} - falling back to raw response",
@@ -467,8 +484,14 @@ public class ToolExecutionManager {
                         Integer httpStatus = executionResult.get("httpStatus") instanceof Map
                             ? (Integer) ((Map<?, ?>) executionResult.get("httpStatus")).get("code")
                             : null;
+                        // A widened answer (the caller selected fields) is not what a plain call
+                        // returns, so the skeleton learns from its default projection instead.
+                        // Skipping the save would leave the skeleton empty forever on a tool
+                        // every caller widens (Drive fields, Asana opt_fields). Without a
+                        // schema nothing was projected, so the answer itself is the default.
                         if (toolUuid != null) {
-                            toolResponseService.autoSaveFromExecution(toolUuid, resultData, httpStatus);
+                            toolResponseService.autoSaveFromExecution(
+                                toolUuid, skeletonData != null ? skeletonData : resultData, httpStatus);
                         }
                     } catch (Exception e) {
                         log.debug("Auto-save tool response skipped: {}", e.getMessage());

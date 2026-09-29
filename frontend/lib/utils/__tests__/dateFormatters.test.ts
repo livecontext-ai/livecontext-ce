@@ -5,9 +5,16 @@
  *   - parseUtcAware MUST append 'Z' to TZ-less ISO strings so that
  *     LocalDateTime payloads from the legacy Java services land as the
  *     correct UTC instant in JS, regardless of the user's browser TZ.
- *   - formatUtcDateTime / formatUtcDate / formatUtcTime MUST always render
- *     in UTC with a trailing " UTC" so users can never mistake the wall
- *     clock for their local time.
+ *   - the absolute formatters render in the zone this module resolves, and do NOT name it: the
+ *     zone is the reader's own setting, and a surface that shows a zone which is not theirs
+ *     names it itself.
+ *
+ * SCOPE, because this file no longer covers what its name suggests: it runs in the suite's
+ * default `node` environment, where there is no `window`, so the resolver answers UTC and every
+ * assertion below pins the PARSE contract plus the SSR fallback. It cannot fail for a
+ * display-zone regression - that is `dateFormatters.zone.test.ts`, which declares jsdom and
+ * stubs the zone. Both are needed: the SSR answer is a real contract (a server component has no
+ * cookie and no Intl) and it is the one this file guards.
  *
  * These tests pin the *observable behavior* the previous bug exhibited:
  * before the fix, a Paris browser parsed `"2026-05-11T14:00:00"` as Paris
@@ -105,11 +112,11 @@ describe('parseUtcAware', () => {
 });
 
 describe('formatUtcDateTime', () => {
-  it('renders bare LocalDateTime as the correct UTC wall-clock with " UTC" suffix', () => {
-    // Pre-bug: in a Paris browser this would render "12:00 UTC" (shifted).
-    // Post-fix: parseUtcAware interprets as UTC => formatter shows 14:00 UTC.
+  it('renders a bare LocalDateTime as the UTC wall-clock, with no zone appended', () => {
+    // Pre-bug: in a Paris browser this would render "12:00" (shifted).
+    // Post-fix: parseUtcAware interprets it as UTC, so the formatter shows 14:00.
     const out = formatUtcDateTime(SAMPLE_BARE_ISO);
-    expect(out.endsWith(' UTC')).toBe(true);
+    expect(out).not.toMatch(/(UTC|GMT[+-]\d)$/);
     expect(out).toContain('14:00');
     // Day must remain 11, not roll back to 10 (which would happen in a
     // far-east browser if the parser shifted the instant backwards across
@@ -133,7 +140,8 @@ describe('formatUtcDateTime', () => {
     const out = formatUtcDateTime(SAMPLE_BARE_ISO, { locale: 'en-US' });
     // English month abbreviation for May
     expect(out).toMatch(/May/);
-    expect(out.endsWith(' UTC')).toBe(true);
+    // Inverted rather than dropped: the locale option must not quietly reintroduce a label.
+    expect(out).not.toMatch(/(UTC|GMT[+-]\d)$/);
   });
 
   it('includes seconds when withSeconds is true', () => {
@@ -143,11 +151,11 @@ describe('formatUtcDateTime', () => {
 });
 
 describe('formatUtcDate', () => {
-  it('renders date-only with " UTC" suffix', () => {
+  it('renders date-only, with no zone appended', () => {
     const out = formatUtcDate(SAMPLE_BARE_ISO, { locale: 'en-US' });
     expect(out).toContain('11');
     expect(out).toContain('May');
-    expect(out.endsWith(' UTC')).toBe(true);
+    expect(out).not.toMatch(/(UTC|GMT[+-]\d)$/);
   });
 
   it('day never rolls back across midnight when fed bare ISO near 00:00', () => {
@@ -161,10 +169,9 @@ describe('formatUtcDate', () => {
 });
 
 describe('formatUtcTime', () => {
-  it('renders 24h time with " UTC" suffix', () => {
+  it('renders 24h time alone, with no zone appended', () => {
     const out = formatUtcTime(SAMPLE_BARE_ISO);
-    expect(out).toContain('14:00');
-    expect(out.endsWith(' UTC')).toBe(true);
+    expect(out).toBe('14:00');
   });
 });
 
@@ -182,10 +189,14 @@ describe('formatRelativeDate', () => {
     expect(out).toBe('1m ago');
   });
 
-  it('falls back to UTC absolute beyond 7 days', () => {
+  it('falls back to an absolute date beyond 7 days', () => {
     const longAgo = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 19);
     const out = formatRelativeDate(longAgo);
-    expect(out.endsWith(' UTC')).toBe(true);
+    // This used to assert the zone suffix and nothing else, so with the suffix gone it would
+    // have passed on any string at all. What it is about is the fallback: past the relative
+    // window the answer is a dated timestamp, not a phrase.
+    expect(out).toMatch(/\d{4}/);
+    expect(out).not.toMatch(/ago|yesterday/i);
   });
 
   it('returns custom never label for null', () => {

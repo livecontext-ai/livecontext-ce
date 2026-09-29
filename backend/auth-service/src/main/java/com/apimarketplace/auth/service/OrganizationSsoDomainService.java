@@ -133,6 +133,8 @@ public class OrganizationSsoDomainService {
         domainRepository.saveAndFlush(d);
         auditService.record(orgId, actorUserId, OrganizationAuditEvent.Type.SSO_DOMAIN_VERIFIED,
                 Map.of("domain", d.getDomain()));
+        // The workspace IdP stays disabled in Keycloak until a first domain is proven.
+        samlService.syncIdentityProviderEnabled(orgId);
         return toDto(d);
     }
 
@@ -144,6 +146,10 @@ public class OrganizationSsoDomainService {
         domainRepository.delete(d);
         auditService.record(orgId, actorUserId, OrganizationAuditEvent.Type.SSO_DOMAIN_REMOVED,
                 Map.of("domain", d.getDomain(), "wasVerified", d.isVerified()));
+        if (d.isVerified()) {
+            // Removing the last verified domain turns the workspace IdP off again.
+            samlService.syncIdentityProviderEnabled(orgId);
+        }
     }
 
     /**

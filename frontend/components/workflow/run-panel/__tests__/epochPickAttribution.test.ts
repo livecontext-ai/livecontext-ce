@@ -82,13 +82,17 @@ describe('who is allowed to record a pick', () => {
       // from `handleSelect` too, which navigated straight there; every chip opens its
       // menu now, because leaving the page is the one click here with no undo.)
       'components/views/AgendaView.tsx',
-      // "Show on the canvas" in the Analysis tab's epoch comparison: a button the user
-      // clicks to open ONE epoch they are looking at. Never from an effect.
-      'components/workflow/run-panel/RunAnalysisPanelContent.tsx',
+      // The epoch navigator of the canvas run pill: its buttons, a release on its
+      // timeline, or its arrow keys once let go. Never from an effect.
+      'components/workflow/WorkflowModeToggle.tsx',
       // The epoch selector of the Run panel.
       'components/workflow/run-panel/RunPanelContent.tsx',
       // `selectAllEpochs`, called from the three "fire from here" controls.
       'components/workflow/run-panel/useDefaultEpochSelection.ts',
+      // `useRunSharedEpoch().pick`, the one way Analysis (grid, chart, "show on the canvas")
+      // and Logs (its epoch select) record a pick: each is a click or a select change,
+      // never an effect.
+      'components/workflow/run-panel/useRunSharedEpoch.ts',
     ]);
   });
 

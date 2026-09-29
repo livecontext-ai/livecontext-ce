@@ -7,6 +7,12 @@ export interface AutoOpenVisualization {
   id: string;
   title?: string;
   runId?: string;
+  /** type 'workflow': the action wrote the stored plan (an edit or a save, never a load). */
+  planChanged?: boolean;
+  /** type 'workflow_run': the plan version the run executes. */
+  planVersion?: number;
+  /** The conversation whose agent produced it, so a surface can tell its own chat's actions apart. */
+  conversationId?: string;
   liveCoords?: {
     sessionId: string;
     cdpToken: string;
@@ -69,8 +75,13 @@ export function enqueueAutoOpen(
 ): Map<string, AutoOpenVisualization> {
   if (!AUTO_OPEN_TYPES.includes(viz.type)) return pending;
   const key = autoOpenKey(viz);
-  if (shouldReplaceAutoOpen(pending.get(key), viz)) {
-    pending.set(key, viz);
+  const existing = pending.get(key);
+  if (shouldReplaceAutoOpen(existing, viz)) {
+    // A plan change stays a plan change for the rest of the window: an edit followed by a
+    // load or a present of the same workflow must still bring the page back to editing.
+    // Same conversation only: another chat's marker must not inherit (or carry away) this edit.
+    const keepEdit = existing?.planChanged && !viz.planChanged && existing.conversationId === viz.conversationId;
+    pending.set(key, keepEdit ? { ...viz, planChanged: true } : viz);
   }
   return pending;
 }
@@ -89,4 +100,22 @@ export function flushAutoOpen(
   pending.clear();
   for (const viz of queued) emit(viz);
   return queued.length;
+}
+
+/**
+ * The `sidePanelAutoOpen` event detail for a flushed marker. Every field a listener reads must be
+ * listed here: the workflow page decides edit vs run from planChanged / planVersion /
+ * conversationId, and a field left out is dropped silently, never an error.
+ */
+export function autoOpenEventDetail(v: AutoOpenVisualization): AutoOpenVisualization {
+  return {
+    type: v.type,
+    id: v.id,
+    title: v.title,
+    runId: v.runId,
+    planChanged: v.planChanged,
+    planVersion: v.planVersion,
+    conversationId: v.conversationId,
+    liveCoords: v.liveCoords,
+  };
 }

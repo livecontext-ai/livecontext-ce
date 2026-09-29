@@ -7,10 +7,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Projects a raw HTTP response onto a tool's declared {@code output_schema}.
@@ -71,7 +74,22 @@ public class OutputProjector {
      */
     public Object project(Object rawResponse, String outputSchemaJson,
                           Map<String, String> responseHeaders) {
-        Object projected = project(rawResponse, outputSchemaJson);
+        return project(rawResponse, outputSchemaJson, responseHeaders, false);
+    }
+
+    /**
+     * Same, and when {@code keepUndeclared} is true every field the schema does NOT declare is
+     * kept as the provider sent it, beside the declared ones (which are still typed and recursed).
+     *
+     * <p>This is for a call that explicitly asked the provider for more fields than the seed
+     * declares (X {@code tweet.fields=entities,attachments}, a Graph {@code $select}, a Jira
+     * {@code expand}): the provider answered, and dropping the answer would hand the caller a
+     * green result missing exactly what it asked for, with nothing saying so. The caller decides,
+     * see {@link RequestedFieldSelection}.
+     */
+    public Object project(Object rawResponse, String outputSchemaJson,
+                          Map<String, String> responseHeaders, boolean keepUndeclared) {
+        Object projected = project(rawResponse, outputSchemaJson, keepUndeclared);
         List<String> headerKeys = headerSourcedKeys(outputSchemaJson);
         if (headerKeys.isEmpty()) {
             return projected;
@@ -154,6 +172,10 @@ public class OutputProjector {
     }
 
     public Object project(Object rawResponse, String outputSchemaJson) {
+        return project(rawResponse, outputSchemaJson, false);
+    }
+
+    private Object project(Object rawResponse, String outputSchemaJson, boolean keepUndeclared) {
         if (outputSchemaJson == null || outputSchemaJson.isBlank()) {
             return rawResponse; // legacy path - no projection
         }
@@ -180,7 +202,7 @@ public class OutputProjector {
                 List<Object> projectedList = new ArrayList<>(responseNode.size());
                 for (JsonNode element : responseNode) {
                     if (element.isObject()) {
-                        projectedList.add(projectAgainstFields(element, schema));
+                        projectedList.add(projectAgainstFields(element, schema, keepUndeclared));
                     } else {
                         projectedList.add(objectMapper.convertValue(element, Object.class));
                     }
@@ -188,7 +210,7 @@ public class OutputProjector {
                 return projectedList;
             }
 
-            return projectAgainstFields(responseNode, schema);
+            return projectAgainstFields(responseNode, schema, keepUndeclared);
         } catch (Exception e) {
             log.warn("OutputProjector: failed to project response, returning raw ({})", e.getMessage());
             return rawResponse;
@@ -199,7 +221,8 @@ public class OutputProjector {
      * Project a JsonNode response against an array of OutputFieldDef-shaped entries.
      * The response is treated as an object whose fields match the schema's {@code key}s.
      */
-    private Map<String, Object> projectAgainstFields(JsonNode responseNode, JsonNode schemaArray) {
+    private Map<String, Object> projectAgainstFields(JsonNode responseNode, JsonNode schemaArray,
+                                                     boolean keepUndeclared) {
         Map<String, Object> out = new LinkedHashMap<>();
         if (responseNode == null || responseNode.isNull() || !responseNode.isObject()) {
             return out;
@@ -209,20 +232,49 @@ public class OutputProjector {
             String type = field.path("type").asText("");
             if (key.isBlank() || type.isBlank()) continue;
             if (field.path("root").asBoolean(false)) {
-                out.put(key, projectField(responseNode, type, field.path("children")));
+                out.put(key, projectField(responseNode, type, field.path("children"), keepUndeclared));
                 continue;
             }
             JsonNode value = responseNode.get(key);
             if (value == null || value.isNull()) continue;
-            out.put(key, projectField(value, type, field.path("children")));
+            out.put(key, projectField(value, type, field.path("children"), keepUndeclared));
+        }
+        if (keepUndeclared) {
+            // Declared keys first (typed), then whatever else the provider sent, untouched.
+            Set<String> declared = declaredBodyKeys(schemaArray);
+            Iterator<Map.Entry<String, JsonNode>> fields = responseNode.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> e = fields.next();
+                if (!out.containsKey(e.getKey()) && !declared.contains(e.getKey())) {
+                    out.put(e.getKey(), objectMapper.convertValue(e.getValue(), Object.class));
+                }
+            }
         }
         return out;
     }
 
     /**
+     * The body keys the schema really projects: the same entries the loop above reads. A root
+     * field names no body key, and an entry with a blank key or type is skipped by that loop, so
+     * counting either as declared would drop a body key that nothing projects.
+     */
+    private Set<String> declaredBodyKeys(JsonNode schemaArray) {
+        Set<String> keys = new HashSet<>();
+        for (JsonNode field : schemaArray) {
+            String key = field.path("key").asText("");
+            if (!key.isBlank() && !field.path("type").asText("").isBlank()
+                    && !field.path("root").asBoolean(false)) {
+                keys.add(key);
+            }
+        }
+        return keys;
+    }
+
+    /**
      * Project a single field value according to its declared type.
      */
-    private Object projectField(JsonNode value, String type, JsonNode childrenSchema) {
+    private Object projectField(JsonNode value, String type, JsonNode childrenSchema,
+                                boolean keepUndeclared) {
         // A structured FileRef ({_type:"file", ...}) MUST pass through intact, regardless of how the
         // tool's output_schema declares the field - many tools declare a file field as `object` with
         // children listing only the old 5 sub-fields ({_type, path, name, mimeType, size}). Projecting
@@ -234,7 +286,7 @@ public class OutputProjector {
         switch (type) {
             case TYPE_OBJECT:
                 if (value.isObject() && childrenSchema.isArray() && childrenSchema.size() > 0) {
-                    return projectAgainstFields(value, childrenSchema);
+                    return projectAgainstFields(value, childrenSchema, keepUndeclared);
                 }
                 return objectMapper.convertValue(value, Object.class);
             case TYPE_ARRAY:
@@ -248,7 +300,7 @@ public class OutputProjector {
                         if (isStructuredFileRef(element)) {
                             items.add(objectMapper.convertValue(element, Object.class));
                         } else if (element.isObject()) {
-                            items.add(projectAgainstFields(element, childrenSchema));
+                            items.add(projectAgainstFields(element, childrenSchema, keepUndeclared));
                         } else {
                             items.add(objectMapper.convertValue(element, Object.class));
                         }

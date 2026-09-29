@@ -73,6 +73,20 @@ class PasswordAuthServiceTest {
     class Register {
 
         @Test
+        @DisplayName("register stores the address in the SAME canonical form invitations use (ASCII-only lowercase)")
+        void registerNormalizesEmailLikeInvitations() {
+            when(userRepository.existsByEmail(anyString())).thenReturn(false);
+
+            User plain = service.register("  Kate@Example.COM ", "password123", "Kate", "Doe");
+            assertThat(plain.getEmail()).isEqualTo("kate@example.com");
+
+            // U+212A (Kelvin sign) must NOT fold to "k": otherwise this account would match an
+            // invitation for kate@example.com that the ASCII-only invitation compare refuses.
+            User lookalike = service.register("\u212Aate@example.com", "password123", "Kelvin", "Doe");
+            assertThat(lookalike.getEmail()).isEqualTo("\u212Aate@example.com");
+        }
+
+        @Test
         @DisplayName("Should set normalized unique username from firstName + lastName")
         void shouldSetUsernameFromFirstAndLastName() {
             when(userRepository.existsByEmail(anyString())).thenReturn(false);

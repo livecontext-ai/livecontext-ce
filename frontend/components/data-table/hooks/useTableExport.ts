@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react';
 import type { ColumnDefinition, DataSourceItemRow, PaginationState } from '../types';
-import { formatUtcDateTime } from '@/lib/utils/dateFormatters';
+import { displayZoneFor, formatUtcDateTime } from '@/lib/utils/dateFormatters';
 import { authenticatedFetch } from '../utils/authenticatedFetch';
 import { cellDisplayText } from '@/lib/datatable/assetValue';
 import { displayIdOf } from '../utils/dataTableUtils';
@@ -115,7 +115,12 @@ export function useTableExport({
     const baseHeaders = [
       ...(rowLevelFields.includes('id') ? ['ID'] : []),
       ...(rowLevelFields.includes('priority') ? ['Priority'] : []),
-      ...(rowLevelFields.includes('created_at') ? ['Created At'] : []),
+      // The zone goes in the HEADER, not beside every value: this file leaves the product, and
+      // the reader who opens it has no display preference of ours. The cell keeps the readable
+      // form the grid shows; the column says once which zone that form is in.
+      ...(rowLevelFields.includes('created_at')
+        ? [`Created At (${displayZoneFor(new Date())})`]
+        : []),
     ];
     // Headers are escaped like the values: a column name may legitimately carry a comma
     // (`Revenue, USD`), which would otherwise split the header row.
@@ -123,7 +128,7 @@ export function useTableExport({
 
     // Data rows (excluding tenant_id and data_source_id for security)
     const dataRows = rowsToExport.map(row => {
-      // Escaped like the data values: a formatted date carries commas ("Dec 31, 2099, 00:00 UTC"),
+      // Escaped like the data values: a formatted date carries commas ("Dec 31, 2099, 00:00"),
       // so an unquoted base column splits one row across three CSV fields.
       const baseValues = [
         // Exactly one column per row-level field. Where `id` is NOT one it is the item's own field

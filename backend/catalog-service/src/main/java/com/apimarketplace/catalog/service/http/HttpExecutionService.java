@@ -820,6 +820,8 @@ public class HttpExecutionService {
 
             url = processPathParameters(url, tool, filteredParameters);
             log.info("[HttpExecutionService.executeHttpCall] Tool: {}, URL after path parameters: {}", tool.getId(), url);
+            // No credential on this path, so nothing fills a placeholder later: check now.
+            requireFilledPathParameters(url, tool);
 
             // Dynamic-URL endpoints first (placeholder reject + host allow-list, no DNS toward
             // non-allowed hosts), then the generic SSRF validation for every URL.
@@ -984,6 +986,9 @@ public class HttpExecutionService {
             if (url.contains("{") && url.contains("}")) {
                 url = replaceUrlTemplateVariables(url, userId, credentialName, credentialValue.orElse(null), secrets);
             }
+            // AFTER the credential fill: {token}, {apiKey}, {project_id} are declared path
+            // parameters too, and are legitimately still unfilled before this point.
+            requireFilledPathParameters(url, tool);
             realUrl = url;
 
             log.info("[HttpExecutionService.executeHttpCallWithCredentials] Final URL: {}", safeUrl);
@@ -2893,6 +2898,79 @@ public class HttpExecutionService {
         return url;
     }
 
+    /** A single-brace {name} left in the URL; a double-brace {{VAR}} is a credential template. */
+    private static final Pattern UNFILLED_PATH_PLACEHOLDER =
+        Pattern.compile("(?<!\\{)\\{([A-Za-z0-9_.\\-]+)\\}(?!\\})");
+
+    /**
+     * Refuses the call when a declared path parameter was not provided and has no default.
+     *
+     * <p>Before this, a missing path value was only logged and the placeholder went out
+     * literally: LinkedIn {@code get_profile} called without {@code personId} reached the
+     * provider as {@code /v2/people/(id:{personId})} and came back as an unreadable
+     * "Illegal character in path" rejection that never named the parameter. Such a URL can
+     * never succeed, so refusing it changes no call that works today; it only replaces the
+     * provider's error with one that says which parameter to pass, before anything is sent.
+     *
+     * <p>WHEN it runs is the whole contract. The importer declares every {@code {x}} of an
+     * endpoint path as a path parameter, including the ones the CREDENTIAL fills
+     * (Ankr and Alchemy {@code {apiKey}}, Firebase and Sanity {@code {project_id}}, PubNub
+     * {@code {pub_key}}/{@code {sub_key}}; about 110 endpoints, several of them
+     * hidden from the agent). Those are only filled by {@code replaceUrlTemplateVariables}, so
+     * on the credentialed paths this runs AFTER that fill, and on the credential-less legacy
+     * path right after the path substitution. Run any earlier and every one of those calls is
+     * refused.
+     *
+     * <p>Only a declared PATH parameter of this endpoint's template with NO default is
+     * refused. Left alone: a base-URL variable, a credential path variable the importer
+     * rewrote, a parameter with a default, a brace sequence that names no parameter. Known
+     * blind spot, deliberate: for a SINGLE-field or EMPTY credential data map
+     * {@code resolveUrlVariable} fills any leftover {@code {var}} with the credential value, so a missing agent parameter there
+     * is never seen here (unchanged behaviour, see its step 4). A provided value that itself
+     * contains a {@code {declaredName}} token is also reported as missing; no seed produces
+     * one. {@code is_required} is not consulted: an unfilled placeholder breaks the URL
+     * whether or not the seed marked it required.
+     *
+     * @throws IllegalArgumentException naming every missing parameter
+     */
+    void requireFilledPathParameters(String url, ApiToolEntity tool) {
+        if (url == null || url.indexOf('{') < 0) {
+            return;
+        }
+        Matcher m = UNFILLED_PATH_PLACEHOLDER.matcher(url);
+        Set<String> leftOver = new LinkedHashSet<>();
+        while (m.find()) {
+            leftOver.add(m.group(1));
+        }
+        if (leftOver.isEmpty()) {
+            return;
+        }
+        Map<String, ParameterMetadata> declared = loadParameterMetadata(tool.getId());
+        List<String> missing = new ArrayList<>();
+        String endpointTemplate = tool.getEndpoint() == null ? "" : tool.getEndpoint();
+        for (String name : leftOver) {
+            ParameterMetadata meta = declared.get(name);
+            // A {name} of the BASE URL ({domain}, {project_id}) or a credential path var the
+            // importer rewrote ({twilio_account_sid}) is filled from the credential later, so
+            // only a PATH parameter of this endpoint's own template can be missing here.
+            if (meta != null
+                    && "path".equalsIgnoreCase(meta.parameterType())
+                    && endpointTemplate.contains("{" + name + "}")
+                    && (meta.defaultValue() == null || meta.defaultValue().isBlank())) {
+                missing.add(name);
+            }
+        }
+        if (!missing.isEmpty()) {
+            throw new IllegalArgumentException("Path parameter"
+                + (missing.size() > 1 ? "s " : " ") + String.join(", ", missing)
+                + (missing.size() > 1 ? " have" : " has") + " no value for " + tool.getToolSlug()
+                + ": pass " + (missing.size() > 1 ? "them" : "it")
+                + " in params. If the value belongs to the connected account (an API key, a project"
+                + " or account id), the user has to add it to that credential instead."
+                + " Nothing was sent to the provider.");
+        }
+    }
+
     /**
      * Extract values for a query-array parameter. Supports both input shapes:
      * <ul>
@@ -3906,6 +3984,7 @@ public class HttpExecutionService {
             if (url.contains("{") && url.contains("}")) {
                 url = replaceUrlTemplateVariables(url, userId, credentialName, credentialValue.orElse(null), secrets);
             }
+            requireFilledPathParameters(url, tool); // after the credential fill, see executeHttpCallWithCredentials
             realUrl = url;
 
             HttpHeaders headers = prepareHeadersWithCredentials(api, tool, userId, credentialName, injection, credentialValue);

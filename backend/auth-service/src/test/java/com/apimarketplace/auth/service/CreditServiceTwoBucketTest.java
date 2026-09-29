@@ -117,6 +117,19 @@ class CreditServiceTwoBucketTest {
     }
 
     @Test
+    @DisplayName("V549: grantCredits sourceType=REWARD_CODE (creator / partner code) lands on payg, never the monthly bucket")
+    void grantRewardCodeRoutesToPaygBucket() {
+        Subscription s = sub(new BigDecimal("25.00"), new BigDecimal("0.00"));
+        when(subscriptionRepository.findActiveByUserIdForUpdate(USER_ID)).thenReturn(Optional.of(s));
+        when(subscriptionRepository.save(any())).thenReturn(s);
+
+        creditService.grantCredits(USER_ID, new BigDecimal("50000"), "REWARD_CODE", "REWARD_CODE_1", "Code LC-X");
+
+        assertThat(s.getRemainingCredits()).isEqualByComparingTo("25.00");
+        assertThat(s.getPaygRemainingCredits()).isEqualByComparingTo("50000");
+    }
+
+    @Test
     @DisplayName("grantCredits sourceType=REWARD_REFERRAL routes +amount to the payg bucket (survives renewal)")
     void grantReferralRewardRoutesToPaygBucket() {
         Subscription s = sub(new BigDecimal("25.00"), new BigDecimal("0.00"));

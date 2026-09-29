@@ -1,5 +1,8 @@
 package com.apimarketplace.interfaces.controller;
 
+import com.apimarketplace.common.web.SharedApplicationScope;
+import com.apimarketplace.common.web.SharedApplicationScopeClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.apimarketplace.interfaces.client.InterfaceFormat;
 import com.apimarketplace.interfaces.client.dto.InterfaceDto;
 import com.apimarketplace.interfaces.client.dto.InterfaceSnapshotDto;
@@ -33,15 +36,27 @@ public class InterfaceController {
     private final InterfaceSnapshotService snapshotService;
     private final InterfaceDtoMapper mapper;
     private final TenantResolver tenantResolver;
+    /** Null only in unit tests that build the controller by hand: share reads then fail closed. */
+    private final SharedApplicationScopeClient sharedApplicationScopeClient;
 
     public InterfaceController(InterfaceService interfaceService,
                                 InterfaceSnapshotService snapshotService,
                                 InterfaceDtoMapper mapper,
                                 TenantResolver tenantResolver) {
+        this(interfaceService, snapshotService, mapper, tenantResolver, null);
+    }
+
+    @Autowired
+    public InterfaceController(InterfaceService interfaceService,
+                                InterfaceSnapshotService snapshotService,
+                                InterfaceDtoMapper mapper,
+                                TenantResolver tenantResolver,
+                                SharedApplicationScopeClient sharedApplicationScopeClient) {
         this.interfaceService = interfaceService;
         this.snapshotService = snapshotService;
         this.mapper = mapper;
         this.tenantResolver = tenantResolver;
+        this.sharedApplicationScopeClient = sharedApplicationScopeClient;
     }
 
     @PostMapping
@@ -161,11 +176,28 @@ public class InterfaceController {
     public ResponseEntity<InterfaceDto> getInterface(@PathVariable UUID id, HttpServletRequest request) {
         String tenantId = tenantResolver.resolve(request);
         String orgId = tenantResolver.resolveOrgId(request);
+        // A share-link holder is authenticated AS THE OWNER, so the scope lookup below would hand
+        // them every interface of the owner's workspace. Serve only the shared application's own
+        // interfaces; anything else is a 404, like an unknown id.
+        if (!shareContextPermitsInterface(request, id, orgId)) {
+            return ResponseEntity.notFound().build();
+        }
         // #150 - scope-aware get: org workspace lookup when orgId is set,
         // personal-strict otherwise. Cross-scope / unknown id → 404.
         return interfaceService.getInterface(id, tenantId, orgId)
                 .map(e -> ResponseEntity.ok(mapper.toDto(e)))
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    private boolean shareContextPermitsInterface(HttpServletRequest request, UUID id, String orgId) {
+        SharedApplicationScope scope = SharedApplicationScope.from(request);
+        if (!scope.isShare()) {
+            return true;
+        }
+        return scope.kind() == SharedApplicationScope.Kind.APPLICATION
+                && sharedApplicationScopeClient != null
+                && sharedApplicationScopeClient.interfaceBelongsToApplication(
+                        scope.publicationId(), orgId, id);
     }
 
     @PutMapping("/{id}")

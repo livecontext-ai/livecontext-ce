@@ -39,7 +39,7 @@ export default function TriggersPage() {
 
 ## Writing rules
 
-- **Accurate first.** Every claim must match the product as shipped on `dev`. Check the code (or the UI strings in `frontend/messages/en.json`) before writing a number, a limit, a default, a plan name, or a button label. When a behaviour differs between the cloud and the self-hosted Community Edition, say so explicitly.
+- **Accurate first.** Every claim must match the product as shipped on `main`. Check the code (or the UI strings in `frontend/messages/en.json`) before writing a number, a limit, a default, a plan name, or a button label. When a behaviour differs between the cloud and the self-hosted Community Edition, say so explicitly.
 - **Write for the person using the product**, not for someone reading the source. No class names, no database tables, no internal service names. Name UI elements exactly as they appear on screen (check `frontend/messages/en.json`), in **bold**. Bold has two other uses: a term at the place where the page defines it, and a short run-in lead phrase that names each item of a list of rules or principles. Never use bold for plain emphasis.
 - Second person, present tense, active voice. Short sentences. One idea per paragraph.
 - Define a term the first time a page uses it, or link to [Glossary](./glossary/page.tsx).

@@ -5,7 +5,7 @@ import type { Node } from 'reactflow';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import {
-  AlertTriangle, ArrowLeft, CheckCircle2, CircleSlash, Crosshair, Loader2, PauseCircle, Play, RefreshCw,
+  AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, CircleSlash, FileText, Layers, Loader2, PauseCircle, Play,
   TrendingUp, XCircle,
 } from 'lucide-react';
 import { Bar, CartesianGrid, Cell, ComposedChart, Line, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
@@ -13,7 +13,6 @@ import { orchestratorApi } from '@/lib/api';
 import type { RunAnalysisEpoch, RunAnalysisNodeCell } from '@/lib/api/orchestrator/types';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { formatCostCompact } from '@/lib/format-cost';
-import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { getIconSlug, NodeIcon, nodeIconRadiusClass } from '@/app/workflows/builder/components/nodes/shared';
 import { nodeMatchesStep } from '@/app/workflows/builder/services/nodeMatcher';
 import { findNodeClassById } from '@/app/workflows/builder/nodes/nodeClasses';
@@ -23,7 +22,9 @@ import { computeDagOrder, sortByDagOrder } from '@/lib/workflow/dagStepOrder';
 import { RunSummaryBar } from './RunSummaryBar';
 import { getCachedRunPanelData, subscribeRunPanelData, type RunPanelData } from './runPanelBus';
 import { formatCompactDuration } from './runFormatting';
-import { markEpochPickedByUser } from './useDefaultEpochSelection';
+import { getRunStatusLabel } from '@/lib/utils/runStatusUtils';
+import { useRunSharedEpoch } from './useRunSharedEpoch';
+import { PANEL_NAV_BUTTON_CLASS } from './panelNavButton';
 import {
   buildNodeRows, cellStatus, compareEpochs, computeInsights, computeKpis, defaultComparison, epochOutcome,
   heatLevel, referenceFor, type CellStatus, type NodeRow,
@@ -60,6 +61,8 @@ export interface RunAnalysisPanelContentProps {
   surfaceId?: string;
   /** Back to the Run tab (the header's left arrow). */
   onBack: () => void;
+  /** On to this run's Logs (the header's right button). Omit where there are none. */
+  onOpenLogs?: () => void;
 }
 
 /**
@@ -69,11 +72,13 @@ export interface RunAnalysisPanelContentProps {
  * side-by-side comparison of two epochs. All of it comes from ONE call
  * (`orchestratorApi.getRunAnalysis`) and is refetched whenever the run gains an epoch.
  */
-export function RunAnalysisPanelContent({ workflowId, runId, surfaceId, onBack }: RunAnalysisPanelContentProps) {
+export function RunAnalysisPanelContent({ workflowId, runId, surfaceId, onBack, onOpenLogs }: RunAnalysisPanelContentProps) {
   const t = useTranslations();
   const ta = useTranslations('workflow.runAnalysis');
   const auth = useAuthGuard();
-  const { setViewingEpoch } = useWorkflowMode();
+  // The epoch picked here is the run's SHARED one (canvas, pill, Run tab, Logs) when this tab is
+  // for the run the panel is bound to; otherwise it stays local to the comparison, as before.
+  const shared = useRunSharedEpoch(runId);
 
   // Run identity + epoch count from the canvas bus: the same snapshot the Run tab renders.
   const [panel, setPanel] = useState<RunPanelData>(() => getCachedRunPanelData(workflowId, surfaceId));
@@ -136,23 +141,60 @@ export function RunAnalysisPanelContent({ workflowId, runId, surfaceId, onBack }
   const kpis = useMemo(() => computeKpis(epochs, query.data?.totalEpochs ?? 0, runStatus), [epochs, query.data, runStatus]);
   const insights = useMemo(() => computeInsights(epochs, rows, runStatus), [epochs, rows, runStatus]);
 
-  // ── Comparison: follows the latest failure until the user picks an epoch ──
-  const [pickedTarget, setPickedTarget] = useState<number | null>(null);
+  // ── Comparison: the epoch on screen, else the latest failure ──
+  const [localTarget, setLocalTarget] = useState<number | null>(null);
+  const { synced, pick: pickShared, showAll: showAllShared } = shared;
+  const pickedTarget = synced ? shared.epoch : localTarget;
+  const pickEpoch = useCallback((epoch: number) => {
+    if (synced) pickShared(epoch);
+    else setLocalTarget(epoch);
+  }, [synced, pickShared]);
+  const showAllEpochs = useCallback(() => {
+    if (synced) showAllShared();
+    else setLocalTarget(null);
+  }, [synced, showAllShared]);
+  // The reference column can be chosen too, so the oldest epoch, which has no earlier one to be
+  // compared against, can still be put side by side with any other. A chosen reference belongs to
+  // the compared epoch it was chosen for: once the compared epoch moves some other way (a grid
+  // cell, a chart column, the canvas), the automatic reference (the last success before it) is
+  // back, instead of a stale choice pairing two failures.
+  const [pickedReference, setPickedReference] = useState<{ forTarget: number; reference: number } | null>(null);
   const comparison = useMemo(() => {
-    if (pickedTarget != null && epochs.some(e => e.epoch === pickedTarget)) {
-      const reference = referenceFor(epochs, pickedTarget, runStatus);
-      return reference == null ? null : { reference, target: pickedTarget };
+    const base = pickedTarget != null && epochs.some(e => e.epoch === pickedTarget)
+      ? (() => {
+          const reference = referenceFor(epochs, pickedTarget, runStatus);
+          return reference == null ? null : { reference, target: pickedTarget };
+        })()
+      : defaultComparison(epochs, runStatus);
+    if (!base) return null;
+    const chosen = pickedReference != null
+      && pickedReference.forTarget === base.target
+      && pickedReference.reference !== base.target
+      && epochs.some(e => e.epoch === pickedReference.reference);
+    return chosen ? { ...base, reference: pickedReference.reference } : base;
+  }, [epochs, pickedTarget, pickedReference, runStatus]);
+  // Choosing, in one column, the epoch the other column shows swaps the two: that is how the
+  // oldest epoch (the default reference) gets into the compared column in one move. A reference
+  // the user chose in the table stays when the compared epoch is changed from the table too.
+  const chooseCompared = useCallback((epoch: number) => {
+    if (!comparison) return;
+    const referenceWasChosen = pickedReference?.forTarget === comparison.target;
+    if (epoch === comparison.reference) setPickedReference({ forTarget: epoch, reference: comparison.target });
+    else setPickedReference(referenceWasChosen ? { forTarget: epoch, reference: comparison.reference } : null);
+    pickEpoch(epoch);
+  }, [comparison, pickedReference, pickEpoch]);
+  const chooseReference = useCallback((epoch: number) => {
+    if (!comparison) return;
+    if (epoch === comparison.target) {
+      // The compared column takes the old reference: the shared epoch moves with it.
+      setPickedReference({ forTarget: comparison.reference, reference: epoch });
+      pickEpoch(comparison.reference);
+      return;
     }
-    return defaultComparison(epochs, runStatus);
-  }, [epochs, pickedTarget, runStatus]);
+    setPickedReference({ forTarget: comparison.target, reference: epoch });
+  }, [comparison, pickEpoch]);
 
   const [colorBy, setColorBy] = useState<'status' | 'duration'>('status');
-
-  const showOnCanvas = useCallback((epoch: number) => {
-    markEpochPickedByUser(runId, epoch);
-    setViewingEpoch(epoch);
-    onBack();
-  }, [runId, setViewingEpoch, onBack]);
 
   const focusNode = useCallback((alias: string) => {
     window.dispatchEvent(new CustomEvent('workflowFocusNode', { detail: { stepAlias: alias } }));
@@ -172,7 +214,7 @@ export function RunAnalysisPanelContent({ workflowId, runId, surfaceId, onBack }
               type="button"
               onClick={onBack}
               data-run-analysis-back
-              className="flex h-6 min-w-0 flex-shrink-0 items-center gap-1.5 rounded-lg border border-theme px-1.5 text-sm font-medium text-theme-secondary transition-colors hover:bg-theme-secondary hover:text-theme-primary"
+              className={PANEL_NAV_BUTTON_CLASS}
               title={t('workflow.logs.backToRun')}
               aria-label={t('workflow.logs.backToRun')}
             >
@@ -181,17 +223,21 @@ export function RunAnalysisPanelContent({ workflowId, runId, surfaceId, onBack }
               <span className="truncate">{t('sidePanel.runTab')}</span>
             </button>
           )}
-          trailing={(
+          // On to Logs, in the look of every other run-view button. No refresh here: the tab
+          // refetches on its own when the run gains or closes an epoch, and polls while it runs.
+          trailing={onOpenLogs ? (
             <button
               type="button"
-              onClick={() => query.refetch()}
-              title={ta('refresh')}
-              aria-label={ta('refresh')}
-              className="flex h-7 flex-shrink-0 items-center rounded-lg px-1.5 text-theme-secondary transition-colors hover:bg-theme-secondary hover:text-theme-primary"
+              data-run-analysis-to-logs
+              onClick={onOpenLogs}
+              title={t('workflow.logs.openLogs')}
+              className={PANEL_NAV_BUTTON_CLASS}
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${query.isFetching ? 'animate-spin' : ''}`} />
+              <FileText className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="truncate">{t('sidePanel.logs')}</span>
+              <ArrowRight className="h-3.5 w-3.5 flex-shrink-0" />
             </button>
-          )}
+          ) : undefined}
         />
       </header>
 
@@ -258,12 +304,28 @@ export function RunAnalysisPanelContent({ workflowId, runId, surfaceId, onBack }
 
             {/* Duration / cost per epoch */}
             <section className="flex flex-col gap-2">
-              <h3 className="text-sm font-semibold text-theme-primary">{ta('chart.title')}</h3>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-theme-primary">{ta('chart.title')}</h3>
+                {/* The way back from a picked epoch, which the canvas and every view now show. */}
+                {pickedTarget != null && (
+                  <button
+                    type="button"
+                    data-run-analysis-all-epochs
+                    onClick={showAllEpochs}
+                    className={PANEL_NAV_BUTTON_CLASS}
+                  >
+                    <Layers className="h-3.5 w-3.5 flex-shrink-0" />
+                    {t('workflow.runSteps.allEpochs')}
+                  </button>
+                )}
+              </div>
               <EpochChart
                 epochs={epochs}
                 runStatus={runStatus}
-                selected={comparison?.target ?? null}
-                onPick={setPickedTarget}
+                // Only a picked epoch stands out: with nothing picked, every epoch shows at full
+                // strength, as the canvas does. The grid below still rings the default comparison.
+                selected={pickedTarget != null ? comparison?.target ?? null : null}
+                onPick={pickEpoch}
                 labels={{ duration: ta('chart.duration'), cost: ta('chart.cost'), epoch: epochLabel }}
               />
             </section>
@@ -299,7 +361,7 @@ export function RunAnalysisPanelContent({ workflowId, runId, surfaceId, onBack }
                 nodeFor={nodeFor}
                 labelFor={labelFor}
                 epochLabel={epochLabel}
-                onPick={setPickedTarget}
+                onPick={pickEpoch}
                 onFocusNode={focusNode}
               />
 
@@ -344,26 +406,71 @@ export function RunAnalysisPanelContent({ workflowId, runId, surfaceId, onBack }
             {/* Compare two epochs */}
             <section className="flex flex-col gap-2" data-run-analysis-compare>
               <h3 className="text-sm font-semibold text-theme-primary">{ta('compare.title')}</h3>
-              {comparison ? (
+              {comparison ? (<>
                 <ComparisonTable
                   reference={epochs.find(e => e.epoch === comparison.reference)!}
                   target={epochs.find(e => e.epoch === comparison.target)!}
+                  epochs={epochs}
                   aliasOrder={aliasOrder}
                   runStatus={runStatus}
                   nodeFor={nodeFor}
                   labelFor={labelFor}
-                  onShowOnCanvas={showOnCanvas}
+                  onPickReference={chooseReference}
+                  onPickTarget={chooseCompared}
                 />
-              ) : (
+                {/* Only with a table: it tells how to choose the epochs its header shows. */}
+                <p className="text-sm text-theme-muted">{ta('compare.hint')}</p>
+              </>) : (
                 <p className="text-sm text-theme-secondary">{ta('compare.needTwo')}</p>
               )}
-              <p className="text-sm text-theme-muted">{ta('compare.hint')}</p>
             </section>
           </div>
         )}
       </div>
     </div>
   );
+}
+
+/**
+ * The epoch a click on the chart landed in: the column under the pointer, bar or not. Recharts
+ * reports the column by its index in `data` (and by its category label, used as a fallback).
+ */
+export function epochFromChartState(
+  state: { activeIndex?: unknown; activeLabel?: unknown } | null | undefined,
+  data: ReadonlyArray<{ epoch: number }>,
+): number | null {
+  if (!state) return null;
+  const index = typeof state.activeIndex === 'number' ? state.activeIndex : Number(state.activeIndex);
+  if (Number.isInteger(index) && index >= 0 && index < data.length) return data[index].epoch;
+  const label = Number(state.activeLabel);
+  return Number.isFinite(label) && data.some(d => d.epoch === label) ? label : null;
+}
+
+/** Steps a clock reads at a glance: 30s, 1m, 5m... never a decimal 3m20s. */
+const TIME_STEPS_MS = [
+  100, 250, 500, 1_000, 2_000, 5_000, 10_000, 15_000, 30_000,
+  60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
+  3_600_000, 7_200_000, 10_800_000, 21_600_000, 43_200_000, 86_400_000,
+];
+
+/** The smallest time step that splits the range into at most four intervals. */
+function niceStep(raw: number): number {
+  return TIME_STEPS_MS.find(step => step >= raw) ?? Math.ceil(raw / 86_400_000) * 86_400_000;
+}
+
+/**
+ * The duration axis: its ticks (round clock steps) and its top. The chart is handed these exact
+ * ticks, and measures its own width from the labels it prints (`width="auto"`): a width
+ * estimated per character still cut the start of the labels off on the left.
+ */
+export function durationAxis(durations: ReadonlyArray<number | null>): { ticks: number[]; top: number } {
+  const longest = durations.reduce<number>((max, d) => (d != null && d > max ? d : max), 0);
+  if (longest <= 0) return { ticks: [0], top: 1 };
+  const step = niceStep(longest / 4);
+  const top = Math.ceil(longest / step) * step;
+  const ticks: number[] = [];
+  for (let value = 0; value <= top + step / 2; value += step) ticks.push(value);
+  return { ticks, top };
 }
 
 /** What the Analysis tab reads from the canvas: node identities and labels, and the edges (DAG order). */
@@ -399,10 +506,10 @@ function NodeLabel({ alias, node, label }: { alias: string; node?: Node<BuilderN
             nodeKind={data.kind}
             nodeFamily={findNodeClassById(data.id || '')?.family}
             avatarUrl={(data as { agentAvatarUrl?: string }).agentAvatarUrl}
-            size="xs"
+            size="2xs"
           />
         ) : (
-          <span className={`h-4 w-4 ${nodeIconRadiusClass('xs')} bg-gray-100 dark:bg-gray-700`} />
+          <span className={`h-4 w-4 ${nodeIconRadiusClass('2xs')} bg-gray-100 dark:bg-gray-700`} />
         )}
       </span>
       <span className="truncate">{label}</span>
@@ -427,14 +534,24 @@ function EpochChart({
     outcome: epochOutcome(e, runStatus),
   })), [epochs, runStatus]);
   const hasCost = data.some(d => d.cost != null);
+  const yAxis = useMemo(() => durationAxis(data.map(d => d.durationMs)), [data]);
 
   return (
-    <div className="h-40 w-full" data-run-analysis-chart>
+    <div className="h-40 w-full cursor-pointer" data-run-analysis-chart>
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={data} margin={{ top: 4, right: hasCost ? 4 : 8, left: 0, bottom: 0 }}>
+        {/* A click anywhere in an epoch's column picks it, not only on its bar: a short bar
+            (or none, for an untimed epoch) is a few pixels to aim at. */}
+        <ComposedChart
+          data={data}
+          margin={{ top: 4, right: hasCost ? 4 : 8, left: 0, bottom: 0 }}
+          onClick={(state) => {
+            const epoch = epochFromChartState(state, data);
+            if (epoch != null) onPick(epoch);
+          }}
+        >
           <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} vertical={false} />
           <XAxis dataKey="epoch" tick={{ fontSize: '0.75rem' }} tickLine={false} tickFormatter={(v: number) => `#${v}`} minTickGap={16} />
-          <YAxis yAxisId="d" tick={{ fontSize: '0.75rem' }} tickLine={false} axisLine={false} width={40} tickFormatter={(v: number) => formatCompactDuration(v)} />
+          <YAxis yAxisId="d" tick={{ fontSize: '0.75rem' }} tickLine={false} axisLine={false} width="auto" domain={[0, yAxis.top]} ticks={yAxis.ticks} tickFormatter={(v: number) => formatCompactDuration(v)} />
           {hasCost && <YAxis yAxisId="c" orientation="right" hide />}
           <ChartTooltip
             cursor={{ fillOpacity: 0.08 }}
@@ -461,19 +578,15 @@ function EpochChart({
             name="duration"
             radius={[2, 2, 0, 0]}
             maxBarSize={14}
-            cursor="pointer"
-            onClick={(entry: { epoch?: number; payload?: { epoch?: number } }) => {
-              const epoch = entry?.payload?.epoch ?? entry?.epoch;
-              if (epoch != null) onPick(epoch);
-            }}
           >
+            {/* The picked epoch stands out by its neighbours dimming, as on the pill's timeline:
+                an outline around a 14px bar spilled onto the bars beside it. */}
             {data.map(d => (
               <Cell
                 key={d.epoch}
+                data-epoch-chart-bar={d.epoch}
                 fill={BAR_COLOR[d.outcome ?? ''] ?? BAR_COLOR_OTHER}
-                fillOpacity={selected == null || selected === d.epoch ? 0.9 : 0.55}
-                stroke={selected === d.epoch ? 'var(--text-primary)' : undefined}
-                strokeWidth={selected === d.epoch ? 1.5 : 0}
+                fillOpacity={selected == null ? 0.9 : selected === d.epoch ? 1 : 0.3}
               />
             ))}
           </Bar>
@@ -606,12 +719,14 @@ function GridRow({
       {epochs.map(e => {
         const cell = row.cells.get(e.epoch);
         const status = cellStatus(cell);
-        const level = colorBy === 'duration' && status === 'ok' ? heatLevel(cell?.elapsedMs, row.maxElapsedMs) : null;
+        const level = colorBy === 'duration' && status === 'ok' ? heatLevel(cell?.elapsedMs, row.minElapsedMs, row.maxElapsedMs) : null;
         const cls = level != null ? HEAT_CLASS[level] : CELL_CLASS[status];
+        // Drawn INSIDE the cell: an outer ring (and its offset) on a 12px cell with 2px gaps
+        // spilled over the neighbouring epochs.
         const ring = selected?.target === e.epoch
-          ? 'ring-2 ring-gray-900 dark:ring-gray-100 ring-offset-1 ring-offset-[var(--bg-primary)]'
+          ? 'ring-2 ring-inset ring-gray-900 dark:ring-gray-100'
           : selected?.reference === e.epoch
-            ? 'ring-1 ring-gray-400 dark:ring-gray-500'
+            ? 'ring-1 ring-inset ring-gray-500 dark:ring-gray-400'
             : '';
         return (
           <button
@@ -727,38 +842,51 @@ function CompareCell({ cell }: { cell?: RunAnalysisNodeCell }) {
 }
 
 function ComparisonTable({
-  reference, target, aliasOrder, runStatus, nodeFor, labelFor, onShowOnCanvas,
+  reference, target, epochs, aliasOrder, runStatus, nodeFor, labelFor, onPickReference, onPickTarget,
 }: {
   reference: RunAnalysisEpoch;
   target: RunAnalysisEpoch;
+  /** Every epoch of the window, offered in both column pickers. */
+  epochs: RunAnalysisEpoch[];
   aliasOrder: string[];
   runStatus: string | null;
   nodeFor: (alias: string) => Node<BuilderNodeData> | undefined;
   labelFor: (alias: string) => string;
-  onShowOnCanvas: (epoch: number) => void;
+  onPickReference: (epoch: number) => void;
+  onPickTarget: (epoch: number) => void;
 }) {
+  const t = useTranslations();
   const ta = useTranslations('workflow.runAnalysis');
   const rows = useMemo(() => compareEpochs(reference, target, aliasOrder), [reference, target, aliasOrder]);
+  // Each option says how that epoch went, so a reference is not picked blind.
+  const optionLabel = (epoch: RunAnalysisEpoch) => {
+    const outcome = epochOutcome(epoch, runStatus);
+    const name = ta('compare.epoch', { epoch: epoch.epoch });
+    return outcome ? `${name} · ${getRunStatusLabel(outcome, (k) => t(k))}` : name;
+  };
+  // Newest first, as everywhere epochs are listed. Both columns offer every epoch: picking the
+  // other column's one swaps the two.
+  const newestFirst = useMemo(() => [...epochs].sort((a, b) => b.epoch - a.epoch), [epochs]);
   const header = (epoch: RunAnalysisEpoch, isReference: boolean) => {
     const outcome = epochOutcome(epoch, runStatus);
+    const label = isReference ? ta('compare.chooseReference') : ta('compare.chooseTarget');
     return (
       <div className="flex min-w-0 items-center gap-1">
         {outcome === 'COMPLETED' ? <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-emerald-500" />
           : outcome === 'FAILED' ? <XCircle className="h-3.5 w-3.5 flex-shrink-0 text-red-500" /> : null}
-        <span className="truncate">
-          {ta('compare.epoch', { epoch: epoch.epoch })}
-          {isReference && <span className="font-normal text-theme-muted"> ({ta('compare.reference')})</span>}
-        </span>
-        <button
-          type="button"
-          onClick={() => onShowOnCanvas(epoch.epoch)}
-          title={ta('compare.showOnCanvas', { epoch: epoch.epoch })}
-          aria-label={ta('compare.showOnCanvas', { epoch: epoch.epoch })}
-          className="flex-shrink-0 rounded p-0.5 text-theme-secondary hover:bg-theme-secondary hover:text-theme-primary"
-          data-show-epoch-on-canvas={epoch.epoch}
+        <select
+          aria-label={label}
+          value={epoch.epoch}
+          onChange={event => (isReference ? onPickReference : onPickTarget)(Number(event.target.value))}
+          data-compare-pick={isReference ? 'reference' : 'target'}
+          data-compare-epoch={epoch.epoch}
+          className="h-6 min-w-0 max-w-full cursor-pointer rounded-md border border-theme bg-theme-primary px-1 text-sm font-semibold text-theme-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]"
         >
-          <Crosshair className="h-3.5 w-3.5" />
-        </button>
+          {newestFirst.map(e => (
+            <option key={e.epoch} value={e.epoch}>{optionLabel(e)}</option>
+          ))}
+        </select>
+        {isReference && <span className="flex-shrink-0 font-normal text-theme-muted">({ta('compare.reference')})</span>}
       </div>
     );
   };

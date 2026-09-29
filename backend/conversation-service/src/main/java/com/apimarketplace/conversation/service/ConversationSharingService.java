@@ -61,6 +61,33 @@ public class ConversationSharingService {
         }
     }
 
+    /** Share mode that lets an anonymous link holder post into the conversation. */
+    static final String SHARE_MODE_READWRITE = "readwrite";
+
+    /**
+     * Thrown when a workspace teammate (authorized to share the conversation read-only) tries
+     * to open it for anonymous WRITES. Mapped to 403 by the controller.
+     */
+    public static class ReadWriteShareRequiresOwnerException extends RuntimeException {
+        public ReadWriteShareRequiresOwnerException() {
+            super("Only the conversation owner can allow anyone with the link to post messages");
+        }
+    }
+
+    /**
+     * A read-write link lets ANYONE holding it post turns that the owner's agent then answers
+     * inside the owner's conversation, with the owner's tools and credits. Sharing rights
+     * ({@link #assertAuthorized}) extend to every teammate of the conversation's workspace, which
+     * is right for a read-only link but would let any member (a viewer included) open another
+     * member's conversation to outside writes. Opening it for writes is therefore the owner's call.
+     */
+    private void assertMayOpenForWrites(Conversation conversation, String userId, String requestedMode) {
+        if (SHARE_MODE_READWRITE.equals(requestedMode)
+                && (userId == null || !userId.equals(conversation.getUserId()))) {
+            throw new ReadWriteShareRequiresOwnerException();
+        }
+    }
+
     /** Back-compat - defaults to personal scope (orgId=null → owner-only check). */
     public ConversationDto enableSharing(String conversationId, String userId, String shareMode, Boolean memoryEnabled) {
         return enableSharing(conversationId, userId, null, shareMode, memoryEnabled);
@@ -73,12 +100,14 @@ public class ConversationSharingService {
                 .orElseThrow(() -> new IllegalArgumentException("Conversation not found"));
 
         assertAuthorized(conversation, userId, organizationId);
+        String effectiveMode = shareMode != null ? shareMode : "read";
+        assertMayOpenForWrites(conversation, userId, effectiveMode);
 
         if (conversation.getShareToken() == null) {
             conversation.setShareToken(generateShareToken());
         }
 
-        conversation.setShareMode(shareMode != null ? shareMode : "read");
+        conversation.setShareMode(effectiveMode);
         if (memoryEnabled != null) {
             conversation.setMemoryEnabled(memoryEnabled);
         }
@@ -103,6 +132,7 @@ public class ConversationSharingService {
                 .orElseThrow(() -> new IllegalArgumentException("Conversation not found"));
 
         assertAuthorized(conversation, userId, organizationId);
+        assertMayOpenForWrites(conversation, userId, shareMode);
 
         if (shareMode != null) {
             conversation.setShareMode(shareMode);

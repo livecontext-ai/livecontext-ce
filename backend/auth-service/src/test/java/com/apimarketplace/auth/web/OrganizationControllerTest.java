@@ -11,6 +11,7 @@ import com.apimarketplace.common.storage.domain.StorageEntity;
 import com.apimarketplace.auth.repository.OrganizationMemberRepository;
 import com.apimarketplace.auth.repository.UserRepository;
 import com.apimarketplace.auth.service.GatewayCacheClient;
+import com.apimarketplace.auth.service.InvitationEmailNotVerifiedException;
 import com.apimarketplace.auth.service.OnboardingService;
 import com.apimarketplace.auth.service.OrganizationMemberService;
 import com.apimarketplace.auth.service.OrganizationService;
@@ -79,7 +80,7 @@ class OrganizationControllerTest {
         void validToken() {
             when(memberService.getInvitationInfo("good-token")).thenReturn(
                     new OrganizationMemberService.InvitationInfo(
-                            true, "invitee@example.com", "Acme", OrganizationRole.MEMBER, true));
+                            true, "invitee@example.com", "Acme", OrganizationRole.MEMBER, true, "Ada Lovelace"));
 
             ResponseEntity<?> resp = controller.getInvitationInfo("good-token");
 
@@ -91,6 +92,7 @@ class OrganizationControllerTest {
             assertThat(body.get("organizationName")).isEqualTo("Acme");
             assertThat(body.get("role")).isEqualTo(OrganizationRole.MEMBER);
             assertThat(body.get("hasAccount")).isEqualTo(true);
+            assertThat(body.get("inviterName")).isEqualTo("Ada Lovelace");
         }
 
         @Test
@@ -112,6 +114,7 @@ class OrganizationControllerTest {
             assertThat(body).doesNotContainKey("organizationName");
             assertThat(body).doesNotContainKey("role");
             assertThat(body).doesNotContainKey("hasAccount");
+            assertThat(body).doesNotContainKey("inviterName");
         }
     }
 
@@ -165,12 +168,8 @@ class OrganizationControllerTest {
         @DisplayName("getMyPendingInvitations (the invitee inbox feed) resolves invitedByName, never \"Unknown\"")
         @SuppressWarnings("unchecked")
         void myPendingInvitationsResolveInviterName() {
-            User caller = new User();
-            caller.setId(userId);
-            caller.setEmail("me@example.com");
             OrganizationInvitation inv = invitationFrom(5L, "me@example.com");
-            when(userRepository.findById(userId)).thenReturn(Optional.of(caller));
-            when(memberService.getPendingInvitationsForEmail("me@example.com")).thenReturn(List.of(inv));
+            when(memberService.getPendingInvitationsForUser(userId)).thenReturn(List.of(inv));
             when(onboardingService.resolveDisplayNames(anyList())).thenReturn(Map.of(5L, "Ada Lovelace"));
 
             ResponseEntity<?> resp = controller.getMyPendingInvitations(userId);
@@ -455,6 +454,164 @@ class OrganizationControllerTest {
             assertThat(resp.getHeaders().getCacheControl())
                     .isEqualTo("no-cache")
                     .doesNotContain("max-age=86400");
+        }
+    }
+
+    @Nested
+    @DisplayName("invitation security (F1 verified email, F2 admin-only pending list)")
+    class InvitationSecurity {
+
+        @SuppressWarnings("unchecked")
+        private void assertEmailNotVerified(ResponseEntity<?> resp) {
+            assertThat(resp.getStatusCode().value()).isEqualTo(403);
+            Map<String, Object> body = (Map<String, Object>) resp.getBody();
+            assertThat(body).isNotNull();
+            assertThat(body.get("code")).isEqualTo("EMAIL_NOT_VERIFIED");
+            assertThat(body.get("error")).isNotNull();
+        }
+
+        @Test
+        @DisplayName("F1: accept by token with an unverified email → 403 code EMAIL_NOT_VERIFIED")
+        void acceptByTokenUnverified() {
+            when(memberService.acceptInvitation("tok", userId)).thenThrow(new InvitationEmailNotVerifiedException());
+
+            assertEmailNotVerified(controller.acceptInvitation("tok", userId));
+        }
+
+        @Test
+        @DisplayName("F1: accept by id with an unverified email → 403 code EMAIL_NOT_VERIFIED")
+        void acceptByIdUnverified() {
+            UUID invId = UUID.randomUUID();
+            when(memberService.acceptInvitationById(invId, userId)).thenThrow(new InvitationEmailNotVerifiedException());
+
+            assertEmailNotVerified(controller.acceptInvitationById(invId, userId));
+        }
+
+        @Test
+        @DisplayName("F1: decline by id with an unverified email → 403 code EMAIL_NOT_VERIFIED")
+        void declineByIdUnverified() {
+            UUID invId = UUID.randomUUID();
+            when(memberService.declineInvitationById(invId, userId)).thenThrow(new InvitationEmailNotVerifiedException());
+
+            assertEmailNotVerified(controller.declineInvitationById(invId, userId));
+        }
+
+        @Test
+        @DisplayName("F1: decline by token with an unverified email → 403 code EMAIL_NOT_VERIFIED")
+        void declineByTokenUnverified() {
+            when(memberService.declineInvitation("tok", userId)).thenThrow(new InvitationEmailNotVerifiedException());
+
+            assertEmailNotVerified(controller.declineInvitation("tok", userId));
+        }
+
+        @Test
+        @DisplayName("an email mismatch stays a plain 403 without the EMAIL_NOT_VERIFIED code")
+        @SuppressWarnings("unchecked")
+        void mismatchIsPlainForbidden() {
+            when(memberService.acceptInvitation("tok", userId))
+                    .thenThrow(new SecurityException("Invitation email does not match user email"));
+
+            ResponseEntity<?> resp = controller.acceptInvitation("tok", userId);
+
+            assertThat(resp.getStatusCode().value()).isEqualTo(403);
+            assertThat((Map<String, Object>) resp.getBody()).doesNotContainKey("code");
+        }
+
+        @Test
+        @DisplayName("decline by token returns the cancelled invitation with the resolved inviter name")
+        void declineByTokenHappyPath() {
+            Organization org = new Organization();
+            org.setName("Acme");
+            User inviter = new User();
+            inviter.setId(5L);
+            OrganizationInvitation inv = new OrganizationInvitation(org, "me@example.com", OrganizationRole.MEMBER, inviter);
+            inv.setStatus(com.apimarketplace.auth.domain.InvitationStatus.CANCELLED);
+            when(memberService.declineInvitation("tok", userId)).thenReturn(inv);
+            when(onboardingService.resolveDisplayName(5L)).thenReturn("Ada Lovelace");
+
+            ResponseEntity<?> resp = controller.declineInvitation("tok", userId);
+
+            assertThat(resp.getStatusCode().value()).isEqualTo(200);
+            InvitationDto dto = (InvitationDto) resp.getBody();
+            assertThat(dto).isNotNull();
+            assertThat(dto.getInvitedByName()).isEqualTo("Ada Lovelace");
+        }
+
+        @Test
+        @DisplayName("F2: a VIEWER listing pending invitations gets 403, never the list or its tokens")
+        void viewerListingPendingInvitationsIsForbidden() {
+            when(memberService.getPendingInvitations(orgId, userId))
+                    .thenThrow(new SecurityException("Only OWNER or ADMIN can list pending invitations"));
+
+            ResponseEntity<?> resp = controller.getPendingInvitations(orgId, userId);
+
+            assertThat(resp.getStatusCode().value()).isEqualTo(403);
+            assertThat(resp.getBody()).isInstanceOf(Map.class);
+        }
+
+        @Test
+        @DisplayName("F2: a MEMBER listing pending invitations gets 403, never the list or its tokens")
+        void memberListingPendingInvitationsIsForbidden() {
+            when(memberService.getPendingInvitations(orgId, 8L))
+                    .thenThrow(new SecurityException("Only OWNER or ADMIN can list pending invitations"));
+
+            ResponseEntity<?> resp = controller.getPendingInvitations(orgId, 8L);
+
+            assertThat(resp.getStatusCode().value()).isEqualTo(403);
+            verifyNoInteractions(onboardingService);
+        }
+
+        @Test
+        @DisplayName("F1: the inbox of an unverified account answers 403 code EMAIL_NOT_VERIFIED, not an empty list")
+        void inboxUnverified() {
+            when(memberService.getPendingInvitationsForUser(userId)).thenThrow(new InvitationEmailNotVerifiedException());
+
+            assertEmailNotVerified(controller.getMyPendingInvitations(userId));
+        }
+
+        @Test
+        @DisplayName("an ADMIN inviting as ADMIN answers 403 with code ADMIN_INVITE_REQUIRES_OWNER")
+        @SuppressWarnings("unchecked")
+        void adminInvitingAdminIsForbiddenWithCode() {
+            when(memberService.inviteMember(orgId, "boss@example.com", OrganizationRole.ADMIN, userId))
+                    .thenThrow(new com.apimarketplace.auth.service.AdminInviteRequiresOwnerException());
+
+            ResponseEntity<?> resp = controller.inviteMember(
+                    orgId, userId, Map.of("email", "boss@example.com", "role", "ADMIN"));
+
+            assertThat(resp.getStatusCode().value()).isEqualTo(403);
+            assertThat((Map<String, Object>) resp.getBody())
+                    .containsEntry("code", "ADMIN_INVITE_REQUIRES_OWNER");
+        }
+
+        @Test
+        @DisplayName("a concurrent duplicate invite (unique index violation at commit) answers 409, not 500")
+        @SuppressWarnings("unchecked")
+        void concurrentDuplicateInviteIsConflict() {
+            when(memberService.inviteMember(orgId, "dup@example.com", OrganizationRole.MEMBER, userId))
+                    .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                            "duplicate key value violates unique constraint \"uq_organization_invitation_pending\""));
+
+            ResponseEntity<?> resp = controller.inviteMember(
+                    orgId, userId, Map.of("email", "dup@example.com", "role", "MEMBER"));
+
+            assertThat(resp.getStatusCode().value()).isEqualTo(409);
+            assertThat((Map<String, Object>) resp.getBody())
+                    .containsEntry("error", "A pending invitation already exists for this email");
+        }
+
+        @Test
+        @DisplayName("F1: the inbox is resolved by the service from the caller id (verified-email gate lives there)")
+        @SuppressWarnings("unchecked")
+        void inboxDelegatesToUserScopedLookup() {
+            when(memberService.getPendingInvitationsForUser(userId)).thenReturn(List.of());
+            lenient().when(onboardingService.resolveDisplayNames(anyList())).thenReturn(Map.of());
+
+            ResponseEntity<?> resp = controller.getMyPendingInvitations(userId);
+
+            assertThat(resp.getStatusCode().value()).isEqualTo(200);
+            assertThat((List<InvitationDto>) resp.getBody()).isEmpty();
+            verify(memberService).getPendingInvitationsForUser(userId);
         }
     }
 }

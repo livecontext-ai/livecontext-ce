@@ -72,12 +72,14 @@ describe('useDataFetching nested workflow rows - execution context', () => {
       .toEqual([[21, 2, 3], [21, 2, 3]]);
   });
 
-  it('puts the context columns first, with the root-level headers', async () => {
+  it('puts the context columns after the item fields, with the root-level headers', async () => {
     respondWith({ rows: [stepRow(1, 1, [{ title: 'a' }])], columns: [] });
     const { result } = setup('output.items');
     await act(async () => { await result.current.fetchData(1, 20); });
 
-    expect(result.current.columns.slice(0, 3).map(c => [c.field, c.header_name]))
+    // The item's data first (the row id already reads as its coordinates), the coordinates last.
+    expect(result.current.columns[0].field).toBe('title');
+    expect(result.current.columns.slice(-3).map(c => [c.field, c.header_name]))
       .toEqual([['@epoch', 'Epoch'], ['@spawn', 'Spawn'], ['@iteration', 'Iteration']]);
   });
 

@@ -24,12 +24,15 @@ vi.mock('@/lib/providers/smart-providers', () => ({
   useAuth: () => useAuthMock(),
 }));
 
-const { getInvitationInfo, acceptInvitation } = vi.hoisted(() => ({
+const { getInvitationInfo, acceptInvitation, declineInvitation } = vi.hoisted(() => ({
   getInvitationInfo: vi.fn(),
   acceptInvitation: vi.fn(),
+  declineInvitation: vi.fn(),
 }));
 vi.mock('@/lib/api/organization-api', () => ({
-  organizationApi: { getInvitationInfo, acceptInvitation },
+  organizationApi: { getInvitationInfo, acceptInvitation, declineInvitation },
+  isInvitationEmailNotVerifiedError: (e: unknown) =>
+    typeof e === 'object' && e !== null && (e as { code?: unknown }).code === 'EMAIL_NOT_VERIFIED',
 }));
 
 const { embeddedRegister } = vi.hoisted(() => ({ embeddedRegister: vi.fn() }));
@@ -138,15 +141,134 @@ describe('AcceptInvitationPage - CE invite-by-link register branch', () => {
     expect(embeddedRegister).not.toHaveBeenCalled();
   });
 
-  it('an authenticated visitor accepts directly via the token (no register form)', async () => {
+  it('F4: an authenticated visitor is NOT auto-accepted on load; the consent card shows workspace, role and inviter', async () => {
     useAuthMock.mockReturnValue({ isAuthenticated: true, isLoading: false });
-    getInvitationInfo.mockResolvedValue({ valid: true, email: 'x@example.com', hasAccount: true });
+    getInvitationInfo.mockResolvedValue({
+      valid: true,
+      email: 'x@example.com',
+      organizationName: 'Acme',
+      role: 'ADMIN',
+      hasAccount: true,
+      inviterName: 'Ada Lovelace',
+    });
+
+    render(<AcceptInvitationPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText('invitationAccept.confirmTitle:{"org":"Acme"}')).toBeInTheDocument()
+    );
+    expect(screen.getByText('Acme')).toBeInTheDocument();
+    expect(screen.getByText('invitationsInbox.role.ADMIN')).toBeInTheDocument();
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    // Explicit consent: opening the link (or a link-preview bot fetching it) joins nothing.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(acceptInvitation).not.toHaveBeenCalled();
+    expect(declineInvitation).not.toHaveBeenCalled();
+    expect(embeddedRegister).not.toHaveBeenCalled();
+  });
+
+  it('F4: accepts only after the Accept click', async () => {
+    useAuthMock.mockReturnValue({ isAuthenticated: true, isLoading: false });
+    getInvitationInfo.mockResolvedValue({ valid: true, email: 'x@example.com', organizationName: 'Acme', role: 'MEMBER', hasAccount: true });
     acceptInvitation.mockResolvedValue({ id: 'org-1', name: 'Acme' });
 
     render(<AcceptInvitationPage />);
 
+    const acceptBtn = await screen.findByRole('button', { name: 'invitationAccept.acceptCta' });
+    expect(acceptInvitation).not.toHaveBeenCalled();
+    fireEvent.click(acceptBtn);
+
     await waitFor(() => expect(acceptInvitation).toHaveBeenCalledWith('tok-xyz'));
-    expect(embeddedRegister).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByText('invitationAccept.acceptedNamedTitle:{"name":"Acme"}')).toBeInTheDocument()
+    );
+    expect(declineInvitation).not.toHaveBeenCalled();
+  });
+
+  it('F4: the Decline click declines the invitation by token and never accepts it', async () => {
+    useAuthMock.mockReturnValue({ isAuthenticated: true, isLoading: false });
+    getInvitationInfo.mockResolvedValue({ valid: true, email: 'x@example.com', organizationName: 'Acme', role: 'MEMBER', hasAccount: true });
+    declineInvitation.mockResolvedValue({ id: 'inv-1', status: 'CANCELLED' });
+
+    render(<AcceptInvitationPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'invitationAccept.declineCta' }));
+
+    await waitFor(() => expect(declineInvitation).toHaveBeenCalledWith('tok-xyz'));
+    await waitFor(() => expect(screen.getByText('invitationAccept.declinedTitle')).toBeInTheDocument());
+    expect(acceptInvitation).not.toHaveBeenCalled();
+  });
+
+  it('an unverified email (403 EMAIL_NOT_VERIFIED) gets a clear "verify your email first" message', async () => {
+    useAuthMock.mockReturnValue({ isAuthenticated: true, isLoading: false });
+    getInvitationInfo.mockResolvedValue({ valid: true, email: 'x@example.com', organizationName: 'Acme', role: 'MEMBER', hasAccount: true });
+    acceptInvitation.mockRejectedValue(
+      Object.assign(new Error('Verify your email address before accepting or declining an invitation'), {
+        status: 403,
+        code: 'EMAIL_NOT_VERIFIED',
+      })
+    );
+
+    render(<AcceptInvitationPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'invitationAccept.acceptCta' }));
+
+    await waitFor(() => expect(screen.getByText('invitationAccept.emailNotVerifiedTitle')).toBeInTheDocument());
+    expect(screen.getByText('invitationAccept.emailNotVerifiedBody')).toBeInTheDocument();
+  });
+
+  it('a 403 email mismatch shows the translated wrong-account message, never the raw backend text', async () => {
+    useAuthMock.mockReturnValue({ isAuthenticated: true, isLoading: false });
+    getInvitationInfo.mockResolvedValue({ valid: true, email: 'x@example.com', organizationName: 'Acme', role: 'MEMBER', hasAccount: true });
+    acceptInvitation.mockRejectedValue(
+      Object.assign(new Error('Invitation email does not match user email'), { status: 403, code: 'HTTP_403' })
+    );
+
+    render(<AcceptInvitationPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'invitationAccept.acceptCta' }));
+
+    await waitFor(() => expect(screen.getByText('invitationAccept.errorWrongAccount')).toBeInTheDocument());
+    expect(screen.getByText('invitationAccept.errorTitle')).toBeInTheDocument();
+    expect(screen.queryByText(/does not match/)).not.toBeInTheDocument();
+  });
+
+  it('any other accept failure shows the translated generic message, never the raw backend text', async () => {
+    useAuthMock.mockReturnValue({ isAuthenticated: true, isLoading: false });
+    getInvitationInfo.mockResolvedValue({ valid: true, email: 'x@example.com', organizationName: 'Acme', role: 'MEMBER', hasAccount: true });
+    acceptInvitation.mockRejectedValue(
+      Object.assign(new Error('Member limit reached (3). Upgrade your plan for more members.'), { status: 400 })
+    );
+
+    render(<AcceptInvitationPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'invitationAccept.acceptCta' }));
+
+    await waitFor(() => expect(screen.getByText('invitationAccept.errorGeneric')).toBeInTheDocument());
+    expect(screen.queryByText(/Member limit/)).not.toBeInTheDocument();
+  });
+
+  it('a failed decline shows the translated decline error title and message', async () => {
+    useAuthMock.mockReturnValue({ isAuthenticated: true, isLoading: false });
+    getInvitationInfo.mockResolvedValue({ valid: true, email: 'x@example.com', organizationName: 'Acme', role: 'MEMBER', hasAccount: true });
+    declineInvitation.mockRejectedValue(Object.assign(new Error('Invitation has expired'), { status: 400 }));
+
+    render(<AcceptInvitationPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'invitationAccept.declineCta' }));
+
+    await waitFor(() => expect(screen.getByText('invitationAccept.declineErrorTitle')).toBeInTheDocument());
+    expect(screen.getByText('invitationAccept.declineFallbackError')).toBeInTheDocument();
+    expect(screen.queryByText('Invitation has expired')).not.toBeInTheDocument();
+  });
+
+  it('CLOUD (not CE): a signed-in invitee also gets the consent card (info looked up, no auto-accept)', async () => {
+    editionMock.IS_CE = false;
+    useAuthMock.mockReturnValue({ isAuthenticated: true, isLoading: false });
+    getInvitationInfo.mockResolvedValue({ valid: true, email: 'x@example.com', organizationName: 'Acme', role: 'VIEWER', hasAccount: true });
+
+    render(<AcceptInvitationPage />);
+
+    await waitFor(() => expect(getInvitationInfo).toHaveBeenCalledWith('tok-xyz'));
+    expect(await screen.findByRole('button', { name: 'invitationAccept.acceptCta' })).toBeInTheDocument();
+    expect(acceptInvitation).not.toHaveBeenCalled();
   });
 
   it('CLOUD (not CE): an unauthenticated invitee gets the sign-in flow, never the embedded register form or the info lookup', async () => {

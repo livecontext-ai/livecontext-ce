@@ -467,6 +467,31 @@ class UserServiceTest {
 
             assertThat(userService.deactivateUser(user).isEnabled()).isFalse();
         }
+
+        @Test
+        @DisplayName("both lifecycle mails are told the language on the row, not left to look it up")
+        void bothLifecycleMailsCarryTheLanguageOffTheRow() {
+            // This service holds the row, so it passes the language instead of making the mailer
+            // re-query for it - and the mailer answers ENGLISH when it is handed nothing. So dropping
+            // either argument does not fail, it quietly writes to a French account in English.
+            //
+            // eq("fr") on BOTH calls, because they are two separate arguments in two separate methods:
+            // the deactivation mail had no assertion here at all, and the restoration one matched the
+            // language with any(), which passes for every value including null.
+            User user = createUser(1L, "francois");
+            user.setEmail("francois@example.com");
+            user.setLocale("fr");
+            user.setEnabled(true);
+            when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            userService.deactivateUser(user);
+            verify(deactivationMailer).sendDeactivationEmail(
+                    eq("francois@example.com"), any(), eq("fr"));
+
+            assertThat(userService.restoreUser(user)).isTrue();
+            verify(deactivationMailer).sendRestorationEmail(
+                    eq("francois@example.com"), any(), eq("fr"));
+        }
     }
 
     @Nested
@@ -494,7 +519,7 @@ class UserServiceTest {
             assertThat(user.getDeactivatedAt())
                     .as("a lingering deletion date is what the purge selects on")
                     .isNull();
-            verify(deactivationMailer).sendRestorationEmail(eq(user.getEmail()), any());
+            verify(deactivationMailer).sendRestorationEmail(eq(user.getEmail()), any(), any());
         }
 
         @Test
@@ -510,7 +535,7 @@ class UserServiceTest {
             // e-mail, nor rewrite a row that is already correct.
             assertThat(restored).isFalse();
             verify(userRepository, never()).save(any(User.class));
-            verify(deactivationMailer, never()).sendRestorationEmail(any(), any());
+            verify(deactivationMailer, never()).sendRestorationEmail(any(), any(), any());
         }
 
         @Test
@@ -529,7 +554,7 @@ class UserServiceTest {
             assertThat(restored).isFalse();
             assertThat(user.isEnabled()).isFalse();
             verify(userRepository, never()).save(any(User.class));
-            verify(deactivationMailer, never()).sendRestorationEmail(any(), any());
+            verify(deactivationMailer, never()).sendRestorationEmail(any(), any(), any());
         }
 
         @Test
@@ -574,6 +599,40 @@ class UserServiceTest {
     @Nested
     @DisplayName("mapToUserProfile() method")
     class MapToUserProfileTests {
+
+        @Test
+        @DisplayName("carries the display preferences, which the app reads its dates and language from")
+        void mapsTheDisplayPreferences() {
+            // The read-back path for auth.users.locale / time_zone. Delete the four setters in
+            // mapToUserProfile and every other backend test stays green, while the Settings zone
+            // row silently falls back to whatever the browser says and the person's choice stops
+            // following them to another device. This is the test that makes that deletion loud.
+            User user = createUser(9L, "preferences");
+            user.setLocale("fr");
+            user.setLocaleExplicit(true);
+            user.setTimeZone("Asia/Tokyo");
+            user.setTimeZoneExplicit(true);
+
+            UserProfile result = userService.mapToUserProfile(user);
+
+            assertThat(result.getLocale()).isEqualTo("fr");
+            assertThat(result.isLocaleExplicit()).isTrue();
+            assertThat(result.getTimeZone()).isEqualTo("Asia/Tokyo");
+            assertThat(result.isTimeZoneExplicit()).isTrue();
+        }
+
+        @Test
+        @DisplayName("an account that never reported a zone maps to nulls, not to a guess")
+        void mapsAbsentPreferencesAsAbsent() {
+            // Null is what tells the app "no answer yet, follow this device". Substituting a
+            // default here would make every account look like a deliberate pick.
+            UserProfile result = userService.mapToUserProfile(createUser(10L, "fresh"));
+
+            assertThat(result.getLocale()).isNull();
+            assertThat(result.getTimeZone()).isNull();
+            assertThat(result.isLocaleExplicit()).isFalse();
+            assertThat(result.isTimeZoneExplicit()).isFalse();
+        }
 
         @Test
         @DisplayName("should map user to UserProfile with storage-backed avatar")

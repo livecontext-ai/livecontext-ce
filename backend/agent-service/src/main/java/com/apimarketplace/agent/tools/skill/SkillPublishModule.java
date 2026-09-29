@@ -59,6 +59,11 @@ public class SkillPublishModule implements ToolModule {
         var accessDenied = com.apimarketplace.agent.config.ToolAccessControl.checkWriteAccess(
                 context != null ? context.credentials() : null, "skill", action);
         if (accessDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get()));
+        // Workspace role (VIEWER is read-only): the READ actions stay, every write is refused.
+        var roleDenied = com.apimarketplace.agent.config.ToolAccessControl.checkRoleWriteAccess(
+                context != null ? context.orgId() : null,
+                context != null ? context.orgRole() : null, "skill", action);
+        if (roleDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, roleDenied.get()));
 
         return Optional.of(switch (action) {
             case "publish" -> executePublish(parameters, tenantId, context);

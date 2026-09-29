@@ -53,12 +53,32 @@ class MonolithWsActionHandlerTest {
     @Mock
     private AgentActivitySnapshotService agentActivitySnapshotService;
 
+    @Mock
+    private com.apimarketplace.auth.repository.OrganizationMemberRepository memberRepository;
+
     private MonolithWsActionHandler handler;
+
+    /** A real workspace id: a run-driving action now requires an active membership in it. */
+    private static final UUID ORG = UUID.fromString("7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d");
+
+    private void memberOfOrg() {
+        com.apimarketplace.auth.domain.User user = new com.apimarketplace.auth.domain.User();
+        user.setId(42L);
+        com.apimarketplace.auth.domain.Organization workspace = new com.apimarketplace.auth.domain.Organization();
+        workspace.setId(ORG);
+        workspace.setName("o");
+        workspace.setSlug("o-" + ORG);
+        workspace.setOwner(user);
+        org.mockito.Mockito.when(memberRepository.findActiveByOrganizationIdAndUserId(ORG, 42L))
+                .thenReturn(java.util.Optional.of(new com.apimarketplace.auth.domain.OrganizationMember(
+                        workspace, user, com.apimarketplace.auth.domain.OrganizationRole.MEMBER, false)));
+    }
 
     @BeforeEach
     void setUp() {
         handler = new MonolithWsActionHandler(signalController, sbsController, accessController,
-                new ObjectMapper(), streamStateService, redisTemplate, agentActivitySnapshotService);
+                new ObjectMapper(), streamStateService, redisTemplate, agentActivitySnapshotService,
+                memberRepository);
         // The virtual-thread worker tries to send an ack - drop it.
         lenient().when(session.isOpen()).thenReturn(false);
     }
@@ -69,34 +89,38 @@ class MonolithWsActionHandlerTest {
         // Bug class: the monolith passed a null org - SBS steps of org-workspace
         // runs ran with no workspace scope (lost output payloads) and, with the
         // run-scope guard, would now be rejected outright.
+        memberOfOrg();
         CountDownLatch invoked = new CountDownLatch(1);
         doAnswer(invocation -> {
             invoked.countDown();
             return ResponseEntity.ok(Map.<String, Object>of("accepted", true));
-        }).when(sbsController).executeNode(eq("run-1"), eq("core:step"), eq("42"), eq("org-7"), anyMap());
+        }).when(sbsController).executeNode(eq("run-1"), eq("core:step"), eq("42"), eq(ORG.toString()),
+                eq("MEMBER"), anyMap());
 
-        handler.handle("42", "org-7", session, "msg-1", "sbs.execute",
+        handler.handle("42", ORG.toString(), session, "msg-1", "sbs.execute",
                 Map.of("runId", "run-1", "nodeId", "core:step"));
 
         assertThat(invoked.await(5, TimeUnit.SECONDS))
-                .as("sbs.execute should reach InternalSbsController with userId=42 and org=org-7")
+                .as("sbs.execute should reach InternalSbsController with userId=42 and the session org")
                 .isTrue();
     }
 
     @Test
     @DisplayName("signal.resolve passes the session's active org to the internal controller")
     void signalResolveForwardsOrgScope() throws Exception {
+        memberOfOrg();
         CountDownLatch invoked = new CountDownLatch(1);
         doAnswer(invocation -> {
             invoked.countDown();
             return ResponseEntity.ok(Map.<String, Object>of("status", "resolved"));
-        }).when(signalController).resolveSignal(eq(7L), eq("42"), eq("org-7"), anyMap());
+        }).when(signalController).resolveSignal(eq(7L), eq("42"), eq(ORG.toString()),
+                eq("MEMBER"), anyMap());
 
-        handler.handle("42", "org-7", session, "msg-1", "signal.resolve",
+        handler.handle("42", ORG.toString(), session, "msg-1", "signal.resolve",
                 Map.of("signalId", "7"));
 
         assertThat(invoked.await(5, TimeUnit.SECONDS))
-                .as("signal.resolve should reach InternalSignalController with userId=42 and org=org-7")
+                .as("signal.resolve should reach InternalSignalController with userId=42 and the session org")
                 .isTrue();
     }
 

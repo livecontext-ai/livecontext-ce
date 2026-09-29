@@ -42,6 +42,7 @@ vi.mock('@/app/workflows/builder/hooks/state', () => ({
 vi.mock('@/components/app/WorkflowPanelContent', () => ({
   setPendingActivateTab,
   RUN_TAB_ID: '__run__',
+  ANALYSIS_TAB_ID: '__analysis__',
   NODE_CREATOR_TAB_ID: '__add_node__',
 }));
 vi.mock('@/lib/api', () => ({ orchestratorApi: { getPinnedWorkflowRun: vi.fn() } }));
@@ -142,6 +143,16 @@ describe('WorkflowDetailView - canvas entry points', () => {
 
     expect(setPendingActivateTab).toHaveBeenCalledWith('__add_node__', WF);
     expect(toggled).toBeGreaterThan(0);
+  });
+
+  it('opens the panel on the Run tab, or on its Analysis sibling when asked (page header menu)', () => {
+    render(<WorkflowDetailView workflowId={WF} />);
+
+    act(() => openRunPanel({ workflowId: WF, view: 'run', tab: 'analysis' }));
+    expect(setPendingActivateTab).toHaveBeenLastCalledWith('__analysis__', WF);
+
+    act(() => openRunPanel({ workflowId: WF, view: 'run', tab: 'run' }));
+    expect(setPendingActivateTab).toHaveBeenLastCalledWith('__run__', WF);
   });
 
   it('when the panel is OPEN ON THIS TAB: focuses it and leaves NO stale pending tab', () => {

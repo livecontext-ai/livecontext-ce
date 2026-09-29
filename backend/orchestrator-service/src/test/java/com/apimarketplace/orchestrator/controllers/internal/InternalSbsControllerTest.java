@@ -63,7 +63,8 @@ class InternalSbsControllerTest {
                 stateSnapshotService,
                 snapshotService,
                 sbsExecutor,
-                runRepository
+                runRepository,
+                com.apimarketplace.orchestrator.testsupport.OrgAccessGuardStubs.allowAll()
         );
         // Mock the claim check to succeed by default (prevents 409 early return)
         lenient().when(stateSnapshotService.claimNodeForExecution(anyString(), anyString()))

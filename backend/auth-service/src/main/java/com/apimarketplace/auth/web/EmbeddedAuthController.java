@@ -1,5 +1,6 @@
 package com.apimarketplace.auth.web;
 
+import com.apimarketplace.auth.util.EmailNormalizer;
 import com.apimarketplace.auth.ce.CeInstallStateService;
 import com.apimarketplace.auth.domain.User;
 import com.apimarketplace.auth.service.OrganizationMemberService;
@@ -108,7 +109,7 @@ public class EmbeddedAuthController {
             InvitationInfo info = organizationMemberService.getInvitationInfo(invitationToken);
             invitedBypass = info.valid()
                     && info.email() != null
-                    && info.email().equalsIgnoreCase(email.trim());
+                    && EmailNormalizer.matches(info.email(), email);
         }
 
         // Door check: an admin may have closed public registration after wizard

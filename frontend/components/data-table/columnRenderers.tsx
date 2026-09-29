@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 import { RenderType, LoopProgress, SplitProgress } from '@/lib/api/orchestrator/types';
 import { normalizeBranchEvaluations, describeResult } from '@/lib/workflows/branchEvaluation';
 import { ChevronRight, Check } from 'lucide-react';
-import { formatUtcDateTime, parseUtcAware } from '@/lib/utils/dateFormatters';
+import { formatUtcDateTime } from '@/lib/utils/dateFormatters';
 
 /**
  * Styled "No data" placeholder matching the design system.
@@ -18,11 +18,20 @@ export const NoData: React.FC = () => (
 );
 
 /**
- * Format a date as precise UTC datetime (e.g., "20 Mar 2026, 14:30:05 UTC").
- * All table cells display in UTC to match server-side storage.
+ * A precise timestamp, to the second, in the READER's display zone
+ * (e.g. "20 Mar 2026, 15:30:05"). The zone is not named: see `lib/utils/dateFormatters`.
+ *
+ * <p>Not UTC any more, whatever an older comment here said: table cells follow the account
+ * preference like every other date in the product. A value that names a DAY rather than a
+ * moment is the one exception, and `formatUtcDateTime` recognises it - but only from the
+ * STRING, so this takes the original value. Handed a parsed `Date`, as it was, the rule cannot
+ * fire and a bare `2026-01-15` reads "Jan 14" for every reader west of Greenwich. That is the
+ * same defect `DateCell` was changed to fix, and it stood here, in the same component family,
+ * under a comment claiming the opposite: two columns of one table could name different days
+ * for the same value.
  */
-function formatPreciseDateTime(date: Date): string {
-  return formatUtcDateTime(date, { withSeconds: true });
+function formatPreciseDateTime(value: string | Date): string {
+  return formatUtcDateTime(value, { withSeconds: true });
 }
 
 /**
@@ -152,12 +161,23 @@ export const DurationRenderer: React.FC<RendererProps> = ({ value }) => {
 export const RelativeTimeRenderer: React.FC<RendererProps> = ({ value }) => {
   if (!value) return <span className="text-muted-foreground">-</span>;
 
-  try {
-    const date = parseUtcAware(value as string);
-    return <span className="truncate">{formatPreciseDateTime(date)}</span>;
-  } catch {
+  // A NON-STRING is a dash, before the formatter sees it.
+  //
+  // `value` is `any` and the renderer is chosen by the column type, so an epoch-millis number or a
+  // JSONB object can arrive here. `parseUtcAware` passes a non-string through unchanged, so the
+  // formatter reaches `.getTime()` on it and throws a TypeError - inside a table row, which takes
+  // the whole grid down. That used to be caught by a try/catch removed in this branch on the
+  // grounds that "`new Date(<junk>)` is an Invalid Date": true of strings, and the only input class
+  // the comment considered. `formatUtcDateOrNull` was hardened against this exact shape in the same
+  // pass, so one helper got the guard and the other lost it.
+  if (typeof value !== 'string' && !(value instanceof Date)) {
     return <span className="text-muted-foreground">-</span>;
   }
+
+  // The ORIGINAL value goes to the formatter, not a parsed Date: it is what carries whether this
+  // names a day or a moment. No try/catch: an unreadable STRING is an Invalid Date, which the
+  // formatter's own fallback already renders as a dash.
+  return <span className="truncate">{formatPreciseDateTime(value)}</span>;
 };
 
 /**

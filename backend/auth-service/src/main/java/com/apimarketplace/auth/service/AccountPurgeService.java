@@ -112,6 +112,15 @@ public class AccountPurgeService {
         return t;
     }
 
+    /** V549: a purged partner's codes stop working (kept as the record of what they gave). */
+    public static final String DEACTIVATE_OWNED_REWARD_CODES_SQL =
+            "UPDATE auth.reward_code SET active = FALSE WHERE owner_user_id = ?";
+
+    /** V549: a purged partner's commissions still in their refund window are voided, never paid out. */
+    public static final String VOID_PARTNER_HOLD_COMMISSIONS_SQL =
+            "UPDATE auth.partner_commission SET status = 'VOID', voided_at = now(), "
+                    + "void_reason = 'PARTNER_PURGED' WHERE partner_user_id = ? AND status = 'HOLD'";
+
     @Transactional
     public boolean purgeUser(Long userId) {
         User user = em.find(User.class, userId, LockModeType.PESSIMISTIC_WRITE);
@@ -177,6 +186,10 @@ public class AccountPurgeService {
         exec(failures, "DELETE FROM auth.user_changelog_seen WHERE user_id = ?", userId);
         // V527 first-touch attribution. Also ON DELETE CASCADE; explicit so the purge reads complete.
         exec(failures, "DELETE FROM auth.user_acquisition WHERE user_id = ?", userId);
+        // V549: a deleted partner's codes stop working and stop earning. The codes and their
+        // commission lines stay: they are the record of what was redeemed and paid.
+        exec(failures, DEACTIVATE_OWNED_REWARD_CODES_SQL, userId);
+        exec(failures, VOID_PARTNER_HOLD_COMMISSIONS_SQL, userId);
         exec(failures, "DELETE FROM auth.user_roles WHERE user_id = ?", userId);
         exec(failures, "DELETE FROM auth.refresh_tokens WHERE user_id = ?", userId);
         exec(failures, "DELETE FROM auth.email_verification_codes WHERE user_id = ?", userId);

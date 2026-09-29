@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { getClientLocale } from '@/lib/utils/locale';
-import { parseUtcAware } from '@/lib/utils/dateFormatters';
+import { displayZoneFor, parseUtcAware } from '@/lib/utils/dateFormatters';
 import { useTranslations } from 'next-intl';
 import { Check, Loader2, Pencil, User } from 'lucide-react';
 import { InfoPopover } from '@/components/ui/info-popover';
@@ -187,11 +187,19 @@ export function PublicProfileSettingsCard() {
 
   const handleDirty = handleInput.trim() !== (profile?.handle ?? '') && handleInput.trim() !== '';
   // Date formatting follows the APP locale via getClientLocale() (never the browser
-  // language, never hardcoded) - see the i18n rule in AGENTS.md.
+  // language, never hardcoded) - see the i18n rule in AGENTS.md. The zone comes from
+  // `displayZoneFor`, which answers UTC for a value that names a calendar DAY: this one is a
+  // cooldown expiry, and a bare `YYYY-MM-DD` translated into the reader's zone would show the
+  // day BEFORE the handle can actually be changed for every reader west of Greenwich.
   const nextChangeLabel = handleNextChangeDate
     ? parseUtcAware(handleNextChangeDate).toLocaleDateString(
         getClientLocale(),
-        { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' },
+        {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          timeZone: displayZoneFor(handleNextChangeDate),
+        },
       )
     : null;
 

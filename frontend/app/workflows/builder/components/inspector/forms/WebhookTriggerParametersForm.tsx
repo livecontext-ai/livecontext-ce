@@ -14,6 +14,7 @@ import { useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 import type { StandaloneWebhook } from '@/lib/api/orchestrator';
 import { CurlExamplePopover } from '@/components/webhook/CurlExamplePopover';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { buildStandaloneSourceNodeId } from '../../../utils/standaloneSourceNodeId';
 import Link from 'next/link';
 
@@ -148,6 +149,9 @@ export function WebhookTriggerParametersForm({
   // Webhook config lives on the backend entity - editing in run mode has no effect
   const { isRunMode: isRunModeContext } = useWorkflowMode();
   const isRunMode = isRunModeContext;
+  // Creating or editing the standalone webhook is a workspace write: a read-only VIEWER
+  // neither auto-creates one nor pushes config edits to it.
+  const canMutate = useCanMutateInCurrentOrg();
 
   const [copied, setCopied] = React.useState(false);
 
@@ -204,7 +208,7 @@ export function WebhookTriggerParametersForm({
   // Auto-create webhook if node has none (drag-and-drop path)
   // Waits for list to be loaded first so we can generate a unique name
   React.useEffect(() => {
-    if (!listLoaded || standaloneWebhookId || isRunMode || isCreatingRef.current) return;
+    if (!listLoaded || standaloneWebhookId || isRunMode || !canMutate || isCreatingRef.current) return;
     const nodeDataId = node.id;
     // Module-level dedup guard
     if (pendingOrCreatedWebhooks.has(nodeDataId)) return;
@@ -235,7 +239,7 @@ export function WebhookTriggerParametersForm({
       })
       .finally(() => setIsLoadingWebhook(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listLoaded, standaloneWebhookId, isRunMode]);
+  }, [listLoaded, standaloneWebhookId, isRunMode, canMutate]);
 
   // Determine effective webhook ID and URL (from node data or local state fallback)
   const effectiveWebhookId = standaloneWebhookId || standaloneWebhook?.id;
@@ -259,7 +263,7 @@ export function WebhookTriggerParametersForm({
 
   // Update handler for webhook trigger data (updates node data + standalone webhook via API)
   const handleUpdateWebhookData = React.useCallback((updates: Partial<WebhookTriggerData>) => {
-    if (isRunMode) return;
+    if (isRunMode || !canMutate) return;
     const newData = {
       ...webhookTriggerData,
       ...updates,
@@ -293,7 +297,7 @@ export function WebhookTriggerParametersForm({
         authConfig: Object.keys(authConfig).length > 0 ? authConfig : undefined,
       }).then(setStandaloneWebhook).catch(() => {/* silently ignore API errors */});
     }
-  }, [data, webhookTriggerData, isRunMode, onUpdate, standaloneWebhookId, standaloneWebhook]);
+  }, [data, webhookTriggerData, isRunMode, canMutate, onUpdate, standaloneWebhookId, standaloneWebhook]);
 
   // Handler for HTTP method change
   const handleMethodChange = React.useCallback((value: string) => {

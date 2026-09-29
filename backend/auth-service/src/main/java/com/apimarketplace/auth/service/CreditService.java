@@ -242,7 +242,7 @@ public class CreditService {
      * workflow nodes while PAYG funds everything.
      */
     private static final java.util.Set<String> PAYG_BUCKET_SOURCE_TYPES =
-            java.util.Set.of("PAYG_TOPUP", "REWARD_REFERRAL", "REWARD_CLAWBACK", "MANUAL_ADJUSTMENT");
+            java.util.Set.of("PAYG_TOPUP", "REWARD_REFERRAL", "REWARD_CLAWBACK", "REWARD_CODE", "MANUAL_ADJUSTMENT");
 
     /**
      * Plan code whose monthly (sub) bucket is scoped: workflow orchestration plus LLM turns

@@ -1,5 +1,6 @@
 package com.apimarketplace.publication.controller;
 
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.publication.domain.SharedLinkEntity;
 import com.apimarketplace.publication.dto.SharedLinkCheckResponse;
 import com.apimarketplace.publication.dto.SharedLinkConfigResponse;
@@ -32,6 +33,17 @@ public class SharedLinkController {
 
     public SharedLinkController(SharedLinkService sharedLinkService) {
         this.sharedLinkService = sharedLinkService;
+    }
+
+    /**
+     * Org VIEWERs are read-only. A share link publishes a workspace resource to anyone who
+     * holds its URL, so creating, editing, deleting or re-keying one is a write on the
+     * workspace (the same rule {@code WorkflowPublicationController} applies to publishing).
+     * Listing and reading links stays open.
+     */
+    private static ResponseEntity<Map<String, String>> viewerForbidden() {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("error", "VIEWER role cannot modify shared links"));
     }
 
     @GetMapping("/config")
@@ -95,9 +107,13 @@ public class SharedLinkController {
     public ResponseEntity<?> create(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
             @RequestBody Map<String, Object> body) {
         try {
+            if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+                return viewerForbidden();
+            }
             String resourceType = (String) body.get("resourceType");
             String resourceToken = (String) body.get("resourceToken");
             UUID resourceId = body.get("resourceId") != null
@@ -139,9 +155,13 @@ public class SharedLinkController {
     public ResponseEntity<?> update(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @PathVariable UUID id,
             @RequestBody Map<String, Object> body) {
         try {
+            if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+                return viewerForbidden();
+            }
             String title = body.get("title") != null ? body.get("title").toString() : null;
             String description = body.get("description") != null ? body.get("description").toString() : null;
             Boolean isActive = body.get("isActive") != null ? (Boolean) body.get("isActive") : null;
@@ -176,8 +196,12 @@ public class SharedLinkController {
     public ResponseEntity<?> delete(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @PathVariable UUID id) {
         try {
+            if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+                return viewerForbidden();
+            }
             sharedLinkService.delete(tenantId, organizationId, id);
             return ResponseEntity.ok().build();
         } catch (IllegalArgumentException e) {
@@ -194,8 +218,12 @@ public class SharedLinkController {
     public ResponseEntity<?> regenerateToken(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @PathVariable UUID id) {
         try {
+            if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+                return viewerForbidden();
+            }
             SharedLinkEntity updated = sharedLinkService.regenerateToken(tenantId, organizationId, id);
             return ResponseEntity.ok(SharedLinkResponse.from(updated));
         } catch (IllegalArgumentException e) {

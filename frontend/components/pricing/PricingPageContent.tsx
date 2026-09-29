@@ -29,6 +29,7 @@ import { planFeatureLabels } from '@/lib/billing/planFeatureLabels';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { cloudLinkService, type CloudLinkStatus, CLOUD_NO_SUBSCRIPTION } from '@/lib/api/cloud-link.service';
 import { track } from '@/lib/analytics/analytics';
+import { RewardCodeInline } from '@/components/reward/RewardCodeInline';
 
 // CE installs manage billing on the LINKED LiveContext Cloud account; the cloud web app lives
 // here (matches the hardcoded cloud host used elsewhere in CE, e.g. marketplace CategoryFilter).
@@ -1008,6 +1009,10 @@ export default function PricingPage() {
 
       {/* User Service Debugger (temporary for testing) */}
       {/* <UserDebugger /> */}
+
+      {/* A partner / creator code is applied here, BEFORE Stripe (see RewardCodeInline). The
+          self-hosted edition sells no plan here (it opens the cloud pricing page), so it has none. */}
+      {!isCeMode && <RewardCodeInline className="flex justify-center" />}
 
       {/* Mode toggle - Subscription vs Pay-as-you-go. Hidden in CE
           (no Stripe wiring, PAYG checkout endpoint returns 503). */}

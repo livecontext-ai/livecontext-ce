@@ -7,7 +7,7 @@ import { useSearchParams } from "next/navigation";
 import { KeyRound, User } from "lucide-react";
 import Toast, { useToast } from "@/components/Toast";
 import { CredentialTemplate } from "@/lib/api/orchestrator";
-import { useCurrentOrg } from "@/lib/stores/current-org-store";
+import { useCurrentOrg, useCanMutateInCurrentOrg } from "@/lib/stores/current-org-store";
 import {
   CredentialTabs,
   CredentialTab,
@@ -33,6 +33,15 @@ export default function CredentialsPage() {
   const { isAuthenticated, isAuthChecking } = useAuthGuard();
   const { loginWithRedirect } = useAuth();
   const t = useTranslations("credentials");
+  const tCommon = useTranslations("common");
+  // Connecting, reconnecting or editing a workspace credential (or its OAuth app) is a
+  // write: the wizard never opens for a read-only VIEWER, who gets the reason instead.
+  const canMutate = useCanMutateInCurrentOrg();
+  const refuseReadOnly = (): boolean => {
+    if (canMutate) return false;
+    addToast({ type: "warning", title: tCommon("viewerReadOnlyTitle"), message: tCommon("viewerReadOnly") });
+    return true;
+  };
   const tSettings = useTranslations("settings");
   const searchParams = useSearchParams();
 
@@ -155,6 +164,7 @@ export default function CredentialsPage() {
 
   // Handle single template configuration
   const handleConfigure = (template: CredentialTemplate) => {
+    if (refuseReadOnly()) return;
     setSelectedTemplate(template);
     setRequirements([]);
     // Honor the "Add custom OAuth connection" pendthrough - when the user
@@ -167,6 +177,7 @@ export default function CredentialsPage() {
 
   // Handle multiple templates configuration
   const handleConfigureMultiple = (templates: CredentialTemplate[]) => {
+    if (refuseReadOnly()) return;
     const reqs: CredentialWizardRequirement[] = templates.map((tmpl) => ({
       iconSlug: extractIconSlug(tmpl),
       serviceName: tmpl.display_name || tmpl.credential_name,
@@ -183,6 +194,7 @@ export default function CredentialsPage() {
   // backend's POST /my upserts on (tenantId, integrationName), so saving
   // updates the existing platform_credential row in place.
   const handleEditOAuthApp = (app: { iconSlug: string | null; displayName: string; integrationName: string }) => {
+    if (refuseReadOnly()) return;
     setSelectedTemplate(null);
     setRequirements([
       {
@@ -208,6 +220,7 @@ export default function CredentialsPage() {
   // entry as Available-tab Configure - re-runs OAuth and creates a fresh
   // active credential. The needs_reauth row stays until user deletes it.
   const handleReconnectCredential = (cred: { integration?: string | null; iconSlug?: string | null; icon_url?: string | null; name: string }) => {
+    if (refuseReadOnly()) return;
     setSelectedTemplate(null);
     setRequirements([
       {
@@ -320,7 +333,7 @@ export default function CredentialsPage() {
           template={selectedTemplate}
           requirements={requirements}
           initialMode={wizardInitialMode}
-          open={isWizardOpen}
+          open={isWizardOpen && canMutate}
           onOpenChange={(open) => {
             setIsWizardOpen(open);
             if (!open) {

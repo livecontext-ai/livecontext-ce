@@ -62,6 +62,7 @@ public class StorageController {
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
         Long userId = resolveCallerId(userIdHeader);
         if (userId == null) return ResponseEntity.status(401).build();
+        if (viewerWriteBlocked()) return ResponseEntity.status(403).build();
         if (organizationId == null || organizationId.isBlank()) {
             // Post-V261: organization_id is NOT NULL on stored_files. Fail fast
             // with a clear 400 instead of letting the JPA INSERT crash at NOT
@@ -181,6 +182,7 @@ public class StorageController {
             @RequestHeader(value = "X-User-ID", required = false) String userIdHeader) {
         Long userId = resolveCallerId(userIdHeader);
         if (userId == null) return ResponseEntity.status(401).build();
+        if (viewerWriteBlocked()) return ResponseEntity.status(403).build();
         try {
             String organizationId = resolveCurrentOrganizationId();
             StoredFile updatedFile = organizationId == null
@@ -215,6 +217,9 @@ public class StorageController {
             @RequestHeader(value = "X-User-ID", required = false) String userIdHeader) {
         if (userIdHeader == null || userIdHeader.isBlank()) {
             return ResponseEntity.status(401).build();
+        }
+        if (viewerWriteBlocked()) {
+            return ResponseEntity.status(403).body(Map.of("error", "VIEWER role cannot delete files"));
         }
         long userId;
         try {
@@ -252,6 +257,9 @@ public class StorageController {
             @RequestHeader(value = "X-User-ID", required = false) String userIdHeader) {
         if (userIdHeader == null || userIdHeader.isBlank()) {
             return ResponseEntity.status(401).build();
+        }
+        if (viewerWriteBlocked()) {
+            return ResponseEntity.status(403).body(Map.of("error", "VIEWER role cannot delete files"));
         }
         try {
             long callerId = Long.parseLong(userIdHeader);
@@ -295,6 +303,18 @@ public class StorageController {
         response.put("usageMB", usage / (1024 * 1024));
         response.put("usageGB", usage / (1024 * 1024 * 1024));
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Org VIEWERs are read-only platform-wide. The role comes from the gateway-validated
+     * {@code X-Organization-Role} header of the bound request (read through TenantResolver,
+     * so existing direct callers keep their signatures); an internal call without a role is
+     * not a workspace VIEWER and is not refused.
+     */
+    private static boolean viewerWriteBlocked() {
+        return com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(
+                com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationId(),
+                com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole());
     }
 
     @GetMapping("/health")

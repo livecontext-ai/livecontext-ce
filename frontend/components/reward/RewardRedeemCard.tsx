@@ -1,60 +1,33 @@
 'use client';
 
 /**
- * Redeem-a-reward-code card (referral or promo).
+ * Redeem-a-reward-code card (referral, promo, creator or partner code).
  *
- * A signed-in user enters a code to claim a benefit: an immediate promo benefit,
- * or a referral that pays out when they take a paid subscription. Typed server
- * error codes are mapped to localized messages; a 202 (pending conversion) shows
- * an explanatory success state rather than an error.
+ * A signed-in user enters a code to claim a benefit: an immediate benefit (credits, a
+ * complimentary plan), or a referral that pays out when they take a paid subscription. The
+ * redeem itself, its error mapping and its success wording live in {@link useRedeemCode}, shared
+ * with the "Have a code?" line shown next to every Stripe checkout ({@link RewardCodeInline}).
  *
  * Style mirrors the former RedeemPromoCard / BalanceBreakdownCard: theme tokens,
  * `text-sm` default, lucide icons at `h-3.5 w-3.5`.
  */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { Gift, Check, Loader2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { RewardApiService } from '@/lib/api/services/reward-api.service';
-import { ApiError } from '@/lib/api/api-client';
+import { useRedeemCode } from './useRedeemCode';
 
-const ERROR_KEY_BY_CODE: Record<string, string> = {
-  INVALID_CODE: 'errors.invalidCode',
-  NOT_REDEEMABLE: 'errors.notRedeemable',
-  ALREADY_REDEEMED: 'errors.alreadyRedeemed',
-  EXHAUSTED: 'errors.exhausted',
-  SELF_REFERRAL: 'errors.selfReferral',
-  ALREADY_PAID: 'errors.alreadyPaid',
-  CLOUD_LINK_REQUIRED: 'errors.cloudLinkRequired',
-};
+export { redeemErrorKey, useRedeemSuccessMessage } from './redeemMessages';
 
 export function RewardRedeemCard({ prefilledCode = '' }: { prefilledCode?: string }) {
   const t = useTranslations('reward.redeem');
-  const rewardApi = useMemo(() => new RewardApiService(), []);
-
   const [code, setCode] = useState(prefilledCode);
-  const [submitting, setSubmitting] = useState(false);
-  const [errorKey, setErrorKey] = useState<string | null>(null);
-  const [successKey, setSuccessKey] = useState<string | null>(null);
+  const { redeem, submitting, errorKey, successText, clearError } = useRedeemCode();
 
-  const handleRedeem = useCallback(async () => {
-    const trimmed = code.trim();
-    if (!trimmed || submitting) return;
-    setSubmitting(true);
-    setErrorKey(null);
-    setSuccessKey(null);
-    try {
-      const result = await rewardApi.redeem(trimmed);
-      setCode('');
-      setSuccessKey(result.code === 'REDEEMED' ? 'successGranted' : 'successPending');
-    } catch (e) {
-      const codeStr = e instanceof ApiError ? e.code : undefined;
-      setErrorKey((codeStr && ERROR_KEY_BY_CODE[codeStr]) || 'errors.generic');
-    } finally {
-      setSubmitting(false);
-    }
-  }, [code, submitting, rewardApi]);
+  const handleRedeem = async () => {
+    if (await redeem(code)) setCode('');
+  };
 
   return (
     <div className="rounded-xl border border-theme p-6">
@@ -68,10 +41,10 @@ export function RewardRedeemCard({ prefilledCode = '' }: { prefilledCode?: strin
         </div>
       </div>
 
-      {successKey && (
+      {successText && (
         <div className="mb-4 flex items-start gap-2 rounded-lg bg-theme-secondary p-3 text-sm">
           <Check className="h-3.5 w-3.5 mt-0.5 text-emerald-500 flex-shrink-0" />
-          <div className="text-theme-primary">{t(successKey)}</div>
+          <div className="text-theme-primary">{successText}</div>
         </div>
       )}
 
@@ -81,7 +54,7 @@ export function RewardRedeemCard({ prefilledCode = '' }: { prefilledCode?: strin
           value={code}
           onChange={(e) => {
             setCode(e.target.value);
-            if (errorKey) setErrorKey(null);
+            if (errorKey) clearError();
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') void handleRedeem();

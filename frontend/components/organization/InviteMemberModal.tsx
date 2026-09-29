@@ -15,6 +15,12 @@ interface InviteMemberModalProps {
   onClose: () => void;
   orgId: string;
   onInviteSent: () => void;
+  /**
+   * Only the OWNER may invite someone as ADMIN (the server refuses it otherwise with
+   * ADMIN_INVITE_REQUIRES_OWNER, like the OWNER-only role change). Defaults to false so
+   * a caller that does not know the role never offers an option the server rejects.
+   */
+  canInviteAdmin?: boolean;
 }
 
 const INVITABLE_ROLES: { value: OrganizationRole; labelKey: string }[] = [
@@ -23,7 +29,13 @@ const INVITABLE_ROLES: { value: OrganizationRole; labelKey: string }[] = [
   { value: 'VIEWER', labelKey: 'roleViewer' },
 ];
 
-export default function InviteMemberModal({ open, onClose, orgId, onInviteSent }: InviteMemberModalProps) {
+export default function InviteMemberModal({
+  open,
+  onClose,
+  orgId,
+  onInviteSent,
+  canInviteAdmin = false,
+}: InviteMemberModalProps) {
   const t = useTranslations('settings.organization');
   const locale = useLocale();
   const [email, setEmail] = useState('');
@@ -153,7 +165,7 @@ export default function InviteMemberModal({ open, onClose, orgId, onInviteSent }
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {INVITABLE_ROLES.map((r) => (
+                {INVITABLE_ROLES.filter((r) => canInviteAdmin || r.value !== 'ADMIN').map((r) => (
                   <SelectItem key={r.value} value={r.value}>
                     {t(r.labelKey)}
                   </SelectItem>

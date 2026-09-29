@@ -163,8 +163,9 @@ class NodeFieldMergerTest {
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> categories = (List<Map<String, Object>>) node.get("classifyCategories");
             assertThat(categories).hasSize(3);
+            // A new category goes LAST: category_0 and category_1 keep routing where they did
             assertThat(categories).extracting(c -> c.get("label"))
-                    .containsExactly("Spam", "Finance", "Tech");
+                    .containsExactly("Finance", "Tech", "Spam");
         }
 
         @Test
@@ -204,14 +205,46 @@ class NodeFieldMergerTest {
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> cases = (List<Map<String, Object>>) node.get("switchCases");
             assertThat(cases).hasSize(3);
-            // Order: incoming first (C, A), then preserved (B)
+            // Positions are kept (case_0 is still A, case_1 still B); the new C is appended
             assertThat(cases).extracting(c -> c.get("label"))
-                    .containsExactly("C", "A", "B");
+                    .containsExactly("A", "B", "C");
             // Updated A keeps original id (preserved from existing)
             Map<String, Object> aCase = cases.stream()
                     .filter(c -> "A".equals(c.get("label"))).findFirst().orElseThrow();
             assertThat(aCase.get("id")).isEqualTo("case-0");
             assertThat(aCase.get("value")).isEqualTo("99");
+        }
+
+        @Test
+        @DisplayName("switchCases: a new case goes before a trailing default, so case_N names stay right")
+        void newCaseBeforeDefault() {
+            Map<String, Object> node = new LinkedHashMap<>();
+            node.put("switchCases", List.of(
+                    new LinkedHashMap<>(Map.of("id", "c0", "type", "case", "label", "A")),
+                    new LinkedHashMap<>(Map.of("id", "c1", "type", "case", "label", "B")),
+                    new LinkedHashMap<>(Map.of("id", "d", "type", "default", "label", "Default"))
+            ));
+
+            NodeFieldMerger.merge(node, "switchCases", List.of(Map.of("label", "C", "value", "3")));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> cases = (List<Map<String, Object>>) node.get("switchCases");
+            assertThat(cases).extracting(c -> c.get("label"))
+                    .containsExactly("A", "B", "C", "Default");
+        }
+
+        @Test
+        @DisplayName("new items keep the caller's order, labelled or not")
+        void newItemsKeepCallerOrder() {
+            Map<String, Object> node = new LinkedHashMap<>();
+            node.put("classifyCategories", List.of(new LinkedHashMap<>(Map.of("label", "A"))));
+
+            NodeFieldMerger.merge(node, "classifyCategories", List.of(
+                    Map.of("description", "no label"), Map.of("label", "B")));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) node.get("classifyCategories");
+            assertThat(items).extracting(c -> c.get("label")).containsExactly("A", null, "B");
         }
 
         @Test

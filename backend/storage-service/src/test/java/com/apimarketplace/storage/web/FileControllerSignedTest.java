@@ -65,7 +65,7 @@ class FileControllerSignedTest {
         when(fileStorageService.openStream(key)).thenReturn(Optional.of(ds));
 
         ResponseEntity<StreamingResponseBody> response =
-                controller.proxySignedDownload(key, exp, "inline", sig);
+                controller.proxySignedDownload(key, exp, "inline", sig, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL))
@@ -91,7 +91,7 @@ class FileControllerSignedTest {
                 .thenReturn(Optional.of(stubStream("png-bytes".getBytes(), 9)));
 
         ResponseEntity<StreamingResponseBody> response =
-                controller.proxySignedDownload(key, exp, "inline", sig);
+                controller.proxySignedDownload(key, exp, "inline", sig, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         // Range, not equality: a second may tick between the test's clock read and the controller's.
@@ -119,7 +119,7 @@ class FileControllerSignedTest {
         String tampered = (first == 'A' ? 'B' : 'A') + validSig.substring(1);
 
         ResponseEntity<StreamingResponseBody> response =
-                controller.proxySignedDownload(key, exp, "inline", tampered);
+                controller.proxySignedDownload(key, exp, "inline", tampered, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(response.getBody()).isNull();
@@ -135,7 +135,7 @@ class FileControllerSignedTest {
         String sig = signer.sign(key, exp, "inline");
 
         ResponseEntity<StreamingResponseBody> response =
-                controller.proxySignedDownload(key, exp, "inline", sig);
+                controller.proxySignedDownload(key, exp, "inline", sig, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(meterRegistry.counter("storage_signed_download_total", "status", "expired").count())
@@ -150,7 +150,7 @@ class FileControllerSignedTest {
         String sigForInline = signer.sign(key, exp, "inline");
 
         ResponseEntity<StreamingResponseBody> response =
-                controller.proxySignedDownload(key, exp, "attachment", sigForInline);
+                controller.proxySignedDownload(key, exp, "attachment", sigForInline, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
@@ -164,7 +164,7 @@ class FileControllerSignedTest {
 
         // Replay the signature against a different key - must fail.
         ResponseEntity<StreamingResponseBody> response =
-                controller.proxySignedDownload("99/foreign.png", exp, "inline", sig);
+                controller.proxySignedDownload("99/foreign.png", exp, "inline", sig, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
@@ -179,9 +179,98 @@ class FileControllerSignedTest {
         lenient().when(fileStorageService.openStream(key)).thenReturn(Optional.empty());
 
         ResponseEntity<StreamingResponseBody> response =
-                controller.proxySignedDownload(key, exp, "inline", sig);
+                controller.proxySignedDownload(key, exp, "inline", sig, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    /**
+     * Interface videos now stream from these links, and a video element asks for byte ranges:
+     * Safari/iOS will not play a 200-only source and Chrome cannot seek one.
+     */
+    @Test
+    @DisplayName("Range: bytes=0-1023 → 206 with the store's Content-Range, Accept-Ranges and the part's length")
+    void singleRangeIsServedAsPartialContent() throws Exception {
+        long exp = Instant.now().getEpochSecond() + 4 * 3600;
+        String key = "1/general/general/ep01.mp4";
+        String sig = signer.sign(key, exp, "inline");
+        when(mimeTypeRegistry.resolve(anyString())).thenReturn("video/mp4");
+        when(fileStorageService.openStreamRange(key, "bytes=0-1023")).thenReturn(Optional.of(
+                new com.apimarketplace.storage.service.file.RangedDownload(
+                        stubStream(new byte[1024], 1024), "bytes 0-1023/18370402")));
+
+        ResponseEntity<StreamingResponseBody> response =
+                controller.proxySignedDownload(key, exp, "inline", sig, "bytes=0-1023");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PARTIAL_CONTENT);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_RANGE)).isEqualTo("bytes 0-1023/18370402");
+        assertThat(response.getHeaders().getFirst(HttpHeaders.ACCEPT_RANGES)).isEqualTo("bytes");
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_LENGTH)).isEqualTo("1024");
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE)).isEqualTo("video/mp4");
+        assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        response.getBody().writeTo(out);
+        assertThat(out.size()).isEqualTo(1024);
+        org.mockito.Mockito.verify(fileStorageService, org.mockito.Mockito.never()).openStream(anyString());
+    }
+
+    @Test
+    @DisplayName("A range the store cannot serve falls back to the whole file as a 200 (always a valid answer)")
+    void unservableRangeFallsBackToFullBody() {
+        long exp = Instant.now().getEpochSecond() + 4 * 3600;
+        String key = "1/general/general/ep01.mp4";
+        String sig = signer.sign(key, exp, "inline");
+        when(fileStorageService.openStreamRange(key, "bytes=99999999-")).thenReturn(Optional.empty());
+        when(fileStorageService.openStream(key)).thenReturn(Optional.of(stubStream("all".getBytes(), 3)));
+
+        ResponseEntity<StreamingResponseBody> response =
+                controller.proxySignedDownload(key, exp, "inline", sig, "bytes=99999999-");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.ACCEPT_RANGES)).isEqualTo("bytes");
+    }
+
+    @Test
+    @DisplayName("A forged signature is refused before any range is opened")
+    void forgedSignatureNeverOpensARange() {
+        long exp = Instant.now().getEpochSecond() + 4 * 3600;
+
+        ResponseEntity<StreamingResponseBody> response =
+                controller.proxySignedDownload("1/general/general/ep01.mp4", exp, "inline", "forged", "bytes=0-");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        org.mockito.Mockito.verifyNoInteractions(fileStorageService);
+    }
+
+    @Test
+    @DisplayName("Several ranges are not served as a range: the whole file comes back")
+    void multiRangeGetsFullBody() {
+        long exp = Instant.now().getEpochSecond() + 4 * 3600;
+        String key = "1/general/general/ep01.mp4";
+        String sig = signer.sign(key, exp, "inline");
+        when(fileStorageService.openStream(key)).thenReturn(Optional.of(stubStream("all".getBytes(), 3)));
+
+        ResponseEntity<StreamingResponseBody> response =
+                controller.proxySignedDownload(key, exp, "inline", sig, "bytes=0-1,5-9");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        org.mockito.Mockito.verify(fileStorageService, org.mockito.Mockito.never()).openStreamRange(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("A signed link to an HTML file is served with the no-script sandbox policy (never runs on the app origin)")
+    void htmlIsSandboxed() {
+        long exp = Instant.now().getEpochSecond() + 4 * 3600;
+        String key = "1/general/general/page.html";
+        String sig = signer.sign(key, exp, "inline");
+        when(mimeTypeRegistry.resolve(anyString())).thenReturn("text/html");
+        when(fileStorageService.openStream(key)).thenReturn(Optional.of(stubStream("<script>".getBytes(), 8)));
+
+        ResponseEntity<StreamingResponseBody> response = controller.proxySignedDownload(key, exp, "inline", sig, null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getHeaders().getFirst("Content-Security-Policy")).isEqualTo("sandbox");
+        assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
     }
 
     private static DownloadStream stubStream(byte[] data, long contentLength) {

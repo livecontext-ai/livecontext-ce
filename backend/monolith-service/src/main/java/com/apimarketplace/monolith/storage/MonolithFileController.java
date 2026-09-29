@@ -70,6 +70,17 @@ public class MonolithFileController {
     private final com.apimarketplace.storage.util.MimeTypeRegistry mimeTypeRegistry;
     private final com.apimarketplace.storage.service.file.StorageStreamingMetrics streamingMetrics;
 
+    /**
+     * Share-link scope checks (which files belong to a shared application). Optional for slim
+     * unit wiring; when null a share-link read is refused (fail closed), never served.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    com.apimarketplace.common.web.SharedApplicationScopeClient sharedApplicationScopeClient;
+
+    /** Lifetime of a {@link #signedUrlById} link; same property as the cloud controller. */
+    @org.springframework.beans.factory.annotation.Value("${storage.signed-url.ttl-seconds:14400}")
+    long signedUrlTtlSeconds = 14400;
+
     public MonolithFileController(FileStorageService fileStorageService,
                                   PublicFileUrlBuilder publicFileUrlBuilder,
                                   StorageService storageService,
@@ -101,11 +112,42 @@ public class MonolithFileController {
             @RequestParam String key,
             @RequestParam long exp,
             @RequestParam(defaultValue = "inline") String disposition,
-            @RequestParam String sig) {
+            @RequestParam String sig,
+            @RequestHeader(value = HttpHeaders.RANGE, required = false) String range) {
 
         long now = java.time.Instant.now().getEpochSecond();
         if (!showcaseUrlSigner.verify(key, exp, disposition, sig, now)) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
+        // Same single-range 206 as the cloud mount (a <video> needs it to play on Safari and to seek);
+        // anything else gets the whole file below.
+        String rangeSpec = com.apimarketplace.storage.web.ByteRanges.singleRange(range);
+        if (rangeSpec != null) {
+            java.util.Optional<com.apimarketplace.storage.service.file.RangedDownload> ranged =
+                    fileStorageService.openStreamRange(key, rangeSpec);
+            if (ranged.isPresent()) {
+                com.apimarketplace.storage.service.file.RangedDownload part = ranged.get();
+                String rangeFileName = com.apimarketplace.storage.util.FileNameExtractor.fromStoragePath(key);
+                String rangeMime = mimeTypeRegistry.resolve(rangeFileName);
+                final long partLength = part.body().contentLength();
+                ResponseEntity.BodyBuilder partial = com.apimarketplace.storage.web.SignedProxyHeaders.guard(
+                        ResponseEntity.status(HttpStatus.PARTIAL_CONTENT), rangeMime)
+                        .header(HttpHeaders.CONTENT_DISPOSITION, ContentDispositions.of(
+                                "attachment".equalsIgnoreCase(disposition) ? "attachment" : "inline", rangeFileName))
+                        .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                        .header(HttpHeaders.CONTENT_RANGE, part.contentRange())
+                        .header(HttpHeaders.CACHE_CONTROL,
+                                com.apimarketplace.common.storage.signing.SignedResponseCacheControl.forExpiry(exp, now))
+                        .contentType(rangeMime != null ? MediaType.parseMediaType(rangeMime) : MediaType.APPLICATION_OCTET_STREAM);
+                if (partLength >= 0) {
+                    partial.contentLength(partLength);
+                }
+                org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody partBody = out ->
+                        com.apimarketplace.storage.service.file.ClientStreamCopier.copy(
+                                part.body(), out, partLength, streamingMetrics, "showcase range key=" + key);
+                return partial.body(partBody);
+            }
         }
 
         return fileStorageService.openStream(key)
@@ -120,8 +162,10 @@ public class MonolithFileController {
                 org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody body = out ->
                         com.apimarketplace.storage.service.file.ClientStreamCopier.copy(
                                 ds, out, ds.contentLength(), streamingMetrics, "showcase key=" + key);
-                ResponseEntity.BodyBuilder builder = ResponseEntity.ok()
+                ResponseEntity.BodyBuilder builder = com.apimarketplace.storage.web.SignedProxyHeaders.guard(
+                        ResponseEntity.ok(), mimeType)
                         .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
+                        .header(HttpHeaders.ACCEPT_RANGES, "bytes")
                         // Shared with the cloud mount so the ceiling and the formula exist once.
                         .header(HttpHeaders.CACHE_CONTROL,
                                 com.apimarketplace.common.storage.signing.SignedResponseCacheControl
@@ -155,6 +199,12 @@ public class MonolithFileController {
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
             @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
+        // Org VIEWERs are read-only platform-wide, and an upload is a write that also
+        // consumes the workspace storage quota (same rule as the cloud FileController).
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, orgRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot upload files"));
+        }
         logger.info("CE file upload: name={}, size={}, workflow={}, run={}, tenant={}, org={}",
                 file.getOriginalFilename(), file.getSize(), workflowId, runId, tenantId, organizationId);
 
@@ -206,6 +256,12 @@ public class MonolithFileController {
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
             @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
+        // Org VIEWERs are read-only platform-wide, and an upload is a write that also
+        // consumes the workspace storage quota (same rule as the cloud FileController).
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, orgRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot upload files"));
+        }
         logger.info("CE generic upload: name={}, size={}, category={}, tenant={}, org={}",
                 file.getOriginalFilename(), file.getSize(), category, tenantId, organizationId);
 
@@ -278,19 +334,8 @@ public class MonolithFileController {
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
             @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
-        // Org-scoped first (any workspace member), then the OWNER fast-path (the uploader can serve
-        // their OWN file regardless of the active workspace) - mirrors FileController.rawById.
-        StorageEntity entity = null;
-        if (organizationId != null && !organizationId.isBlank()) {
-            entity = storageService.getEntityByIdForScope(id, tenantId, organizationId).orElse(null);
-        }
+        StorageEntity entity = readableEntity(id, tenantId, organizationId, orgRole);
         if (entity == null) {
-            entity = storageService.getEntityById(id, tenantId).orElse(null);
-        }
-        if (entity == null || entity.getFileName() == null) {
-            return ResponseEntity.notFound().build();
-        }
-        if (!canAccessFile(entity, id, tenantId, organizationId, orgRole)) {
             return ResponseEntity.notFound().build();
         }
 
@@ -315,6 +360,71 @@ public class MonolithFileController {
                 .header(HttpHeaders.CONTENT_TYPE, mimeType)
                 .header(HttpHeaders.CACHE_CONTROL, "private, max-age=300")
                 .body(data);
+    }
+
+    /**
+     * The file row behind {@code id} when this caller may read it, else {@code null} - the one
+     * authorisation shared by {@link #rawById} and {@link #signedUrlById}, so the two can never
+     * disagree on who may see a file. Org-scoped first (any workspace member), then the OWNER
+     * fast-path (the uploader can serve their OWN file regardless of the active workspace), non-file
+     * rows refused, and a share-link holder (authenticated AS THE OWNER) confined to the shared
+     * application's files. Mirrors {@code FileController.readableEntity} in the cloud.
+     */
+    private StorageEntity readableEntity(UUID id, String tenantId, String organizationId, String orgRole) {
+        StorageEntity entity = null;
+        if (organizationId != null && !organizationId.isBlank()) {
+            entity = storageService.getEntityByIdForScope(id, tenantId, organizationId).orElse(null);
+        }
+        if (entity == null) {
+            entity = storageService.getEntityById(id, tenantId).orElse(null);
+        }
+        if (entity == null || entity.getFileName() == null) {
+            return null;
+        }
+        if (!canAccessFile(entity, id, tenantId, organizationId, orgRole)) {
+            return null;
+        }
+        if (!com.apimarketplace.common.storage.service.SharedApplicationFileScope.permits(
+                com.apimarketplace.common.web.SharedApplicationScope.current(),
+                entity, tenantId, organizationId, sharedApplicationScopeClient)) {
+            return null;
+        }
+        return entity;
+    }
+
+    /**
+     * A short-lived {@code /api/files/proxy-signed} link to a file the caller may read - the CE
+     * counterpart of {@code FileController.signedUrlById}, which carries the full reasoning (an
+     * interface iframe inlines every file as a base64 {@code data:} URI, which kills the page for a
+     * video; media is streamed from this link instead). Same authorisation as {@link #rawById}.
+     * 404 when unreadable or not in object storage, 503 without a signing secret
+     * ({@code STORAGE_SHOWCASE_HMAC_SECRET}); the frontend falls back on either.
+     */
+    @GetMapping("/by-id/{id}/signed-url")
+    public ResponseEntity<Map<String, Object>> signedUrlById(
+            @PathVariable UUID id,
+            @RequestParam(defaultValue = "inline") String disposition,
+            @RequestHeader("X-User-ID") String tenantId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
+        StorageEntity entity = readableEntity(id, tenantId, organizationId, orgRole);
+        if (entity == null || entity.getS3Key() == null || entity.getS3Key().isBlank()) {
+            return ResponseEntity.notFound().build();
+        }
+        if (!showcaseUrlSigner.isEnabled()) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+        }
+        String dispo = "attachment".equalsIgnoreCase(disposition) ? "attachment" : "inline";
+        long exp = java.time.Instant.now().getEpochSecond() + signedUrlTtlSeconds;
+        String sig = showcaseUrlSigner.sign(entity.getS3Key(), exp, dispo);
+        if (sig == null) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+        }
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .body(Map.of(
+                        "url", com.apimarketplace.common.storage.url.FileProxyUrls.signedPath(entity.getS3Key(), exp, dispo, sig),
+                        "expires_at", exp));
     }
 
     /**

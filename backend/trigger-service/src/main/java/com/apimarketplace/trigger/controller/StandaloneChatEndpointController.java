@@ -1,6 +1,7 @@
 package com.apimarketplace.trigger.controller;
 
 import com.apimarketplace.trigger.client.dto.ChatEndpointAccessLogDto;
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.trigger.client.dto.EndpointConfigDto;
 import com.apimarketplace.trigger.client.dto.StandaloneChatEndpointDto;
 import com.apimarketplace.trigger.client.dto.StandaloneChatEndpointRequest;
@@ -22,6 +23,11 @@ public class StandaloneChatEndpointController {
 
     private final StandaloneChatEndpointService chatEndpointService;
 
+    /*
+     * Org VIEWERs are read-only: every create / update / delete / regenerate-token /
+     * relink below is refused for them with 403, reads stay open. The endpoint URL runs a
+     * workspace workflow, so rewiring or re-keying it is a write on the workspace.
+     */
     public StandaloneChatEndpointController(StandaloneChatEndpointService chatEndpointService) {
         this.chatEndpointService = chatEndpointService;
     }
@@ -37,8 +43,12 @@ public class StandaloneChatEndpointController {
     public ResponseEntity<StandaloneChatEndpointDto> create(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
             @Valid @RequestBody StandaloneChatEndpointRequest request) {
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         try {
             StandaloneChatEndpointDto response = chatEndpointService.create(tenantId, organizationId, userPlan, request);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
@@ -63,8 +73,12 @@ public class StandaloneChatEndpointController {
     public ResponseEntity<StandaloneChatEndpointDto> update(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @PathVariable UUID id,
             @Valid @RequestBody StandaloneChatEndpointRequest request) {
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         try {
             return ResponseEntity.ok(chatEndpointService.update(tenantId, organizationId, id, request));
         } catch (WorkflowReferenceImmutableException e) {
@@ -78,7 +92,11 @@ public class StandaloneChatEndpointController {
     public ResponseEntity<Void> delete(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @PathVariable UUID id) {
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         try {
             chatEndpointService.delete(tenantId, organizationId, id);
             return ResponseEntity.noContent().build();
@@ -91,7 +109,11 @@ public class StandaloneChatEndpointController {
     public ResponseEntity<StandaloneChatEndpointDto> regenerateToken(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @PathVariable UUID id) {
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         try {
             return ResponseEntity.ok(chatEndpointService.regenerateToken(tenantId, organizationId, id));
         } catch (IllegalArgumentException e) {
@@ -117,8 +139,12 @@ public class StandaloneChatEndpointController {
     public ResponseEntity<StandaloneChatEndpointDto> updateWorkflowReference(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @PathVariable UUID id,
             @RequestBody WorkflowReferenceRequest request) {
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         try {
             UUID workflowId = request.workflowId() != null ? UUID.fromString(request.workflowId()) : null;
             return ResponseEntity.ok(chatEndpointService.updateWorkflowReference(tenantId, organizationId, id, workflowId, request.workflowName()));

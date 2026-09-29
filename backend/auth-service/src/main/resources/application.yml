@@ -121,6 +121,12 @@ app:
   mail:
     from: ${SMTP_FROM:noreply@livecontext.ai}
     from-name: LiveContext
+    # Where a lifecycle mail tells a reader to write if the account it is about is not theirs.
+    #
+    # A property because this bean is unconditional: a self-hosted install sends these mails too,
+    # and a hard-coded address told those users to write to the cloud vendor about their own server.
+    # It shipped as a property with no entry in any config file, so it was configurable in name only.
+    support: ${MAIL_SUPPORT:support@livecontext.ai}
   security:
     keycloak:
       audience: ${KEYCLOAK_AUDIENCE:livecontext-frontend}
@@ -161,6 +167,10 @@ gateway:
       # instead of by remembering to list it.
       - /api/internal/credentials/
       - /api/internal/auth/workspace/
+      # The CURRENT workspace role of a member, read by the gateway WebSocket per run-driving
+      # action. Only the gateway calls it and it signs (WsOrgRoleResolver); gated so nothing
+      # else in the cluster can probe memberships through the public /api/internal/ namespace.
+      - /api/internal/auth/member-role/
 
 oauth2:
   callback-url: ${OAUTH2_CALLBACK_URL:http://localhost:8083/api/credentials/oauth2/callback}
@@ -224,7 +234,7 @@ billing:
   # 1.333333/2.0 - see frontend/lib/billing/pricing-constants.ts, whose published
   # figures are re-priced in the same commit and pinned to this value by
   # frontend/lib/billing/__tests__/margin-repricing.test.ts. Since 2026-09-21 those
-  # figures are priced on a LIGHTWEIGHT model (a named DeepSeek Flash catalogue row)
+  # figures are priced on a LIGHTWEIGHT model (a named catalogue row: GPT-6 Luna since 2026-09-28, DeepSeek Flash before)
   # rather than on Claude Sonnet 5, so a credit figure quoted there is no longer
   # comparable with one quoted here without converting for the model.
   #

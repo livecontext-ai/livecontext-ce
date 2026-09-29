@@ -1,15 +1,31 @@
 package com.apimarketplace.orchestrator.tools.workflow.builder;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.apimarketplace.common.web.GatewayAuthenticationFilter;
+import com.apimarketplace.common.web.GatewayFilterProperties;
+import com.apimarketplace.common.web.InternalGatewaySigner;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockFilterChain;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -20,6 +36,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 
 /**
  * Pins the {@link ToolSchemaFetcher#checkToolExists} dispatch across three id shapes:
@@ -31,6 +48,11 @@ import static org.mockito.Mockito.never;
  * slug-form ids that the execution layer actually accepts (CatalogV1Controller exposes
  * both a {@code /tools/{uuid}/execute} and a {@code /tools/{apiSlug}/{toolSlug}/execute}
  * endpoint, proving the slug form is a legitimate identifier).
+ *
+ * <p>Prod incident 2026-09-26: the slug lookup hit the HMAC-gated {@code /api/workflow-inspector}
+ * unsigned, so every call 401'd, became UNKNOWN (validator permissive) and was logged as a
+ * "transient" WARN. The class also pins the gateway signature (replayed through the real
+ * catalog filter), the ERROR log on 401/403, and which outcomes are cached.
  */
 @DisplayName("ToolSchemaFetcher - UUID + slug dispatch")
 class ToolSchemaFetcherSlugTest {
@@ -40,6 +62,10 @@ class ToolSchemaFetcherSlugTest {
 
     private static final String CATALOG_URL = "http://catalog:8081";
     private static final String UUID_FORM = "85f92897-77c6-4d94-b2b7-77774eeb6aa7";
+    private static final String GATEWAY_SECRET = "test-gateway-secret-key-0123456789";
+
+    private Logger fetcherLogger;
+    private ListAppender<ILoggingEvent> logAppender;
 
     @BeforeEach
     void setUp() {
@@ -47,6 +73,17 @@ class ToolSchemaFetcherSlugTest {
         restTemplate = mock(RestTemplate.class);
         ReflectionTestUtils.setField(fetcher, "restTemplate", restTemplate);
         ReflectionTestUtils.setField(fetcher, "catalogServiceUrl", CATALOG_URL);
+        ReflectionTestUtils.setField(fetcher, "gatewaySecretKey", GATEWAY_SECRET);
+
+        fetcherLogger = (Logger) LoggerFactory.getLogger(ToolSchemaFetcher.class);
+        logAppender = new ListAppender<>();
+        logAppender.start();
+        fetcherLogger.addAppender(logAppender);
+    }
+
+    @AfterEach
+    void tearDown() {
+        fetcherLogger.detachAppender(logAppender);
     }
 
     @Test
@@ -132,5 +169,170 @@ class ToolSchemaFetcherSlugTest {
         assertThat(out).isEqualTo(ToolSchemaFetcher.ToolExistence.NOT_FOUND);
         verify(restTemplate, never()).exchange(any(String.class), eq(HttpMethod.GET),
                 any(HttpEntity.class), eq(Map.class));
+    }
+
+    // --- Prod 2026-09-26: every slug lookup 401'd "Missing gateway authentication headers" ---
+    // /api/workflow-inspector is HMAC-gated on catalog-service; the slug call was unsigned, so
+    // the 401 became UNKNOWN (validator permissive), logged as "transient" and never alerted.
+
+    @Test
+    @DisplayName("Slug lookup is signed so catalog's real GatewayAuthenticationFilter lets it through")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void slugLookupPassesRealGatewayFilter() throws Exception {
+        ArgumentCaptor<HttpEntity> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+        when(restTemplate.exchange(contains("/api/workflow-inspector/tools/deepseek-chat"),
+                eq(HttpMethod.GET), entityCaptor.capture(), eq(Map.class)))
+            .thenReturn(ResponseEntity.ok((Map) Map.of("slug", "deepseek-chat")));
+
+        fetcher.checkToolExists("deepseek/deepseek-chat");
+
+        HttpHeaders headers = entityCaptor.getValue().getHeaders();
+        assertThat(headers.getFirst(InternalGatewaySigner.HEADER_PROVIDER_ID))
+            .isEqualTo(ToolSchemaFetcher.INTERNAL_PROVIDER_ID);
+
+        MockHttpServletResponse response = replayThroughCatalogFilter(headers,
+                "/api/workflow-inspector/tools/deepseek-chat");
+        assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("Blank gateway secret: call goes out unsigned, catalog refuses it, ERROR says configured=false")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void blankSecretIsUnsignedAndReportedAsMisconfiguration() throws Exception {
+        ReflectionTestUtils.setField(fetcher, "gatewaySecretKey", "");
+        ArgumentCaptor<HttpEntity> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+        when(restTemplate.exchange(contains("/api/workflow-inspector/tools/deepseek-chat"),
+                eq(HttpMethod.GET), entityCaptor.capture(), eq(Map.class)))
+            .thenThrow(HttpClientErrorException.create(HttpStatus.UNAUTHORIZED, "Unauthorized", null, null, null));
+
+        assertThat(fetcher.checkToolExists("deepseek/deepseek-chat"))
+            .isEqualTo(ToolSchemaFetcher.ToolExistence.UNKNOWN);
+
+        HttpHeaders headers = entityCaptor.getValue().getHeaders();
+        assertThat(headers.getFirst(InternalGatewaySigner.HEADER_SECRET)).isNull();
+        assertThat(headers.getFirst(InternalGatewaySigner.HEADER_TIMESTAMP)).isNull();
+        // The same unsigned request is exactly what prod's catalog filter answered 401 to.
+        assertThat(replayThroughCatalogFilter(headers, "/api/workflow-inspector/tools/deepseek-chat").getStatus())
+            .isEqualTo(401);
+        assertThat(logAppender.list)
+            .filteredOn(e -> e.getLevel() == Level.ERROR)
+            .singleElement()
+            .satisfies(e -> assertThat(e.getFormattedMessage()).contains("configured=false"));
+    }
+
+    /**
+     * Replays the captured outgoing headers through the filter catalog-service runs, configured
+     * with catalog's public paths (which do NOT include /api/workflow-inspector).
+     */
+    private static MockHttpServletResponse replayThroughCatalogFilter(HttpHeaders headers, String path)
+            throws Exception {
+        GatewayFilterProperties props = new GatewayFilterProperties();
+        props.setSecretKey(GATEWAY_SECRET);
+        props.setVerificationEnabled(true);
+        // Mirrors catalog-service application.yml gateway.filter.public-paths (2026-09-26): the
+        // UUID path (/api/catalog) is public, /api/workflow-inspector is NOT.
+        props.setPublicPaths(List.of("/health", "/actuator", "/api/internal/", "/api/agent-tools",
+                "/api/tools", "/api/catalog", "/api/v1", "/catalog/v1", "/api/tool-responses",
+                "/api/mcp", "/api/tool-categories", "/api/apis"));
+        GatewayAuthenticationFilter filter = new GatewayAuthenticationFilter(props);
+
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
+        headers.forEach((name, values) -> values.forEach(v -> request.addHeader(name, v)));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+        return response;
+    }
+
+    @Test
+    @DisplayName("Real slug (signed call answered 200) -> EXISTS, cached for the next lookup")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void realSlugIsExistsAndCached() {
+        when(restTemplate.exchange(contains("/api/workflow-inspector/tools/telegram-send-message"),
+                eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            .thenReturn(ResponseEntity.ok((Map) Map.of("slug", "telegram-send-message")));
+
+        assertThat(fetcher.checkToolExists("telegram/telegram-send-message"))
+            .isEqualTo(ToolSchemaFetcher.ToolExistence.EXISTS);
+        assertThat(fetcher.checkToolExists("telegram/telegram-send-message"))
+            .isEqualTo(ToolSchemaFetcher.ToolExistence.EXISTS);
+        verify(restTemplate, times(1)).exchange(contains("/api/workflow-inspector/tools/telegram-send-message"),
+                eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+    }
+
+    @Test
+    @DisplayName("Unknown slug (404) -> NOT_FOUND, cached, no ERROR log")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void unknownSlugIsNotFoundAndCached() {
+        when(restTemplate.exchange(contains("/api/workflow-inspector/tools/invented-tool"),
+                eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            .thenThrow(HttpClientErrorException.create(HttpStatus.NOT_FOUND, "Not Found", null, null, null));
+
+        assertThat(fetcher.checkToolExists("fake/invented-tool"))
+            .isEqualTo(ToolSchemaFetcher.ToolExistence.NOT_FOUND);
+        assertThat(fetcher.checkToolExists("fake/invented-tool"))
+            .isEqualTo(ToolSchemaFetcher.ToolExistence.NOT_FOUND);
+        verify(restTemplate, times(1)).exchange(contains("/api/workflow-inspector/tools/invented-tool"),
+                eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+        assertThat(logAppender.list).noneMatch(e -> e.getLevel() == Level.ERROR);
+    }
+
+    @Test
+    @DisplayName("401 on the slug lookup -> UNKNOWN, logged at ERROR (not 'transient'), never cached")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void unauthorizedSlugLookupIsErrorAndNotCached() {
+        assertAuthRefusalIsLoudAndUncached(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    @DisplayName("403 on the slug lookup -> UNKNOWN, logged at ERROR (not 'transient'), never cached")
+    void forbiddenSlugLookupIsErrorAndNotCached() {
+        assertAuthRefusalIsLoudAndUncached(HttpStatus.FORBIDDEN);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void assertAuthRefusalIsLoudAndUncached(HttpStatus status) {
+        when(restTemplate.exchange(contains("/api/workflow-inspector/tools/openai-admin-cost"),
+                eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            .thenThrow(HttpClientErrorException.create(status, status.getReasonPhrase(), null,
+                "{\"error\":\"Unauthorized\",\"message\":\"Missing gateway authentication headers\"}"
+                    .getBytes(), null));
+
+        assertThat(fetcher.checkToolExists("openai/openai-admin-cost"))
+            .isEqualTo(ToolSchemaFetcher.ToolExistence.UNKNOWN);
+        assertThat(fetcher.checkToolExists("openai/openai-admin-cost"))
+            .isEqualTo(ToolSchemaFetcher.ToolExistence.UNKNOWN);
+
+        // Not cached: both calls reached the catalog.
+        verify(restTemplate, times(2)).exchange(contains("/api/workflow-inspector/tools/openai-admin-cost"),
+                eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+        assertThat(logAppender.list)
+            .filteredOn(e -> e.getLevel() == Level.ERROR)
+            .hasSize(2)
+            .allSatisfy(e -> {
+                assertThat(e.getFormattedMessage()).contains("openai/openai-admin-cost")
+                    .contains(String.valueOf(status.value()))
+                    .doesNotContain("transient");
+            });
+        assertThat(logAppender.list).noneMatch(e -> e.getFormattedMessage().contains("transient"));
+    }
+
+    @Test
+    @DisplayName("Transient 5xx on the slug lookup stays WARN 'transient' and is not cached")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void serverErrorStaysTransientWarn() {
+        when(restTemplate.exchange(contains("/api/workflow-inspector/tools/gmail-list-messages"),
+                eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            .thenThrow(org.springframework.web.client.HttpServerErrorException.create(
+                HttpStatus.SERVICE_UNAVAILABLE, "Unavailable", null, null, null));
+
+        assertThat(fetcher.checkToolExists("gmail/gmail-list-messages"))
+            .isEqualTo(ToolSchemaFetcher.ToolExistence.UNKNOWN);
+        fetcher.checkToolExists("gmail/gmail-list-messages");
+
+        verify(restTemplate, times(2)).exchange(contains("/api/workflow-inspector/tools/gmail-list-messages"),
+                eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+        assertThat(logAppender.list).noneMatch(e -> e.getLevel() == Level.ERROR);
+        assertThat(logAppender.list).anyMatch(e -> e.getLevel() == Level.WARN
+                && e.getFormattedMessage().contains("transient"));
     }
 }

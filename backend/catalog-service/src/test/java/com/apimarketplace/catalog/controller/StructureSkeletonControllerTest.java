@@ -2,6 +2,7 @@ package com.apimarketplace.catalog.controller;
 
 import com.apimarketplace.catalog.repository.ToolResponseRepository;
 import com.apimarketplace.catalog.service.StructureSkeletonService;
+import com.apimarketplace.catalog.web.CatalogAdminAccess;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -11,6 +12,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.util.*;
 
@@ -18,6 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("StructureSkeletonController")
@@ -28,9 +33,11 @@ class StructureSkeletonControllerTest {
 
     private StructureSkeletonController controller;
 
+    private static final String ADMIN_TOKEN = "catalog-admin-secret";
+
     @BeforeEach
     void setUp() {
-        controller = new StructureSkeletonController(service);
+        controller = new StructureSkeletonController(service, new CatalogAdminAccess(ADMIN_TOKEN));
     }
 
     @Nested
@@ -221,10 +228,10 @@ class StructureSkeletonControllerTest {
         void triggersMigrationWithBatchSize() {
             when(service.runMigrationBatch(50)).thenReturn(50);
 
-            ResponseEntity<String> response = controller.triggerMigration(50);
+            ResponseEntity<?> response = controller.triggerMigration(50, "USER,ADMIN", null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(response.getBody()).contains("50");
+            assertThat((String) response.getBody()).contains("50");
 
             verify(service).runMigrationBatch(50);
         }
@@ -234,10 +241,10 @@ class StructureSkeletonControllerTest {
         void usesDefaultBatchSize() {
             when(service.runMigrationBatch(100)).thenReturn(75);
 
-            ResponseEntity<String> response = controller.triggerMigration(100);
+            ResponseEntity<?> response = controller.triggerMigration(100, "ADMIN", null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(response.getBody()).contains("75");
+            assertThat((String) response.getBody()).contains("75");
         }
     }
 
@@ -252,9 +259,105 @@ class StructureSkeletonControllerTest {
 
             doNothing().when(service).generateAndSaveSkeleton(responseId);
 
-            ResponseEntity<Void> response = controller.regenerateSkeleton(responseId);
+            ResponseEntity<?> response = controller.regenerateSkeleton(responseId, "ADMIN", null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            verify(service).generateAndSaveSkeleton(responseId);
+        }
+    }
+
+    /**
+     * Regression: POST /api/v1/structure/migrate and /{responseId}/regenerate had no
+     * authorization, and the gateway routes /api/v1/structure/** to any signed-in user.
+     * Both rewrite GLOBAL tool-response skeletons, so they must be admin only. Driven
+     * through MockMvc so the real header names (X-User-Roles, X-Internal-Admin-Token)
+     * are what gets bound, not positional arguments.
+     */
+    @Nested
+    @DisplayName("Admin gate on skeleton writes")
+    class AdminGateTests {
+
+        private MockMvc mockMvc;
+
+        @BeforeEach
+        void setUpMvc() {
+            mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+        }
+
+        @Test
+        @DisplayName("migrate refuses a plain signed-in user with 403 and runs no batch")
+        void migrateRefusesNonAdmin() throws Exception {
+            mockMvc.perform(post("/api/v1/structure/migrate")
+                            .header("X-User-ID", "42")
+                            .header("X-User-Roles", "USER"))
+                    .andExpect(status().isForbidden());
+
+            verify(service, never()).runMigrationBatch(anyInt());
+        }
+
+        @Test
+        @DisplayName("migrate refuses an anonymous caller with a wrong admin token")
+        void migrateRefusesWrongToken() throws Exception {
+            mockMvc.perform(post("/api/v1/structure/migrate")
+                            .header("X-Internal-Admin-Token", "not-the-secret"))
+                    .andExpect(status().isForbidden());
+
+            verify(service, never()).runMigrationBatch(anyInt());
+        }
+
+        @Test
+        @DisplayName("migrate accepts a platform admin")
+        void migrateAcceptsAdminRole() throws Exception {
+            when(service.runMigrationBatch(10)).thenReturn(3);
+
+            mockMvc.perform(post("/api/v1/structure/migrate").param("batchSize", "10")
+                            .header("X-User-Roles", "USER,ADMIN"))
+                    .andExpect(status().isOk());
+
+            verify(service).runMigrationBatch(10);
+        }
+
+        @Test
+        @DisplayName("migrate accepts the catalog admin token from an in-cluster job")
+        void migrateAcceptsAdminToken() throws Exception {
+            when(service.runMigrationBatch(100)).thenReturn(0);
+
+            mockMvc.perform(post("/api/v1/structure/migrate")
+                            .header("X-Internal-Admin-Token", ADMIN_TOKEN))
+                    .andExpect(status().isOk());
+
+            verify(service).runMigrationBatch(100);
+        }
+
+        @Test
+        @DisplayName("regenerate refuses a plain signed-in user with 403 and rewrites nothing")
+        void regenerateRefusesNonAdmin() throws Exception {
+            mockMvc.perform(post("/api/v1/structure/{id}/regenerate", UUID.randomUUID())
+                            .header("X-User-Roles", "USER"))
+                    .andExpect(status().isForbidden());
+
+            verify(service, never()).generateAndSaveSkeleton(any());
+        }
+
+        @Test
+        @DisplayName("regenerate refuses a wrong admin token")
+        void regenerateRefusesWrongToken() throws Exception {
+            mockMvc.perform(post("/api/v1/structure/{id}/regenerate", UUID.randomUUID())
+                            .header("X-Internal-Admin-Token", "guess"))
+                    .andExpect(status().isForbidden());
+
+            verify(service, never()).generateAndSaveSkeleton(any());
+        }
+
+        @Test
+        @DisplayName("regenerate accepts the catalog admin token")
+        void regenerateAcceptsAdminToken() throws Exception {
+            UUID responseId = UUID.randomUUID();
+
+            mockMvc.perform(post("/api/v1/structure/{id}/regenerate", responseId)
+                            .header("X-Internal-Admin-Token", ADMIN_TOKEN))
+                    .andExpect(status().isOk());
+
             verify(service).generateAndSaveSkeleton(responseId);
         }
     }

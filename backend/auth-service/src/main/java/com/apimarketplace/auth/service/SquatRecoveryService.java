@@ -83,7 +83,9 @@ public class SquatRecoveryService {
         }
 
         String token = tokenService.mint(event.installId(), event.victimUserId());
-        mailer.sendRecoveryEmail(victim.get().getEmail(), token);
+        // The victim row is right here (line above), so its language travels with the alert
+        // instead of being looked up again by address.
+        mailer.sendRecoveryEmail(victim.get().getEmail(), token, victim.get().getLocale());
     }
 
     /**

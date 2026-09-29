@@ -248,8 +248,23 @@ public class CatalogExecuteModule implements ToolModule {
         var accessDenied = ToolAccessControl.checkWriteAccess(
                 context != null ? context.credentials() : null, "catalog", toolName);
         if (accessDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get()));
+        Optional<ToolExecutionResult> roleDenied = checkViewerRole(context, toolName);
+        if (roleDenied.isPresent()) return roleDenied;
 
         return Optional.of(executeCatalogExecute(parameters, context, null));
+    }
+
+    /**
+     * Workspace-role gate: a VIEWER is read-only, and running a catalog tool acts on a
+     * third-party service with the workspace credentials (and may spend its credits), so
+     * every execution is refused to them. search / response_schema / help stay open.
+     * The REST twin ({@code CatalogV1Controller}) refuses the same call.
+     */
+    static Optional<ToolExecutionResult> checkViewerRole(ToolExecutionContext context, String action) {
+        return ToolAccessControl.checkRoleWriteAccess(
+                        context != null ? context.orgId() : null,
+                        context != null ? context.orgRole() : null, "catalog", action)
+                .map(msg -> ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, msg));
     }
 
     /**
@@ -271,6 +286,8 @@ public class CatalogExecuteModule implements ToolModule {
         if (accessDenied.isPresent()) {
             return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get()));
         }
+        Optional<ToolExecutionResult> roleDenied = checkViewerRole(context, "execute");
+        if (roleDenied.isPresent()) return roleDenied;
         return Optional.of(executeCatalogExecute(parameters, context, billing));
     }
 

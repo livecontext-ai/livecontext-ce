@@ -120,3 +120,42 @@ describe('WorkflowModeToggle - returning to edit mode', () => {
     expect(push).not.toHaveBeenCalled();
   });
 });
+
+describe('WorkflowModeToggle - marks its own clicks for the workflow page', () => {
+  // The page keeps the panel agent's chat in front only for a TOGGLE click; it knows one by this mark.
+  it('marks an Edit click with the edit target (null)', async () => {
+    const { consumeUserModeToggle } = await import('@/lib/workflow/workflowPanelChat');
+    render(<WorkflowModeToggle workflowId="wf-1" mode={modeRef.value} />);
+
+    clickEdit();
+
+    expect(consumeUserModeToggle('wf-1', null)).toBe(true);
+  });
+
+  it('marks a Run click with the run it is about to show, and leaves no mark when that run is already shown', async () => {
+    const { orchestratorApi } = await import('@/lib/api');
+    const { consumeUserModeToggle } = await import('@/lib/workflow/workflowPanelChat');
+    const latest = vi.mocked(orchestratorApi.getLatestWorkflowRun);
+    const clickRun = async () => {
+      fireEvent.click(screen.getByTitle('workflow.mode.run'));
+      await vi.waitFor(() => expect(latest).toHaveBeenCalled());
+      await Promise.resolve();
+    };
+
+    latest.mockResolvedValueOnce({ runId: 'run-2' } as never);
+    const first = render(<WorkflowModeToggle workflowId="wf-1" mode="run" />);
+    await clickRun();
+    await vi.waitFor(() => expect(push).toHaveBeenCalledWith('/app/workflow/wf-1/run/run-2'));
+    expect(consumeUserModeToggle('wf-1', 'run-2')).toBe(true);
+    first.unmount();
+    latest.mockReset();
+
+    // Re-click Run on the run already on screen (the context shows run-1): no change will follow,
+    // so a mark would linger and mislabel the next, unrelated run change as a toggle.
+    latest.mockResolvedValueOnce({ runId: 'run-1' } as never);
+    render(<WorkflowModeToggle workflowId="wf-1" mode="run" />);
+    await clickRun();
+    await vi.waitFor(() => expect(push).toHaveBeenCalledWith('/app/workflow/wf-1/run/run-1'));
+    expect(consumeUserModeToggle('wf-1', 'run-1')).toBe(false);
+  });
+});

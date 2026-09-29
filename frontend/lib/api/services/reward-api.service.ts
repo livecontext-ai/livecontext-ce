@@ -24,6 +24,12 @@ export interface RewardRedeemResult {
   success: boolean;
   code: string;
   status?: string;
+  /** PAYG credits a creator / partner code granted on the spot (0 otherwise). */
+  grantedCredits?: number;
+  /** Plan a creator code granted (e.g. PRO), null when none (or the account kept its own). */
+  grantedPlan?: string | null;
+  /** When that complimentary plan ends, as an ISO instant (UTC, ending in Z). */
+  planEndsAt?: string | null;
 }
 
 /**
@@ -33,7 +39,8 @@ export interface RewardRedeemResult {
  *
  * On a typed failure apiClient throws an ApiError whose {@code .code} is one of
  * INVALID_CODE | NOT_REDEEMABLE | ALREADY_REDEEMED | EXHAUSTED | SELF_REFERRAL |
- * ALREADY_PAID | CLOUD_LINK_REQUIRED, so the caller maps it to a localized message.
+ * ALREADY_PAID | ALREADY_ATTRIBUTED | CLOUD_LINK_REQUIRED, so the caller maps it to a
+ * localized message.
  */
 export class RewardApiService {
   async getMyInvite(): Promise<RewardInvite> {

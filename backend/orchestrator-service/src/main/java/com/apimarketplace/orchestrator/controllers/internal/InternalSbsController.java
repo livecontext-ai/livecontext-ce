@@ -42,6 +42,13 @@ public class InternalSbsController {
     private final SnapshotService snapshotService;
     private final TaskExecutor sbsExecutor;
     private final WorkflowRunRepository runRepository;
+    private final com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard;
+
+    /** Backward-compatible direct-call overload used by controller unit tests: no role. */
+    public ResponseEntity<Map<String, Object>> executeNode(String runId, String nodeId, String userId,
+                                                           String organizationId, Map<String, Object> data) {
+        return executeNode(runId, nodeId, userId, organizationId, null, data);
+    }
 
     public InternalSbsController(
             V2StepByStepService v2StepByStepService,
@@ -50,7 +57,9 @@ public class InternalSbsController {
             StateSnapshotService stateSnapshotService,
             SnapshotService snapshotService,
             @Qualifier("sbsExecutor") TaskExecutor sbsExecutor,
-            WorkflowRunRepository runRepository) {
+            WorkflowRunRepository runRepository,
+            com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard) {
+        this.orgAccessGuard = orgAccessGuard;
         this.v2StepByStepService = v2StepByStepService;
         this.v2StepByStepScheduler = v2StepByStepScheduler;
         this.resumeService = resumeService;
@@ -75,6 +84,7 @@ public class InternalSbsController {
             @PathVariable String nodeId,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @RequestBody(required = false) Map<String, Object> data) {
 
         log.info("[InternalSbs] Execute request: runId={}, nodeId={}, userId={}", runId, nodeId, userId);
@@ -100,6 +110,17 @@ public class InternalSbsController {
                     "accepted", false,
                     "error", "RUN_NOT_FOUND",
                     "message", "Run not found"
+            ));
+        }
+        // Same write gate as the HTTP twin (StepByStepController.guardRunWrite).
+        String denial = com.apimarketplace.orchestrator.controllers.workflow.RunWriteGate.denial(
+                orgAccessGuard, runRow.get(), userId, organizationId, organizationRole, "execute steps of");
+        if (denial != null) {
+            int status = com.apimarketplace.orchestrator.controllers.workflow.RunWriteGate.statusFor(denial);
+            return ResponseEntity.status(status).body(Map.of(
+                    "accepted", false,
+                    "error", status == 503 ? "UNAVAILABLE" : "FORBIDDEN",
+                    "message", denial
             ));
         }
 

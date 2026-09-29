@@ -1,5 +1,6 @@
 package com.apimarketplace.trigger.controller;
 
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.trigger.client.dto.*;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.trigger.repository.StandaloneWebhookRepository;
@@ -8,6 +9,7 @@ import com.apimarketplace.trigger.service.StandaloneWebhookService;
 import com.apimarketplace.trigger.service.WorkflowReferenceImmutableException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.data.domain.Page;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -49,6 +51,10 @@ public class StandaloneWebhookController {
     public ResponseEntity<?> create(
             @RequestBody StandaloneWebhookRequest body,
             HttpServletRequest request) {
+        if (isViewerWriteBlocked(request)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot modify webhooks"));
+        }
         String tenantId = tenantResolver.resolve(request);
         String organizationId = requireOrgId(request);
         String userPlan = request.getHeader("X-User-Plan");
@@ -87,6 +93,9 @@ public class StandaloneWebhookController {
             @PathVariable("id") UUID id,
             @RequestBody StandaloneWebhookRequest body,
             HttpServletRequest request) {
+        if (isViewerWriteBlocked(request)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         String tenantId = tenantResolver.resolve(request);
         String organizationId = requireOrgId(request);
         try {
@@ -102,6 +111,9 @@ public class StandaloneWebhookController {
     public ResponseEntity<Void> delete(
             @PathVariable("id") UUID id,
             HttpServletRequest request) {
+        if (isViewerWriteBlocked(request)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         String tenantId = tenantResolver.resolve(request);
         String organizationId = requireOrgId(request);
         try {
@@ -116,6 +128,9 @@ public class StandaloneWebhookController {
     public ResponseEntity<StandaloneWebhookDto> regenerateToken(
             @PathVariable("id") UUID id,
             HttpServletRequest request) {
+        if (isViewerWriteBlocked(request)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         String tenantId = tenantResolver.resolve(request);
         String organizationId = requireOrgId(request);
         try {
@@ -145,6 +160,9 @@ public class StandaloneWebhookController {
             @PathVariable("id") UUID id,
             @RequestBody WorkflowReferenceRequest body,
             HttpServletRequest request) {
+        if (isViewerWriteBlocked(request)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         String tenantId = tenantResolver.resolve(request);
         String organizationId = requireOrgId(request);
         UUID workflowId = body.workflowId() != null ? UUID.fromString(body.workflowId()) : null;
@@ -165,6 +183,16 @@ public class StandaloneWebhookController {
         String userPlan = request.getHeader("X-User-Plan");
         config.put("maxPerUser", planLimitHelper.getMaxEndpoints(userPlan));
         return ResponseEntity.ok(config);
+    }
+
+    /**
+     * Org VIEWERs are read-only: create / update / delete / regenerate-token / relink are
+     * refused with 403, reads stay open. A webhook URL runs a workspace workflow, so
+     * rewiring or re-keying it is a write on the workspace.
+     */
+    private boolean isViewerWriteBlocked(HttpServletRequest request) {
+        return OrgAccessGuard.isRoleWriteBlocked(
+                tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request));
     }
 
     /**

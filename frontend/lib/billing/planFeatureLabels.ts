@@ -100,6 +100,15 @@ export function planFeatureLabels(planId: string, deps: PlanFeatureLabelDeps): s
       case 'nodesPublishing':
         return withTooltip(tCards('features.nodesPublishing'), tCards('features.nodesPublishingTooltip'));
 
+      // Capabilities every plan carries. The short line names the benefit; the
+      // "i" says what is behind it, since none of them is a number to compare.
+      case 'agentToolkit':
+      case 'chatChannels':
+      case 'channelAlerts':
+      case 'mcpServer':
+      case 'twoFactor':
+        return withTooltip(tCards(`features.${key}`), tCards(`features.${key}Tooltip`));
+
       default:
         return tCards(`features.${key}`);
     }

@@ -6,6 +6,10 @@ import jakarta.mail.internet.MimeMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import com.apimarketplace.auth.service.mail.AccountMailCatalog;
+import com.apimarketplace.auth.service.mail.BrandedMail;
+import com.apimarketplace.auth.service.mail.MailLocaleResolver;
+import com.apimarketplace.common.i18n.MessageCatalog;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -83,6 +87,24 @@ public class PasswordResetMailer {
         this.drainSeconds = seconds;
     }
 
+    /** Subject and body of this mail, in the six app locales. Shared with the other account mails. */
+    static final MessageCatalog CATALOG = AccountMailCatalog.INSTANCE;
+
+    /**
+     * Resolves the reader's language from the address, when the caller could not supply it.
+     *
+     * <p>Injected through a SETTER rather than the constructor, and optional: this mailer is
+     * constructed directly in several tests, and adding a fifth constructor argument would have
+     * made every one of them compile against a collaborator they have no use for. A null resolver
+     * means English, which is what this mail was before it was translated.
+     */
+    private MailLocaleResolver mailLocales;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setMailLocales(MailLocaleResolver mailLocales) {
+        this.mailLocales = mailLocales;
+    }
+
     private final JavaMailSender mailSender;
     private final String mailFrom;
     private final String mailFromName;
@@ -157,15 +179,23 @@ public class PasswordResetMailer {
      * requester would answer "does this address have an account", since a mail is
      * only ever attempted when it does.
      *
-     * @param userId only for the operator log line, never for the requester
+     * @param userId      only for the operator log line, never for the requester
+     * @param knownLocale the account's stored language, when the caller already holds the row.
+     *                    Null falls back to a lookup by address, which is all an address-only
+     *                    caller can do - but it is a second query for something the caller
+     *                    already has, and it answers English if the database is unreachable at
+     *                    that moment. Passing what the caller already read avoids both, on the
+     *                    one mail whose reader is locked out and cannot retry in another
+     *                    language. (It is NOT about duplicate addresses: uk_users_email_unique
+     *                    forbids two rows with the same non-null one.)
      */
     public void dispatchResetEmail(String email, String displayName, String rawToken,
-                                   int ttlMinutes, Long userId) {
+                                   int ttlMinutes, Long userId, String knownLocale) {
         pending.incrementAndGet();
         try {
             sendPool.execute(() -> {
                 try {
-                    sendResetEmail(email, displayName, rawToken, ttlMinutes);
+                    sendResetEmail(email, displayName, rawToken, ttlMinutes, knownLocale);
                 } catch (MailDeliveryException e) {
                     logger.error("Password reset token issued for user {} but the e-mail could not "
                             + "be sent. The user is still locked out. Check SMTP.", userId, e);
@@ -236,37 +266,71 @@ public class PasswordResetMailer {
     }
 
     /**
-     * @param rawToken the one-time token. Goes into the link and nowhere else.
+     * The one send. There used to be a four-argument overload delegating here with a null locale; it
+     * had no caller left, and keeping it left the inline-send path this class forbids one call away.
+     *
+     * @param rawToken    the one-time token. Goes into the link and nowhere else.
+     * @param knownLocale the account's stored language, or null to resolve it from the address
      * @throws MailDeliveryException so the dispatcher can log the truth
      */
-    public void sendResetEmail(String email, String displayName, String rawToken, int ttlMinutes) {
-        // URL-encode: the token is base64url, so today it needs nothing, but a
-        // future change of alphabet must not silently produce a broken link.
-        String resetUrl = frontendUrl + "/reset-password?token="
-                + URLEncoder.encode(rawToken, StandardCharsets.UTF_8);
-        String name = displayName != null ? displayName : "there";
-        // Escaped for the HTML part ONLY: the plain-text part must not show the
-        // reader "&amp;" where their name has an ampersand.
-        String safeName = sanitize(name);
+    public void sendResetEmail(String email, String displayName, String rawToken, int ttlMinutes,
+                               String knownLocale) {
+        String locale = resolveLocale(email, knownLocale);
+        // The link carries the account's LANGUAGE, like the mail around it.
+        //
+        // These routes live under `app/[locale]/`, and an unprefixed path is redirected by the
+        // proxy, which picks the locale from the NEXT_LOCALE cookie or Accept-Language. So an
+        // account whose stored language is French, opened on a browser that advertises English,
+        // got a French mail whose only call to action landed on the English page - exactly the
+        // cross-device case this feature exists for. `MessageCatalog.localizedPath` is what the
+        // sibling NotificationMailer already uses, and it is a no-op for English.
+        // The token is URL-encoded: base64url needs nothing today, but a future change of alphabet
+        // must not silently produce a broken link. (This comment described the line below and had
+        // drifted three statements above it, onto the locale resolution.)
+        String resetUrl = frontendUrl
+                + MessageCatalog.localizedPath(locale, "/reset-password")
+                + "?token=" + URLEncoder.encode(rawToken, StandardCharsets.UTF_8);
+
+        String title = CATALOG.text(locale, "reset.title");
+        java.util.List<String> paragraphs = java.util.List.of(
+                AccountMailCatalog.greeting(locale, displayName),
+                CATALOG.text(locale, "reset.body"),
+                CATALOG.text(locale, "reset.ignore"));
+        BrandedMail.Button button = new BrandedMail.Button(resetUrl, CATALOG.text(locale, "reset.action"));
+        // The pasteable link goes in the NOTE, which is where the sibling invitation mail puts the
+        // identical string.
+        //
+        // A button is an <a> like any other: a client that strips HTML, a proxy that rewrites links,
+        // or a person reading the text alternative is left with no way to reach the page, and this is
+        // the one mail whose reader is already locked out and cannot ask for help from inside the
+        // product. It had been lost in the shell extraction and was rebuilt into the FOOTER, glued to
+        // the footer sentence by a space: two mails putting one string in two places, and a ~120
+        // character URL with no break opportunity inside a 12px footer cell of a 560px table. The
+        // note is its own paragraph and breaks (see BrandedMail).
+        String note = CATALOG.text(locale, "reset.expiry",
+                java.util.Map.of("minutes", String.valueOf(ttlMinutes)))
+                + " " + CATALOG.text(locale, "reset.fallback", java.util.Map.of("url", resetUrl));
+        BrandedMail.Footer footer = BrandedMail.Footer.of(CATALOG.text(locale, "common.footer"));
 
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
             helper.setFrom(mailFrom, mailFromName);
             helper.setTo(email);
-            helper.setSubject("Reset your LiveContext password");
+            helper.setSubject(BrandedMail.subject(CATALOG.text(locale, "reset.subject")));
 
-            String plain = String.format(
-                    "Hi %s,%n%n"
-                            + "Someone asked to reset the password for this LiveContext account.%n%n"
-                            + "Open this link to choose a new one. It works once and expires in "
-                            + "%d minutes:%n%n%s%n%n"
-                            + "If you did not ask for this, you can ignore this e-mail. Your "
-                            + "password has not changed and nobody has been given access.%n%n"
-                            + "- The LiveContext Team",
-                    name, ttlMinutes, resetUrl);
-
-            helper.setText(plain, buildHtml(safeName, resetUrl, ttlMinutes));
+            // The plain part shows the name as typed; the HTML part escapes it. That asymmetry is
+            // deliberate and tested: a reader of the text alternative must not see "&amp;" where
+            // their name has an ampersand, and a reader of the HTML one must not receive markup.
+            // The sign-off goes in its own SLOT, not at the end of the paragraph list.
+            //
+            // As a paragraph it rendered above the button - and in the verification mail, between
+            // "use the code below" and the code - because the shell emits paragraphs first. Five
+            // mails read backwards for it, and nothing asserted block order.
+            String signature = CATALOG.text(locale, "common.signature");
+            helper.setText(
+                    BrandedMail.plain(title, paragraphs, null, note, button, signature, footer),
+                    BrandedMail.html(BrandedMail.logoUrl(frontendUrl), locale, null, title, paragraphs, null, note, button, signature, footer));
             mailSender.send(message);
             logger.info("Password reset email sent to {}", email);
         } catch (MessagingException | UnsupportedEncodingException e) {
@@ -279,55 +343,16 @@ public class PasswordResetMailer {
         }
     }
 
-    private static String sanitize(String s) {
-        if (s == null) return "";
-        return s.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\"", "&quot;");
-    }
-
-    private String buildHtml(String name, String resetUrl, int ttlMinutes) {
-        return """
-                <!DOCTYPE html>
-                <html lang="en"><head><meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width,initial-scale=1">
-                <title>Reset your password</title></head>
-                <body style="margin:0;padding:0;">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f5f5f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827;">
-                  <tr><td align="center" style="padding:40px 16px;">
-                    <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;background:#ffffff;border:1px solid #e7e5e4;border-radius:12px;">
-                      <tr><td align="left" style="padding:32px 40px 24px 40px;border-bottom:1px solid #e7e5e4;">
-                        <img src="{{LOGO}}" alt="LiveContext" height="32" style="display:block;height:32px;width:auto;border:0;text-decoration:none;">
-                      </td></tr>
-                      <tr><td style="padding:32px 40px;font-size:15px;line-height:1.6;color:#111827;">
-                        <h1 style="margin:0 0 16px 0;font-size:22px;font-weight:600;color:#111827;">Reset your password</h1>
-                        <p style="margin:0 0 12px 0;">Hi <strong>{{NAME}}</strong>,</p>
-                        <p style="margin:0 0 12px 0;">Someone asked to reset the password for this LiveContext account. Choose a new one here:</p>
-                        <p style="margin:24px 0;text-align:center;">
-                          <a href="{{URL}}" style="display:inline-block;padding:12px 28px;background:#111827;color:#ffffff;border-radius:8px;font-size:15px;font-weight:600;text-decoration:none;">Choose a new password</a>
-                        </p>
-                        <p style="margin:0 0 12px 0;font-size:13px;color:#6b7280;">This link works once and expires in {{TTL}} minutes.</p>
-                        <div style="margin:20px 0;padding:16px 20px;background:#f5f5f4;border:1px solid #e7e5e4;border-radius:8px;">
-                          <p style="margin:0;font-size:13px;color:#374151;">Did not ask for this? Ignore this e-mail. Your password has not changed and nobody has been given access.</p>
-                        </div>
-                      </td></tr>
-                      <tr><td style="padding:24px 40px 32px 40px;border-top:1px solid #e7e5e4;font-size:12px;line-height:1.5;color:#6b7280;">
-                        If the button does not work, paste this into your browser:<br>
-                        <span style="word-break:break-all;color:#374151;">{{URL}}</span><br><br>&copy; LiveContext
-                      </td></tr>
-                    </table>
-                  </td></tr>
-                </table>
-                </body></html>
-                """
-                // Placeholders the TEMPLATE owns go first. Substituting the
-                // user-supplied name first would let a display name containing the
-                // literal {{URL}} expand in that user's own mail.
-                .replace("{{TTL}}", String.valueOf(ttlMinutes))
-                .replace("{{URL}}", resetUrl)
-                .replace("{{LOGO}}", frontendUrl + "/liveContext-logo-light.png?v=2")
-                .replace("{{NAME}}", name);
+    /**
+     * The language this mail is written in: what the caller read off the account, else a lookup
+     * by address, else English.
+     *
+     * <p>{@code mailLocales} is null only where nothing injected it (a directly constructed
+     * instance). English then, rather than a NullPointerException inside a send that is already
+     * detached from any request and whose failure nobody is waiting on.
+     */
+    private String resolveLocale(String email, String knownLocale) {
+        return MailLocaleResolver.resolve(mailLocales, knownLocale, email);
     }
 
     /** Mail could not be handed to the SMTP server. The reset did not reach anyone. */

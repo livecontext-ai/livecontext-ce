@@ -91,7 +91,7 @@ class PasswordResetMailerTest {
             return null;
         }).when(mailSender).send(any(MimeMessage.class));
 
-        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L);
+        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L, null);
 
         assertThat(sent.await(5, TimeUnit.SECONDS)).as("the mail was never sent").isTrue();
         // The whole point of the dispatch: a known address must not cost the
@@ -111,7 +111,7 @@ class PasswordResetMailerTest {
             throw new MailSendException("no route to host");
         }).when(mailSender).send(any(MimeMessage.class));
 
-        assertThatCode(() -> mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L))
+        assertThatCode(() -> mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L, null))
                 .doesNotThrowAnyException();
 
         assertThat(attempted.await(5, TimeUnit.SECONDS)).isTrue();
@@ -129,14 +129,14 @@ class PasswordResetMailerTest {
     @DisplayName("the raw token reaches NO log line, at any level, on success or on failure")
     void tokenIsNeverLogged() throws Exception {
         CountDownLatch sent = latchOnSend();
-        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L);
+        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L, null);
         assertThat(sent.await(5, TimeUnit.SECONDS)).isTrue();
         await(() -> !logged.list.isEmpty(), "at least one log line");
 
         doAnswer(invocation -> {
             throw new MailSendException("refused");
         }).when(mailSender).send(any(MimeMessage.class));
-        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L);
+        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L, null);
         await(() -> logged.list.stream().anyMatch(e -> e.getLevel() == Level.ERROR), "the failure line");
 
         for (ILoggingEvent event : logged.list) {
@@ -149,7 +149,8 @@ class PasswordResetMailerTest {
     }
 
     @Test
-    @DisplayName("the link this mailer EMITS is <frontend>/reset-password?token=... - that the proxy "
+    @DisplayName("the link this mailer EMITS for an English reader is <frontend>/reset-password?token=... "
+            + "- that the proxy "
             + "resolves that path is the other half of the contract, pinned in "
             + "frontend/__tests__/proxy.localeRequiredPrefixes.test.ts")
     void linkPointsAtTheResetPage() {
@@ -159,7 +160,7 @@ class PasswordResetMailerTest {
             return null;
         }).when(mailSender).send(any(MimeMessage.class));
 
-        mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60);
+        mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, null);
 
         assertThat(body.get()).contains("https://install.example.com/reset-password?token=tok-123");
     }
@@ -174,7 +175,7 @@ class PasswordResetMailerTest {
             return null;
         }).when(mailSender).send(any(MimeMessage.class));
 
-        mailer.sendResetEmail("owner@example.com", "<b>Ada</b>", "tok-123", 60);
+        mailer.sendResetEmail("owner@example.com", "<b>Ada</b>", "tok-123", 60, null);
 
         // Measured gap: replacing sanitize() with the identity function left every
         // test green, because the only assertion on it checked that the PLAIN part
@@ -187,14 +188,14 @@ class PasswordResetMailerTest {
             + "pool that will not run it")
     void dispatchAfterShutdownIsReported() throws Exception {
         CountDownLatch sent = latchOnSend();
-        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L);
+        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L, null);
         assertThat(sent.await(5, TimeUnit.SECONDS)).isTrue();
         await(() -> mailer.unsentCount() == 0, "the first send to finish");
 
         mailer.shutdown();
         logged.list.clear();
 
-        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L);
+        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L, null);
 
         // Replace shutdown()'s body with `return` and this dispatch is accepted
         // instead, which is how the drain and its report went unverified.
@@ -215,7 +216,7 @@ class PasswordResetMailerTest {
             return null;
         }).when(mailSender).send(any(MimeMessage.class));
 
-        mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60);
+        mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, null);
 
         // Measured gap: replacing setTo(email) with a hard-coded third party left
         // 10 tests green. `email` and `displayName` are adjacent String
@@ -245,18 +246,45 @@ class PasswordResetMailerTest {
             return null;
         }).when(mailSender).send(any(MimeMessage.class));
 
-        mailer.sendResetEmail("owner@example.com", "{{URL}}", "tok-123", 60);
+        mailer.sendResetEmail("owner@example.com", "{{URL}}", "tok-123", 60, null);
 
         // The HTML part ONLY. Reading the whole message made this pass either
-        // way: the plain-text part interpolates the name with String.format, so
-        // the literal marker is in it regardless of the order, and the assertion
-        // was being satisfied by the wrong half of the message.
+        // way: the plain-text part carries the name verbatim, so the literal
+        // marker is in it regardless, and the assertion was being satisfied by
+        // the wrong half of the message.
         //
-        // In the HTML part the marker survives only if the template's own
-        // {{URL}} was substituted BEFORE the name was inserted. Reverse the
-        // order and the injected marker is expanded too, so it disappears.
+        // The PROPERTY is that an injected marker cannot expand. It used to hold
+        // by ordering alone (the template's own {{URL}} was substituted first);
+        // since the shared shell escapes "{{" it holds structurally, in every
+        // slot and whatever the substitution order. Asserted as the property
+        // rather than as one spelling of it, so the stronger mechanism does not
+        // read as a regression: the braces reach the reader either literally or
+        // as their entity.
         String html = htmlPart(sentMessage.get());
-        assertThat(html).contains("{{URL}}");
+        // ONE spelling, the reachable one. `BrandedMail.escape` rewrites "{{" and leaves "}}"
+        // alone, so of the three alternatives an earlier version accepted, two could never
+        // occur: the tolerance read as care and pinned nothing. (`doesNotContain("{{URL}}=")`
+        // went with them - no code path emits that in either outcome, so it passed whether the
+        // marker had expanded or not.)
+        assertThat(html).contains("&#123;&#123;URL}}");
+
+        // And the injected name added NO copy of the link. Compared against the same mail sent to
+        // a harmless name rather than against a fixed number: the template legitimately prints
+        // the URL more than once (the button, and the pasteable fallback for a client that
+        // strips it), and a hard-coded count turns every such change into a false injection
+        // report - which is exactly what it did the day the fallback came back.
+        mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, null);
+        int benign = countLink(htmlPart(sentMessage.get()));
+
+        assertThat(countLink(html))
+                .as("the injected marker must not have expanded into an extra copy of the link")
+                .isEqualTo(benign);
+    }
+
+    /** How many times the reset URL appears in one rendering. */
+    private static int countLink(String html) {
+        return html.split(java.util.regex.Pattern.quote(
+                "https://install.example.com/reset-password?token=tok-123"), -1).length - 1;
     }
 
     @Test
@@ -272,7 +300,7 @@ class PasswordResetMailerTest {
         }).when(mailSender).send(any(MimeMessage.class));
 
         mailer.setDrainSecondsForTest(1);
-        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L);
+        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L, null);
         assertThat(inside.await(5, TimeUnit.SECONDS)).isTrue();
         logged.list.clear();
 
@@ -310,7 +338,7 @@ class PasswordResetMailerTest {
                 Thread.onSpinWait();
             }
         });
-        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L);
+        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L, null);
         assertThat(inside.await(5, TimeUnit.SECONDS)).isTrue();
         logged.list.clear();
 
@@ -368,7 +396,6 @@ class PasswordResetMailerTest {
         return null;
     }
 
-
     @Test
     @DisplayName("the plain-text part shows the name as typed: escaping is for the HTML part only")
     void plainTextIsNotHtmlEscaped() {
@@ -378,7 +405,7 @@ class PasswordResetMailerTest {
             return null;
         }).when(mailSender).send(any(MimeMessage.class));
 
-        mailer.sendResetEmail("owner@example.com", "Ben & Co", "tok-123", 60);
+        mailer.sendResetEmail("owner@example.com", "Ben & Co", "tok-123", 60, null);
 
         // The HTML part still escapes it, so both forms are present; what must
         // NOT happen is the reader seeing "Ben &amp; Co" as their name.
@@ -412,8 +439,8 @@ class PasswordResetMailerTest {
             return null;
         }).when(mailSender).send(any(MimeMessage.class));
 
-        mailer.dispatchResetEmail("a@example.com", "A", TOKEN, 60, 1L);
-        mailer.dispatchResetEmail("b@example.com", "B", TOKEN, 60, 2L);
+        mailer.dispatchResetEmail("a@example.com", "A", TOKEN, 60, 1L, null);
+        mailer.dispatchResetEmail("b@example.com", "B", TOKEN, 60, 2L, null);
 
         // With corePoolSize 0 this would deadlock the assertion: ThreadPoolExecutor
         // offers to the QUEUE before starting a second thread, so the pool would be
@@ -436,7 +463,7 @@ class PasswordResetMailerTest {
         }).when(mailSender).send(any(MimeMessage.class));
 
         assertThat(mailer.unsentCount()).isZero();
-        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L);
+        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L, null);
         assertThat(inside.await(5, TimeUnit.SECONDS)).isTrue();
 
         // In flight, not queued. shutdownNow() would not see this one, which is
@@ -460,7 +487,7 @@ class PasswordResetMailerTest {
         // Base64url needs no encoding today, which is exactly why dropping the
         // encode() call broke nothing measurable. This pins it against the change
         // of alphabet its comment is there for.
-        mailer.sendResetEmail("owner@example.com", "Ada", "a+b/c=d&e", 60);
+        mailer.sendResetEmail("owner@example.com", "Ada", "a+b/c=d&e", 60, null);
 
         String sent = body.get();
         assertThat(sent).contains("token=a%2Bb%2Fc%3Dd%26e");
@@ -474,5 +501,192 @@ class PasswordResetMailerTest {
             Thread.sleep(10);
         }
         throw new AssertionError("timed out waiting for " + what);
+    }
+
+    /* ------------------------------------------------------------------ *
+     * The language the mail is written in.
+     *
+     * Untested until now, on the one mail whose reader cannot get help from
+     * inside the product: they are locked out, so an e-mail they cannot read
+     * is the end of the road. Every sibling mailer got this coverage when it
+     * was translated; this one kept a four-argument constructor in its setUp,
+     * which left the resolver null in all 20 tests, so the whole feature was
+     * exercised only on its English fallback.
+     * ------------------------------------------------------------------ */
+
+    /** The mail this send produced, both parts, as one string. */
+    private String captureBody(Runnable send) {
+        AtomicReference<MimeMessage> sent = new AtomicReference<>();
+        doAnswer(invocation -> {
+            sent.set(invocation.getArgument(0));
+            return null;
+        }).when(mailSender).send(any(MimeMessage.class));
+        send.run();
+        return readAllText(sent.get());
+    }
+
+    /** A resolver that answers {@code locale} for any address. */
+    private void resolverAnswers(String locale) {
+        com.apimarketplace.auth.service.mail.MailLocaleResolver resolver =
+                mock(com.apimarketplace.auth.service.mail.MailLocaleResolver.class);
+        when(resolver.forEmail(any())).thenReturn(locale);
+        mailer.setMailLocales(resolver);
+    }
+
+    @Test
+    @DisplayName("the mail is written in the language the CALLER supplies, subject and body alike")
+    void writtenInTheCallerSuppliedLanguage() {
+        String body = captureBody(() ->
+                mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, "fr"));
+
+        // The action, the expiry and the reassurance: one from each part of the mail, so a
+        // translation applied to the heading alone does not pass.
+        assertThat(body).contains("Choisir un nouveau mot de passe");
+        assertThat(body).contains("60 minutes");
+        assertThat(body).contains("Votre mot de passe n");
+        assertThat(body).doesNotContain("Choose a new password");
+    }
+
+    @Test
+    @DisplayName("the SUBJECT is translated too, which is the only part a locked-out reader sees "
+            + "before deciding to open it")
+    void subjectIsTranslated() throws Exception {
+        AtomicReference<MimeMessage> sent = new AtomicReference<>();
+        doAnswer(invocation -> {
+            sent.set(invocation.getArgument(0));
+            return null;
+        }).when(mailSender).send(any(MimeMessage.class));
+
+        mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, "de");
+
+        assertThat(sent.get().getSubject()).isEqualTo("Setzen Sie Ihr LiveContext-Passwort zur\u00fcck");
+    }
+
+    @Test
+    @DisplayName("without a supplied language it asks the resolver, which is all an address-only "
+            + "caller can do")
+    void fallsBackToTheAddressLookup() {
+        resolverAnswers("es");
+
+        String body = captureBody(() ->
+                mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, null));
+
+        assertThat(body).contains("Elegir una contrase");
+    }
+
+    @Test
+    @DisplayName("a supplied language WINS over the address lookup, because the caller read it "
+            + "off the account and the lookup can only guess")
+    void suppliedLanguageBeatsTheLookup() {
+        // The lookup is a second query for something the caller already has, and it can fail on
+        // its own (an unreachable database), in which case the resolver answers English. The
+        // caller holding the row knows better, so it has to win - not merely be consulted.
+        resolverAnswers("en");
+
+        String body = captureBody(() ->
+                mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, "fr"));
+
+        assertThat(body).contains("Choisir un nouveau mot de passe");
+        assertThat(body).doesNotContain("Choose a new password");
+    }
+
+    @Test
+    @DisplayName("a blank supplied language is treated as ABSENT, not as a locale, so an empty "
+            + "column does not silently pin English over a known preference")
+    void blankSuppliedLanguageFallsBackToTheLookup() {
+        resolverAnswers("fr");
+
+        String body = captureBody(() ->
+                mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, "   "));
+
+        assertThat(body).contains("Choisir un nouveau mot de passe");
+    }
+
+    @Test
+    @DisplayName("a language nothing translates falls back to English rather than emitting raw "
+            + "catalog keys")
+    void unknownLanguageFallsBackToEnglish() {
+        String body = captureBody(() ->
+                mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, "kl"));
+
+        assertThat(body).contains("Choose a new password");
+        assertThat(body).doesNotContain("reset.action");
+    }
+
+    @Test
+    @DisplayName("with no resolver wired at all the mail still goes out, in English")
+    void noResolverStillSends() {
+        // The pool thread is detached from any request, so a NullPointerException here would be
+        // a mail that never arrives and a person who stays locked out, with only a stack trace.
+        String body = captureBody(() ->
+                mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, null));
+
+        assertThat(body).contains("Choose a new password");
+    }
+
+    @Test
+    @DisplayName("the link is ALSO printed as pasteable text, so a client that strips the button "
+            + "still leaves a way in")
+    void carriesAPasteableLink() {
+        // The button is an <a>: a client that strips HTML, a gateway that rewrites links, or a
+        // reader on the text alternative is left with nothing. The template this mail replaced
+        // printed the URL in its footer for that reason, and the invitation mail still does; this
+        // one lost it in the move to the shared shell, silently, because no test named it.
+        String body = captureBody(() ->
+                mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, "en"));
+
+        assertThat(body).contains("copy and paste this link");
+        assertThat(body).contains("https://install.example.com/reset-password?token=tok-123");
+    }
+
+    @Test
+    @DisplayName("the pasteable link is translated with the rest of the mail")
+    void pasteableLinkIsTranslated() {
+        String body = captureBody(() ->
+                mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, "fr"));
+
+        assertThat(body).contains("Si le bouton ne fonctionne pas");
+    }
+
+    @Test
+    @DisplayName("the language travels through the DETACHED dispatch, which is the only path "
+            + "production ever takes")
+    void languageSurvivesTheDispatch() throws Exception {
+        AtomicReference<MimeMessage> sent = new AtomicReference<>();
+        CountDownLatch done = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            sent.set(invocation.getArgument(0));
+            done.countDown();
+            return null;
+        }).when(mailSender).send(any(MimeMessage.class));
+
+        mailer.dispatchResetEmail("owner@example.com", "Ada", TOKEN, 60, 7L, "fr");
+
+        assertThat(done.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(readAllText(sent.get())).contains("Choisir un nouveau mot de passe");
+    }
+
+    @Test
+    @DisplayName("no catalog placeholder survives into the mail in any language")
+    void noUnsubstitutedPlaceholders() {
+        // {minutes} and {url} are named placeholders the catalog substitutes by hand. A key
+        // whose translation spells one of them differently leaves the brace form on screen, and
+        // only a per-language check can see it.
+        for (String locale : java.util.List.of("en", "fr", "de", "es", "pt", "zh")) {
+            String body = captureBody(() ->
+                    mailer.sendResetEmail("owner@example.com", "Ada", "tok-123", 60, locale));
+
+            assertThat(body).as("mail in %s", locale)
+                    .doesNotContain("{minutes}")
+                    .doesNotContain("{url}")
+                    .doesNotContain("{name}");
+            // The link carries the READER's language. English is unprefixed (next-intl's default
+            // locale has no segment), every other language gets one, and pt/zh use the app's own
+            // two-letter codes here rather than Keycloak's pt-BR / zh-CN - this is a frontend
+            // route, not a Keycloak page.
+            String prefix = "en".equals(locale) ? "" : "/" + locale;
+            assertThat(body).as("link in %s", locale)
+                    .contains("https://install.example.com" + prefix + "/reset-password?token=tok-123");
+        }
     }
 }

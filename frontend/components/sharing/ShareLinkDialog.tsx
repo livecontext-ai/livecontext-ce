@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Copy, Check, RefreshCw, ExternalLink, Globe, AlertCircle } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { Button } from '@/components/ui/button';
 import { sharingService, type SharedLink } from '@/lib/api/sharing.service';
 import { conversationSharingService } from '@/lib/api/conversation-sharing.service';
@@ -30,6 +31,14 @@ export function ShareLinkDialog({
   resourceName,
 }: ShareLinkDialogProps) {
   const t = useTranslations('sharing');
+  const tCommon = useTranslations('common');
+  // Read through a ref by checkExistingLink: that callback drives the open effect, and a
+  // translator in its deps re-ran the check on every render, wiping any error just shown.
+  const tRef = useRef(t);
+  tRef.current = t;
+  // Creating, toggling or re-keying a share link is a workspace write: a read-only VIEWER
+  // can copy an existing link, nothing else.
+  const canMutate = useCanMutateInCurrentOrg();
 
   const [link, setLink] = useState<SharedLink | null>(null);
   const [loading, setLoading] = useState(false);
@@ -71,16 +80,23 @@ export function ShareLinkDialog({
         setPhase('confirm');
       }
     } catch {
-      setError(t('errorLoadingLink'));
+      setError(tRef.current('errorLoadingLink'));
       setPhase('confirm');
     } finally {
       setLoading(false);
     }
-  }, [resourceId, resourceType, resourceToken, t]);
+  }, [resourceId, resourceType, resourceToken]);
 
   const handleConfirmShare = useCallback(async () => {
+    if (!canMutate) {
+      setError(tCommon('viewerReadOnly'));
+      return;
+    }
     setLoading(true);
     setError(null);
+    // Set once conversation sharing is switched on, so a failed link creation can switch it
+    // back off: never leave a conversation publicly shared with no link to manage it.
+    let enabledConversation = false;
     try {
       let actualResourceToken = resourceToken;
 
@@ -90,6 +106,7 @@ export function ShareLinkDialog({
           shareMode: 'read',
           memoryEnabled: true,
         });
+        enabledConversation = true;
         if (conv.shareToken) {
           actualResourceToken = conv.shareToken;
         }
@@ -106,12 +123,17 @@ export function ShareLinkDialog({
       });
       setLink(created);
       setPhase('shared');
-    } catch {
-      setError(t('errorLoadingLink'));
+    } catch (err) {
+      if (enabledConversation) {
+        await conversationSharingService.disableSharing(resourceToken).catch(() => {});
+      }
+      setError((err as { status?: number } | null)?.status === 403
+        ? tCommon('viewerReadOnly')
+        : t('errorLoadingLink'));
     } finally {
       setLoading(false);
     }
-  }, [resourceId, resourceType, resourceToken, resourceName, t]);
+  }, [resourceId, resourceType, resourceToken, resourceName, t, tCommon, canMutate]);
 
   useEffect(() => {
     if (open) {
@@ -212,7 +234,8 @@ export function ShareLinkDialog({
         </Button>
         <Button
           onClick={handleConfirmShare}
-          disabled={loading}
+          disabled={loading || !canMutate}
+          title={canMutate ? undefined : tCommon('viewerReadOnly')}
           className="flex-1"
         >
           {loading ? (
@@ -329,6 +352,8 @@ export function ShareLinkDialog({
                 </span>
                 <button
                   onClick={handleToggleActive}
+                  disabled={!canMutate}
+                  title={canMutate ? undefined : tCommon('viewerReadOnly')}
                   className={`text-xs px-2.5 py-1 rounded-lg transition-colors ${
                     link.isActive
                       ? 'text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20'
@@ -344,6 +369,8 @@ export function ShareLinkDialog({
             <div className="pt-4 border-t border-theme">
               <button
                 onClick={handleRegenerate}
+                disabled={!canMutate}
+                title={canMutate ? undefined : tCommon('viewerReadOnly')}
                 className="flex items-center gap-1.5 text-xs text-theme-secondary hover:text-theme-primary transition-colors"
               >
                 <RefreshCw className="h-3 w-3" />

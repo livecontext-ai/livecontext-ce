@@ -364,7 +364,8 @@ public class WorkflowExecutionController {
             @PathVariable String workflowId,
             @PathVariable String runId,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
             logger.info("Starting workflow run: workflowId={}, runId={}, userId={}", workflowId, runId, userId);
 
@@ -390,6 +391,14 @@ public class WorkflowExecutionController {
                         runId, userId, orgId);
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(responseFactory.createFailureResponse("Execution not found"));
+            }
+
+            // Starting a PENDING run executes the workflow: same gate as execute itself
+            // (VIEWER role, then the member deny-list on the run's workflow).
+            String denial = RunWriteGate.denial(orgAccessGuard, runEntity, userId, orgId, orgRole, "start");
+            if (denial != null) {
+                return ResponseEntity.status(RunWriteGate.statusFor(denial))
+                    .body(responseFactory.createFailureResponse(denial));
             }
 
             // Reconstruct execution state from DB (no in-memory cache)

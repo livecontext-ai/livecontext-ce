@@ -11,6 +11,7 @@ import { EpochStatusIcon } from '@/components/workflow/EpochStatusIcon';
 import {
   formatCompactDuration,
   epochDisplayDurationMs,
+  epochTone,
   isEpochLive,
   resolveEpochBadgeStatus,
   type EpochTimestamp,
@@ -105,9 +106,8 @@ function EpochRow({ index, style, entries, durations, maxDuration, selectedEpoch
             <div
               className={`h-full rounded-full transition-all ${
                 isRunning ? 'bg-blue-500 animate-pulse'
-                  : badgeStatus === 'FAILED' ? (isSelected ? 'bg-red-500' : 'bg-red-500/70')
-                  : badgeStatus === 'CANCELLED' || badgeStatus === 'STOPPED' || badgeStatus === 'TIMEOUT'
-                    ? (isSelected ? 'bg-gray-400' : 'bg-gray-400/70')
+                  : epochTone(badgeStatus) === 'failed' ? (isSelected ? 'bg-red-500' : 'bg-red-500/70')
+                  : epochTone(badgeStatus) === 'stopped' ? (isSelected ? 'bg-gray-400' : 'bg-gray-400/70')
                   : isSelected ? 'bg-emerald-500' : 'bg-emerald-500/70'
               }`}
               style={{ width: `${barPct}%` }}

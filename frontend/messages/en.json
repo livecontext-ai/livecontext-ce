@@ -121,6 +121,11 @@
       "cloudHint": "Rewards land on your cloud account ({username}).",
       "loading": "Loading your referral details..."
     },
+    "inline": {
+      "toggle": "Have a code?",
+      "pending": "Code {code} is waiting: apply it",
+      "apply": "Apply"
+    },
     "redeem": {
       "title": "Redeem a code",
       "subtitle": "Have a referral or promo code? Enter it here.",
@@ -129,6 +134,15 @@
       "redeeming": "Redeeming...",
       "successGranted": "Code redeemed. Your benefit is now active.",
       "successPending": "Code applied. Your reward unlocks when your subscription is confirmed.",
+      "successCredits": "Code redeemed: {credits} credits added to your balance.",
+      "successPlan": "Code redeemed: your account is on {plan} until {until}.",
+      "successCreditsAndPlan": "Code redeemed: {credits} credits added, and your account is on {plan} until {until}.",
+      "pendingTitle": "Code {code}",
+      "dismiss": "Dismiss",
+      "signedOutTitle": "Claim your code",
+      "signedOutBody": "Sign in or create a free account. Your code is applied automatically once you are in.",
+      "signedOutBodyWithCode": "Sign in or create a free account. The code {code} is applied automatically once you are in.",
+      "signedOutCta": "Sign in or create an account",
       "errors": {
         "invalidCode": "This code doesn't exist.",
         "notRedeemable": "This code isn't available right now.",
@@ -136,6 +150,11 @@
         "exhausted": "This code has reached its redemption limit.",
         "selfReferral": "You can't redeem your own referral code.",
         "alreadyPaid": "This code is for new subscriptions only.",
+        "alreadyAttributed": "Your account already uses a partner code.",
+        "emailNotVerified": "Verify your email address to use this code.",
+        "notNewAccount": "This code is for new accounts.",
+        "nothingToGrant": "Your account already has this plan or a better one.",
+        "retry": "Could not redeem this code right now. Try again.",
         "cloudLinkRequired": "Connect your cloud account to redeem a code.",
         "generic": "Could not redeem this code."
       }
@@ -233,6 +252,7 @@
     "subtitle": "Organizations that have invited you to join. Accept to become a member.",
     "loadError": "Failed to load invitations.",
     "acceptError": "Could not accept the invitation. The link may be expired or already used.",
+    "emailNotVerified": "Verify your email address before accepting or declining an invitation.",
     "declineError": "Could not decline the invitation. It may be expired or already used.",
     "signInRequired": "Please sign in to see your pending invitations.",
     "emptyState": "You have no pending invitations.",
@@ -277,9 +297,28 @@
     "passwordTooShort": "Password must be at least 8 characters",
     "passwordMismatch": "Passwords do not match",
     "invalidTitle": "Invitation not available",
-    "invalidBody": "This invitation link is invalid, expired, or has already been used."
+    "invalidBody": "This invitation link is invalid, expired, or has already been used.",
+    "confirmTitle": "Join {org}?",
+    "confirmTitleGeneric": "Join this workspace?",
+    "confirmBody": "You have been invited to join this workspace. Review the invitation, then accept or decline it.",
+    "workspaceLabel": "Workspace",
+    "roleLabel": "Role",
+    "invitedByLabel": "Invited by",
+    "acceptCta": "Accept invitation",
+    "declineCta": "Decline",
+    "decliningTitle": "Declining the invitation...",
+    "declinedTitle": "Invitation declined",
+    "declinedBody": "You did not join this workspace. You can close this page.",
+    "declineErrorTitle": "Could not decline this invitation",
+    "declineFallbackError": "Failed to decline the invitation. The link may be expired or already used.",
+    "emailNotVerifiedTitle": "Verify your email first",
+    "emailNotVerifiedBody": "Your email address is not verified yet. Verify it, then open this invitation link again to accept or decline it.",
+    "errorWrongAccount": "This invitation was sent to a different email address. Sign in with the invited address to answer it.",
+    "errorGeneric": "The invitation could not be accepted. It may have expired or already been used, or the workspace may be full. Ask the person who invited you for a new link."
   },
   "common": {
+    "viewerReadOnlyTitle": "Read-only access",
+    "viewerReadOnly": "Your role in this workspace is Viewer, which is read-only. Ask a workspace owner or admin if you need to make changes.",
     "infoAbout": "About {label}",
     "addToFavorites": "Add to favorites",
     "removeFromFavorites": "Remove from favorites",
@@ -951,6 +990,7 @@
     "placeholder": "Type a message...",
     "placeholderOrbi": "Message Orbi...",
     "orbiPoke": "Poke Orbi",
+    "scrollToBottom": "Scroll to the latest message",
     "send": "Send",
     "stop": "Stop",
     "queue": {
@@ -1335,6 +1375,14 @@
       "config": "Configuration"
     },
     "runInfo": {
+      "epochNav": {
+        "browse": "Browse epochs",
+        "previous": "Previous epoch",
+        "next": "Next epoch",
+        "nextFailure": "Next failed epoch",
+        "timeline": "Epoch timeline",
+        "summary": "{ok} succeeded · {failed} failed{running, plural, =0 {} other { · # running}}{stopped, plural, =0 {} other { · # stopped}}"
+      },
       "costOfThisRun": "Cost of this run",
       "costTooltip": "Total cost of this run across all epochs",
       "budgetReached": "Budget reached, no new run will start",
@@ -1354,7 +1402,6 @@
       "window": "Epochs shown",
       "windowOption": "Last {count}",
       "windowOf": "Last {shown} of {total, plural, one {# epoch} other {# epochs}}",
-      "refresh": "Refresh",
       "loading": "Loading analysis",
       "error": "Could not load the analysis.",
       "retry": "Retry",
@@ -1406,15 +1453,22 @@
       },
       "compare": {
         "title": "Compare two epochs",
-        "hint": "Click a bar or a cell to pick the epoch to compare.",
+        "hint": "Click a bar or a cell to pick the epoch to compare, or choose both epochs in the table header.",
         "reference": "Reference",
+        "chooseReference": "Reference epoch",
+        "chooseTarget": "Compared epoch",
         "node": "Node",
         "epoch": "Epoch #{epoch}",
-        "showOnCanvas": "Show epoch {epoch} on the canvas",
         "total": "Total",
         "notRun": "Did not run",
         "needTwo": "At least two epochs are needed to compare."
       }
+    },
+    "runViews": {
+      "title": "Look at this run",
+      "choose": "Choose what to show about this run",
+      "analysisHint": "Trends, failures and comparison of epochs",
+      "logsHint": "Inputs and outputs of each node"
     }
   },
   "workflowRelations": {
@@ -5620,7 +5674,17 @@
         "nodesAll": "Every node and integration, without restriction",
         "nodesPublishingTooltip": "Publish straight from a workflow to the social and video platforms in the catalogue, YouTube, Instagram, TikTok, X and LinkedIn among them, with more added over time.",
         "ownLlmKey": "Run on your own LLM API keys",
-        "ownLlmKeyTooltip": "Save your OpenAI, Anthropic, Google, Mistral or DeepSeek key and your agents run on it: the provider bills you the tokens and LiveContext charges a flat fee per agent turn. Starts at Pro on cloud."
+        "ownLlmKeyTooltip": "Save your OpenAI, Anthropic, Google, Mistral or DeepSeek key and your agents run on it: the provider bills you the tokens and LiveContext charges a flat fee per agent turn. Starts at Pro on cloud.",
+        "agentToolkit": "Agents with memory, credit caps and approvals",
+        "agentToolkitTooltip": "Every agent remembers across runs, can be held to a hard credit budget it cannot exceed, and can pause for a human approval. Sub-workflows, the agenda of every schedule and agent run, and the image and video studio (billed in credits) come with every plan too.",
+        "chatChannels": "Agents and approvals in your chat apps",
+        "chatChannelsTooltip": "Connect Telegram, Slack, Discord, WhatsApp or Microsoft Teams: an agent asks its questions there, and you approve or refuse a sensitive action in one tap, even when nobody is watching the app.",
+        "channelAlerts": "Alerts in the app and in your chat",
+        "channelAlertsTooltip": "A failed workflow, an assigned task or a low credit balance reaches the in-app bell and the chat channel you connected, on every plan. Email delivery of the same alerts is the Email alerts line.",
+        "mcpServer": "Built-in MCP server",
+        "mcpServerTooltip": "Use your workflows, agents and integrations from Claude Code, Claude Desktop, Cursor or any MCP client that speaks Streamable HTTP, with a personal API key. On cloud and self-hosted alike.",
+        "twoFactor": "Two-factor authentication (2FA)",
+        "twoFactorTooltip": "Protect your cloud account with an authenticator app, with one-time recovery codes in case you lose your phone. A password change can sign you out of every other device."
       }
     },
     "compare": {
@@ -5652,7 +5716,7 @@
         "workspaces": "Workspaces",
         "analytics": "Analytics",
         "support": "Support",
-        "creditsTooltip": "About **{exchangeCredits} credits** for a short exchange with a configured agent, its whole context included, on a lightweight model such as {basisModel}. An estimate from real usage, not a cap; a top-tier model costs more."
+        "creditsTooltip": "**{nodeCredits} credit** per node a workflow run executes, on every plan, and about **{exchangeCredits} credits** for a short exchange with a configured agent, its whole context included, on a lightweight model such as {basisModel}. The agent figure is an estimate from real usage, not a cap; a top-tier model costs more."
       },
       "values": {
         "creditsFree": "1,000 / month",
@@ -5742,7 +5806,7 @@
       },
       "conversationCost": {
         "question": "How many conversations do my credits cover?",
-        "answer": "You are billed for the tokens a model reads and writes, never per message, so it depends on how much work you ask for. A plain question and answer, with no tool involved, costs about {simpleCredits} credits. A conversation in which an agent builds a workflow for you, around 5 turns and 45 tool calls, costs about {agentCredits}, and a longer build costs proportionally more. A single classification step inside a running workflow is about {classifyCredits}. Priced on a lightweight model such as {basisModel}; a top-tier model costs more.",
+        "answer": "You are billed for the tokens a model reads and writes, never per message, so it depends on how much work you ask for. A plain question and answer, with no tool involved, costs about {simpleCredits} credits. A conversation in which an agent builds a workflow for you, around 5 turns and 45 tool calls, costs about {agentCredits}, and a longer build costs proportionally more. A single classification step inside a running workflow is about {classifyCredits}. Priced on a lightweight model such as {basisModel}; a top-tier model costs more. Workflow runs also cost a flat {nodeCredits} credit per node executed, on every plan.",
         "examplesCaption": "What the {credits} credits every paid plan starts with buy:",
         "examples": {
           "simpleChat": {
@@ -6150,6 +6214,7 @@
       "marketplacePurchase": "Marketplace Purchase",
       "paygTopup": "Credit Top-Up",
       "rewardReferral": "Referral Reward",
+      "rewardCode": "Code Credits",
       "rewardClawback": "Reward Reversed",
       "manualAdjustment": "Manual Adjustment",
       "planGrant": "Plan Grant",
@@ -6619,8 +6684,11 @@
       "sidePanelBottomModeFull": "Full width (under the sidebar)",
       "sidePanelBottomModeContent": "Content width",
       "timezone": "Timezone",
-      "timezoneDescription": "Set your local timezone",
+      "timezoneDescription": "Used for every date shown in the app, and for the emails you receive.",
       "selectTimezone": "Select timezone",
+      "timezoneDevice": "Follow this device ({zone})",
+      "timezoneNow": "Currently {time}.",
+      "timezoneSaveError": "Could not save the time zone. Please try again.",
       "creditLimit": "Default Credit Limit",
       "creditLimitDescription": "Number of credits usable without confirmation",
       "chatDefaultsTitle": "Chat defaults",
@@ -6869,8 +6937,6 @@
         "certificate": "X.509 signing certificate",
         "certificatePlaceholder": "Paste the PEM certificate from your identity provider",
         "certificateHelp": "Leave this blank when editing to keep the current certificate.",
-        "hideOnLoginPage": "Hide from the global login page",
-        "hideOnLoginPageHelp": "Users sign in through this workspace SSO URL instead of seeing a tenant-specific button on the shared login page.",
         "serviceProviderTitle": "Service provider details",
         "serviceProviderEntityId": "SP entity ID",
         "assertionConsumerServiceUrl": "ACS URL",
@@ -11065,9 +11131,9 @@
     "dismiss": "Got it",
     "learnMore": "See all updates",
     "latest": {
-      "title": "Your agents can reach you in your chat app",
-      "body": "Agents, approval steps and unattended runs no longer wait on a card nobody sees. Connect Telegram, Slack, Discord, WhatsApp or Microsoft Teams on the Channels page of your settings, and a question or an approval arrives in the chat you already read: you answer from there and the run continues. Alerts can leave the app too, on a channel or by email, in your language (on the cloud, email alerts start with the Starter plan). A channel can be connected by hand, without the assistant and without spending credits.",
-      "mediaAlt": "Two icons side by side: a chat bubble, captioned as chat channels for Telegram, Slack, Discord, WhatsApp and Teams, and a bell, captioned as alerts by email or on a channel"
+      "title": "Browse a run epoch by epoch, in your own time zone",
+      "body": "On the canvas, the run pill now unfolds a timeline of every epoch: step through them, jump to the next failure, and the canvas, the Analysis tab and the Logs all follow the epoch you pick. Analysis compares any two epochs side by side. The time zone and language set in your account settings now drive every date in the app and every email you receive, sign-in pages included. And the layout wand now balances the branches on both sides of a fork.",
+      "mediaAlt": "Two icons side by side: a row of bars of different heights, captioned as browsing a run epoch by epoch across the canvas, Analysis and Logs, and a clock, captioned as your time zone and language applied everywhere"
     }
   },
   "optionalComponents": {
@@ -12309,7 +12375,7 @@
         },
         "pricing": {
           "question": "How does pricing work?",
-          "answer": "There is a free tier with no credit card required. Paid plans are credit-based: you pick a credit tier and can cap the spend per agent with a hard budget it cannot exceed. The self-hosted Community Edition is free."
+          "answer": "There is a free tier with no credit card required. Every plan is credit-based, Free included: each node a workflow run executes costs 1 credit, and agents are billed on the tokens they use. Paid plans let you pick a credit tier and cap the spend per agent with a hard budget it cannot exceed. The self-hosted Community Edition is free."
         },
         "models": {
           "question": "Which AI models can I use?",
@@ -12385,7 +12451,7 @@
       },
       "meta": {
         "title": "LiveContext: The AI automation platform. Chat, workflows, agents, apps.",
-        "description": "Describe the job in chat and LiveContext builds the automation and its app in front of you, runs it on schedule, and lets you share the result as a link, a PDF or an export. Every step visible, budgets per agent, cloud or self-hosted."
+        "description": "Describe the job in chat: LiveContext builds the automation and its app, runs it on schedule and shares the result. Every step visible, cloud or self-hosted."
       },
       "hero": {
         "eyebrow": "The AI Automation platform",
@@ -15649,6 +15715,94 @@
       "description": "This install is linked to a LiveContext Cloud account that is not on a paid plan. Cloud models, web search and cloud integrations need one. Choose a plan on LiveContext Cloud and they work right away: the install stays linked.",
       "cta": "View cloud plans",
       "close": "Close"
+    }
+  },
+  "partnerProgram": {
+    "title": "Partner program",
+    "subtitle": "Creator codes to let a creator try the product, and partner codes with a revenue share for their audience.",
+    "selfHosted": {
+      "title": "Not available on a self-hosted install",
+      "body": "The partner program runs on the cloud edition."
+    },
+    "creator": {
+      "title": "Creator code",
+      "subtitle": "For the creator themselves: a complimentary plan and credits, single use by default.",
+      "submit": "Create creator code"
+    },
+    "partner": {
+      "title": "Partner code",
+      "subtitle": "For their audience: credits for every new user, and a share of what those users pay goes to the partner.",
+      "submit": "Create partner code"
+    },
+    "fields": {
+      "code": "Code",
+      "codeAuto": "Generated if empty",
+      "label": "Internal note",
+      "plan": "Complimentary plan",
+      "planNone": "None (credits only)",
+      "planDays": "Plan duration (days)",
+      "credits": "Credits",
+      "creditsHint": "Added once to the pay-as-you-go balance, never reset monthly.",
+      "maxUses": "Maximum uses",
+      "validDays": "Valid for (days)",
+      "validDaysHint": "0 = no end date.",
+      "partnerEmail": "Partner account email",
+      "partnerEmailHint": "The partner must have a LiveContext account. One partner code per account.",
+      "audienceCredits": "Credits for each new user",
+      "commissionPercent": "Commission (%)",
+      "commissionMonths": "Commission duration (months)",
+      "holdDays": "Hold before payable (days)",
+      "holdDaysHint": "Covers the refund window: a refunded payment cancels its commission.",
+      "partnerMaxUses": "Maximum sign-ups (optional)",
+      "partnerMaxUsesHint": "Empty = no limit. Bounds what a public link can hand out."
+    },
+    "list": {
+      "title": "Codes",
+      "loading": "Loading...",
+      "empty": "No creator or partner code yet.",
+      "code": "Code",
+      "benefit": "Benefit",
+      "redemptions": "Uses",
+      "commissions": "Commissions",
+      "actions": "Actions",
+      "kindPartner": "Partner",
+      "kindCreator": "Creator",
+      "inactive": "Disabled",
+      "validUntil": "Valid until {date}",
+      "partnerBenefit": "{credits} credits per new user, {percent}% for {months} months",
+      "creatorBenefitPlan": "{plan} for {days} days + {credits} credits",
+      "creatorBenefitCredits": "{credits} credits",
+      "usesOf": "{used} of {max}",
+      "payingCustomers": "{count, plural, one {# paying customer} other {# paying customers}}",
+      "payable": "Payable",
+      "onHold": "On hold",
+      "paid": "Paid",
+      "copyLink": "Copy link",
+      "activate": "Enable",
+      "deactivate": "Disable",
+      "markPaid": "Mark paid"
+    },
+    "toasts": {
+      "createdTitle": "Code created",
+      "failureTitle": "Action failed",
+      "copied": "Link copied",
+      "paidTitle": "Commissions settled",
+      "paidMessage": "{lines} lines marked paid ({amount})."
+    },
+    "errors": {
+      "adminOnly": "Only platform administrators can manage the partner program.",
+      "generic": "Something went wrong. Try again.",
+      "code_taken": "This code is already in use.",
+      "invalid_code_format": "A code uses 3 to 32 letters, digits, hyphens or underscores.",
+      "user_not_found": "No account with this email.",
+      "partner_already_has_code": "This partner already has a partner code.",
+      "invalid_values": "One of the values is out of range.",
+      "unsupported_plan": "This plan cannot be granted by a code.",
+      "empty_benefit": "A code must give a plan or credits.",
+      "missing_partner": "Enter the partner account email.",
+      "not_available_in_ce": "The partner program is not available on a self-hosted install.",
+      "code_generation_failed": "Could not generate a free code. Try again.",
+      "missing_body": "The request was empty."
     }
   }
 }

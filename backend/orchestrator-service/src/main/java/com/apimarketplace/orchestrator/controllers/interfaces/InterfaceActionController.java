@@ -40,15 +40,18 @@ public class InterfaceActionController {
     private final InterfaceActionService interfaceActionService;
     private final WorkflowRunRepository runRepository;
     private final InterfaceClient interfaceClient;
+    private final com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard;
 
     public InterfaceActionController(UnifiedSignalService signalService,
                                      InterfaceActionService interfaceActionService,
                                      WorkflowRunRepository runRepository,
-                                     InterfaceClient interfaceClient) {
+                                     InterfaceClient interfaceClient,
+                                     com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard) {
         this.signalService = signalService;
         this.interfaceActionService = interfaceActionService;
         this.runRepository = runRepository;
         this.interfaceClient = interfaceClient;
+        this.orgAccessGuard = orgAccessGuard;
     }
 
     /**
@@ -121,7 +124,8 @@ public class InterfaceActionController {
             @PathVariable String nodeId,
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         logger.info("[InterfaceAction] Fire action: runId={}, nodeId={}, userId={}", runId, nodeId, userId);
 
@@ -132,6 +136,17 @@ public class InterfaceActionController {
             logger.warn("[SCOPE] InterfaceAction.fireAction cross-tenant blocked: runId={} caller={} orgId={}",
                     runId, userId, orgId);
             return ResponseEntity.notFound().build();
+        }
+        // Firing an action drives the run (a mapped trigger or step executes with the
+        // owner's credentials), i.e. it runs the workflow: same RunWriteGate as every run
+        // write (VIEWER role, then the member deny-list on the run's workflow). Share-link
+        // visitors of a published app reach this endpoint under the owner's identity with no
+        // role header, so they are not refused.
+        String denial = com.apimarketplace.orchestrator.controllers.workflow.RunWriteGate.denial(
+                orgAccessGuard, runRepository.findByRunIdPublic(runId).orElse(null),
+                userId, orgId, orgRole, "fire interface actions on");
+        if (denial != null) {
+            return ResponseEntity.status(com.apimarketplace.orchestrator.controllers.workflow.RunWriteGate.statusFor(denial)).body(Map.of("error", denial));
         }
 
         String actionKey = body.get("actionKey") instanceof String ? (String) body.get("actionKey") : null;
@@ -282,5 +297,11 @@ public class InterfaceActionController {
             .toList();
 
         return ResponseEntity.ok(result);
+    }
+
+    /** Backward-compatible direct-call overload used by controller unit tests. */
+    public ResponseEntity<Map<String, Object>> fireAction(String runId, String nodeId,
+            Map<String, Object> body, String userId, String orgId) {
+        return fireAction(runId, nodeId, body, userId, orgId, null);
     }
 }

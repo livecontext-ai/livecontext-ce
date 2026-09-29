@@ -32,6 +32,35 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://livecontext.ai';
 // build with "Invalid segment configuration export". Keep the two in step.
 export const revalidate = 3600;
 
+/**
+ * An EMPTY list, and it is what makes the `revalidate` above take effect.
+ *
+ * <p>Without `generateStaticParams`, Next renders a dynamic segment on every
+ * request and ignores `revalidate`: production served every integration page
+ * with `Cache-Control: private, no-store` and rendered it from scratch each time.
+ * Returning `[]` pre-renders nothing at build (the gateway is not reachable
+ * from the builder, so a build-time list would be empty anyway) and caches each
+ * page on its first request, regenerated in the background after the window.
+ *
+ * <p>What caching changes, and why it is acceptable here. An unreachable catalog
+ * THROWS (see `fetchIntegration`), so it is never cached: a failed regeneration
+ * keeps serving the previous page. An unknown slug is a cached 404 for up to the
+ * window, so an integration imported after someone hit its URL shows up within
+ * the hour. Each cached entry is written to the pod's own disk (measured: ~370 KB
+ * for a real page, ~48 KB for a 404); slugs are shape-checked before any read
+ * (`isValidIntegrationSlug`), and the disk is the container's ephemeral one,
+ * emptied on every restart and deploy. The "related integrations" footer degrades to nothing on a gateway
+ * blip, and that degraded page can stay cached for one window; the page's own
+ * content is unaffected. The response carries `s-maxage`, but Cloudflare does not
+ * cache this site's HTML beyond the home page today (`cf-cache-status: DYNAMIC`),
+ * so the cache in question is each frontend pod's own. (`/u/[handle]` is NOT
+ * cached: its reader cannot tell an outage from a 404, and a profile made private
+ * must not stay pinned in a page cache.)
+ */
+export async function generateStaticParams(): Promise<{ slug: string }[]> {
+  return [];
+}
+
 /** How many other integrations the footer of this page links on to. */
 const RELATED_COUNT = 8;
 

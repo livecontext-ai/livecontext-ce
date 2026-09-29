@@ -617,6 +617,26 @@ class OrganizationServiceTest {
         }
 
         @Test
+        @DisplayName("a plan change re-syncs every owned workspace's SAML IdP (a downgrade below Team disables it)")
+        @SuppressWarnings("unchecked")
+        void planChangeResyncsWorkspaceSamlIdentityProviders() {
+            mockCap(3);
+            Organization personal = ws("personal", true, false);
+            Organization team = ws("team", false, false);
+            ownedOldestFirst(personal, team);
+            OrganizationSamlService samlService = mock(OrganizationSamlService.class);
+            org.springframework.beans.factory.ObjectProvider<OrganizationSamlService> provider =
+                    mock(org.springframework.beans.factory.ObjectProvider.class);
+            when(provider.getIfAvailable()).thenReturn(samlService);
+            ReflectionTestUtils.setField(organizationService, "organizationSamlServiceProvider", provider);
+
+            organizationService.reconcileWorkspacePauseState(OWNER);
+
+            verify(samlService).syncIdentityProviderEnabled(personal.getId());
+            verify(samlService).syncIdentityProviderEnabled(team.getId());
+        }
+
+        @Test
         @DisplayName("Downgrade to Starter (cap 1): keep personal, pause every non-personal")
         void downgradeToStarterPausesAllNonPersonal() {
             mockCap(1);

@@ -105,7 +105,7 @@ class EmbeddedAuthControllerTest {
         // Door is CLOSED, but the token resolves to a PENDING invitation for the
         // submitted email → the user is created and auto-joined.
         when(organizationMemberService.getInvitationInfo("good-token"))
-                .thenReturn(new InvitationInfo(true, "invitee@example.com", "Acme", OrganizationRole.MEMBER, false));
+                .thenReturn(new InvitationInfo(true, "invitee@example.com", "Acme", OrganizationRole.MEMBER, false, "Ada"));
         User user = stubRegisterReturnsUser(42L, "invitee@example.com");
 
         ResponseEntity<Map<String, Object>> response =
@@ -120,10 +120,10 @@ class EmbeddedAuthControllerTest {
     }
 
     @Test
-    @DisplayName("invite-link: token bypass tolerates a case-different email (equalsIgnoreCase)")
+    @DisplayName("invite-link: token bypass tolerates an ASCII case-different email")
     void validInvitationTokenBypassIsCaseInsensitiveOnEmail() {
         when(organizationMemberService.getInvitationInfo("good-token"))
-                .thenReturn(new InvitationInfo(true, "Invitee@Example.com", "Acme", OrganizationRole.MEMBER, false));
+                .thenReturn(new InvitationInfo(true, "Invitee@Example.com", "Acme", OrganizationRole.MEMBER, false, "Ada"));
         User user = stubRegisterReturnsUser(7L, "invitee@example.com");
 
         ResponseEntity<Map<String, Object>> response =
@@ -155,11 +155,28 @@ class EmbeddedAuthControllerTest {
     void mismatchedEmailTokenDoesNotBypassClosedDoor() {
         // The token is for someone-else@; the attacker submits their own address.
         when(organizationMemberService.getInvitationInfo("good-token"))
-                .thenReturn(new InvitationInfo(true, "someone-else@example.com", "Acme", OrganizationRole.MEMBER, false));
+                .thenReturn(new InvitationInfo(true, "someone-else@example.com", "Acme", OrganizationRole.MEMBER, false, "Ada"));
         when(installStateService.isRegistrationOpen()).thenReturn(false);
 
         ResponseEntity<Map<String, Object>> response =
                 controller.register(registerBody("attacker@example.com", "good-token"), request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getBody()).containsEntry("error", "registration_closed");
+        verify(passwordAuthService, never()).register(anyString(), anyString(), any(), any());
+        verify(organizationMemberService, never()).acceptInvitation(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("invite-link: a Unicode look-alike email (U+212A Kelvin sign for k) does NOT bypass a closed door")
+    void unicodeLookalikeEmailDoesNotBypassClosedDoor() {
+        // equalsIgnoreCase folds U+212A to k, so the old comparison let this address through.
+        when(organizationMemberService.getInvitationInfo("good-token"))
+                .thenReturn(new InvitationInfo(true, "kate@example.com", "Acme", OrganizationRole.MEMBER, false, "Ada"));
+        when(installStateService.isRegistrationOpen()).thenReturn(false);
+
+        ResponseEntity<Map<String, Object>> response =
+                controller.register(registerBody("\u212Aate@example.com", "good-token"), request);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(response.getBody()).containsEntry("error", "registration_closed");

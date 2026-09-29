@@ -741,7 +741,6 @@ class MonolithSecurityFilterTest {
         String wf = "22222222-2222-2222-2222-222222222222";
         String iface = "33333333-3333-3333-3333-333333333333";
         for (String path : new String[]{
-                "/api/publications/acquired",
                 "/api/publications/" + pub,
                 "/api/publications/" + pub + "/application-workflow",
                 "/api/publications/" + pub + "/reviews",
@@ -757,6 +756,9 @@ class MonolithSecurityFilterTest {
                 "/api/interfaces/" + iface,
                 "/api/interfaces/" + iface + "/render",
                 "/api/files/by-id/55555555-5555-5555-5555-555555555555/raw",
+                // Interface media streams from a short-lived signed link minted here (videos would
+                // otherwise be inlined as base64 and kill the page); same file scope as /raw.
+                "/api/files/by-id/55555555-5555-5555-5555-555555555555/signed-url",
                 "/api/users/42/avatar"}) {
             MonolithSecurityFilter filter = new MonolithSecurityFilter(
                     () -> null,
@@ -791,6 +793,10 @@ class MonolithSecurityFilterTest {
                 "/api/agents/" + id + "/webhook",
                 "/api/credentials/all",
                 "/api/publications/shared-links",
+                // The owner's acquired-apps list: it names every other app the owner has
+                // installed (with workflow ids), none of which the share link exposes.
+                "/api/publications/acquired",
+                "/api/publications/acquired/paged",
                 // Named siblings of the by-id interface route. /snapshots hands out the html,
                 // css and js of EVERY page of any run id in the owner's org, and /paged lists
                 // the owner's pages: both used to slip through the by-id branch, which is why

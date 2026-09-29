@@ -81,13 +81,13 @@ class HeaderSourcedOutputWiringTest {
         OutputProjector projector = mock(OutputProjector.class);
         ToolExecutionOrchestrator orchestrator = new ToolExecutionOrchestrator(projector);
         Map<String, String> headers = Map.of("etag", "e1");
-        when(projector.project(any(), eq(SCHEMA), any())).thenReturn(Map.of("etag", "e1"));
+        when(projector.project(any(), eq(SCHEMA), any(), eq(false))).thenReturn(Map.of("etag", "e1"));
 
         orchestrator.projectResult(Map.of(), SCHEMA, "sync", headers);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, String>> captor = ArgumentCaptor.forClass(Map.class);
-        verify(projector).project(any(), eq(SCHEMA), captor.capture());
+        verify(projector).project(any(), eq(SCHEMA), captor.capture(), eq(false));
         assertEquals(headers, captor.getValue(),
             "forwarding null here would reproduce the original bug one layer down");
     }
@@ -101,7 +101,7 @@ class HeaderSourcedOutputWiringTest {
 
         orchestrator.projectResult(Map.of(), SCHEMA, "upload", headers);
 
-        verify(projector).project(any(), eq(SCHEMA), eq(headers));
+        verify(projector).project(any(), eq(SCHEMA), eq(headers), eq(false));
     }
 
     /**
@@ -117,7 +117,7 @@ class HeaderSourcedOutputWiringTest {
 
         orchestrator.projectResult(Map.of("a", 1), SCHEMA, "sync");
 
-        verify(projector).project(any(), eq(SCHEMA), eq(null));
+        verify(projector).project(any(), eq(SCHEMA), eq(null), eq(false));
     }
 
     // ── the two hops together, with the real projector ────────────────────────────────────

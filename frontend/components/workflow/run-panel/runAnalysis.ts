@@ -108,8 +108,10 @@ export interface NodeRow {
   partials: number;
   /** Mean elapsed time over the epochs where the node succeeded; null when none carries one. */
   avgElapsedMs: number | null;
-  /** Longest elapsed time of the node in the window, the scale of its own duration colours. */
+  /** Longest elapsed time of the node in the window, the top of its own duration colours. */
   maxElapsedMs: number;
+  /** Shortest one, the bottom of that scale (0 when no success carries a time). */
+  minElapsedMs: number;
 }
 
 /**
@@ -123,7 +125,7 @@ export function buildNodeRows(epochs: RunAnalysisEpoch[], runStatus?: string | n
     for (const cell of epoch.nodes) {
       let row = rows.get(cell.alias);
       if (!row) {
-        row = { alias: cell.alias, cells: new Map(), failures: 0, partials: 0, avgElapsedMs: null, maxElapsedMs: 0 };
+        row = { alias: cell.alias, cells: new Map(), failures: 0, partials: 0, avgElapsedMs: null, maxElapsedMs: 0, minElapsedMs: 0 };
         rows.set(cell.alias, row);
       }
       row.cells.set(epoch.epoch, cell);
@@ -138,6 +140,7 @@ export function buildNodeRows(epochs: RunAnalysisEpoch[], runStatus?: string | n
       // Only successes are coloured by duration, so only they set the scale: one 5-minute timeout
       // would otherwise push every success of the row into the "fast" bucket.
       if (status === 'ok' && cell.elapsedMs != null) {
+        row.minElapsedMs = elapsed.length ? Math.min(row.minElapsedMs, cell.elapsedMs) : cell.elapsedMs;
         row.maxElapsedMs = Math.max(row.maxElapsedMs, cell.elapsedMs);
         elapsed.push(cell.elapsedMs);
       }
@@ -148,14 +151,31 @@ export function buildNodeRows(epochs: RunAnalysisEpoch[], runStatus?: string | n
 }
 
 /**
- * Duration colour step of a cell, 0 (fastest) to 4 (slowest), relative to the node's OWN longest
- * run in the window: a 30 s agent and a 20 ms decision are each judged against themselves, or
- * every cell but the agent's would read "fast". Null when the cell has no elapsed time.
+ * Below this spread between a node's fastest and slowest success, its durations are "all the
+ * same": the absolute floor for fast nodes, and a share of the slowest run for long ones, so a
+ * 30 s agent that wobbles by 200 ms is not painted from pale to dark.
  */
-export function heatLevel(elapsedMs: number | null | undefined, rowMaxMs: number): 0 | 1 | 2 | 3 | 4 | null {
+export const HEAT_MIN_SPREAD_MS = 100;
+export const HEAT_MIN_SPREAD_RATIO = 0.1;
+
+/**
+ * Duration colour step of a cell, 0 (fastest) to 4 (slowest), placed between the node's OWN
+ * fastest and slowest success in the window: a 30 s agent and a 20 ms decision are each judged
+ * against themselves, or every cell but the agent's would read "fast".
+ *
+ * Nothing to compare (a single success, or durations that barely differ) is level 0. Dividing
+ * by the row maximum alone made a lone cell its own maximum, so the only epoch of a run was
+ * painted "slowest" even at a few milliseconds. Null when the cell has no elapsed time.
+ */
+export function heatLevel(
+  elapsedMs: number | null | undefined,
+  rowMinMs: number,
+  rowMaxMs: number,
+): 0 | 1 | 2 | 3 | 4 | null {
   if (elapsedMs == null) return null;
-  if (rowMaxMs <= 0) return 0;
-  const ratio = elapsedMs / rowMaxMs;
+  const spread = rowMaxMs - rowMinMs;
+  if (spread < Math.max(HEAT_MIN_SPREAD_MS, rowMaxMs * HEAT_MIN_SPREAD_RATIO)) return 0;
+  const ratio = (elapsedMs - rowMinMs) / spread;
   if (ratio < 0.2) return 0;
   if (ratio < 0.4) return 1;
   if (ratio < 0.6) return 2;

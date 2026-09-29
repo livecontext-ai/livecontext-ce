@@ -5,6 +5,7 @@ import com.apimarketplace.auth.security.AuthTokenAtRestBackfill;
 
 import com.apimarketplace.auth.domain.*;
 import com.apimarketplace.auth.repository.*;
+import com.apimarketplace.auth.util.EmailNormalizer;
 import com.apimarketplace.common.web.AppEditionProvider;
 import com.apimarketplace.notification.client.NotificationClient;
 import com.apimarketplace.notification.client.dto.NotificationEmitRequest;
@@ -28,6 +29,35 @@ import java.util.UUID;
 /**
  * Service for organization member management: invitations, role changes, removal.
  * Plan gating is based on the organization owner's subscription plan.
+ *
+ * <p><b>Who may answer an invitation.</b> An invitation is keyed on an email address,
+ * so the caller must prove they own that mailbox. Two proofs are accepted:
+ * <ul>
+ *   <li>the invitation TOKEN (accept / decline by token): it only travels through the
+ *       invitation email or the link an admin handed out;</li>
+ *   <li>a VERIFIED account email (every path, including accept / decline by id and the
+ *       inbox), see {@link #requireVerifiedInvitee}.</li>
+ * </ul>
+ *
+ * <p><b>Accepted CE risk (auth.mode=embedded).</b> CE may run without SMTP, so
+ * {@code PasswordAuthService.register} creates every account already verified, and the
+ * verified flag proves nothing about the mailbox there. The by-id paths and the inbox are
+ * therefore narrowed in CE: they only serve an invitation to an account that existed
+ * BEFORE the invitation was sent (the in-app bell delivery for existing users, see
+ * {@link #isInboxEligible}). An account registered after the invitation must use the
+ * token (the invite-link registration does), so registering the invitee's address
+ * through OPEN public registration no longer lets anyone accept by id. What remains:
+ * an address registered by someone else BEFORE the admin invites it will receive the
+ * invitation. The admin controls this (registration is closed after setup by default,
+ * and the user list shows every local account); it is documented, not fixed, because
+ * fixing it needs mailbox verification that CE cannot assume.
+ *
+ * <p><b>Concurrent duplicate invites.</b> Two simultaneous invites for the same address
+ * both pass the "no pending invitation" check; the partial unique index rejects the
+ * loser at commit (409 in the controller), but by then the loser has already sent its
+ * invitation email (cloud, sent synchronously; the CE bell notification waits for the
+ * commit and is not sent) and written its MEMBER_INVITED audit row (own transaction). That
+ * email links to a token that was never persisted, so it resolves as an invalid invitation.
  */
 @Service
 @Transactional
@@ -169,8 +199,16 @@ public class OrganizationMemberService {
      * in-app notification bell instead of SMTP.
      */
     public OrganizationInvitation inviteMember(UUID orgId, String email, OrganizationRole role, Long invitedByUserId) {
+        email = EmailNormalizer.normalize(email);
         Organization org = organizationRepository.findById(orgId)
                 .orElseThrow(() -> new IllegalArgumentException("Organization not found"));
+
+        // A soft-deleted organization is tomb-stoned: softDeleteOrganization cancels
+        // its PENDING invitations and acceptInvitationInternal refuses to join it, so
+        // a fresh invitation could only ever be a dead row plus a misleading email.
+        if (org.isDeleted()) {
+            throw new IllegalStateException("Cannot invite members to a deleted organization");
+        }
 
         User inviter = userRepository.findById(invitedByUserId)
                 .orElseThrow(() -> new IllegalArgumentException("Inviter user not found"));
@@ -183,6 +221,16 @@ public class OrganizationMemberService {
                 inviterMembership.getRole() != OrganizationRole.ADMIN) {
             throw new SecurityException("Only OWNER or ADMIN can invite members");
         }
+
+        // Granting ADMIN is OWNER-only, by invitation exactly as by role change
+        // (changeRole is OWNER-only): an ADMIN may invite MEMBER or VIEWER.
+        if (role == OrganizationRole.ADMIN && inviterMembership.getRole() != OrganizationRole.OWNER) {
+            throw new AdminInviteRequiresOwnerException();
+        }
+
+        // An expired PENDING row is dead: it can no longer be accepted, so it must neither
+        // block a fresh invitation to the same address nor count against the member cap.
+        expireStalePendingInvitations(orgId);
 
         // Check plan supports team - CE gates teammates by the owner's (cloud-aware) plan,
         // exactly like cloud: adding members requires a TEAM/ENTERPRISE-capable plan. The owner
@@ -265,7 +313,11 @@ public class OrganizationMemberService {
         } else {
             invitationMailer.sendInvitationEmail(
                     email, org.getName(), inviterDisplay,
-                    invitation.getToken(), role.name());
+                    invitation.getToken(), role.name(),
+                    // The invitee's row when there is one: already loaded above, so the mailer does
+                    // not query for it again. Null for an address with no account yet, which is the
+                    // ordinary case and the one the mailer still looks up.
+                    existingUser.map(com.apimarketplace.auth.domain.User::getLocale).orElse(null));
         }
 
         return invitation;
@@ -406,13 +458,7 @@ public class OrganizationMemberService {
             throw new IllegalStateException("Invitation has expired");
         }
 
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("User not found"));
-
-        // Verify email matches
-        if (!invitation.getEmail().equalsIgnoreCase(user.getEmail())) {
-            throw new SecurityException("Invitation email does not match user email");
-        }
+        User user = requireVerifiedInvitee(invitation, userId);
 
         acceptInvitationInternal(invitation, user);
 
@@ -450,14 +496,10 @@ public class OrganizationMemberService {
             throw new IllegalStateException("Invitation has expired");
         }
 
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("User not found"));
-
-        if (user.getEmail() == null || !invitation.getEmail().equalsIgnoreCase(user.getEmail())) {
-            // CRITICAL guard: a UUID-guessing attacker who learns an invitation
-            // ID must NOT be able to redirect that membership to themselves.
-            throw new SecurityException("Invitation email does not match user email");
-        }
+        // CRITICAL guard: a UUID-guessing attacker who learns an invitation
+        // ID must NOT be able to redirect that membership to themselves.
+        User user = requireVerifiedInvitee(invitation, userId);
+        requireInboxEligible(invitation, user);
 
         acceptInvitationInternal(invitation, user);
 
@@ -478,7 +520,20 @@ public class OrganizationMemberService {
     public OrganizationInvitation declineInvitationById(UUID invitationId, Long userId) {
         OrganizationInvitation invitation = invitationRepository.findById(invitationId)
                 .orElseThrow(() -> new IllegalArgumentException("Invitation not found"));
+        return declineInternal(invitation, userId, false);
+    }
 
+    /**
+     * Decline a pending invitation from its email link (the accept page's Decline
+     * button). Same guards as {@link #declineInvitationById(UUID, Long)}.
+     */
+    public OrganizationInvitation declineInvitation(String token, Long userId) {
+        OrganizationInvitation invitation = findInvitationByToken(token)
+                .orElseThrow(() -> new IllegalArgumentException("Invitation not found"));
+        return declineInternal(invitation, userId, true);
+    }
+
+    private OrganizationInvitation declineInternal(OrganizationInvitation invitation, Long userId, boolean viaToken) {
         if (invitation.getStatus() != InvitationStatus.PENDING) {
             throw new IllegalStateException("Invitation is no longer pending (status: " + invitation.getStatus() + ")");
         }
@@ -488,10 +543,9 @@ public class OrganizationMemberService {
             throw new IllegalStateException("Invitation has expired");
         }
 
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("User not found"));
-        if (user.getEmail() == null || !invitation.getEmail().equalsIgnoreCase(user.getEmail())) {
-            throw new SecurityException("Invitation email does not match user email");
+        User user = requireVerifiedInvitee(invitation, userId);
+        if (!viaToken) {
+            requireInboxEligible(invitation, user);
         }
 
         invitation.setStatus(InvitationStatus.CANCELLED);
@@ -749,6 +803,8 @@ public class OrganizationMemberService {
                 java.util.Map.of(
                         "previousOwnerUserId", currentOwnerUserId,
                         "newOwnerUserId", newOwnerUserId));
+        // The workspace plan is the owner's: a new owner below Team turns its SAML IdP off.
+        syncSamlIdentityProvider(orgId);
     }
 
     private Organization lockOrganizationForOwnershipTransfer(UUID orgId) {
@@ -851,6 +907,8 @@ public class OrganizationMemberService {
         auditService.record(orgId, requesterUserId, OrganizationAuditEvent.Type.DELETED,
                 java.util.Map.of("confirmName", confirmName, "deletedBy", requesterUserId));
         log.info("Workspace {} soft-deleted by user {} (grace window before hard-purge)", orgId, requesterUserId);
+        // A deleted workspace must not keep a live login door during its grace window.
+        syncSamlIdentityProvider(orgId);
     }
 
     /**
@@ -890,6 +948,22 @@ public class OrganizationMemberService {
         auditService.record(orgId, requesterUserId, OrganizationAuditEvent.Type.RESTORED,
                 java.util.Map.of("restoredBy", requesterUserId));
         log.info("Workspace {} restored by user {}", orgId, requesterUserId);
+        syncSamlIdentityProvider(orgId);
+    }
+
+    /**
+     * Workspace SAML IdP follows the workspace state (see OrganizationSamlService). Resolved
+     * lazily: that service depends on this one, so a constructor dependency would be a cycle.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<OrganizationSamlService> organizationSamlServiceProvider;
+
+    private void syncSamlIdentityProvider(UUID orgId) {
+        OrganizationSamlService saml = organizationSamlServiceProvider != null
+                ? organizationSamlServiceProvider.getIfAvailable() : null;
+        if (saml != null) {
+            saml.syncIdentityProviderEnabled(orgId);
+        }
     }
 
     /**
@@ -935,19 +1009,34 @@ public class OrganizationMemberService {
     }
 
     /**
-     * PR4b - return all PENDING invitations addressed to a given email. Used
-     * by the /app/invitations inbox to show the current user their pending
+     * PR4b - return all PENDING invitations addressed to the given user's email.
+     * Used by the /app/invitations inbox to show the current user their pending
      * invites. Filters expired rows lazily - the JPA query just matches by
      * email + status, and expired entries get caught on accept (existing
      * isExpired path).
+     *
+     * <p>Returns an empty list when the user is unknown or has no email. Throws
+     * {@link InvitationEmailNotVerifiedException} when the email is NOT verified:
+     * an unverified account does not prove it owns the mailbox, so it must not
+     * learn which organizations invited that address (it could not accept them
+     * anyway, see {@link #requireVerifiedInvitee}); the refusal lets the inbox
+     * tell the user to verify their email instead of showing a misleading empty
+     * list. In CE only invitations the account may answer by id are listed
+     * ({@link #isInboxEligible}).
      */
     @Transactional(readOnly = true)
-    public List<OrganizationInvitation> getPendingInvitationsForEmail(String email) {
-        if (email == null || email.isBlank()) {
+    public List<OrganizationInvitation> getPendingInvitationsForUser(Long userId) {
+        User user = userId == null ? null : userRepository.findById(userId).orElse(null);
+        String email = user == null ? null : EmailNormalizer.normalize(user.getEmail());
+        if (email == null || email.isEmpty()) {
             return java.util.Collections.emptyList();
+        }
+        if (!user.isEmailVerified()) {
+            throw new InvitationEmailNotVerifiedException();
         }
         return invitationRepository.findByEmailAndStatus(email, InvitationStatus.PENDING).stream()
                 .filter(inv -> !inv.isExpired())
+                .filter(inv -> isInboxEligible(inv, user))
                 .toList();
     }
 
@@ -976,18 +1065,24 @@ public class OrganizationMemberService {
                         inv.getEmail(),
                         inv.getOrganization() != null ? inv.getOrganization().getName() : null,
                         inv.getRole(),
-                        userRepository.findByEmail(inv.getEmail()).isPresent()))
+                        userRepository.findByEmail(inv.getEmail()).isPresent(),
+                        publicInviterName(inv.getInvitedBy())))
                 .orElseGet(InvitationInfo::invalid);
     }
 
     /**
-     * Get pending invitations for an organization.
+     * Get pending invitations for an organization. OWNER / ADMIN only: the list
+     * carries every invitee email (and, under embedded auth, the raw accept
+     * token the admin copies as a link), so a MEMBER or VIEWER reading it could
+     * learn who is being invited or even redeem someone else's invitation link.
      */
     @Transactional(readOnly = true)
     public List<OrganizationInvitation> getPendingInvitations(UUID orgId, Long userId) {
-        // Verify requester is a member
-        if (!memberRepository.existsByOrganization_IdAndUser_Id(orgId, userId)) {
-            throw new IllegalArgumentException("User is not a member of this organization");
+        OrganizationMember requester = memberRepository.findByOrganization_IdAndUser_Id(orgId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("User is not a member of this organization"));
+        if (requester.getRole() != OrganizationRole.OWNER
+                && requester.getRole() != OrganizationRole.ADMIN) {
+            throw new SecurityException("Only OWNER or ADMIN can list pending invitations");
         }
 
         return invitationRepository.findByOrganization_IdAndStatus(orgId, InvitationStatus.PENDING);
@@ -1012,6 +1107,76 @@ public class OrganizationMemberService {
     }
 
     // --- Internal helpers ---
+
+    /**
+     * Inviter name for the PUBLIC invitation lookup. The shared display-name chain
+     * ends on the email address, which an unauthenticated token holder must not
+     * receive: anything that is (or looks like) an email is dropped.
+     */
+    private String publicInviterName(User inviter) {
+        if (inviter == null) {
+            return null;
+        }
+        String name = onboardingService.resolveDisplayName(inviter.getId());
+        if (name == null || name.isBlank() || name.contains("@")
+                || EmailNormalizer.matches(name, inviter.getEmail())) {
+            return null;
+        }
+        return name;
+    }
+
+    /** Flip every expired PENDING invitation of the organization to EXPIRED. */
+    private void expireStalePendingInvitations(UUID orgId) {
+        for (OrganizationInvitation inv : invitationRepository.findByOrganization_IdAndStatus(orgId, InvitationStatus.PENDING)) {
+            if (inv.isExpired()) {
+                inv.setStatus(InvitationStatus.EXPIRED);
+                invitationRepository.save(inv);
+            }
+        }
+    }
+
+    /**
+     * Whether this account may answer the invitation WITHOUT its token (accept /
+     * decline by id, inbox listing). Always true in cloud, where a verified email
+     * proves the mailbox. In CE a verified flag proves nothing (see the class
+     * javadoc), so only an account that already existed when the invitation was
+     * sent qualifies: that is the in-app bell delivery. An account registered
+     * afterwards must present the token.
+     */
+    private boolean isInboxEligible(OrganizationInvitation invitation, User user) {
+        if (!isEmbeddedAuthMode()) {
+            return true;
+        }
+        if (user.getCreatedAt() == null || invitation.getCreatedAt() == null) {
+            // Cannot prove the account predates the invitation: require the token.
+            return false;
+        }
+        return !user.getCreatedAt().isAfter(invitation.getCreatedAt());
+    }
+
+    private void requireInboxEligible(OrganizationInvitation invitation, User user) {
+        if (!isInboxEligible(invitation, user)) {
+            throw new SecurityException("Open the invitation link to answer this invitation");
+        }
+    }
+
+    /**
+     * Resolve the acting user and prove they are the invitee: the invitation must
+     * be addressed to their email AND that email must be verified. A matching but
+     * unverified address proves nothing (anyone can register it), which is why
+     * every accept / decline path goes through here.
+     */
+    private User requireVerifiedInvitee(OrganizationInvitation invitation, Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        if (!EmailNormalizer.matches(user.getEmail(), invitation.getEmail())) {
+            throw new SecurityException("Invitation email does not match user email");
+        }
+        if (!user.isEmailVerified()) {
+            throw new InvitationEmailNotVerifiedException();
+        }
+        return user;
+    }
 
     private void acceptInvitationInternal(OrganizationInvitation invitation, User user) {
         Organization org = invitation.getOrganization();
@@ -1103,10 +1268,11 @@ public class OrganizationMemberService {
             String email,
             String organizationName,
             OrganizationRole role,
-            boolean hasAccount
+            boolean hasAccount,
+            String inviterName
     ) {
         public static InvitationInfo invalid() {
-            return new InvitationInfo(false, null, null, null, false);
+            return new InvitationInfo(false, null, null, null, false, null);
         }
     }
 

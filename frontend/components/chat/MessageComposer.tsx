@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { getClientLocale } from '@/lib/utils/locale';
-import { Paperclip, ArrowUp, Square, X, FileIcon, ImageIcon, Loader2, Mic, MicOff, Settings2, Plus } from 'lucide-react';
+import { Paperclip, ArrowUp, ArrowDown, Square, X, FileIcon, ImageIcon, Loader2, Mic, MicOff, Settings2, Plus } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { AttachmentHandler, type AttachmentView } from './AttachmentHandler';
 import { ImageLightbox } from './ImageLightbox';
@@ -146,6 +146,8 @@ export function MessageComposer({
   onReorderQueue,
   leadingControl,
   linkedAgentId,
+  showScrollToBottom = false,
+  onScrollToBottom,
 }: MessageComposerProps) {
   const t = useTranslations();
   const studioRouter = useLocaleRouter();
@@ -629,6 +631,22 @@ export function MessageComposer({
     <div className={containerClass} style={inputContainerStyle}>
       <div className={fullWidth ? "w-full" : "mx-auto max-w-4xl"}>
         <div className="relative">
+          {/* Back to the latest message: shown by the chat only when there are messages and
+              the reader has scrolled away from the bottom. Centered just above the composer. */}
+          {showScrollToBottom && onScrollToBottom && !minimal && (
+            <div className="absolute bottom-full left-1/2 z-20 mb-3 -translate-x-1/2">
+              <button
+                type="button"
+                data-testid="chat-scroll-to-bottom"
+                onClick={onScrollToBottom}
+                aria-label={t('chat.scrollToBottom')}
+                title={t('chat.scrollToBottom')}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-theme bg-theme-primary text-theme-secondary shadow-md hover:text-theme-primary"
+              >
+                <ArrowDown className="h-4 w-4" />
+              </button>
+            </div>
+          )}
           {showOrbi && !minimal && (
             <div
               data-testid="orbi-perch"

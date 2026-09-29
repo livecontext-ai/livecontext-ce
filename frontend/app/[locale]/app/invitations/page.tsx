@@ -17,10 +17,15 @@ import { useTranslations } from 'next-intl';
 import { useRouter, useParams } from 'next/navigation';
 import { Building2, Crown, User, Eye, MailOpen, Check, X } from 'lucide-react';
 import { useAuth } from '@/lib/providers/smart-providers';
-import { organizationApi, type Invitation, type OrganizationRole } from '@/lib/api/organization-api';
+import {
+  organizationApi,
+  isInvitationEmailNotVerifiedError,
+  type Invitation,
+  type OrganizationRole,
+} from '@/lib/api/organization-api';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { parseUtcAware } from '@/lib/utils/dateFormatters';
+import { formatUtcDate } from '@/lib/utils/dateFormatters';
 
 const ROLE_ICONS: Record<OrganizationRole, React.ReactNode> = {
   OWNER: <Crown className="h-3.5 w-3.5 text-amber-500" />,
@@ -47,7 +52,7 @@ export default function InvitationsInboxPage() {
       const list = await organizationApi.getMyPendingInvitations();
       setInvitations(list);
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('loadError'));
+      setError(isInvitationEmailNotVerifiedError(e) ? t('emailNotVerified') : t('loadError'));
       setInvitations([]);
     }
   }, [t]);
@@ -93,9 +98,13 @@ export default function InvitationsInboxPage() {
       )}
 
       {invitations.length === 0 ? (
-        <div className="rounded-xl border border-theme bg-theme-secondary/30 p-8 text-center">
-          <p className="text-sm text-theme-secondary">{t('emptyState')}</p>
-        </div>
+        // No "you have no invitations" under an error: for an unverified account the
+        // list is refused, not empty, and saying "none" would be wrong.
+        error ? null : (
+          <div className="rounded-xl border border-theme bg-theme-secondary/30 p-8 text-center">
+            <p className="text-sm text-theme-secondary">{t('emptyState')}</p>
+          </div>
+        )
       ) : (
         <ul className="space-y-3">
           {invitations.map((inv) => (
@@ -120,7 +129,12 @@ export default function InvitationsInboxPage() {
                       {t(`role.${inv.role}`)}
                     </span>
                     <span aria-hidden>·</span>
-                    <time>{parseUtcAware(inv.createdAt).toLocaleDateString(locale, { timeZone: 'UTC' })}</time>
+                    {/* Through the shared formatter, like every other date in the product: it
+                        resolves the display zone from the account and keeps the calendar-day rule,
+                        neither of which the hand-rolled `toLocaleDateString(locale)` here did. That
+                        call had the LOCALE right and the ZONE wrong: with no zone argument it
+                        formatted in the browser's, which the product forbids. */}
+                    <time>{formatUtcDate(inv.createdAt, { locale })}</time>
                   </p>
                 </div>
               </div>
@@ -136,7 +150,11 @@ export default function InvitationsInboxPage() {
                       await organizationApi.declineInvitationById(inv.id);
                       await fetchInbox();
                     } catch (e) {
-                      setError(e instanceof Error ? e.message : t('declineError'));
+                      setError(
+                        isInvitationEmailNotVerifiedError(e)
+                          ? t('emailNotVerified')
+                          : t('declineError')
+                      );
                     } finally {
                       setDecliningId(null);
                     }
@@ -158,7 +176,11 @@ export default function InvitationsInboxPage() {
                       await fetchInbox();
                       router.push(`/${locale}/app/settings/organization`);
                     } catch (e) {
-                      setError(e instanceof Error ? e.message : t('acceptError'));
+                      setError(
+                        isInvitationEmailNotVerifiedError(e)
+                          ? t('emailNotVerified')
+                          : t('acceptError')
+                      );
                       setAcceptingId(null);
                     }
                   }}

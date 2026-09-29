@@ -1096,8 +1096,11 @@ class CeCatalogRelayServiceTest {
         @Test
         @DisplayName("rate limiter allows up to the per-minute limit and refuses the next call")
         void rateLimiterEnforcesWindow() {
+            // A pinned clock: with the system clock the three calls could straddle a minute and the
+            // third one land in a fresh window (failed CI at 12:41:00.08 on 2026-09-27).
+            java.time.Clock pinned = java.time.Clock.fixed(java.time.Instant.parse("2026-09-27T12:40:59.990Z"), java.time.ZoneOffset.UTC);
             CeCatalogRelayService limited = new CeCatalogRelayService(apiRepository, apiToolRepository,
-                    credentialClient, creditClient, catalogV1Service, new ObjectMapper(), 10, 2);
+                    credentialClient, creditClient, catalogV1Service, new ObjectMapper(), 10, 2, pinned);
 
             assertThat(limited.tryAcquire(INSTALL_ID)).isTrue();
             assertThat(limited.tryAcquire(INSTALL_ID)).isTrue();

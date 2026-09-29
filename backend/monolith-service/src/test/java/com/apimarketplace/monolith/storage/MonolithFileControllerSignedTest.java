@@ -72,7 +72,7 @@ class MonolithFileControllerSignedTest {
                 .thenReturn(Optional.of(new DownloadStream(new ByteArrayInputStream(bytes), bytes.length, "video/mp4")));
 
         ResponseEntity<StreamingResponseBody> response =
-                controller.proxySignedDownload(KEY, exp, "inline", sig);
+                controller.proxySignedDownload(KEY, exp, "inline", sig, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL)).isEqualTo("private, max-age=900");
@@ -97,7 +97,7 @@ class MonolithFileControllerSignedTest {
                 .thenReturn(Optional.of(new DownloadStream(new ByteArrayInputStream(bytes), bytes.length, "video/mp4")));
 
         ResponseEntity<StreamingResponseBody> response =
-                controller.proxySignedDownload(KEY, exp, "inline", sig);
+                controller.proxySignedDownload(KEY, exp, "inline", sig, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         String header = response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL);
@@ -118,7 +118,7 @@ class MonolithFileControllerSignedTest {
         String forged = (first == 'A' ? 'B' : 'A') + validSig.substring(1);
 
         ResponseEntity<StreamingResponseBody> response =
-                controller.proxySignedDownload(KEY, exp, "inline", forged);
+                controller.proxySignedDownload(KEY, exp, "inline", forged, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(response.getBody()).isNull();
@@ -131,7 +131,7 @@ class MonolithFileControllerSignedTest {
         String sig = signer.sign(KEY, exp, "inline");
 
         ResponseEntity<StreamingResponseBody> response =
-                controller.proxySignedDownload(KEY, exp, "inline", sig);
+                controller.proxySignedDownload(KEY, exp, "inline", sig, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
@@ -148,7 +148,7 @@ class MonolithFileControllerSignedTest {
         String sig = signer.sign(KEY, exp, "inline");
 
         ResponseEntity<StreamingResponseBody> response =
-                disabled.proxySignedDownload(KEY, exp, "inline", sig);
+                disabled.proxySignedDownload(KEY, exp, "inline", sig, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
@@ -161,8 +161,42 @@ class MonolithFileControllerSignedTest {
         when(fileStorageService.openStream(KEY)).thenReturn(Optional.empty());
 
         ResponseEntity<StreamingResponseBody> response =
-                controller.proxySignedDownload(KEY, exp, "inline", sig);
+                controller.proxySignedDownload(KEY, exp, "inline", sig, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("Range: bytes=0-1023 → 206 with Content-Range, like the cloud mount (a video needs it on Safari)")
+    void singleRangeIsPartialContent() throws Exception {
+        long exp = Instant.now().getEpochSecond() + 4 * 3600;
+        String sig = signer.sign(KEY, exp, "inline");
+        when(fileStorageService.openStreamRange(KEY, "bytes=0-1023")).thenReturn(Optional.of(
+                new com.apimarketplace.storage.service.file.RangedDownload(
+                        new DownloadStream(new ByteArrayInputStream(new byte[1024]), 1024, "video/mp4"),
+                        "bytes 0-1023/18370402")));
+
+        ResponseEntity<StreamingResponseBody> response =
+                controller.proxySignedDownload(KEY, exp, "inline", sig, "bytes=0-1023");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PARTIAL_CONTENT);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_RANGE)).isEqualTo("bytes 0-1023/18370402");
+        assertThat(response.getHeaders().getFirst(HttpHeaders.ACCEPT_RANGES)).isEqualTo("bytes");
+        assertThat(response.getHeaders().getContentLength()).isEqualTo(1024);
+        assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+    }
+
+    @Test
+    @DisplayName("An unservable range falls back to the whole file (200)")
+    void unservableRangeFallsBack() {
+        long exp = Instant.now().getEpochSecond() + 4 * 3600;
+        String sig = signer.sign(KEY, exp, "inline");
+        when(fileStorageService.openStreamRange(KEY, "bytes=99999999-")).thenReturn(Optional.empty());
+        byte[] bytes = "mp4".getBytes();
+        when(fileStorageService.openStream(KEY))
+                .thenReturn(Optional.of(new DownloadStream(new ByteArrayInputStream(bytes), bytes.length, "video/mp4")));
+
+        assertThat(controller.proxySignedDownload(KEY, exp, "inline", sig, "bytes=99999999-").getStatusCode())
+                .isEqualTo(HttpStatus.OK);
     }
 }

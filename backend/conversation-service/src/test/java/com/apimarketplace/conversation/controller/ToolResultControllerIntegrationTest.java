@@ -32,6 +32,9 @@ class ToolResultControllerIntegrationTest {
     @Mock
     private ToolResultService toolResultService;
 
+    @Mock
+    private com.apimarketplace.conversation.service.ConversationQueryService conversationQueryService;
+
     @InjectMocks
     private ToolResultController toolResultController;
 
@@ -42,7 +45,69 @@ class ToolResultControllerIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(toolResultController).build();
+        // Default: the caller may write conv-1; the scope tests below override it.
+        org.mockito.Mockito.lenient()
+                .when(conversationQueryService.isConversationInStrictScope(any(), any(), any()))
+                .thenReturn(true);
+        mockMvc = MockMvcBuilders.standaloneSetup(
+                toolResultController, new InternalToolResultController(toolResultService)).build();
+    }
+
+    @Nested
+    @DisplayName("POST /api/tool-results - conversation scope")
+    class SaveToolResultScope {
+
+        @Test
+        @DisplayName("regression: a conversation outside the caller's workspace is refused with 404 and nothing is saved")
+        void foreignConversationRefused() throws Exception {
+            when(conversationQueryService.isConversationInStrictScope("conv-1", TENANT_ID, "org-attacker"))
+                    .thenReturn(false);
+
+            mockMvc.perform(post("/api/tool-results")
+                            .header(TENANT_HEADER, TENANT_ID)
+                            .header("X-Organization-ID", "org-attacker")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(buildSaveRequest())))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.success").value(false));
+
+            org.mockito.Mockito.verifyNoInteractions(toolResultService);
+        }
+
+        @Test
+        @DisplayName("a body without a conversationId is refused with 404 (no unscoped row)")
+        void missingConversationIdRefused() throws Exception {
+            Map<String, Object> request = buildSaveRequest();
+            request.remove("conversationId");
+
+            mockMvc.perform(post("/api/tool-results")
+                            .header(TENANT_HEADER, TENANT_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isNotFound());
+
+            org.mockito.Mockito.verifyNoInteractions(toolResultService);
+        }
+
+        @Test
+        @DisplayName("the internal service-to-service save stays unchecked (agent loop, no workspace header)")
+        void internalSaveNotScopeChecked() throws Exception {
+            ToolResult saved = buildToolResult(UUID.randomUUID(), "my_tool", true);
+            when(toolResultService.save(
+                    eq("conv-1"), eq(TENANT_ID), eq("my_tool"), eq("call-123"),
+                    eq(true), eq(200L), eq("tool output"), isNull(), anyMap(), isNull()
+            )).thenReturn(saved);
+
+            mockMvc.perform(post("/api/internal/tool-results")
+                            .header(TENANT_HEADER, TENANT_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(buildSaveRequest())))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.success").value(true));
+
+            org.mockito.Mockito.verify(conversationQueryService, org.mockito.Mockito.never())
+                    .isConversationInStrictScope(any(), any(), any());
+        }
     }
 
     // ================================================================

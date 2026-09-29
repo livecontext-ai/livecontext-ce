@@ -43,6 +43,8 @@ public class StorageV1Controller {
             @RequestHeader(value = "X-User-ID", required = false) String userId,
             @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
         
+        if (viewerWriteBlocked()) return ResponseEntity.status(403).build();
+
         try {
             logger.info("Creation de document - collection={}, userId={}, orgId={}", 
                        request.getCollection(), userId, orgId);
@@ -113,6 +115,8 @@ public class StorageV1Controller {
             @RequestHeader(value = "X-User-ID", required = false) String userId,
             @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
         
+        if (viewerWriteBlocked()) return ResponseEntity.status(403).build();
+
         try {
             logger.info("Indexation RAG - id={}, userId={}, orgId={}", 
                        request.getId(), userId, orgId);
@@ -144,6 +148,18 @@ public class StorageV1Controller {
     /**
      * GET /storage/v1/health - Health check
      */
+    /**
+     * Org VIEWERs are read-only platform-wide. The role comes from the gateway-validated
+     * {@code X-Organization-Role} header of the bound request (read through TenantResolver,
+     * so existing direct callers keep their signatures); an internal call without a role is
+     * not a workspace VIEWER and is not refused.
+     */
+    private static boolean viewerWriteBlocked() {
+        return com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(
+                com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationId(),
+                com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole());
+    }
+
     @GetMapping("/health")
     public ResponseEntity<Map<String, Object>> health() {
         return ResponseEntity.ok(Map.of(
@@ -162,6 +178,9 @@ public class StorageV1Controller {
             @RequestHeader(value = "X-User-ID", required = false) String userId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
             @RequestParam(value = "description", required = false) String description) {
+        if (viewerWriteBlocked()) {
+            return ResponseEntity.status(403).body(Map.of("error", "VIEWER role cannot upload files"));
+        }
 
         try {
             if (userId == null) {

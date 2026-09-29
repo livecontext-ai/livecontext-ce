@@ -246,6 +246,16 @@ public class ConversationEventPublisher {
      */
     public void publishVisualizationReady(String streamId, String conversationId,
                                            String type, String id, String title, String runId) {
+        publishVisualizationReady(streamId, conversationId, type, id, title, runId, null);
+    }
+
+    /**
+     * Same, with the plan version the run executes, so the page showing the workflow can tell
+     * whether the plan on its canvas is that run's (see WorkflowRunVisualization).
+     */
+    public void publishVisualizationReady(String streamId, String conversationId,
+                                           String type, String id, String title, String runId,
+                                           Integer planVersion) {
         if (conversationId == null || conversationId.isBlank()) return;
         try {
             Map<String, Object> payload = new LinkedHashMap<>();
@@ -253,6 +263,7 @@ public class ConversationEventPublisher {
             payload.put("visualizationId", id);
             if (title != null) payload.put("visualizationTitle", title);
             if (runId != null) payload.put("runId", runId);
+            if (planVersion != null) payload.put("planVersion", planVersion);
             payload.put("timestamp", Instant.now().toString());
             String json = objectMapper.writeValueAsString(payload);
 

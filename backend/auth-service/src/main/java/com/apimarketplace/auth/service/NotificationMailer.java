@@ -184,7 +184,7 @@ public class NotificationMailer {
                 "MANAGE_LABEL", escape(CATALOG.text(locale, "footer.manage")),
                 "REASON", escape(CATALOG.text(locale, "footer.reason")),
                 "LANG", locale,
-                "LOGO", frontendUrl + "/liveContext-logo-light.png?v=2");
+                "LOGO", com.apimarketplace.auth.service.mail.BrandedMail.logoUrl(frontendUrl));
         java.util.regex.Matcher m = PLACEHOLDER.matcher(template);
         StringBuilder out = new StringBuilder();
         while (m.find()) {

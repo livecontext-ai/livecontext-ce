@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { ResourceType } from '@/lib/api/orchestrator/agenda.service';
-import { browserTimezone } from '@/lib/utils/agendaTime';
+import { getClientTimeZone } from '@/lib/utils/timezone';
 
 /**
  * How the user wants their agenda to look. Persisted per browser, because it is a view
@@ -11,7 +11,7 @@ import { browserTimezone } from '@/lib/utils/agendaTime';
  */
 export interface AgendaPreferences {
   view: AgendaViewMode;
-  /** Display timezone. Defaults to the viewer's own; a schedule still fires in its own. */
+  /** Display timezone. Defaults to the account's display zone; a schedule still fires in its own. */
   timezone: string;
   weekStartsOn: 0 | 1;
   showWeekends: boolean;
@@ -31,6 +31,33 @@ export type AgendaViewMode = 'month' | 'week' | 'day' | 'list';
 
 const STORAGE_KEY = 'lc.agenda.preferences.v1';
 
+/**
+ * Forget the stored agenda zone, keeping every other agenda preference.
+ *
+ * <p>Called when a session ends, next to `clearDisplayTimeZone`, and when somebody picks a zone in
+ * Settings, which is the other half of why it exists. The zone here is the only
+ * field of this blob that belongs to an ACCOUNT rather than to a browser: the rest (view, week
+ * start, which resource types to show) is a per-device habit worth keeping, while a zone left
+ * behind is the previous person's. On a shared browser their pinned zone would otherwise open
+ * the next person's agenda, and an account that later changes its zone would never see the
+ * agenda follow - the same leak the LC_TZ cookie work went to lengths to close, reopened in a
+ * different store.
+ */
+export function clearStoredAgendaTimezone(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const stored = JSON.parse(raw) as Record<string, unknown>;
+    if (!('timezone' in stored)) return;
+    delete stored.timezone;
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    // Unreadable or unwritable storage (private mode, blocked site data): there is nothing to
+    // leak from a store that cannot be read either.
+  }
+}
+
 export const ALL_RESOURCE_TYPES: ResourceType[] = ['WORKFLOW', 'APPLICATION', 'AGENT'];
 
 function defaults(): AgendaPreferences {
@@ -39,7 +66,25 @@ function defaults(): AgendaPreferences {
     // "+7 more", so the view that fits a whole month is the one that shows the least of
     // it; a week gives every occurrence a readable row and an hour to sit at.
     view: 'week',
-    timezone: browserTimezone(),
+    // UTC here, and the account's zone is filled in by the hydrate effect below.
+    //
+    // The account's display zone is what the agenda should show by default - it has to agree with
+    // every other date in the product - but resolving it means reading the `LC_TZ` cookie, and this
+    // function seeds `useState`, so doing it here reads a cookie DURING RENDER: the server has no
+    // cookie and answers UTC while the client's first pass answers the stored zone, which is the
+    // hydration mismatch the docblock on this hook says it avoids `localStorage` for.
+    //
+    // UTC, and NOT the empty string. The first version of this fix used '' and every render path
+    // here reaches `new Intl.DateTimeFormat(..., { timeZone })`, which throws a RangeError on it -
+    // so the whole agenda threw on its first paint, for everybody. UTC is what the server resolves
+    // to anyway, so seeding it satisfies the hydration argument exactly as well while staying a
+    // usable zone id. The sibling test "rejects a timezone the platform cannot format in" exists
+    // for this failure and could not see it, because it asserts the value after hydration.
+    //
+    // It stays overridable per browser afterwards: reading a calendar in a colleague's or a
+    // customer's zone for a moment is a legitimate, temporary thing to do, which is why this
+    // preference lives here rather than on the account.
+    timezone: 'UTC',
     weekStartsOn: 1,
     showWeekends: true,
     resourceTypes: [...ALL_RESOURCE_TYPES],
@@ -70,9 +115,11 @@ function hydrate(raw: unknown): AgendaPreferences {
 
   return {
     view: views.includes(stored.view as AgendaViewMode) ? (stored.view as AgendaViewMode) : base.view,
+    // This runs inside the hydrate effect, so resolving the account zone here is safe - unlike
+    // `defaults()`, which seeds useState and must not touch the cookie.
     timezone: typeof stored.timezone === 'string' && isUsableTimezone(stored.timezone)
       ? stored.timezone
-      : base.timezone,
+      : getClientTimeZone(),
     weekStartsOn: stored.weekStartsOn === 0 || stored.weekStartsOn === 1 ? stored.weekStartsOn : base.weekStartsOn,
     showWeekends: typeof stored.showWeekends === 'boolean' ? stored.showWeekends : base.showWeekends,
     resourceTypes: Array.isArray(stored.resourceTypes)
@@ -134,9 +181,21 @@ export function useAgendaPreferences() {
       const raw = window.localStorage.getItem(STORAGE_KEY);
       // Nothing stored is the one moment the screen gets a say in the view: see firstView.
       if (raw) setPreferences(hydrate(JSON.parse(raw)));
-      else setPreferences((current) => ({ ...current, view: firstView() }));
+      else setPreferences((current) => ({
+        ...current,
+        view: firstView(),
+        timezone: getClientTimeZone(),
+      }));
     } catch {
-      // Private mode, blocked site data, corrupt JSON: the defaults are a fine agenda.
+      // Private mode, blocked site data, corrupt JSON: the rest of the defaults are a fine agenda,
+      // but the ZONE is not one of them any more.
+      //
+      // `defaults()` seeds the literal 'UTC' so that it touches no cookie during render, on the
+      // understanding that this effect replaces it. If the read throws, nothing did - and a Tokyo
+      // reader then had their whole agenda nine hours off, labelled UTC so it looked deliberate, for
+      // the life of the page. Before the seed became a placeholder this path gave the device zone,
+      // so the comment that used to stand here stopped being true when the seed changed.
+      setPreferences((current) => ({ ...current, timezone: getClientTimeZone() }));
     }
     setHydrated(true);
   }, []);
@@ -156,7 +215,11 @@ export function useAgendaPreferences() {
   const reset = useCallback(() => {
     // Reset puts the agenda back to how it would arrive on THIS screen, not to how it would
     // arrive on a laptop: landing a phone back on a seven-column week is not a clean slate.
-    const next = { ...defaults(), view: firstView() };
+    //
+    // The zone comes from the account, not from `defaults()`: this runs from a click, long after
+    // hydration, where reading the cookie is exactly right. Taking the seed instead put the render
+    // fallback back into live state.
+    const next = { ...defaults(), view: firstView(), timezone: getClientTimeZone() };
     try {
       window.localStorage.removeItem(STORAGE_KEY);
     } catch {

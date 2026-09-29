@@ -1345,6 +1345,61 @@ class WorkflowBuilderProviderTest {
             assertThat(r.error()).contains("node_id");
         }
 
+        /** A run whose workflow is the LAZY proxy production hands back: id only, any other field throws. */
+        private UUID runOnLazyWorkflow(int planVersion) {
+            UUID wfId = UUID.randomUUID();
+            WorkflowEntity lazy = org.mockito.Mockito.mock(WorkflowEntity.class);
+            when(lazy.getId()).thenReturn(wfId);
+            lenient().when(lazy.getName()).thenThrow(new org.hibernate.LazyInitializationException("no session"));
+            WorkflowRunEntity run = org.mockito.Mockito.mock(WorkflowRunEntity.class);
+            lenient().when(run.getTenantId()).thenReturn(TENANT);
+            when(run.getWorkflow()).thenReturn(lazy);
+            when(run.getRunIdPublic()).thenReturn(RUN);
+            when(run.getPlanVersion()).thenReturn(planVersion);
+            when(workflowRunRepository.findByRunIdPublic(RUN)).thenReturn(Optional.of(run));
+            WorkflowEntity loaded = new WorkflowEntity();
+            loaded.setId(wfId);
+            loaded.setName("Inbox");
+            when(workflowService.getWorkflow(wfId)).thenReturn(Optional.of(loaded));
+            return wfId;
+        }
+
+        @Test
+        @DisplayName("continue_interface carries the run visualization so the workflow page follows the resumed run")
+        void continueCarriesRunVisualization() {
+            UUID wfId = runOnLazyWorkflow(7);
+            List<SignalWaitEntity> pending = List.of(pendingOn("interface:page1"));
+            when(runSignalResolution.pendingOfType(RUN, SignalType.INTERFACE_SIGNAL)).thenReturn(pending);
+            when(runSignalResolution.continueInterface(eq(RUN), eq("interface:page1"), any(), eq(TENANT), any(), any()))
+                    .thenReturn(new RunSignalResolutionService.Outcome(true, null, 2L, 1, null));
+
+            ToolExecutionResult r = exec(params("action", "continue_interface", "run_id", RUN));
+
+            assertThat(r.success()).isTrue();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> viz = (Map<String, Object>) r.metadata().get("visualization");
+            assertThat(viz).containsEntry("type", "workflow_run").containsEntry("id", wfId.toString())
+                    .containsEntry("title", "Inbox").containsEntry("runId", RUN).containsEntry("planVersion", 7);
+        }
+
+        @Test
+        @DisplayName("resolve_approval carries the run visualization too (same signal outcome path)")
+        void approvalCarriesRunVisualization() {
+            UUID wfId = runOnLazyWorkflow(3);
+            List<SignalWaitEntity> pending = List.of(pendingOn("core:approve"));
+            when(runSignalResolution.pendingOfType(RUN, SignalType.USER_APPROVAL)).thenReturn(pending);
+            when(runSignalResolution.resolveApproval(eq(RUN), eq("core:approve"),
+                    eq(SignalResolution.APPROVED), any(), eq(TENANT), any(), any()))
+                    .thenReturn(new RunSignalResolutionService.Outcome(true, null, 1L, 0, "APPROVED"));
+
+            ToolExecutionResult r = exec(params("action", "resolve_approval", "run_id", RUN, "decision", "approved"));
+
+            assertThat(r.success()).isTrue();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> viz = (Map<String, Object>) r.metadata().get("visualization");
+            assertThat(viz).containsEntry("id", wfId.toString()).containsEntry("planVersion", 3);
+        }
+
         @Test
         @DisplayName("continue_interface auto-resolves the single paused interface and advances the run")
         void continueHappyPath() {

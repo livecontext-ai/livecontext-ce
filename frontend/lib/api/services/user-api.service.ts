@@ -68,12 +68,21 @@ export interface AdminVerifiedAccountResponse {
  * Body of PUT /users/profile/context: what the app knows about the signed-in person's
  * context (display locale, time zone, first-touch acquisition). Every field is optional.
  * `localeExplicit` is true only when the person picked a language in the UI; the backend
- * then lets it win over any locale the app merely displayed.
+ * then lets it win over any locale the app merely displayed. `timeZoneExplicit` is the same
+ * rule for the zone: true only when they picked it in Settings, so a later browser report
+ * cannot undo the pick.
  */
 export interface ProfileContextPayload {
   locale?: string;
   localeExplicit?: boolean;
   timeZone?: string;
+  timeZoneExplicit?: boolean;
+  /**
+   * True when the person asked, in Settings, to follow this device again: it releases an earlier
+   * pick and stores `timeZone`. A field of its own rather than `timeZoneExplicit: false`, which is
+   * what an ordinary browser report sends and would un-pin everyone once a session.
+   */
+  timeZoneFollowsDevice?: boolean;
   acquisition?: {
     utmSource?: string;
     utmMedium?: string;
@@ -225,6 +234,29 @@ export class UserApiService {
       // Ignored on purpose: the next session's context report does not overwrite an
       // explicit choice, so the only cost of a lost call is the stored locale lagging.
     }
+  }
+
+  /**
+   * Record a time zone the person explicitly picked in Settings. Pins it: the browser report
+   * sent at the start of each session no longer overwrites it.
+   *
+   * <p>Unlike the locale, this one is AWAITED by its caller: the zone it stores is what every
+   * date in the app is then formatted in, so the caller re-reads the profile afterwards and a
+   * silent failure would leave the screen claiming a zone the server never accepted.
+   */
+  async reportExplicitTimeZone(timeZone: string): Promise<void> {
+    const payload: ProfileContextPayload = { timeZone, timeZoneExplicit: true };
+    await apiClient.put('/users/profile/context', payload);
+  }
+
+  /**
+   * Go back to following this device's zone: releases an earlier pick and stores the zone
+   * passed here, so the report sent at the start of each session keeps it current again.
+   * Awaited for the same reason as {@link reportExplicitTimeZone}.
+   */
+  async reportDeviceTimeZone(timeZone: string): Promise<void> {
+    const payload: ProfileContextPayload = { timeZone, timeZoneFollowsDevice: true };
+    await apiClient.put('/users/profile/context', payload);
   }
 
   async getMarketingConsent(): Promise<MarketingConsent> {

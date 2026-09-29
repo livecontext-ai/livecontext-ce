@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocale, useTranslations } from 'next-intl';
 import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, FileText, Layers, Loader2, PanelLeftClose, PanelLeftOpen, RefreshCw } from 'lucide-react';
@@ -22,6 +22,7 @@ import { JsonValueTree } from '@/app/workflows/builder/components/inspector/outp
 import { WorkflowStepTable } from './WorkflowStepTable';
 import { CopyButton } from '@/app/workflows/builder/components/inspector/shared/CopyButton';
 import { getPickedEpoch } from './run-panel/useDefaultEpochSelection';
+import { useRunSharedEpoch } from './run-panel/useRunSharedEpoch';
 
 interface WorkflowLogsExplorerProps {
   workflowId: string;
@@ -50,17 +51,31 @@ function LogsExplorer({ workflowId, runId, initialStepAlias, onBreadcrumbChange,
   const [tableRevision, setTableRevision] = useState(0);
   const [nodesHidden, setNodesHidden] = useState(false);
   const [showRoot, setShowRoot] = useState(false);
-  const [epoch, setEpoch] = useState<number | null | undefined>(() => getPickedEpoch(runId));
-  // The table lists every call of a node, so it always opens on all epochs; the simple view keeps its own epoch.
+  // The epoch is the run's SHARED one when these logs are for the run the panel is bound to:
+  // the canvas, the pill, the Run tab, Analysis and Logs all show the same epoch, and a pick in
+  // any of them moves the others. Logs of another run keep a local choice, as before.
+  const shared = useRunSharedEpoch(runId);
+  const synced = shared.synced;
+  const viewingEpoch = shared.epoch;
+  const [localEpoch, setLocalEpoch] = useState<number | null | undefined>(() => getPickedEpoch(runId));
+  // Unsynced only: the table lists every call of a node, so it always opens on all epochs.
   const [tableEpoch, setTableEpoch] = useState<number | null>(null);
   useEffect(() => {
     // Reset on leaving, so the table is already on all epochs when it opens again (no refetch of a stale epoch).
     if (!tableView) setTableEpoch(null);
   }, [tableView]);
-  const viewEpoch = tableView ? tableEpoch : epoch;
+  const epoch = synced ? viewingEpoch : localEpoch;
+  const viewEpoch = synced ? viewingEpoch : tableView ? tableEpoch : localEpoch;
   const [requestedAlias, setRequestedAlias] = useState(initialStepAlias);
   const [direction, setDirection] = useState<'input' | 'output'>('output');
-  const [passageId, setPassageId] = useState<number | null>(null);
+  // The passage belongs to the epoch it was picked in: when the epoch changes, here or from the
+  // canvas, the old pick lapses and the first passage of the new epoch shows.
+  const [passagePick, setPassagePick] = useState<{ epoch: number | null | undefined; id: number } | null>(null);
+  const passageId = passagePick && passagePick.epoch === epoch ? passagePick.id : null;
+  const setPassageId = useCallback(
+    (id: number | null) => setPassagePick(id == null ? null : { epoch, id }),
+    [epoch],
+  );
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
   const [canvasRevision, setCanvasRevision] = useState(0);
   useEffect(() => subscribeCanvasNodes(() => setCanvasRevision(value => value + 1)), []);
@@ -78,11 +93,11 @@ function LogsExplorer({ workflowId, runId, initialStepAlias, onBreadcrumbChange,
   });
   const epochs = useMemo(() => [...(Array.isArray(stateQuery.data?.epochTimestamps) ? stateQuery.data.epochTimestamps : [])].sort((a, b) => b.epoch - a.epoch), [stateQuery.data]);
   useEffect(() => {
-    if (epoch === undefined && stateQuery.isSuccess) {
+    if (!synced && localEpoch === undefined && stateQuery.isSuccess) {
       // Pin once. A new trigger fire must not take the reader away from their data.
-      setEpoch(epochs[0]?.epoch ?? null);
+      setLocalEpoch(epochs[0]?.epoch ?? null);
     }
-  }, [epoch, epochs, stateQuery.isSuccess]);
+  }, [synced, localEpoch, epochs, stateQuery.isSuccess]);
 
   const nodesQuery = useQuery<AggregatedStepTiming[]>({
     queryKey: ['workflow-logs', workflowId, runId, 'nodes', viewEpoch],
@@ -149,11 +164,17 @@ function LogsExplorer({ workflowId, runId, initialStepAlias, onBreadcrumbChange,
   function chooseEpoch(value: string) {
     const next = value === 'all' ? null : Number(value);
     setTablePath('');
+    if (synced) {
+      // A user choice, recorded like a pick in the Run tab, so every surface of the run follows.
+      if (next === null) shared.showAll();
+      else shared.pick(next);
+      return;
+    }
     if (tableView) {
       setTableEpoch(next);
       return;
     }
-    setEpoch(next);
+    setLocalEpoch(next);
     setPassageId(null);
   }
   const busy = !enabled || stateQuery.isLoading || viewEpoch === undefined || nodesQuery.isLoading;
@@ -243,7 +264,7 @@ function LogsExplorer({ workflowId, runId, initialStepAlias, onBreadcrumbChange,
                 </div>
                 {tableView ? (
                   <div data-testid="workflow-logs-table" className="min-h-0 flex-1 p-3">
-                    <WorkflowStepTable key={`${alias}:${tableEpoch}`} workflowId={workflowId} runId={runId} stepAlias={alias} epoch={tableEpoch} jsonPath={tablePath} onNavigate={setTablePath} refreshVersion={tableRevision} />
+                    <WorkflowStepTable key={`${alias}:${viewEpoch}`} workflowId={workflowId} runId={runId} stepAlias={alias} epoch={viewEpoch ?? null} jsonPath={tablePath} onNavigate={setTablePath} refreshVersion={tableRevision} />
                   </div>
                 ) : <>
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-theme px-3 py-2">

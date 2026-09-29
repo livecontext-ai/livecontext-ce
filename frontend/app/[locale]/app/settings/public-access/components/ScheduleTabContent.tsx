@@ -97,7 +97,24 @@ export function ScheduleTabContent({ isAuthenticated, addToast }: ScheduleTabCon
     }
   };
 
-  const formatDate = (dateStr?: string) => formatUtcDateTime(dateStr);
+  /**
+   * A schedule's own zone, not the reader's.
+   *
+   * <p>The card prints the cron expression next to its timezone ("0 9 * * * (Asia/Tokyo)"), so
+   * rendering "next run" underneath in the reader's zone puts two zones in one row and invites
+   * exactly the wrong arithmetic: the reader checks whether 01:00 matches "0 9" and concludes the
+   * schedule is broken. The fire times are the schedule's zone; `createdAt` on the same card is an
+   * event in the reader's own life and stays theirs, so the card is not single-zone.
+   *
+   * <p>A BLANK stored zone reads as UTC rather than falling through to the reader's. Falling
+   * through was the old behaviour and it was visible, because every instant carried its zone label;
+   * a label is now printed only for a PINNED zone, so the same fall-through would show a fire time
+   * in the reader's zone with nothing saying so, under a detail line reading "0 9 * * * ()". UTC is
+   * what a schedule with no zone fires in, so both halves of the card say UTC.
+   */
+  const zoneOf = (timeZone?: string) => (timeZone && timeZone.trim() ? timeZone : 'UTC');
+  const formatDate = (dateStr?: string, timeZone?: string) =>
+    formatUtcDateTime(dateStr, { timeZone: zoneOf(timeZone) });
 
   if (loading) {
     return (
@@ -137,13 +154,13 @@ export function ScheduleTabContent({ isAuthenticated, addToast }: ScheduleTabCon
               workflowName={schedule.workflowName}
               isApplication={schedule.workflowId ? appWorkflowIds.has(schedule.workflowId) : false}
               createdAt={schedule.createdAt}
-              detailLine={`${schedule.cronExpression} (${schedule.timezone})`}
+              detailLine={`${schedule.cronExpression} (${zoneOf(schedule.timezone)})`}
               detailCopyable={false}
               extraInfo={
                 <div className="flex items-center gap-3 text-xs text-theme-secondary">
                   <span>{t('executions', { count: schedule.executionCount })}</span>
                   {schedule.nextExecutionAt && (
-                    <span>{t('nextRun')}: {formatDate(schedule.nextExecutionAt)}</span>
+                    <span>{t('nextRun')}: {formatDate(schedule.nextExecutionAt, schedule.timezone)}</span>
                   )}
                 </div>
               }

@@ -1,19 +1,22 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, ListTree, Play, Table2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, BarChart3, ListTree, Play, Table2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { WorkflowLogsExplorer } from './WorkflowLogsExplorer';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/breadcrumb';
 import { orchestratorApi, type WorkflowRun } from '@/lib/api';
 import { RunSummaryBar } from '@/components/workflow/run-panel/RunSummaryBar';
 import { ToggleGroup } from '@/components/ui/toggle-group';
+import { PANEL_NAV_BUTTON_CLASS } from '@/components/workflow/run-panel/panelNavButton';
 
 interface WorkflowLogsPanelContentProps {
   workflowId: string;
   runId: string;
   initialStepAlias?: string;
   onBack: () => void;
+  /** Go on to the Analysis view of this run. Omit where there is none (another run, a preview). */
+  onOpenAnalysis?: () => void;
 }
 
 /**
@@ -25,6 +28,7 @@ export function WorkflowLogsPanelContent({
   runId,
   initialStepAlias,
   onBack,
+  onOpenAnalysis,
 }: WorkflowLogsPanelContentProps) {
   const t = useTranslations();
   const [breadcrumbItems, setBreadcrumbItems] = useState<BreadcrumbItem[]>([]);
@@ -77,7 +81,7 @@ export function WorkflowLogsPanelContent({
             <button
               type="button"
               onClick={onBack}
-              className="flex h-6 min-w-0 flex-shrink-0 items-center gap-1.5 rounded-lg border border-theme px-1.5 text-sm font-medium text-theme-secondary transition-colors hover:bg-theme-secondary hover:text-theme-primary"
+              className={PANEL_NAV_BUTTON_CLASS}
               title={t('workflow.logs.backToRun')}
               aria-label={t('workflow.logs.backToRun')}
             >
@@ -86,6 +90,20 @@ export function WorkflowLogsPanelContent({
               <span className="truncate">{t('sidePanel.runTab')}</span>
             </button>
           )}
+          trailing={onOpenAnalysis ? (
+            <button
+              type="button"
+              data-logs-to-analysis
+              onClick={onOpenAnalysis}
+              className={PANEL_NAV_BUTTON_CLASS}
+              title={t('sidePanel.analysisTab')}
+              aria-label={t('sidePanel.analysisTab')}
+            >
+              <BarChart3 className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="truncate">{t('sidePanel.analysisTab')}</span>
+              <ArrowRight className="h-3.5 w-3.5 flex-shrink-0" />
+            </button>
+          ) : undefined}
         />
 
         {runLoadFailed && (

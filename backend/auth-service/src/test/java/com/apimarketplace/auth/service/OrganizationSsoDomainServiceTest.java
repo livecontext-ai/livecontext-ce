@@ -160,6 +160,8 @@ class OrganizationSsoDomainServiceTest {
             assertThat(d.getLastCheckedAt()).isNotNull();
             verify(domainRepository).saveAndFlush(d);
             verify(auditService).record(eq(ORG_ID), eq(ACTOR), eq(OrganizationAuditEvent.Type.SSO_DOMAIN_VERIFIED), any());
+            // The workspace IdP was kept disabled until a first domain was proven: re-sync it now.
+            verify(samlService).syncIdentityProviderEnabled(ORG_ID);
         }
 
         @Test
@@ -175,6 +177,7 @@ class OrganizationSsoDomainServiceTest {
             assertThat(dto.verified()).isFalse();
             assertThat(d.getLastCheckedAt()).isNotNull();
             verify(auditService, never()).record(any(), any(), any(), any());
+            verify(samlService, never()).syncIdentityProviderEnabled(any());
         }
 
         @Test
@@ -251,6 +254,19 @@ class OrganizationSsoDomainServiceTest {
 
         verify(domainRepository).delete(d);
         verify(auditService).record(eq(ORG_ID), eq(ACTOR), eq(OrganizationAuditEvent.Type.SSO_DOMAIN_REMOVED), any());
+        verify(samlService, never()).syncIdentityProviderEnabled(any());
+    }
+
+    @Test
+    @DisplayName("removing a VERIFIED domain re-syncs the workspace IdP (the last one gone turns it off)")
+    void deletingAVerifiedDomainResyncsTheIdentityProvider() {
+        OrganizationSsoDomain d = pending("acme.com");
+        d.setVerifiedAt(java.time.Instant.now());
+        when(domainRepository.findByIdAndOrganization_Id(DOMAIN_ID, ORG_ID)).thenReturn(Optional.of(d));
+
+        service.delete(ORG_ID, ACTOR, DOMAIN_ID);
+
+        verify(samlService).syncIdentityProviderEnabled(ORG_ID);
     }
 
     @Nested

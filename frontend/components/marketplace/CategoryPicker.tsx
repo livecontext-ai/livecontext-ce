@@ -2,27 +2,9 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import * as LucideIcons from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { orchestratorApi } from '@/lib/api';
-
-/**
- * Resolve a Lucide icon component from a category's iconSlug. The catalog stores
- * iconSlug as kebab-case (e.g. "shopping-bag"); Lucide exports the PascalCase
- * (e.g. ShoppingBag). Returns null when the slug is unset or the lookup fails
- * so callers can fall back to a no-icon layout.
- */
-function getCategoryIcon(iconSlug?: string): React.ComponentType<{ className?: string }> | null {
-  if (!iconSlug) return null;
-  const pascalCase = iconSlug
-    .split('-')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join('');
-  // Lucide's type is too loose to constrain at compile-time - keyed lookup is
-  // intentional and the null fallback above protects all callsites.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return ((LucideIcons as any)[pascalCase] as React.ComponentType<{ className?: string }>) || null;
-}
+import { getCategoryIcon } from '@/lib/marketplace/categoryIcons';
 
 interface Category {
   id: string;

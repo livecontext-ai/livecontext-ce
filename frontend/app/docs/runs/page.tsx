@@ -357,10 +357,11 @@ export default function RunsPage() {
           table, one row per element. Use the breadcrumb to come back.
         </p>
         <p>
-          The first columns always say where a row comes from: <strong>ID</strong>, then{' '}
-          <strong>Epoch</strong>, <strong>Spawn</strong>, and <strong>Iteration</strong>. They stay
-          visible inside an opened field too: each element keeps the coordinates of the pass it came
-          from, so a value you drilled into never loses its origin.
+          The <strong>ID</strong> comes first and already says where a row comes from. The status,
+          input, and output follow, then <strong>Epoch</strong>, <strong>Spawn</strong>, and{' '}
+          <strong>Iteration</strong> one per column, to filter and sort on. They stay visible inside
+          an opened field too: each element keeps the coordinates of the pass it came from, so a
+          value you drilled into never loses its origin.
         </p>
         <p>
           The <strong>ID</strong> is those coordinates written together,{' '}

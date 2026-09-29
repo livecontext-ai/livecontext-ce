@@ -25,6 +25,8 @@ import AccountRestoreModal from '@/components/auth/AccountRestoreModal';
 import ChangelogModal from '@/components/changelog/ChangelogModal';
 import AppViewTracker from '@/components/analytics/AppViewTracker';
 import ProfileContextReporter from '@/components/lifecycle/ProfileContextReporter';
+import PendingRewardCodeRedeemer from '@/components/reward/PendingRewardCodeRedeemer';
+import DisplayPreferencesGate from '@/components/lifecycle/DisplayPreferencesGate';
 import IncidentStrip from '@/components/app/IncidentStrip';
 import TwoFactorNudge from '@/components/app/TwoFactorNudge';
 import { IS_CE } from '@/lib/edition';
@@ -66,7 +68,18 @@ export default function AppLayout({
                         lifecycle e-mails, once per session. Here, not in the root
                         providers, so share, embed and public pages never send it. */}
                     {!IS_CE && <ProfileContextReporter />}
-                    <AppShell>{children}</AppShell>
+                    {/* Applies the partner / creator code the person arrived with. */}
+                    {!IS_CE && <PendingRewardCodeRedeemer />}
+                    {/* Applies the stored display time zone (and captures this device's when the
+                        account has none), so every date below reads in the person's zone. It
+                        WRAPS the shell rather than sitting beside it: nothing that formats a date
+                        subscribes to the zone, so a preference that lands after the first paint
+                        has to re-render what it affects. BOTH editions, unlike the reporter
+                        above: a self-hosted install writes its notification e-mails from the same
+                        stored preference. */}
+                    <DisplayPreferencesGate>
+                      <AppShell>{children}</AppShell>
+                    </DisplayPreferencesGate>
                     {/* Ongoing-incident strip. Mounted here rather than inside
                         AppShell: AppShell renders two different arrangements and
                         moving a child between those branches remounts the subtree

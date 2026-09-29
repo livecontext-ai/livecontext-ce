@@ -590,4 +590,50 @@ public interface StorageRepository extends JpaRepository<StorageEntity, UUID> {
         @Param("jsonPath") String jsonPath,
         @Param("pageSize") int pageSize,
         @Param("offset") int offset);
+
+    /**
+     * JSONPath matching a FileRef object ({@code "_type": "file"}) whose {@code id} is the
+     * {@code $fid} variable, at any depth. Bound as a parameter rather than inlined so the
+     * {@code ?} filter never meets a JDBC/Hibernate placeholder parser.
+     */
+    String FILE_REF_BY_ID_JSONPATH = "$.** ? (@._type == \"file\" && @.id == $fid)";
+
+    /**
+     * Whether a node OUTPUT of one of {@code runIds} carries a FileRef pointing at {@code fileId}.
+     * Used by the share-link file scope: a file a tool uploaded untagged (catalog binary, image
+     * generation) is reachable through the step output that references it.
+     *
+     * <p>Deliberately narrow, because a share viewer can put text into a shared run:
+     * <ul>
+     *   <li>only {@code source_type = 'STEP_OUTPUT'} rows (node outputs), never the
+     *       {@code SIGNAL} / {@code INTERFACE_ACTION} rows that persist what a visitor submitted;</li>
+     *   <li>never a {@code trigger:*} or {@code interface:*} node output, which carry the trigger
+     *       payload and form inputs;</li>
+     *   <li>only a real FileRef shape ({@code _type = "file"} with that {@code id}), not a bare id
+     *       mentioned anywhere in the payload.</li>
+     * </ul>
+     * The {@code strpos} prefilter keeps the JSONPath off rows that cannot match. The node prefix
+     * is split on {@code chr(58)} (a colon) so no colon literal reaches a named-parameter parser.
+     */
+    @Query(value = """
+        SELECT EXISTS (
+            SELECT 1 FROM storage.storage s
+            WHERE s.run_id IN (:runIds)
+              AND s.status = 'ACTIVE'
+              AND s.source_type = 'STEP_OUTPUT'
+              AND s.step_key IS NOT NULL
+              AND split_part(s.step_key, chr(58), 1) NOT IN ('trigger', 'interface')
+              AND s.data IS NOT NULL
+              AND strpos(CAST(s.data AS text), :fileId) > 0
+              AND jsonb_path_exists(s.data, CAST(:fileRefPath AS jsonpath),
+                                    jsonb_build_object('fid', CAST(:fileId AS text))))
+        """, nativeQuery = true)
+    boolean existsStepOutputFileRef(@Param("runIds") java.util.Collection<String> runIds,
+                                    @Param("fileId") String fileId,
+                                    @Param("fileRefPath") String fileRefPath);
+
+    /** {@link #existsStepOutputFileRef} with the canonical FileRef JSONPath. */
+    default boolean existsRunRowReferencing(java.util.Collection<String> runIds, String fileId) {
+        return existsStepOutputFileRef(runIds, fileId, FILE_REF_BY_ID_JSONPATH);
+    }
 }

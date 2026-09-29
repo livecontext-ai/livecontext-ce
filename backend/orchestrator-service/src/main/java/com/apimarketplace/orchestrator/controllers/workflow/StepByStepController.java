@@ -53,6 +53,31 @@ public class StepByStepController {
     @Autowired
     private WorkflowRunRepository runRepository;
 
+    @Autowired
+    private com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard;
+
+    /**
+     * Scope check, then the run write gate: executing a step (or switching the run's mode,
+     * or starting it) runs nodes with the owner's credentials, so it is refused to the VIEWER
+     * role and to a member restricted from the run's workflow ({@link RunWriteGate}).
+     * Read endpoints keep using {@link #guardRunScope} alone.
+     */
+    private ResponseEntity<?> guardRunWrite(String runId, String userId, String orgId, String orgRole,
+                                            String action) {
+        ResponseEntity<?> scopeBlock = guardRunScope(runId, userId, orgId);
+        if (scopeBlock != null) return scopeBlock;
+        String denial = RunWriteGate.denial(orgAccessGuard,
+                runRepository.findByRunIdPublic(runId).orElse(null), userId, orgId, orgRole, action);
+        return denial == null ? null : ResponseEntity.status(RunWriteGate.statusFor(denial)).body(Map.of("error", denial));
+    }
+
+    /** Backward-compatible direct-call overload used by controller unit tests: no role. */
+    public ResponseEntity<?> executeSingleStepInStepByStepMode(String runId, String stepId, Integer epoch,
+                                                               String userId, String orgId,
+                                                               Map<String, Object> inputData) {
+        return executeSingleStepInStepByStepMode(runId, stepId, epoch, userId, orgId, null, inputData);
+    }
+
     /**
      * Audit 2026-05-16 round-3 - every step-by-step endpoint MUST scope by caller.
      * Returns:
@@ -81,9 +106,10 @@ public class StepByStepController {
             @PathVariable("runId") String runId,
             @PathVariable("stepId") String stepId,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
-            ResponseEntity<?> scopeBlock = guardRunScope(runId, userId, orgId);
+            ResponseEntity<?> scopeBlock = guardRunWrite(runId, userId, orgId, orgRole, "execute steps of");
             if (scopeBlock != null) return scopeBlock;
 
             // No credit pre-check: the step executes and NodeCreditGate fails the node
@@ -173,9 +199,10 @@ public class StepByStepController {
             @PathVariable("runId") String runId,
             @RequestBody Map<String, String> request,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
-            ResponseEntity<?> scopeBlock = guardRunScope(runId, userId, orgId);
+            ResponseEntity<?> scopeBlock = guardRunWrite(runId, userId, orgId, orgRole, "change the execution mode of");
             if (scopeBlock != null) return scopeBlock;
             String modeStr = request.get("mode");
             if (modeStr == null) {
@@ -239,9 +266,10 @@ public class StepByStepController {
             @PathVariable("runId") String runId,
             @RequestBody(required = false) Map<String, Object> requestBody,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
-            ResponseEntity<?> scopeBlock = guardRunScope(runId, userId, orgId);
+            ResponseEntity<?> scopeBlock = guardRunWrite(runId, userId, orgId, orgRole, "start");
             if (scopeBlock != null) return scopeBlock;
             updatePlanIfPresent(runId, requestBody);
 
@@ -286,9 +314,10 @@ public class StepByStepController {
             @PathVariable("coreId") String coreId,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
             @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
             @RequestBody(required = false) Map<String, Object> requestBody) {
         try {
-            ResponseEntity<?> scopeBlock = guardRunScope(runId, userId, orgId);
+            ResponseEntity<?> scopeBlock = guardRunWrite(runId, userId, orgId, orgRole, "execute steps of");
             if (scopeBlock != null) return scopeBlock;
             // No credit pre-check: the step executes and NodeCreditGate fails the node
             // with the out-of-credit message, so the run shows WHERE it stopped and the
@@ -360,9 +389,10 @@ public class StepByStepController {
             @RequestParam(value = "epoch", required = false) Integer epoch,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
             @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
             @RequestBody(required = false) Map<String, Object> inputData) {
         try {
-            ResponseEntity<?> scopeBlock = guardRunScope(runId, userId, orgId);
+            ResponseEntity<?> scopeBlock = guardRunWrite(runId, userId, orgId, orgRole, "execute steps of");
             if (scopeBlock != null) return scopeBlock;
             // No credit pre-check: the step executes and NodeCreditGate fails the node
             // with the out-of-credit message, so the run shows WHERE it stopped and the

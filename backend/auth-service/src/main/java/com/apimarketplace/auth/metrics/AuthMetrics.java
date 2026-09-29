@@ -107,7 +107,7 @@ public class AuthMetrics {
             // permanently flat zeros, and a flat zero reads as "watched and healthy" rather
             // than as "nothing is watching". Same argument the auth_time counter below makes
             // for leaving "local" out.
-            for (String reason : new String[]{"invalid_credentials","rate_limited","disabled","internal_error","no_jwt","user_not_found","cross_provider_conflict"}) {
+            for (String reason : new String[]{"invalid_credentials","rate_limited","disabled","internal_error","no_jwt","user_not_found","cross_provider_conflict","saml_rejected"}) {
                 Counter.builder(LOGIN_TOTAL).tags("result","failure","provider",provider,"reason",reason).register(registry);
             }
             Counter.builder(SIGNUP_TOTAL).tags("provider",provider,"first_user","false").register(registry);

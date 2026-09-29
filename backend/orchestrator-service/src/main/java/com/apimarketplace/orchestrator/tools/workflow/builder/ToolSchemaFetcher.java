@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.tools.workflow.builder;
 
+import com.apimarketplace.common.web.InternalGatewaySigner;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
@@ -24,6 +25,17 @@ public class ToolSchemaFetcher {
 
     @Value("${catalog.service.url:http://localhost:8081}")
     private String catalogServiceUrl;
+
+    /**
+     * The slug lookup hits {@code /api/workflow-inspector}, which catalog-service does NOT list
+     * among its gateway public paths, so the call must carry the gateway HMAC or it is refused
+     * with 401 "Missing gateway authentication headers" (every slug lookup failed that way in
+     * prod from 569da567db until this signature was added).
+     */
+    @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}")
+    private String gatewaySecretKey;
+
+    static final String INTERNAL_PROVIDER_ID = "internal-orchestrator-tool-schema";
 
     public ToolSchemaFetcher() {
         this.restTemplate = new RestTemplate();
@@ -215,6 +227,7 @@ public class ToolSchemaFetcher {
             String url = catalogServiceUrl + "/api/workflow-inspector/tools/" + toolSlug;
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
+            InternalGatewaySigner.stamp(headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
             HttpEntity<Void> entity = new HttpEntity<>(headers);
 
             @SuppressWarnings("unchecked")
@@ -233,6 +246,15 @@ public class ToolSchemaFetcher {
             CachedToolInfo entry = new CachedToolInfo(Optional.empty(), ToolExistence.NOT_FOUND, Instant.now());
             cachePut(cacheKey, entry);
             return entry;
+        } catch (HttpClientErrorException.Unauthorized | HttpClientErrorException.Forbidden authError) {
+            // Not transient: a refused signature is a configuration error (missing or mismatched
+            // gateway secret) that repeats on every call. Logged at ERROR so it alerts, and never
+            // cached so the lookup recovers as soon as the configuration is fixed.
+            log.error("Catalog slug lookup REJECTED for tool {} ({}): gateway authentication refused, "
+                    + "check gateway.filter.secret-key on orchestrator-service (configured={}): {}",
+                    cacheKey, authError.getStatusCode().value(),
+                    gatewaySecretKey != null && !gatewaySecretKey.isBlank(), authError.getMessage());
+            return new CachedToolInfo(Optional.empty(), ToolExistence.UNKNOWN, Instant.now());
         } catch (Exception e) {
             log.warn("Catalog slug lookup failed for tool {} (transient): {}", cacheKey, e.getMessage());
             return new CachedToolInfo(Optional.empty(), ToolExistence.UNKNOWN, Instant.now());

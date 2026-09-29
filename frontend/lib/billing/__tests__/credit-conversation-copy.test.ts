@@ -286,8 +286,8 @@ describe('credit-to-conversation copy', () => {
     // The inverse matters as much, which is why this is one test and not two: a flat
     // price does NOT vary by model, so naming one beside it would invent a qualification
     // and turn an exact figure into an apparent estimate. {nodeCredits} is the flat one
-    // (CreditService debits exactly one credit per workflow node), and the free-plan
-    // credits tooltip is the message that quotes it.
+    // (CreditService debits exactly one credit per workflow node, on every plan), and
+    // both credits tooltips and the FAQ answer quote it beside a model-priced figure.
     const pricing = (LOCALES[locale] as any)?.pricing ?? {};
     const wrong: string[] = [];
     for (const path of [...PRICING_TOOLTIPS, `faq.${CREDIT_EXAMPLES_FAQ_KEY}.answer`]) {
@@ -321,6 +321,16 @@ describe('credit-to-conversation copy', () => {
     const cell = String(read((LOCALES[locale] as any)?.pricing ?? {}, 'compare.values.creditsFree'));
     expect(cell, `${locale}: the free credits cell still qualifies its pot`).not.toMatch(/[(（].+[)）]/);
     expect(cell).toMatch(/\d/);
+  });
+
+  it.each(Object.keys(LOCALES))('%s prices a workflow node on the paid plans too, not only on Free', (locale) => {
+    // CreditService debits one credit per workflow node on EVERY plan, but only the Free
+    // tooltip used to say so: the paid cards, the compare table and the pricing FAQ priced
+    // agent exchanges alone, which read as "workflows are free once you pay".
+    const pricing = (LOCALES[locale] as any)?.pricing ?? {};
+    for (const path of ['compare.dimensions.creditsTooltip', 'faq.conversationCost.answer']) {
+      expect(read(pricing, path), `${locale}: ${path} must price a workflow node`).toContain('{nodeCredits}');
+    }
   });
 
   it.each(Object.keys(LOCALES))('%s prices the free-plan pool with both units it funds', (locale) => {

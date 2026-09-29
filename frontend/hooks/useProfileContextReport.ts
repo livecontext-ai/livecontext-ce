@@ -7,16 +7,20 @@ import { unifiedApiService } from '@/lib/api/unified-api-service';
 import type { ProfileContextPayload } from '@/lib/api/services/user-api.service';
 import { readAcquisition } from '@/lib/lifecycle/acquisition';
 import { isAnalyticsConsentGranted } from '@/lib/analytics/consent';
+import { getBrowserTimeZone } from '@/lib/utils/timezone';
 
 /** sessionStorage key holding the last report this tab already delivered. */
 export const PROFILE_CONTEXT_SENT_KEY = 'lc_ctx_sent_v1';
 
+/**
+ * The DEVICE's zone. Delegates to the shared reader rather than repeating its try/catch: the same
+ * question had three implementations, and a fallback that differs between them is a bug nobody
+ * would look for. Deliberately not the account's display zone ({@code getClientTimeZone}) - this
+ * report is what TELLS the account where the device is, so reading the account back would make it
+ * report its own last answer forever.
+ */
 function browserTimeZone(): string | undefined {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
-  } catch {
-    return undefined;
-  }
+  return getBrowserTimeZone();
 }
 
 /**

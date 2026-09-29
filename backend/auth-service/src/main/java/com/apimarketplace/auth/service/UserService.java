@@ -755,7 +755,7 @@ public class UserService {
         String displayName = onboardingRepository.findByUserId(user.getId())
                 .map(UserOnboarding::getDisplayName)
                 .orElse(user.getFirstName());
-        deactivationMailer.sendDeactivationEmail(user.getEmail(), displayName);
+        deactivationMailer.sendDeactivationEmail(user.getEmail(), displayName, user.getLocale());
         if (lifecycleEmails != null) lifecycleEmails.deleteContact(user.getEmail());
 
         logger.info("Account deactivated for user {} ({}), 30-day grace period started",
@@ -797,7 +797,7 @@ public class UserService {
         String displayName = onboardingRepository.findByUserId(user.getId())
                 .map(UserOnboarding::getDisplayName)
                 .orElse(user.getFirstName());
-        deactivationMailer.sendRestorationEmail(user.getEmail(), displayName);
+        deactivationMailer.sendRestorationEmail(user.getEmail(), displayName, user.getLocale());
         if (lifecycleEmails != null) lifecycleEmails.syncContact(user.getId());
 
         logger.info("Account restored for user {} ({}), deletion scheduled at {} cancelled",
@@ -872,6 +872,13 @@ public class UserService {
         profile.setHandle(ensureHandle(profileEntity, handleBase));
         profile.setBio(profileEntity.getBio());
         profile.setProfileVisibility(profileEntity.getProfileVisibility());
+
+        // Display preferences, so the app formats dates in the person's zone and language on
+        // every device instead of on whichever one last wrote the browser cookie.
+        profile.setLocale(user.getLocale());
+        profile.setLocaleExplicit(user.isLocaleExplicit());
+        profile.setTimeZone(user.getTimeZone());
+        profile.setTimeZoneExplicit(user.isTimeZoneExplicit());
 
         return profile;
     }

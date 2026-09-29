@@ -1,17 +1,17 @@
 // @vitest-environment jsdom
 /**
- * A node cannot be moved on a canvas that cannot save the move.
+ * Who may move a node on the canvas.
  *
- * In run mode (and in a read-only preview) the canvas has no Save, yet it let nodes
- * be dragged: the move looked done, and switching back to edit mode silently put the
- * node back where it was saved (reproduced live 2026-09-23: y=257 back to 153), with
- * Save disabled because nothing had changed. Dragging is locked wherever the canvas is.
+ * Edit mode: yes, and Save persists it. Run mode: yes, to rearrange the graph while
+ * reading a run (not saved). 60589c8ec3 locked run mode to stop a move that looked
+ * saved from snapping back, which took that away. A read-only preview stays fixed.
+ * The toolbar lock freezes nodes in every mode, including a drag already under way.
  *
  * Mock scaffolding mirrors BuilderCanvas.saveScope.test.tsx.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, act } from '@testing-library/react';
 
 let mockMode: { isRunMode: boolean; isPreviewOnly: boolean };
 let mockPathname: string;
@@ -70,7 +70,13 @@ vi.mock('../../registry/nodeRegistry', () => ({
 vi.mock('../../nodes/nodeClasses', () => ({ findNodeClassById: () => undefined }));
 vi.mock('../nodes/shared', () => ({ NodeIcon: () => null, getIconSlug: () => '' }));
 vi.mock('../HoverEdgeManager', () => ({ HoverEdgeManager: () => null }));
-vi.mock('../CanvasToolbar', () => ({ CanvasToolbar: () => null }));
+let toolbarProps: { onToggleInteractivity: () => void } | null = null;
+vi.mock('../CanvasToolbar', () => ({
+  CanvasToolbar: (p: { onToggleInteractivity: () => void }) => {
+    toolbarProps = p;
+    return null;
+  },
+}));
 vi.mock('../CanvasSettingsPanel', () => ({ CanvasSettingsPanel: () => null }));
 vi.mock('../EmptyCanvasChat', () => ({ EmptyCanvasChat: () => <div data-testid="empty-canvas-chat" /> }));
 
@@ -121,6 +127,7 @@ beforeEach(() => {
   mockPathname = '/app/workflow/wf-1';
   mockDirection = 'horizontal';
   generateWorkflowPlan.mockClear();
+  toolbarProps = null;
 });
 
 const props = () => ({
@@ -144,15 +151,96 @@ describe('BuilderCanvas node dragging', () => {
     expect(reactFlowProps.nodesDraggable).toBe(true);
   });
 
-  it('regression: locks dragging in run mode, where no Save exists and the move was silently lost', () => {
+  it('regression: lets nodes be dragged in run mode again (locked by 60589c8ec3)', () => {
     mockMode = { isRunMode: true, isPreviewOnly: false };
+    const p = props();
+    render(<BuilderCanvas {...p} />);
+    expect(reactFlowProps.nodesDraggable).toBe(true);
+
+    // The move reaches the node state, so the node follows the pointer.
+    const move = { type: 'position', id: 'n1', position: { x: 40, y: 80 }, dragging: true };
+    act(() => (reactFlowProps.onNodesChange as (c: unknown[]) => void)([move]));
+    expect(p.onNodesChange).toHaveBeenCalledWith([move]);
+  });
+
+  it('keeps a read-only preview fixed', () => {
+    mockMode = { isRunMode: false, isPreviewOnly: true };
     render(<BuilderCanvas {...props()} />);
     expect(reactFlowProps.nodesDraggable).toBe(false);
   });
 
-  it('locks dragging in a read-only preview too', () => {
-    mockMode = { isRunMode: false, isPreviewOnly: true };
+  it('keeps a read-only preview of a run fixed', () => {
+    mockMode = { isRunMode: true, isPreviewOnly: true };
     render(<BuilderCanvas {...props()} />);
     expect(reactFlowProps.nodesDraggable).toBe(false);
+  });
+
+  it.each([
+    ['edit', false],
+    ['run', true],
+  ])('the toolbar lock freezes nodes in %s mode, and unlocking frees them', (_label, isRunMode) => {
+    mockMode = { isRunMode, isPreviewOnly: false };
+    render(<BuilderCanvas {...props()} />);
+
+    act(() => toolbarProps!.onToggleInteractivity());
+    expect(reactFlowProps.nodesDraggable).toBe(false);
+
+    act(() => toolbarProps!.onToggleInteractivity());
+    expect(reactFlowProps.nodesDraggable).toBe(true);
+  });
+
+  describe('while the toolbar lock is on', () => {
+    const lockedCanvas = (isRunMode: boolean) => {
+      mockMode = { isRunMode, isPreviewOnly: false };
+      const p = props();
+      render(<BuilderCanvas {...p} />);
+      act(() => toolbarProps!.onToggleInteractivity());
+      const send = (changes: unknown[]) =>
+        act(() => (reactFlowProps.onNodesChange as (c: unknown[]) => void)(changes));
+      return { p, send };
+    };
+
+    it('drops the moves of a drag already under way', () => {
+      const { p, send } = lockedCanvas(true);
+      send([{ type: 'position', id: 'n1', position: { x: 40, y: 80 }, dragging: true }]);
+      expect(p.onNodesChange).not.toHaveBeenCalled();
+    });
+
+    it('keeps the drag-end change, which has no position and clears the node dragging state', () => {
+      const { p, send } = lockedCanvas(true);
+      // The exact shape ReactFlow emits on pointer-up: updateNodePositions(items, false, false).
+      const dragEnd = { type: 'position', id: 'n1', dragging: false };
+      send([{ type: 'position', id: 'n1', position: { x: 40, y: 80 }, dragging: true }, dragEnd]);
+      expect(p.onNodesChange).toHaveBeenCalledWith([dragEnd]);
+    });
+
+    it('keeps the measured-layout correction, a position change without the dragging flag', () => {
+      const { p, send } = lockedCanvas(false);
+      const correction = { type: 'position', id: 'n1', position: { x: 0, y: 320 } };
+      send([correction]);
+      expect(p.onNodesChange).toHaveBeenCalledWith([correction]);
+    });
+
+    it('keeps measurements, which ReactFlow needs to paint the node', () => {
+      const { p, send } = lockedCanvas(true);
+      const measure = { type: 'dimensions', id: 'n1', dimensions: { width: 200, height: 80 } };
+      send([measure]);
+      expect(p.onNodesChange).toHaveBeenCalledWith([measure]);
+    });
+
+    it('still strips removals in run mode', () => {
+      const { p, send } = lockedCanvas(true);
+      const measure = { type: 'dimensions', id: 'n1', dimensions: { width: 200, height: 80 } };
+      send([{ type: 'remove', id: 'n1' }, measure]);
+      expect(p.onNodesChange).toHaveBeenCalledWith([measure]);
+    });
+
+    it('lets drag moves through again once unlocked', () => {
+      const { p, send } = lockedCanvas(true);
+      act(() => toolbarProps!.onToggleInteractivity());
+      const move = { type: 'position', id: 'n1', position: { x: 40, y: 80 }, dragging: true };
+      send([move]);
+      expect(p.onNodesChange).toHaveBeenCalledWith([move]);
+    });
   });
 });

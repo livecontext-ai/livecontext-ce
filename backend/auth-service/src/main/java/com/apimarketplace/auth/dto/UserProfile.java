@@ -31,6 +31,16 @@ public class UserProfile {
     // the user as search-indexable. The safe state is the safe default.
     private String profileVisibility = "UNLISTED";
 
+    // Display preferences (auth.users, V527/V540). Written through
+    // PUT /api/users/profile/context, read back here so the app can format every date in the
+    // person's zone and language on ANY device - the browser cookie only ever knew the last
+    // device they used. `explicit` distinguishes a deliberate pick (pinned) from what the
+    // browser merely reported (last wins), which is what the Settings selects display.
+    private String locale;
+    private boolean localeExplicit;
+    private String timeZone;
+    private boolean timeZoneExplicit;
+
     // Constructeur par defaut
     public UserProfile() {}
 
@@ -106,6 +116,18 @@ public class UserProfile {
 
     public String getProfileVisibility() { return profileVisibility; }
     public void setProfileVisibility(String profileVisibility) { this.profileVisibility = profileVisibility; }
+
+    public String getLocale() { return locale; }
+    public void setLocale(String locale) { this.locale = locale; }
+
+    public boolean isLocaleExplicit() { return localeExplicit; }
+    public void setLocaleExplicit(boolean localeExplicit) { this.localeExplicit = localeExplicit; }
+
+    public String getTimeZone() { return timeZone; }
+    public void setTimeZone(String timeZone) { this.timeZone = timeZone; }
+
+    public boolean isTimeZoneExplicit() { return timeZoneExplicit; }
+    public void setTimeZoneExplicit(boolean timeZoneExplicit) { this.timeZoneExplicit = timeZoneExplicit; }
 
     @Override
     public String toString() {

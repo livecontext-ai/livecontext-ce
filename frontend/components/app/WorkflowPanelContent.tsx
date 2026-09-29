@@ -77,10 +77,12 @@ import {
   type WorkflowLogsNavigationTarget,
 } from '@/lib/sidePanel/workflowLogsNavigation';
 import { WorkflowPanelHostProvider } from '@/contexts/WorkflowPanelHostContext';
+import { WORKFLOW_PANEL_TAB_ID } from '@/lib/sidePanel/tabResource';
+import { WORKFLOW_PANEL_CHAT_TAB_ID, rememberWorkflowPanelConversation } from '@/lib/workflow/workflowPanelChat';
 
 // ── Constants ──
 
-const CHAT_TAB_ID = '__chat_ia__';
+const CHAT_TAB_ID = WORKFLOW_PANEL_CHAT_TAB_ID;
 export const APP_TAB_ID = '__application__';
 export const WORKFLOW_TAB_ID = '__workflow__';
 /** Run history + epochs + steps of the current run (run mode). */
@@ -309,6 +311,12 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
     loadConversation,
     stopStream,
   } = useWorkflowChat({ workflowId, model: selectedModel });
+
+  // The page follows what THIS chat's agent does (see workflowPanelChat). Only the page's own
+  // workflow panel records it: a builder tab on a chat page is not "the chat in the workflow panel".
+  useEffect(() => {
+    if (hostTabId === WORKFLOW_PANEL_TAB_ID) rememberWorkflowPanelConversation(workflowId, conversationId);
+  }, [hostTabId, workflowId, conversationId]);
 
   // Streaming state → dispatch to canvas
   const streaming = useStreaming();
@@ -782,6 +790,10 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<OpenRunPanelDetail>).detail ?? {};
       if (detail.workflowId && detail.workflowId !== workflowId) return;
+      if (detail.tab === 'analysis') {
+        selectPanelTab(ANALYSIS_TAB_ID);
+        return;
+      }
       setRunViewRequest(prev => ({ view: detail.view ?? 'run', seq: (prev?.seq ?? 0) + 1 }));
       selectPanelTab(RUN_TAB_ID);
       // Handled live, so drop it from the bus too: the mount-time consume never
@@ -1291,6 +1303,9 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
           runId={logsTarget.runId}
           initialStepAlias={logsTarget.initialStepAlias}
           onBack={backToRunDetail}
+          // Logs here are always the bound run's (a target for another run is dropped above), so
+          // the only question is whether this panel offers an Analysis tab at all.
+          onOpenAnalysis={showAnalysisTab ? () => selectPanelTab(ANALYSIS_TAB_ID) : undefined}
         />
       ) : activeTabId === ANALYSIS_TAB_ID && currentRunId ? (
         <RunAnalysisPanelContent
@@ -1299,6 +1314,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
           runId={currentRunId}
           surfaceId={runSurfaceId}
           onBack={backToRunDetail}
+          onOpenLogs={openRunLogs}
         />
       ) : activeTabId === CHAT_TAB_ID ? (
         <ChatCore

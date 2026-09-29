@@ -25,6 +25,7 @@ import java.util.stream.Collectors;
 public class ToolResultController {
 
     private final ToolResultService toolResultService;
+    private final com.apimarketplace.conversation.service.ConversationQueryService conversationQueryService;
 
     /**
      * Save a tool result with metadata.
@@ -33,7 +34,25 @@ public class ToolResultController {
     @PostMapping
     public ResponseEntity<Map<String, Object>> saveToolResult(
             @RequestBody Map<String, Object> request,
-            @RequestHeader(value = "X-User-ID") String tenantId) {
+            @RequestHeader(value = "X-User-ID") String tenantId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+        // This path is routed from outside (gateway "tool-results"), so the row's conversation
+        // must be in the caller's active workspace; the service callers use the internal endpoint
+        // (InternalToolResultController) instead. 404, not 403: no existence disclosure.
+        Object conversationId = request.get("conversationId");
+        if (!(conversationId instanceof String id)
+                || !conversationQueryService.isConversationInStrictScope(id, tenantId, organizationId)) {
+            log.warn("Tool result save refused - user {} (org: {}) may not write conversation {}",
+                tenantId, organizationId, conversationId);
+            return ResponseEntity.status(org.springframework.http.HttpStatus.NOT_FOUND)
+                .body(Map.of("success", false, "error", "Conversation not found"));
+        }
+        return save(toolResultService, request, tenantId);
+    }
+
+    /** Shared save + response shape, also used by {@link InternalToolResultController}. */
+    static ResponseEntity<Map<String, Object>> save(ToolResultService toolResultService,
+                                                    Map<String, Object> request, String tenantId) {
         try {
             String conversationId = (String) request.get("conversationId");
             String toolName = (String) request.get("toolName");

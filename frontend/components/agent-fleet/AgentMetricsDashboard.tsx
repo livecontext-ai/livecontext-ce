@@ -24,7 +24,8 @@ import { AvatarDisplay } from '@/components/agents';
 import { AgentPanelContent, AGENT_CONFIGURATION_TAB } from '@/components/app/AgentPanelContent';
 import { StopReasonBadge } from '@/components/agents/StopReasonBadge';
 import { useThemeValue } from '@/hooks/useThemeSafely';
-import { formatUtcDate, formatUtcDateTime, formatUtcTime, parseUtcAware, formatRelativeDateI18n } from '@/lib/utils/dateFormatters';
+import { formatCalendarDate, formatUtcDateTime, formatRelativeDateI18n } from '@/lib/utils/dateFormatters';
+import { formatStartedAt } from './agentRunTime';
 import {
   Select, SelectTrigger, SelectContent, SelectItem, SelectValue,
 } from '@/components/ui/select';
@@ -1604,7 +1605,7 @@ export function AgentMetricsDashboard() {
                   }}
                   itemStyle={{ color: chartColours.tooltipText }}
                   labelStyle={{ color: chartColours.tooltipText, fontWeight: 600, marginBottom: 4 }}
-                  labelFormatter={(v: string) => formatUtcDate(v)}
+                  labelFormatter={(v: string) => formatCalendarDate(v)}
                 />
                 <Legend wrapperStyle={{ fontSize: '12px', color: chartColours.tooltipText }} />
                 {/* 3-bucket stack: success (green) → warning (amber) → failure (red).
@@ -1810,21 +1811,11 @@ function formatDuration(ms: number): string {
   return `${ms}ms`;
 }
 
-// All absolute timestamps are rendered in UTC project-wide. Relative branches
-// stay timezone-neutral; absolute fallbacks go through formatUtcDate / formatUtcTime
-// so the user sees a consistent " UTC" suffix on every page.
-
-function formatStartedAt(dateStr: string): string {
-  // Always UTC. Short form for "today in UTC", full form otherwise. The
-  // " UTC" suffix is preserved so users in any local zone read the same value.
-  const date = parseUtcAware(dateStr);
-  const nowUtcDay = new Date().toISOString().slice(0, 10);
-  const dateUtcDay = date.toISOString().slice(0, 10);
-  if (nowUtcDay === dateUtcDay) {
-    return formatUtcTime(date);
-  }
-  return formatUtcDateTime(date);
-}
+// Absolute timestamps render in the READER's display zone and carry that zone's label, like the
+// rest of the product. Relative branches stay zone-neutral. Day BUCKETS on the charts keep their
+// own calendar (see the axis formatters above): a bucket names a day, and a day is the same day
+// everywhere. `formatStartedAt` lives in ./agentRunTime so its day rule can be tested without
+// mounting this file.
 
 function formatFullDate(dateStr: string): string {
   return formatUtcDateTime(dateStr, { withSeconds: true });

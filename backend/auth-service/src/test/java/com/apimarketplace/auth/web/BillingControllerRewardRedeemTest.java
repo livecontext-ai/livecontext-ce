@@ -73,6 +73,32 @@ class BillingControllerRewardRedeemTest {
     }
 
     @Test
+    @DisplayName("V549: SUCCESS carries what a creator code gave (credits, plan, plan end) for the UI to say it")
+    void successCarriesGrantedCreditsAndPlan() {
+        RewardRedemption r = withStatus(RewardStatus.GRANTED);
+        java.time.LocalDateTime endsAt = java.time.LocalDateTime.of(2026, 12, 27, 10, 0);
+        when(rewardService.redeem(7L, "CODE"))
+                .thenReturn(new RedeemResult(RedeemStatus.SUCCESS, r, 50000, "PRO", endsAt));
+
+        var resp = controller.redeemRewardCode(Map.of("code", "CODE"), request);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        assertThat(resp.getBody().get("grantedCredits")).isEqualTo(50000);
+        assertThat(resp.getBody().get("grantedPlan")).isEqualTo("PRO");
+        // An instant with its offset: the browser shows the right day in any zone.
+        assertThat(java.time.Instant.parse((String) resp.getBody().get("planEndsAt")))
+                .isEqualTo(endsAt.atZone(java.time.ZoneId.systemDefault()).toInstant());
+    }
+
+    @Test
+    @DisplayName("V549: ALREADY_ATTRIBUTED -> 409 with its own typed code (the UI names the reason)")
+    void alreadyAttributed() {
+        var resp = redeemReturning(RedeemStatus.ALREADY_ATTRIBUTED, null);
+        assertThat(resp.getStatusCode().value()).isEqualTo(409);
+        assertThat(resp.getBody().get("code")).isEqualTo("ALREADY_ATTRIBUTED");
+    }
+
+    @Test
     @DisplayName("PENDING_CONVERSION -> 202")
     void pending() {
         var resp = redeemReturning(RedeemStatus.PENDING_CONVERSION, withStatus(RewardStatus.PENDING));
@@ -126,9 +152,10 @@ class BillingControllerRewardRedeemTest {
     }
 
     @Test
-    @DisplayName("a concurrent double-redeem (DataIntegrityViolation) -> 409 ALREADY_REDEEMED")
+    @DisplayName("a concurrent double-redeem (the per-user-per-code unique constraint) -> 409 ALREADY_REDEEMED")
     void duplicateRace() {
-        when(rewardService.redeem(7L, "CODE")).thenThrow(new DataIntegrityViolationException("dup"));
+        when(rewardService.redeem(7L, "CODE")).thenThrow(new DataIntegrityViolationException("insert",
+                new RuntimeException("duplicate key value violates unique constraint \"uq_reward_redemption_user_code\"")));
         var resp = controller.redeemRewardCode(Map.of("code", "CODE"), request);
         assertThat(resp.getStatusCode().value()).isEqualTo(409);
         assertThat(resp.getBody().get("code")).isEqualTo("ALREADY_REDEEMED");
@@ -140,5 +167,44 @@ class BillingControllerRewardRedeemTest {
         when(request.getHeader("X-User-ID")).thenReturn(null);
         var resp = controller.redeemRewardCode(Map.of("code", "CODE"), request);
         assertThat(resp.getStatusCode().value()).isEqualTo(401);
+    }
+
+    @Test
+    @DisplayName("V549: EMAIL_NOT_VERIFIED -> 403 (not final: the auto-redeem keeps the code and retries)")
+    void emailNotVerifiedIs403() {
+        var resp = redeemReturning(RedeemStatus.EMAIL_NOT_VERIFIED, null);
+        assertThat(resp.getStatusCode().value()).isEqualTo(403);
+        assertThat(resp.getBody().get("code")).isEqualTo("EMAIL_NOT_VERIFIED");
+    }
+
+    @Test
+    @DisplayName("V549: NOT_NEW_ACCOUNT and NOTHING_TO_GRANT -> 409 with their own codes")
+    void newAccountAndNothingToGrant() {
+        assertThat(redeemReturning(RedeemStatus.NOT_NEW_ACCOUNT, null).getBody().get("code")).isEqualTo("NOT_NEW_ACCOUNT");
+        assertThat(redeemReturning(RedeemStatus.NOTHING_TO_GRANT, null).getBody().get("code")).isEqualTo("NOTHING_TO_GRANT");
+    }
+
+    @Test
+    @DisplayName("V549: an unexpected constraint (rolled back, nothing consumed) is 503 REDEEM_RETRY, never 'already redeemed'")
+    void unexpectedConstraintIsRetryable() {
+        when(rewardService.redeem(7L, "CODE")).thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                "insert", new RuntimeException("duplicate key value violates unique constraint \"uq_subscription_one_active\"")));
+
+        var resp = controller.redeemRewardCode(Map.of("code", "CODE"), request);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(503);
+        assertThat(resp.getBody().get("code")).isEqualTo("REDEEM_RETRY");
+    }
+
+    @Test
+    @DisplayName("V549: two partner codes redeemed at once lose on the one-partner index -> ALREADY_ATTRIBUTED, not ALREADY_REDEEMED")
+    void partnerIndexRaceMapsToAlreadyAttributed() {
+        when(rewardService.redeem(7L, "CODE")).thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                "insert", new RuntimeException("duplicate key value violates unique constraint \"uq_reward_redemption_partner_redeemer\"")));
+
+        var resp = controller.redeemRewardCode(Map.of("code", "CODE"), request);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(409);
+        assertThat(resp.getBody().get("code")).isEqualTo("ALREADY_ATTRIBUTED");
     }
 }

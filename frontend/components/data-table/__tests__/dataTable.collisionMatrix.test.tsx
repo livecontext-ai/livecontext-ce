@@ -314,7 +314,10 @@ describe.each(MODES)('collision matrix - $name', (mode) => {
     for (const field of fields) {
       if (field === 'checkbox') continue;
       const asBase = field === 'id' ? 'ID' : field === 'priority' ? 'Priority' : field === 'created_at' ? 'Created At' : null;
-      const present = headers.includes(field) || (asBase !== null && headers.includes(asBase));
+      // The timestamp column names its zone ("Created At (Europe/Paris)"), because the file leaves
+      // the product and its reader has none of our preferences. Matched on the name, not equality.
+      const present = headers.includes(field)
+        || (asBase !== null && headers.some((h) => h === asBase || h.startsWith(`${asBase} (`)));
       expect(present, `${field} must reach the export`).toBe(true);
     }
 

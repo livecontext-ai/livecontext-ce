@@ -32,9 +32,25 @@ import frMessages from '../../../messages/fr.json';
 // locale the provider carries, omitting it downstream would still look correct.
 vi.mock('@/lib/utils/locale', () => ({ getClientLocale: () => 'en' }));
 
+// Pin the DISPLAY ZONE for the same reason the locale is pinned. Absolute timestamps are
+// rendered in the reader's zone, which in a jsdom run is whatever zone the machine happens to be
+// in - so without this the assertions below would read "Oct 14" on a UTC CI box and "Oct 15" on
+// a laptop in Paris, because this instant is 23:53 UTC and the day itself moves. What these
+// tests are about is the yearly-invoice / monthly-grant split, not the zone. Mutable so the one
+// test that IS about the zone can move it.
+const zoneMock = vi.hoisted(() => ({ tz: 'UTC' }));
+vi.mock('@/lib/utils/timezone', () => ({
+  getClientTimeZone: () => zoneMock.tz,
+  isValidTimeZone: (tz?: string | null) => !!tz,
+}));
+
 import { BalanceBreakdownCard } from '../BalanceBreakdown';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // Back to UTC: a zone left set by one test would silently move every date after it.
+  zoneMock.tz = 'UTC';
+});
 
 /** 2026-10-14, the shape `/billing/me` serves: a LocalDateTime with no zone designator. */
 const GRANT_DATE = '2026-10-14T23:53:09';
@@ -78,8 +94,21 @@ describe('the wallet card says when the credits come back, and how many', () => 
     // "Back to", never "+". The bucket is ZEROED by resetBalance before the re-grant, so a
     // subscriber holding 8,000 of a 10,000 grant ends the day with 10,000, not 18,000. The
     // plus sign asserted the arithmetic the mechanism does not perform.
-    expect(line()!.textContent).toBe('Back to 10,000 credits on Oct 14, 2026 UTC');
+    expect(line()!.textContent).toBe('Back to 10,000 credits on Oct 14, 2026');
     expect(line()!.textContent).not.toContain('+');
+  });
+
+  it('names the day the READER is on, not the day UTC is on', () => {
+    // GRANT_DATE is 23:53 UTC on the 14th, which is already the 15th in Paris. Whose day the
+    // card should name is a real question, and this is the answer it now gives: the reader's,
+    // like every other date in the product. Somebody in Paris whose balance resets just after
+    // their midnight is told the 15th, which is the date they will watch it happen on.
+    zoneMock.tz = 'Europe/Paris';
+
+    renderCard({ allowance: 10_000, renewsAt: GRANT_DATE, periodEndsAt: GRANT_DATE });
+
+    expect(line()!.textContent).toContain('Oct 15, 2026');
+    expect(line()!.textContent).not.toContain('Oct 14');
   });
 
   it('groups the amount in the app locale, not the browser one', () => {
@@ -174,7 +203,7 @@ describe('the "i" carries the rules, the line carries the facts', () => {
     openExplainer();
 
     expect(screen.getByTestId('subscription-renewal-popover').textContent)
-      .toContain('subscription balance returns to 10,000 credits on Oct 14, 2026 UTC');
+      .toContain('subscription balance returns to 10,000 credits on Oct 14, 2026');
   });
 
   it('explains the annual invoice / monthly grant split, naming the invoice date', () => {
@@ -185,7 +214,7 @@ describe('the "i" carries the rules, the line carries the facts', () => {
     openExplainer();
 
     expect(screen.getByTestId('subscription-renewal-popover').textContent)
-      .toContain('You are billed on Sep 14, 2027 UTC, but your credits are granted every month');
+      .toContain('You are billed on Sep 14, 2027, but your credits are granted every month');
   });
 
   it('does NOT explain a split that does not exist when the two dates are one event', () => {

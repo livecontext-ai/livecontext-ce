@@ -52,7 +52,8 @@ class TriggerControllerTest {
     @BeforeEach
     void setUp() {
         lenient().when(creditClient.checkCredits(any())).thenReturn(true);
-        controller = new TriggerController(runRepository, triggerService, resumeService);
+        controller = new TriggerController(runRepository, triggerService, resumeService,
+                com.apimarketplace.orchestrator.testsupport.OrgAccessGuardStubs.allowAll());
     }
 
     @Nested

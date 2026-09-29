@@ -443,6 +443,31 @@ public class InternalAuthController {
     }
 
     /**
+     * The CURRENT role of one user in one organization, as {@code {"role": "VIEWER"}}, or
+     * {@code {"role": null}} when the user is not an active member (removed, org deleted, or
+     * a malformed id). Consumed by the gateway WebSocket, which re-reads the role on every
+     * run-driving action instead of trusting the one captured at handshake, so a demotion to
+     * VIEWER applies to an already-open socket. Same lookup as the CE monolith's WS handler.
+     * HMAC-required ({@code gateway.filter.hmac-required-paths}): the gateway signs it.
+     */
+    @GetMapping("/member-role/{orgId}/{userId}")
+    public ResponseEntity<Map<String, Object>> getMemberRole(@PathVariable String orgId,
+                                                             @PathVariable String userId) {
+        String role = null;
+        try {
+            role = memberRepository
+                    .findActiveByOrganizationIdAndUserId(java.util.UUID.fromString(orgId), Long.parseLong(userId))
+                    .map(m -> m.getRole() != null ? m.getRole().name() : null)
+                    .orElse(null);
+        } catch (IllegalArgumentException e) {
+            // Malformed org or user id: not a member.
+        }
+        Map<String, Object> body = new HashMap<>();
+        body.put("role", role);
+        return ResponseEntity.ok(body);
+    }
+
+    /**
      * Returns the auth user ids of every member of an organization, as a JSON
      * array of strings under {@code userIds}. Consumed by agent-service's
      * {@code AuthClient.getOrganizationMemberIds} to validate that a human task

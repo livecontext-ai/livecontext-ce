@@ -7,6 +7,7 @@ import { AppDataProvider, LOGIN_SIGNIN_AT_KEY, LOGIN_REDIRECT_LOG_KEY } from '..
 import { EmbeddedAuthProvider } from '../lib/providers/embedded-auth-provider';
 import AnalyticsProvider from '../components/analytics/AnalyticsProvider';
 import AcquisitionCapture from '../components/lifecycle/AcquisitionCapture';
+import PendingRewardCodeCapture from '../components/reward/PendingRewardCodeCapture';
 import { IS_CE } from '../lib/edition';
 import { markOrbiGreeting } from '../components/chat/orbi/orbiGreeting';
 import { stripOidcCallbackParams } from '../lib/auth/oidcCallbackUrl';
@@ -50,6 +51,8 @@ export default function Providers({ children }: { children: React.ReactNode }) {
         {!IS_CE && <AnalyticsProvider />}
         {/* First-touch attribution for the cloud lifecycle e-mails; landing included. */}
         {!IS_CE && <AcquisitionCapture />}
+        {/* A partner / creator code from the landing link, applied after sign-up. */}
+        {!IS_CE && <PendingRewardCodeCapture />}
         <FirstLoginGuard>
           {children}
         </FirstLoginGuard>

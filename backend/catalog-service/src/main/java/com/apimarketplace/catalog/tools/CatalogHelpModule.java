@@ -428,7 +428,8 @@ public class CatalogHelpModule implements ToolModule {
                     "inputSchema", "Array of {name, type, location, required, default, allowedValues, example, description} - the param contract for action='execute'. Read this BEFORE building the execute() call: defaults and allowedValues are pinned here.",
                     "hint", "Present only when skeleton is null. Tells you what to do (execute the tool first, or pass different params if you already executed and got an empty payload). NOT an error - the call still succeeded."
                 ),
-                "cold_start", "If skeleton is null: call catalog(action='execute', tool_id='<uuid>', params={...}) once with valid params, then re-call response_schema. The first non-empty result auto-seeds the skeleton."
+                "cold_start", "If skeleton is null: call catalog(action='execute', tool_id='<uuid>', params={...}) once with valid params, then re-call response_schema. The first non-empty result auto-seeds the skeleton.",
+                "field_selection", "A tool's documented output lists the fields it returns by default. When your execute params include a field-selection parameter with a non-empty text or list value (for example tweet.fields, user.fields, expansions, fields, expand, $select, include, part, readMask, properties, or a name ending in fields such as opt_fields; exclude_fields, search_fields, sort_fields and custom_fields do not count), every extra field the provider sends back is kept in the result next to the documented ones. Without such a parameter only the documented fields come back, even when the provider sent more, so pass the parameter explicitly to get them."
             ),
 
             "skeleton_format", Map.of(

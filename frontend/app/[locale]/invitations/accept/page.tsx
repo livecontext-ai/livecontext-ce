@@ -6,8 +6,12 @@
  * Flow:
  *   1. Read ?token= from the URL and look up the invitation (public, no auth)
  *      via getInvitationInfo → {valid, email, organizationName, role, hasAccount}.
- *   2. If the visitor is authenticated → accept via
- *      organizationApi.acceptInvitation(token) (email match enforced server-side).
+ *   2. If the visitor is authenticated → show WHO invites them to WHICH workspace
+ *      at WHICH role, and wait for an explicit Accept (acceptInvitation) or
+ *      Decline (declineInvitation) click. Nothing is accepted on page load: a
+ *      link opened by mistake (or by a link-preview bot) must never join a
+ *      workspace on the user's behalf. Email match AND a verified email are
+ *      enforced server-side; an unverified email gets a dedicated message.
  *   3. If NOT authenticated and the invitation is valid:
  *        - hasAccount=false (brand-new invitee, CE invite-by-link) → render a
  *          REGISTER form (email locked to the invitation email) that registers
@@ -28,7 +32,12 @@ import { useTranslations } from "next-intl";
 import { ArrowRight } from "lucide-react";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { embeddedRegister } from "@/lib/providers/embedded-auth-provider";
-import { organizationApi, type Organization, type InvitationInfo } from "@/lib/api/organization-api";
+import {
+  organizationApi,
+  isInvitationEmailNotVerifiedError,
+  type Organization,
+  type InvitationInfo,
+} from "@/lib/api/organization-api";
 import { IS_CE } from "@/lib/edition";
 import { AuthLayout } from "@/components/auth/AuthLayout";
 
@@ -39,6 +48,8 @@ const INPUT_CLS =
 const LABEL_CLS = "mb-1.5 block text-[13px] font-medium text-[var(--text-secondary)]";
 const PRIMARY_BTN =
   "mt-1.5 inline-flex h-[46px] w-full items-center justify-center gap-2.5 rounded-[10px] border border-[var(--accent-primary)] bg-[var(--accent-primary)] px-4 text-sm font-semibold text-[var(--accent-foreground)] shadow-[0_1px_2px_rgba(17,17,17,0.06),0_6px_16px_var(--shadow-color)] transition-all hover:-translate-y-px hover:shadow-[0_1px_2px_rgba(17,17,17,0.06),0_10px_22px_var(--shadow-color)] active:scale-[0.985] disabled:cursor-wait disabled:opacity-90";
+const SECONDARY_BTN =
+  "mt-2.5 inline-flex h-[46px] w-full items-center justify-center gap-2.5 rounded-[10px] border border-[var(--border-color)] bg-transparent px-4 text-sm font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-secondary)] disabled:cursor-wait disabled:opacity-70";
 
 type Status =
   | "idle"
@@ -47,12 +58,19 @@ type Status =
   | "invalid"
   | "register"
   | "sign-in"
+  | "confirm"
   | "accepting"
   | "accepted"
+  | "declining"
+  | "declined"
   | "error";
+
+/** Which action failed, so the error card can say "accept" or "decline". */
+type FailedAction = "accept" | "decline";
 
 export default function AcceptInvitationPage() {
   const t = useTranslations("invitationAccept");
+  const tRole = useTranslations("invitationsInbox");
   const router = useRouter();
   const searchParams = useSearchParams();
   const params = useParams();
@@ -64,9 +82,10 @@ export default function AcceptInvitationPage() {
 
   const [status, setStatus] = useState<Status>(token ? "idle" : "missing-token");
   const [errorMessage, setErrorMessage] = useState<string>("");
+  const [failedAction, setFailedAction] = useState<FailedAction>("accept");
+  const [emailNotVerified, setEmailNotVerified] = useState(false);
   const [acceptedOrg, setAcceptedOrg] = useState<Organization | null>(null);
   const [info, setInfo] = useState<InvitationInfo | null>(null);
-  const submittedTokenRef = useRef<string | null>(null);
   const infoTokenRef = useRef<string | null>(null);
 
   // Register-form fields (brand-new invitee path).
@@ -76,73 +95,98 @@ export default function AcceptInvitationPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [registering, setRegistering] = useState(false);
 
-  // Step 1: look up the invitation once the token is known. Drives the
-  // register-vs-sign-in branch for unauthenticated visitors.
+  // Step 1: look up the invitation once the token and the auth state are known.
+  // CE needs it for every visitor (register-vs-sign-in); cloud only for a signed-in
+  // invitee, who must see the workspace, role and inviter before consenting. In
+  // cloud an unauthenticated invitee simply signs in first (Keycloak), as before.
   useEffect(() => {
-    if (!token) return;
-    if (infoTokenRef.current === token) return;
-    infoTokenRef.current = token;
-    // The embedded invite-by-link flow (info lookup + register form) is CE-only.
-    // In cloud (Keycloak) keep the original behavior: an unauthenticated invitee
-    // signs in (Step 2 then accepts) - no info lookup, no embedded register form.
-    if (!IS_CE) {
+    if (!token || isLoading) return;
+    if (!IS_CE && !isAuthenticated) {
       setStatus("sign-in");
       return;
     }
+    if (infoTokenRef.current === token) return;
+    infoTokenRef.current = token;
     setStatus("loading-info");
     organizationApi
       .getInvitationInfo(token)
       .then((result) => setInfo(result))
       .catch(() => setInfo({ valid: false }));
-  }, [token]);
+  }, [token, isLoading, isAuthenticated]);
 
-  // Step 2: authenticated visitor → accept directly (email match enforced server-side).
+  // Step 2: derive the screen from the lookup. A signed-in invitee gets the
+  // explicit consent card; an anonymous CE visitor registers or signs in.
   useEffect(() => {
-    if (!token) return;
-    if (isLoading) return;
-    if (!isAuthenticated) return;
-    if (submittedTokenRef.current === token) return;
-
-    let cancelled = false;
-    submittedTokenRef.current = token;
-    queueMicrotask(() => {
-      if (!cancelled) setStatus("accepting");
-    });
-
-    organizationApi
-      .acceptInvitation(token)
-      .then((org) => {
-        if (cancelled) return;
-        setAcceptedOrg(org);
-        setStatus("accepted");
-        setTimeout(() => {
-          router.push(`/${locale}/app/settings/organization`);
-        }, 1500);
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        const msg = e instanceof Error ? e.message : t("fallbackError");
-        setErrorMessage(msg);
-        setStatus("error");
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [token, isAuthenticated, isLoading, router, locale, t]);
-
-  // Step 3: unauthenticated visitor → derive register vs sign-in from the lookup.
-  useEffect(() => {
-    if (!token || isLoading || isAuthenticated || info === null) return;
-    if (status === "accepting" || status === "accepted" || status === "error") return;
+    if (!token || isLoading || info === null) return;
+    if (
+      status === "accepting" ||
+      status === "accepted" ||
+      status === "declining" ||
+      status === "declined" ||
+      status === "error"
+    ) {
+      return;
+    }
     if (!info.valid) {
       setStatus("invalid");
+    } else if (isAuthenticated) {
+      setStatus("confirm");
     } else if (info.hasAccount) {
       setStatus("sign-in");
     } else {
       setStatus("register");
     }
   }, [token, isLoading, isAuthenticated, info, status]);
+
+  const failWith = useCallback(
+    (action: FailedAction, e: unknown) => {
+      setFailedAction(action);
+      // Never show the backend message (English, technical): map the refusal
+      // to a translated explanation the invitee can act on.
+      const status = typeof e === "object" && e !== null ? (e as { status?: unknown }).status : undefined;
+      if (isInvitationEmailNotVerifiedError(e)) {
+        setEmailNotVerified(true);
+        setErrorMessage(t("emailNotVerifiedBody"));
+      } else {
+        setEmailNotVerified(false);
+        setErrorMessage(
+          status === 403
+            ? t("errorWrongAccount")
+            : action === "decline"
+              ? t("declineFallbackError")
+              : t("errorGeneric")
+        );
+      }
+      setStatus("error");
+    },
+    [t]
+  );
+
+  // Step 3: the user clicked Accept.
+  const handleAccept = useCallback(async () => {
+    setStatus("accepting");
+    try {
+      const org = await organizationApi.acceptInvitation(token);
+      setAcceptedOrg(org);
+      setStatus("accepted");
+      setTimeout(() => {
+        router.push(`/${locale}/app/settings/organization`);
+      }, 1500);
+    } catch (e: unknown) {
+      failWith("accept", e);
+    }
+  }, [token, router, locale, failWith]);
+
+  // Step 3 (alternative): the user clicked Decline.
+  const handleDecline = useCallback(async () => {
+    setStatus("declining");
+    try {
+      await organizationApi.declineInvitation(token);
+      setStatus("declined");
+    } catch (e: unknown) {
+      failWith("decline", e);
+    }
+  }, [token, failWith]);
 
   const handleRegister = useCallback(
     async (e: React.FormEvent) => {
@@ -298,6 +342,47 @@ export default function AcceptInvitationPage() {
     );
   }
 
+  // Signed-in invitee: explicit consent. Show the workspace, the role and the
+  // inviter, and act only on a click.
+  if (status === "confirm" && info?.valid) {
+    const org = info.organizationName;
+    const role = info.role ? tRole(`role.${info.role}`) : null;
+    return (
+      <AuthCard
+        title={org ? t("confirmTitle", { org }) : t("confirmTitleGeneric")}
+        body={t("confirmBody")}
+      >
+        <dl className="mb-6 space-y-2 rounded-[10px] border border-[var(--border-color)] bg-[var(--bg-secondary)] px-3.5 py-3 text-sm">
+          {org ? (
+            <div className="flex justify-between gap-4">
+              <dt className="text-[var(--text-secondary)]">{t("workspaceLabel")}</dt>
+              <dd className="font-medium text-[var(--text-primary)]">{org}</dd>
+            </div>
+          ) : null}
+          {role ? (
+            <div className="flex justify-between gap-4">
+              <dt className="text-[var(--text-secondary)]">{t("roleLabel")}</dt>
+              <dd className="font-medium text-[var(--text-primary)]">{role}</dd>
+            </div>
+          ) : null}
+          {info.inviterName ? (
+            <div className="flex justify-between gap-4">
+              <dt className="text-[var(--text-secondary)]">{t("invitedByLabel")}</dt>
+              <dd className="font-medium text-[var(--text-primary)]">{info.inviterName}</dd>
+            </div>
+          ) : null}
+        </dl>
+        <button type="button" onClick={handleAccept} className={PRIMARY_BTN}>
+          <span>{t("acceptCta")}</span>
+          <ArrowRight className="h-3.5 w-3.5" strokeWidth={2.5} />
+        </button>
+        <button type="button" onClick={handleDecline} className={SECONDARY_BTN}>
+          {t("declineCta")}
+        </button>
+      </AuthCard>
+    );
+  }
+
   if (status === "accepting") {
     return <AuthCard title={t("acceptingTitle")} body={t("acceptingBody")} spinner />;
   }
@@ -312,9 +397,28 @@ export default function AcceptInvitationPage() {
     );
   }
 
+  if (status === "declining") {
+    return <AuthCard title={t("decliningTitle")} spinner />;
+  }
+
+  if (status === "declined") {
+    return (
+      <AuthCard title={t("declinedTitle")} body={t("declinedBody")}>
+        <Link href={`/${locale}/app/settings/organization`} className={PRIMARY_BTN}>
+          {t("goToOrganizations")}
+        </Link>
+      </AuthCard>
+    );
+  }
+
   // error
+  const errorTitle = emailNotVerified
+    ? t("emailNotVerifiedTitle")
+    : failedAction === "decline"
+      ? t("declineErrorTitle")
+      : t("errorTitle");
   return (
-    <AuthCard title={t("errorTitle")} body={errorMessage}>
+    <AuthCard title={errorTitle} body={errorMessage}>
       <Link href={`/${locale}/app/settings/organization`} className={PRIMARY_BTN}>
         {t("goToOrganizations")}
       </Link>

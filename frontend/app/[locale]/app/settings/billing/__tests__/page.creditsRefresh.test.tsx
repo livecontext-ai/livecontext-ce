@@ -30,6 +30,14 @@ vi.mock('@/hooks/useAuthGuard', () => ({
   useAuthGuard: () => ({ isAuthenticated: true, isAuthChecking: false }),
 }));
 vi.mock('@/lib/utils/locale', () => ({ getClientLocale: () => 'en' }));
+// Pin the DISPLAY ZONE alongside the locale. Absolute dates now render in the reader's zone, so
+// in a jsdom run they would follow whatever zone the machine is in: these fixtures fall at 23:53
+// UTC, which is already the NEXT day anywhere east of Greenwich, and the assertions below are
+// about WHICH of the two dates the page shows (invoice vs credit grant), not about the zone.
+vi.mock('@/lib/utils/timezone', () => ({
+  getClientTimeZone: () => 'UTC',
+  isValidTimeZone: (tz?: string | null) => !!tz,
+}));
 vi.mock('@/lib/hooks/smart-hooks-complete', () => ({
   useSubscription: () => ({
     subscription: { subscription: state.subscription },

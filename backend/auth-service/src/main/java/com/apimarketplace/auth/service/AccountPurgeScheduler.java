@@ -87,10 +87,15 @@ public class AccountPurgeScheduler {
                 String displayName = onboardingRepository.findByUserId(user.getId())
                         .map(UserOnboarding::getDisplayName)
                         .orElse(user.getFirstName());
+                // And the LANGUAGE, for the same reason and on the same line. The mailer resolves
+                // a locale by looking the address up, and this is the one mail sent AFTER the row
+                // it would look up has been deleted: without carrying it here, the last message a
+                // person ever receives from us is the one guaranteed to be in the wrong language.
+                String locale = user.getLocale();
 
                 boolean purged = purgeService.purgeUser(user.getId());
                 if (purged) {
-                    mailer.sendPurgeConfirmationEmail(email, displayName);
+                    mailer.sendPurgeConfirmationEmail(email, displayName, locale);
                     if (lifecycleEmails != null) lifecycleEmails.deleteContact(email);
                     logger.info("Account purge: successfully purged user {} ({})", user.getId(), email);
                 }

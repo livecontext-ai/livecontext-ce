@@ -53,6 +53,8 @@ class WorkflowExecutionControllerViewerGateWebMvcTest {
     @Mock private WorkflowResponseFactory responseFactory;
     @Mock private WorkflowControllerHelper helper;
     @Mock private AuthClient authClient;
+    @Mock private com.apimarketplace.orchestrator.repository.WorkflowRunRepository runRepository;
+    @Mock private com.apimarketplace.orchestrator.services.resume.WorkflowResumeService resumeService;
 
     private MockMvc mockMvc;
     private UUID workflowId;
@@ -66,6 +68,8 @@ class WorkflowExecutionControllerViewerGateWebMvcTest {
         // REAL guard: the deny must come from the central isRoleWriteBlocked
         // logic, not from a stubbed canWrite.
         ReflectionTestUtils.setField(controller, "orgAccessGuard", new OrgAccessGuardImpl(authClient));
+        ReflectionTestUtils.setField(controller, "runRepository", runRepository);
+        ReflectionTestUtils.setField(controller, "resumeService", resumeService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new OrgAccessDeniedExceptionHandler())
                 .build();
@@ -76,11 +80,11 @@ class WorkflowExecutionControllerViewerGateWebMvcTest {
         workflow.setTenantId(CALLER);
         workflow.setOrganizationId(ORG);
         workflow.setName("Org workflow");
-        when(workflowRepository.findById(workflowId)).thenReturn(Optional.of(workflow));
+        lenient().when(workflowRepository.findById(workflowId)).thenReturn(Optional.of(workflow));
 
         WorkflowPlan plan = mock(WorkflowPlan.class);
         lenient().when(plan.getId()).thenReturn(workflowId.toString());
-        when(helper.parseWorkflowPlan(any(), anyString(), anyString())).thenReturn(plan);
+        lenient().when(helper.parseWorkflowPlan(any(), anyString(), anyString())).thenReturn(plan);
 
         // Delegate to the real factory: the controller declares the concrete
         // WorkflowExecutionResponse return type, so a Map stub would CCE.
@@ -107,6 +111,27 @@ class WorkflowExecutionControllerViewerGateWebMvcTest {
         // The role gate fires without consulting the per-resource deny-list and
         // before the credit check: no AuthClient or credit interaction happened.
         org.mockito.Mockito.verifyNoInteractions(authClient);
+    }
+
+    @Test
+    @DisplayName("Regression: VIEWER cannot START a pending run (POST /{workflowId}/runs/{runId}/start)")
+    void viewerCannotStartPendingRun() throws Exception {
+        com.apimarketplace.orchestrator.domain.WorkflowRunEntity run =
+                new com.apimarketplace.orchestrator.domain.WorkflowRunEntity();
+        WorkflowEntity wf = new WorkflowEntity();
+        wf.setId(workflowId);
+        run.setWorkflow(wf);
+        run.setRunIdPublic("run-p1");
+        run.setTenantId("owner-9");
+        run.setOrganizationId(ORG);
+        when(runRepository.findByRunIdPublic("run-p1")).thenReturn(Optional.of(run));
+
+        mockMvc.perform(post("/api/v2/workflows/dag/" + workflowId + "/runs/run-p1/start")
+                        .header("X-User-ID", CALLER)
+                        .header("X-Organization-ID", ORG)
+                        .header("X-Organization-Role", "VIEWER"))
+                .andExpect(status().isForbidden());
+        org.mockito.Mockito.verifyNoInteractions(resumeService);
     }
 
     @Test

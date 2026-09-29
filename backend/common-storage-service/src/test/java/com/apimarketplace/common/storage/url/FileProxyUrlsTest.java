@@ -210,4 +210,31 @@ class FileProxyUrlsTest {
             assertThat(FileProxyUrls.storageKeyOf("/api/files/upload")).isNull();
         }
     }
+
+    @Nested
+    @DisplayName("signedPath")
+    class SignedPath {
+
+        @Test
+        @DisplayName("builds the relative signed URL that parse reads back field for field (key with slashes and a colon, base64url sig)")
+        void roundTrips() {
+            String url = FileProxyUrls.signedPath(KEY, 1787778662L, "inline", "Zm9v-YmFy_");
+
+            assertThat(url).startsWith("/api/files/proxy-signed?key=" + ENCODED_KEY);
+            FileProxyUrls.ProxyUrl parsed = FileProxyUrls.parse(url);
+            assertThat(parsed.signed()).isTrue();
+            assertThat(parsed.absolute()).isFalse();
+            assertThat(parsed.key()).isEqualTo(KEY);
+            assertThat(parsed.exp()).isEqualTo(1787778662L);
+            assertThat(parsed.disposition()).isEqualTo("inline");
+            assertThat(parsed.sig()).isEqualTo("Zm9v-YmFy_");
+        }
+
+        @Test
+        @DisplayName("anything other than attachment is signed as inline, the endpoint's own default")
+        void normalisesDisposition() {
+            assertThat(FileProxyUrls.parse(FileProxyUrls.signedPath(KEY, 1L, "attachment", "s")).disposition()).isEqualTo("attachment");
+            assertThat(FileProxyUrls.parse(FileProxyUrls.signedPath(KEY, 1L, "weird", "s")).disposition()).isEqualTo("inline");
+        }
+    }
 }

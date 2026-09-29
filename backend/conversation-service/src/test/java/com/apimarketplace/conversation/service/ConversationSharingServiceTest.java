@@ -343,6 +343,63 @@ class ConversationSharingServiceTest {
             assertThat(conv.getShareMode()).isEqualTo("off");
             verify(conversationRepository).save(conv);
         }
+
+        @Test
+        @DisplayName("enableSharing: a teammate may NOT open another member's conversation to anonymous writes")
+        void teammateCannotEnableReadWrite() {
+            // A read-write link lets anyone post turns the OWNER's agent answers with the owner's
+            // tools and credits: that is the owner's decision, not any workspace member's.
+            Conversation conv = buildConversation(CONV_ID, OWNER);
+            conv.setOrganizationId(ORG);
+            when(conversationRepository.findById(CONV_ID)).thenReturn(Optional.of(conv));
+
+            assertThatThrownBy(() -> service.enableSharing(CONV_ID, TEAMMATE, ORG, "readwrite", null))
+                    .isInstanceOf(ConversationSharingService.ReadWriteShareRequiresOwnerException.class);
+            assertThat(conv.getShareMode()).isEqualTo("off");
+            verify(conversationRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("updateShareSettings: a teammate may NOT switch another member's link to read-write")
+        void teammateCannotUpdateToReadWrite() {
+            Conversation conv = buildConversation(CONV_ID, OWNER);
+            conv.setOrganizationId(ORG);
+            conv.setShareMode("read");
+            when(conversationRepository.findById(CONV_ID)).thenReturn(Optional.of(conv));
+
+            assertThatThrownBy(() -> service.updateShareSettings(CONV_ID, TEAMMATE, ORG, "readwrite", null))
+                    .isInstanceOf(ConversationSharingService.ReadWriteShareRequiresOwnerException.class);
+            assertThat(conv.getShareMode()).isEqualTo("read");
+            verify(conversationRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("the owner may open their own org-tagged conversation to writes")
+        void ownerCanEnableReadWrite() {
+            Conversation conv = buildConversation(CONV_ID, OWNER);
+            conv.setOrganizationId(ORG);
+            when(conversationRepository.findById(CONV_ID)).thenReturn(Optional.of(conv));
+            when(conversationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            service.enableSharing(CONV_ID, OWNER, ORG, "readwrite", null);
+
+            assertThat(conv.getShareMode()).isEqualTo("readwrite");
+        }
+
+        @Test
+        @DisplayName("a teammate can still change memory on a read-write link the owner opened (mode untouched)")
+        void teammateCanUpdateMemoryWithoutTouchingMode() {
+            Conversation conv = buildConversation(CONV_ID, OWNER);
+            conv.setOrganizationId(ORG);
+            conv.setShareMode("readwrite");
+            when(conversationRepository.findById(CONV_ID)).thenReturn(Optional.of(conv));
+            when(conversationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            service.updateShareSettings(CONV_ID, TEAMMATE, ORG, null, false);
+
+            assertThat(conv.getMemoryEnabled()).isFalse();
+            assertThat(conv.getShareMode()).isEqualTo("readwrite");
+        }
     }
 
     // ──────────────── helpers ────────────────

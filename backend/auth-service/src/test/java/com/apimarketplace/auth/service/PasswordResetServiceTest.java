@@ -78,7 +78,7 @@ class PasswordResetServiceTest {
     private String capturedMailedToken() {
         ArgumentCaptor<String> mailed = ArgumentCaptor.forClass(String.class);
         verify(mailer).dispatchResetEmail(anyString(), anyString(), mailed.capture(),
-                eq(PasswordResetService.TOKEN_TTL_MINUTES), eq(7L));
+                eq(PasswordResetService.TOKEN_TTL_MINUTES), eq(7L), any());
         return mailed.getValue();
     }
 
@@ -153,9 +153,19 @@ class PasswordResetServiceTest {
             service.requestReset("owner@example.com", "10.0.0.1");
 
             verify(mailer).dispatchResetEmail(eq("owner@example.com"), anyString(), anyString(),
-                    eq(PasswordResetService.TOKEN_TTL_MINUTES), eq(7L));
-            // Inline sending is what the mitigation removes; it must not come back.
-            verify(mailer, never()).sendResetEmail(anyString(), anyString(), anyString(), anyInt());
+                    eq(PasswordResetService.TOKEN_TTL_MINUTES), eq(7L), any());
+            // Inline sending is what the mitigation removes; it must not come back - on EITHER
+            // overload. Naming only the four-argument one left the five-argument shape, the one
+            // this service actually calls, free to be used inline without a test noticing.
+            // Five arguments, once: the four-argument overload was deleted in this change, so there is
+            // one signature left to guard and the pair of `never()` verifications that used to name
+            // "either overload" now name the same method twice, the second strictly subsumed by the
+            // first. This guard is the reason the overload could not simply be left in place: it keeps
+            // the inline-send path closed.
+            verify(mailer, never()).sendResetEmail(
+                    anyString(), anyString(), anyString(), anyInt(), org.mockito.ArgumentMatchers.any());
+            verify(mailer, never()).sendResetEmail(anyString(), anyString(), anyString(), anyInt(),
+                    anyString());
         }
     }
 
@@ -220,7 +230,7 @@ class PasswordResetServiceTest {
             fireAfterCommit();
 
             verify(mailer).dispatchResetEmail(eq("owner@example.com"), anyString(), anyString(),
-                    eq(PasswordResetService.TOKEN_TTL_MINUTES), eq(7L));
+                    eq(PasswordResetService.TOKEN_TTL_MINUTES), eq(7L), any());
         }
 
         @Test
@@ -253,7 +263,7 @@ class PasswordResetServiceTest {
             fireRollback();
 
             verify(mailer, times(1)).dispatchResetEmail(anyString(), anyString(), anyString(),
-                    eq(PasswordResetService.TOKEN_TTL_MINUTES), eq(7L));
+                    eq(PasswordResetService.TOKEN_TTL_MINUTES), eq(7L), any());
         }
     }
 
@@ -674,6 +684,43 @@ class PasswordResetServiceTest {
             verify(tokenRepository, times(1)).deleteExpiredBefore(cutoff.capture());
             assertThat(cutoff.getValue()).isBefore(LocalDateTime.now().minusDays(6));
             assertThat(cutoff.getValue()).isAfter(LocalDateTime.now().minusDays(8));
+        }
+    }
+
+    @Nested
+    @DisplayName("the mail is written in the language of the account it is for")
+    class MailLanguage {
+
+        @Test
+        @DisplayName("the account's stored language is handed to the mailer, so it does not have "
+                + "to look up by address what this method already read")
+        void accountLanguageTravelsWithTheMail() {
+            User user = userWithPassword();
+            user.setLocale("fr");
+            when(userRepository.findByEmail(anyString())).thenReturn(Optional.of(user));
+
+            service.requestReset("owner@example.com", "10.0.0.1");
+
+            // A lookup by address is not equivalent: it is a second query for something this
+            // method already has, and it answers English if the database is unreachable at that
+            // moment. This reader is locked out of the product, so an English mail is the end of
+            // the road for them.
+            verify(mailer).dispatchResetEmail(anyString(), anyString(), anyString(),
+                    eq(PasswordResetService.TOKEN_TTL_MINUTES), eq(7L), eq("fr"));
+        }
+
+        @Test
+        @DisplayName("an account with no stored language hands over null, which lets the mailer "
+                + "fall back instead of pinning English here")
+        void noStoredLanguageHandsOverNull() {
+            User user = userWithPassword();
+            user.setLocale(null);
+            when(userRepository.findByEmail(anyString())).thenReturn(Optional.of(user));
+
+            service.requestReset("owner@example.com", "10.0.0.1");
+
+            verify(mailer).dispatchResetEmail(anyString(), anyString(), anyString(),
+                    eq(PasswordResetService.TOKEN_TTL_MINUTES), eq(7L), eq((String) null));
         }
     }
 }

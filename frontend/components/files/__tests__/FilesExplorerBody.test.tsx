@@ -2,12 +2,18 @@
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import type { StorageExplorerEntry } from '@/lib/api/storage-api';
 
 // Stable, locale-independent day labels (UTC getters - the real formatUtcDate is UTC).
-vi.mock('@/lib/utils/dateFormatters', () => ({
-  formatUtcDate: (d: Date) => `Day ${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`,
+// The day-bucket LABELS come from the real formatter: this suite asserts the body layout, and a
+// mock of the whole dateFormatters module is what hid a day-shift in the grouping it renders
+// (see lib/files/__tests__/filesGrouping.test.ts). Only the label shape is stubbed, by pinning the
+// display zone, so the assertions below stay stable without being blind.
+import { applyDisplayTimeZone, clearDisplayTimeZone } from '@/lib/utils/timezone';
+
+vi.mock('@/lib/utils/dateFormatters', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/utils/dateFormatters')>()),
 }));
 
 // Stub the leaf tiles/rows so the test asserts the BODY's layout contract (folder/file
@@ -86,6 +92,16 @@ const baseProps = {
 
 afterEach(() => cleanup());
 
+beforeEach(() => {
+  clearDisplayTimeZone();
+  // UTC, so the day labels below are the UTC days the fixtures name.
+  applyDisplayTimeZone('UTC');
+});
+afterEach(() => clearDisplayTimeZone());
+
+/** A day-section header as the real formatter renders it for a UTC reader: "Jun 17, 2026". */
+const DAY_HEADER = /^[A-Z][a-z]{2} \d{2}, \d{4}$/;
+
 describe('FilesExplorerBody - shared layout contract', () => {
   it('grid: each folder sits in the day section of its last activity, ABOVE that day\'s files', () => {
     const entries = [
@@ -97,8 +113,8 @@ describe('FilesExplorerBody - shared layout contract', () => {
     render(<FilesExplorerBody variant="grid" entries={entries} enableFolders {...baseProps} />);
 
     // THREE day groups now (the Jan-1 folder makes its own section), newest day first.
-    const headers = screen.getAllByText(/^Day /).map((el) => el.textContent);
-    expect(headers).toEqual(['Day 2026-06-17', 'Day 2026-06-10', 'Day 2026-01-01']);
+    const headers = screen.getAllByText(DAY_HEADER).map((el) => el.textContent);
+    expect(headers).toEqual(['Jun 17, 2026', 'Jun 10, 2026', 'Jan 01, 2026']);
 
     // Both folders render, each under its own day, newest-activity day first.
     const folders = screen.getAllByTestId(/^grid-folder-/).map((el) => el.getAttribute('data-testid'));
@@ -117,7 +133,7 @@ describe('FilesExplorerBody - shared layout contract', () => {
     render(<FilesExplorerBody variant="grid" entries={entries} enableFolders={false} {...baseProps} />);
 
     expect(screen.getByTestId('grid-file-a')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Day 2026-06-17'));
+    fireEvent.click(screen.getByText('Jun 17, 2026'));
     // The collapsed day's file is gone; the other day still shows.
     expect(screen.queryByTestId('grid-file-a')).not.toBeInTheDocument();
     expect(screen.getByTestId('grid-file-b')).toBeInTheDocument();
@@ -135,7 +151,7 @@ describe('FilesExplorerBody - shared layout contract', () => {
     expect(screen.getByTestId('row-folder-fA')).toBeInTheDocument();
     expect(screen.getByTestId('row-file-x')).toBeInTheDocument();
     expect(screen.queryByTestId('grid-file-x')).not.toBeInTheDocument(); // never the grid tile in compact
-    expect(screen.getByText('Day 2026-06-17')).toBeInTheDocument();
+    expect(screen.getByText('Jun 17, 2026')).toBeInTheDocument();
   });
 
   it('compact picker: routes file clicks to onSelectFile (not onOpenFile)', () => {
@@ -263,12 +279,12 @@ describe('FilesExplorerBody - groupByDay', () => {
 
   it('groups by day by DEFAULT, so every surface that omits the prop is unchanged', () => {
     render(<FilesExplorerBody variant="grid" entries={mixedDays} enableFolders {...baseProps} />);
-    expect(screen.getAllByText(/^Day /).length).toBeGreaterThan(1);
+    expect(screen.getAllByText(DAY_HEADER).length).toBeGreaterThan(1);
   });
 
   it('renders ONE flat block with no day headers when grouping is off', () => {
     render(<FilesExplorerBody variant="grid" entries={mixedDays} enableFolders groupByDay={false} {...baseProps} />);
-    expect(screen.queryByText(/^Day /)).toBeNull();
+    expect(screen.queryByText(DAY_HEADER)).toBeNull();
   });
 
   it('preserves the server order exactly - the chosen sort is not re-sorted client-side', () => {
@@ -289,7 +305,7 @@ describe('FilesExplorerBody - groupByDay', () => {
 
   it('applies to the compact variant too (the side panel keeps its row layout)', () => {
     render(<FilesExplorerBody variant="compact" entries={mixedDays} enableFolders groupByDay={false} {...baseProps} />);
-    expect(screen.queryByText(/^Day /)).toBeNull();
+    expect(screen.queryByText(DAY_HEADER)).toBeNull();
     expect(screen.getByTestId('row-folder-fA')).toBeInTheDocument();
     expect(screen.getByTestId('row-file-zzz')).toBeInTheDocument();
   });

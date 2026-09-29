@@ -76,6 +76,10 @@ class CrossProviderEmailMergeReproTest {
                 new PlanStorageQuotaSyncer(null, null), freeSubscriptionProvisioner);
         lenient().when(userRepository.updateLastLoginIfStale(anyLong(), any(), any())).thenReturn(1);
         ReflectionTestUtils.setField(service, "self", service);
+        // A SAML token fails closed without the admission service; these scenarios are about
+        // the cross-provider guard, so the (mocked) admission lets them through.
+        ReflectionTestUtils.setField(service, "samlLoginService",
+                org.mockito.Mockito.mock(OrganizationSamlLoginService.class));
     }
 
     @Test
@@ -201,6 +205,7 @@ class CrossProviderEmailMergeReproTest {
     @DisplayName("A SAML account whose Keycloak user was recreated (SAML again, new sub) is still re-pointed")
     void samlUserRecreationStillRebinds() {
         User existing = existingAccount(9L, "old-saml-sub", AuthProvider.SAML);
+        existing.setSamlIdpAlias(SAML_ALIAS); // created by this same workspace IdP
         when(userRepository.findByProviderId(NEW_KC_SUB)).thenReturn(Optional.empty());
         when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(existing));
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));

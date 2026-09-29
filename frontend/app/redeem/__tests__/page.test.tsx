@@ -24,10 +24,20 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(mockSearch),
 }));
 
+vi.mock('next-intl', () => ({
+  useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
+    vars ? `${key}:${JSON.stringify(vars)}` : key,
+}));
+
+const loginWithRedirect = vi.fn();
+const authMock = vi.hoisted(() => ({ current: undefined as Record<string, unknown> | undefined }));
+vi.mock('@/lib/providers/smart-providers', () => ({ useOptionalAuth: () => authMock.current }));
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   mockSearch = '';
+  authMock.current = undefined;
 });
 
 describe('RedeemPage', () => {
@@ -50,5 +60,24 @@ describe('RedeemPage', () => {
     render(<RedeemPage />);
 
     expect(screen.getByTestId('redeem-card')).toHaveAttribute('data-code', '');
+  });
+
+  it('signed out: does not show a card that would fail, sends them to sign in with the code named', () => {
+    mockSearch = 'code=techdox';
+    authMock.current = { isAuthenticated: false, isLoading: false, loginWithRedirect };
+    render(<RedeemPage />);
+
+    expect(screen.queryByTestId('redeem-card')).toBeNull();
+    expect(screen.getByText(/signedOutBodyWithCode/)).toHaveTextContent('TECHDOX');
+    screen.getByRole('button', { name: /signedOutCta/ }).click();
+    expect(loginWithRedirect).toHaveBeenCalledWith(expect.objectContaining({ appState: { returnTo: '/app' } }));
+  });
+
+  it('signed in: shows the redeem card pre-filled', () => {
+    mockSearch = 'code=TECHDOX';
+    authMock.current = { isAuthenticated: true, isLoading: false, loginWithRedirect };
+    render(<RedeemPage />);
+
+    expect(screen.getByTestId('redeem-card')).toHaveAttribute('data-code', 'TECHDOX');
   });
 });

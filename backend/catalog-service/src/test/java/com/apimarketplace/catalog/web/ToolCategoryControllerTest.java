@@ -33,8 +33,7 @@ class ToolCategoryControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new ToolCategoryController(toolCategoryService);
-        ReflectionTestUtils.setField(controller, "catalogAdminToken", ADMIN_TOKEN);
+        controller = new ToolCategoryController(toolCategoryService, new CatalogAdminAccess(ADMIN_TOKEN));
     }
 
     private ToolCategoryEntity buildCategory(String name) {
@@ -348,7 +347,7 @@ class ToolCategoryControllerTest {
 
             when(toolCategoryService.createToolCategory(category)).thenReturn(category);
 
-            ResponseEntity<ToolCategoryEntity> response = controller.createToolCategory(category, ADMIN_TOKEN);
+            ResponseEntity<ToolCategoryEntity> response = controller.createToolCategory(category, ADMIN_TOKEN, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody().getName()).isEqualTo("New Category");
@@ -366,7 +365,7 @@ class ToolCategoryControllerTest {
 
             when(toolCategoryService.createToolName(toolName)).thenReturn(toolName);
 
-            ResponseEntity<ToolNameEntity> response = controller.createToolName(toolName, ADMIN_TOKEN);
+            ResponseEntity<ToolNameEntity> response = controller.createToolName(toolName, ADMIN_TOKEN, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody().getName()).isEqualTo("New Tool");
@@ -386,7 +385,7 @@ class ToolCategoryControllerTest {
             when(toolCategoryService.updateToolCategory(category)).thenReturn(category);
 
             ResponseEntity<ToolCategoryEntity> response =
-                    controller.updateToolCategory(categoryId, category, ADMIN_TOKEN);
+                    controller.updateToolCategory(categoryId, category, ADMIN_TOKEN, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(category.getId()).isEqualTo(categoryId);
@@ -406,7 +405,7 @@ class ToolCategoryControllerTest {
             when(toolCategoryService.updateToolName(toolName)).thenReturn(toolName);
 
             ResponseEntity<ToolNameEntity> response =
-                    controller.updateToolName(toolNameId, toolName, ADMIN_TOKEN);
+                    controller.updateToolName(toolNameId, toolName, ADMIN_TOKEN, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(toolName.getId()).isEqualTo(toolNameId);
@@ -424,7 +423,7 @@ class ToolCategoryControllerTest {
 
             doNothing().when(toolCategoryService).deleteToolCategory(categoryId);
 
-            ResponseEntity<Void> response = controller.deleteToolCategory(categoryId, ADMIN_TOKEN);
+            ResponseEntity<Void> response = controller.deleteToolCategory(categoryId, ADMIN_TOKEN, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             verify(toolCategoryService).deleteToolCategory(categoryId);
@@ -435,7 +434,7 @@ class ToolCategoryControllerTest {
         void rejectsDeleteWithoutAdminToken() {
             UUID categoryId = UUID.randomUUID();
 
-            ResponseEntity<Void> response = controller.deleteToolCategory(categoryId, null);
+            ResponseEntity<Void> response = controller.deleteToolCategory(categoryId, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
             verify(toolCategoryService, never()).deleteToolCategory(any());
@@ -453,7 +452,7 @@ class ToolCategoryControllerTest {
 
             doNothing().when(toolCategoryService).deleteToolName(toolNameId);
 
-            ResponseEntity<Void> response = controller.deleteToolName(toolNameId, ADMIN_TOKEN);
+            ResponseEntity<Void> response = controller.deleteToolName(toolNameId, ADMIN_TOKEN, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             verify(toolCategoryService).deleteToolName(toolNameId);
@@ -464,7 +463,47 @@ class ToolCategoryControllerTest {
         void rejectsDeleteWithoutAdminToken() {
             UUID toolNameId = UUID.randomUUID();
 
-            ResponseEntity<Void> response = controller.deleteToolName(toolNameId, null);
+            ResponseEntity<Void> response = controller.deleteToolName(toolNameId, null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            verify(toolCategoryService, never()).deleteToolName(any());
+        }
+    }
+
+    /**
+     * The admin gate is shared with the other global-catalog writes (CatalogAdminAccess):
+     * a platform admin coming through the gateway is accepted without the import token,
+     * and a plain signed-in user is still refused.
+     */
+    @Nested
+    @DisplayName("Admin role on tool-category writes")
+    class AdminRoleTests {
+
+        @Test
+        @DisplayName("accepts a platform admin without the import token")
+        void acceptsAdminRoleWithoutToken() {
+            UUID categoryId = UUID.randomUUID();
+
+            ResponseEntity<Void> response = controller.deleteToolCategory(categoryId, null, "USER,ADMIN");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            verify(toolCategoryService).deleteToolCategory(categoryId);
+        }
+
+        @Test
+        @DisplayName("refuses a plain signed-in user")
+        void refusesPlainUser() {
+            ResponseEntity<ToolCategoryEntity> response =
+                    controller.createToolCategory(buildCategory("x"), null, "USER");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            verify(toolCategoryService, never()).createToolCategory(any());
+        }
+
+        @Test
+        @DisplayName("refuses a wrong import token")
+        void refusesWrongToken() {
+            ResponseEntity<Void> response = controller.deleteToolName(UUID.randomUUID(), "guess", null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
             verify(toolCategoryService, never()).deleteToolName(any());

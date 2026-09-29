@@ -32,6 +32,9 @@ import {
 } from '@/lib/workflow/interfaceContinue';
 import { ApiError } from '@/lib/api/api-client';
 
+// The bridge now reads its read-only sentence through next-intl.
+vi.mock('next-intl', () => ({ useTranslations: () => (k: string) => k }));
+
 const fireInterfaceAction = vi.fn();
 vi.mock('@/lib/api/orchestrator/interface.service', () => ({
   interfaceService: {

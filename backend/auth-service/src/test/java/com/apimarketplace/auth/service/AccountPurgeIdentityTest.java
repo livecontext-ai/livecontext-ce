@@ -293,4 +293,29 @@ class AccountPurgeIdentityTest {
                 .isFalse();
         verifyNoInteractions(restTemplate, workspaceDataPurger, stripeBillingService);
     }
+
+    @Test
+    @DisplayName("V549: the purge runs the partner statements (codes disabled, HOLD commissions voided) for this user")
+    void purgeRunsPartnerStatements() throws Exception {
+        keycloakTokenOk();
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.DELETE), any(), eq(Void.class)))
+                .thenReturn(ResponseEntity.noContent().build());
+        java.util.List<String> executed = new java.util.ArrayList<>();
+        java.sql.Connection conn = mock(java.sql.Connection.class);
+        when(conn.prepareStatement(anyString())).thenAnswer(inv -> {
+            String sql = inv.getArgument(0);
+            java.sql.PreparedStatement ps = mock(java.sql.PreparedStatement.class);
+            doAnswer(set -> { executed.add(sql + " <- " + set.getArgument(1)); return null; })
+                    .when(ps).setObject(eq(1), any());
+            return ps;
+        });
+        doAnswer(inv -> { ((org.hibernate.jdbc.Work) inv.getArgument(0)).execute(conn); return null; })
+                .when(session).doWork(any());
+
+        assertThat(service.purgeUser(USER_ID)).isTrue();
+
+        assertThat(executed).contains(
+                AccountPurgeService.DEACTIVATE_OWNED_REWARD_CODES_SQL + " <- " + USER_ID,
+                AccountPurgeService.VOID_PARTNER_HOLD_COMMISSIONS_SQL + " <- " + USER_ID);
+    }
 }

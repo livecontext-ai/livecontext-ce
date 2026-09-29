@@ -22,7 +22,7 @@ interface PauseResumeState {
 }
 
 export interface ExecutionError {
-  type: 'epoch_limit' | 'queue_timeout' | 'rerun_refused' | 'generic';
+  type: 'epoch_limit' | 'queue_timeout' | 'rerun_refused' | 'read_only' | 'generic';
   message: string;
 }
 
@@ -152,8 +152,11 @@ export function useStepByStepHandlers({
       // `instanceof`, not a duck-typed `.status`: a bare Response carries one too, and only
       // an ApiError means the backend actually answered with a refusal.
       const refused = err instanceof ApiError && (err.status === 409 || err.status === 400);
+      // 403 = the workspace role is read-only (VIEWER): its own translated sentence, not the
+      // backend's English and not the "try again later" refusal copy.
+      const forbidden = err instanceof ApiError && err.status === 403;
       onExecutionError?.({
-        type: refused ? 'rerun_refused' : 'generic',
+        type: forbidden ? 'read_only' : refused ? 'rerun_refused' : 'generic',
         message: err?.message || String(err),
       });
       return null;
@@ -167,8 +170,12 @@ export function useStepByStepHandlers({
       await pauseResumeActions.resolveApproval(nodeId, resolution, epoch, itemId);
     } catch (err) {
       console.error('[StepByStep] Failed to resolve approval:', err);
+      // A read-only role (VIEWER) is refused with 403: say so instead of a silent no-op.
+      if (err instanceof ApiError && err.status === 403) {
+        onExecutionError?.({ type: 'read_only', message: err.message });
+      }
     }
-  }, [pauseResumeActions]);
+  }, [pauseResumeActions, onExecutionError]);
 
   return {
     handlePauseWorkflow,

@@ -14,7 +14,7 @@ GitHub Actions, not via this directory.
 
 - A machine supported by the release images. Prebuilt releases support x86-64; ARM64 must be explicitly included in that release. See [image architectures](../README.md#images).
 - Docker Desktop 4.x+ (or Docker Engine 24+ with Compose v2)
-- 4 GB RAM minimum (8 GB recommended)
+- 6 GB RAM minimum (Docker Desktop: give its VM at least 4 GB), 8 GB recommended
 - An LLM provider for agents: connect to LiveContext Cloud (recommended), or add your own OpenAI / Anthropic / Google key in the app
 
 ## Quick Start
@@ -592,12 +592,17 @@ curl http://localhost:8080/api/agent-tools | python -m json.tool | head -5
 
 ## Resource Usage
 
-| Container | Memory Limit | Typical Usage |
+| Container | Memory Limit | Measured (2026-09-28) |
 |-----------|-------------|---------------|
-| PostgreSQL | 256 MB | ~50 MB idle |
-| Redis | 96 MB | ~10 MB idle |
-| MinIO | 256 MB | ~30 MB idle |
-| Backend | 1536 MB | ~800 MB after startup |
-| Frontend | 256 MB | ~100 MB after startup |
-| **Total** | **~2.4 GB** | **~1 GB idle** |
+| PostgreSQL | 256 MB | ~230 MB under load |
+| Redis | 384 MB | a few MB |
+| MinIO | 256 MB | ~60 MB |
+| Bridge | 512 MB | ~30-60 MB |
+| Backend | 2048 MB | ~1.55 GB after startup, ~1.6 GB under load |
+| Frontend | none in the public compose (dev compose: 256 MB) | ~80-140 MB |
+| **Total** | **~3.5 GB + the frontend** | **~2-2.1 GB** |
+
+The backend runs `-Xmx1024m` with ZGC: its heap grows to that full GiB, and Metaspace, code
+cache, direct buffers and threads add ~500 MB on top. Below a 2 GB limit the kernel kills it
+during startup and Docker restarts it in a loop.
 

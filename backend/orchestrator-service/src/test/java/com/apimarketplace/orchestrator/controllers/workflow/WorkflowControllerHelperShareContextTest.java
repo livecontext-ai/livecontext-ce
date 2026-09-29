@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.controllers.workflow;
 
+import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -104,5 +105,46 @@ class WorkflowControllerHelperShareContextTest {
     void shareContextFalse_unchanged() {
         shareRequest("false", "APPLICATION", "pub-A");
         assertThat(WorkflowControllerHelper.isRunInScope(ownerRun("pub-B"), CALLER, ORG)).isTrue();
+    }
+
+    // ===== shareContextPermitsWorkflow =====
+
+    private static WorkflowEntity workflowOf(java.util.UUID sourcePublicationId) {
+        WorkflowEntity wf = new WorkflowEntity();
+        wf.setTenantId(CALLER);
+        wf.setOrganizationId(ORG);
+        wf.setSourcePublicationId(sourcePublicationId);
+        return wf;
+    }
+
+    @Test
+    @DisplayName("workflow binding: no share context → every workflow permitted (owner path unchanged)")
+    void workflowBinding_noShareContext_permitted() {
+        assertThat(WorkflowControllerHelper.shareContextPermitsWorkflow(workflowOf(null))).isTrue();
+    }
+
+    @Test
+    @DisplayName("workflow binding: APPLICATION share + the shared publication's clone → permitted")
+    void workflowBinding_sharedClone_permitted() {
+        java.util.UUID pub = java.util.UUID.randomUUID();
+        shareRequest("true", "APPLICATION", pub.toString());
+        assertThat(WorkflowControllerHelper.shareContextPermitsWorkflow(workflowOf(pub))).isTrue();
+    }
+
+    @Test
+    @DisplayName("workflow binding: APPLICATION share + another owner workflow (no or other publication) → DENIED")
+    void workflowBinding_foreignWorkflow_denied() {
+        shareRequest("true", "APPLICATION", java.util.UUID.randomUUID().toString());
+        assertThat(WorkflowControllerHelper.shareContextPermitsWorkflow(workflowOf(null))).isFalse();
+        assertThat(WorkflowControllerHelper.shareContextPermitsWorkflow(
+                workflowOf(java.util.UUID.randomUUID()))).isFalse();
+    }
+
+    @Test
+    @DisplayName("workflow binding: non-APPLICATION share → DENIED even for a publication clone")
+    void workflowBinding_nonApplicationShare_denied() {
+        java.util.UUID pub = java.util.UUID.randomUUID();
+        shareRequest("true", "CONVERSATION", pub.toString());
+        assertThat(WorkflowControllerHelper.shareContextPermitsWorkflow(workflowOf(pub))).isFalse();
     }
 }

@@ -98,17 +98,19 @@ vi.mock('@/components/chat/ApplicationCarousel', () => ({
   ApplicationCarousel: () => <div data-testid="app-carousel" />,
 }));
 vi.mock('@/components/workflow/WorkflowLogsPanelContent', () => ({
-  WorkflowLogsPanelContent: ({ runId, initialStepAlias, onBack }: { runId: string; initialStepAlias?: string; onBack: () => void }) => (
+  WorkflowLogsPanelContent: ({ runId, initialStepAlias, onBack, onOpenAnalysis }: { runId: string; initialStepAlias?: string; onBack: () => void; onOpenAnalysis?: () => void }) => (
     <div data-testid="logs-child" data-run-id={runId}>
       <span>{initialStepAlias}</span>
       <button type="button" onClick={onBack}>Back to run</button>
+      {onOpenAnalysis && <button type="button" onClick={onOpenAnalysis}>Open analysis</button>}
     </div>
   ),
 }));
 vi.mock('@/components/workflow/run-panel/RunAnalysisPanelContent', () => ({
-  RunAnalysisPanelContent: ({ runId, onBack }: { runId: string; onBack: () => void }) => (
+  RunAnalysisPanelContent: ({ runId, onBack, onOpenLogs }: { runId: string; onBack: () => void; onOpenLogs?: () => void }) => (
     <div data-testid="analysis-child" data-run-id={runId}>
       <button type="button" onClick={onBack}>Back from analysis</button>
+      {onOpenLogs && <button type="button" onClick={onOpenLogs}>Open logs from analysis</button>}
     </div>
   ),
 }));
@@ -292,6 +294,75 @@ describe('WorkflowPanelContent - Application sub-tab (side-panel workflow)', () 
       render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
       expect(screen.getByRole('button', { name: 'sidePanel.runTab' })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'sidePanel.analysisTab' })).toBeNull();
+    } finally {
+      pathnameState.current = '/app/chat';
+    }
+  });
+
+  it('shows the Analysis sub-tab when the page header asks for it, without touching the Run level', () => {
+    render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent('workflowOpenRunPanel', { detail: { workflowId: 'wf-1', view: 'history' } }));
+    });
+    expect(screen.getByTestId('run-parent')).toHaveAttribute('data-view-request', 'history');
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('workflowOpenRunPanel', { detail: { workflowId: 'wf-1', view: 'run', tab: 'analysis' } }));
+    });
+    expect(screen.getByTestId('analysis-child')).toHaveAttribute('data-run-id', 'run-1');
+    expect(screen.getByRole('button', { name: 'sidePanel.analysisTab' })).toHaveAttribute('aria-pressed', 'true');
+
+    // A request for another workflow's Analysis is not this panel's business.
+    fireEvent.click(screen.getByRole('button', { name: 'sidePanel.runTab' }));
+    act(() => {
+      window.dispatchEvent(new CustomEvent('workflowOpenRunPanel', { detail: { workflowId: 'wf-other', tab: 'analysis' } }));
+    });
+    expect(screen.queryByTestId('analysis-child')).toBeNull();
+  });
+
+  it('lands on the Run tab when the header asks for Analysis where Analysis is not offered', () => {
+    // A marketplace preview hides Analysis; the request must not leave the panel on an empty tab.
+    runPanelState.current = { runId: 'run-1', runInfo: { runId: 'run-1', status: 'COMPLETED' }, isPreviewOnly: true };
+    render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" isPreviewOnly workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('workflowOpenRunPanel', { detail: { workflowId: 'wf-1', tab: 'analysis' } }));
+    });
+
+    expect(screen.queryByTestId('analysis-child')).toBeNull();
+    expect(screen.getByTestId('run-parent')).toBeInTheDocument();
+  });
+
+  it('goes on from Analysis to the logs of the same run', () => {
+    render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+    fireEvent.click(screen.getByRole('button', { name: 'sidePanel.analysisTab' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open logs from analysis' }));
+
+    expect(screen.getByTestId('logs-child')).toHaveAttribute('data-run-id', 'run-1');
+    expect(screen.queryByTestId('analysis-child')).toBeNull();
+  });
+
+  it('goes on from the logs of the bound run to its Analysis', () => {
+    render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+    fireEvent.click(screen.getByRole('button', { name: 'actions.logs' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open analysis' }));
+
+    expect(screen.getByTestId('analysis-child')).toHaveAttribute('data-run-id', 'run-1');
+    expect(screen.queryByTestId('logs-child')).toBeNull();
+  });
+
+  it('offers no way on to Analysis where the panel has no Analysis tab (a shared run link)', () => {
+    pathnameState.current = '/s/share-token';
+    try {
+      render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+      expect(screen.queryByRole('button', { name: 'sidePanel.analysisTab' })).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: 'actions.logs' }));
+
+      expect(screen.getByTestId('logs-child')).toHaveAttribute('data-run-id', 'run-1');
+      expect(screen.queryByRole('button', { name: 'Open analysis' })).toBeNull();
     } finally {
       pathnameState.current = '/app/chat';
     }

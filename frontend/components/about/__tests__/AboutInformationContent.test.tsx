@@ -32,3 +32,21 @@ describe('AboutInformationContent social links', () => {
     }
   });
 });
+
+// The public /about page had no <h1> at all: the block's first heading was an <h2>
+// on both surfaces. The page promotes it; Settings keeps its own page heading.
+describe('AboutInformationContent heading level', () => {
+  afterEach(cleanup);
+
+  it('renders the first heading as the page <h1> when the public page asks for it', () => {
+    render(<AboutInformationContent titleAs="h1" />);
+    expect(screen.getByRole('heading', { level: 1, name: 'About Us' })).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+
+  it('keeps it an <h2> by default, for the in-app Settings page', () => {
+    render(<AboutInformationContent />);
+    expect(screen.getByRole('heading', { level: 2, name: 'About Us' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+});

@@ -44,6 +44,15 @@ public class User implements UserDetails {
     @Column(name = "provider_id")
     private String providerId;
 
+    /**
+     * The workspace SAML identity provider ({@code org-<uuid>-saml}) that created this account,
+     * written once at creation and never changed. NULL for every account created any other way.
+     * A token brokered by a workspace IdP resolves only to the account that IdP created: the IdP
+     * is configured by a workspace admin, so it must never reach an account someone else owns.
+     */
+    @Column(name = "saml_idp_alias", length = 120)
+    private String samlIdpAlias;
+
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "user_roles", joinColumns = @JoinColumn(name = "user_id"))
     @Column(name = "role")
@@ -131,9 +140,26 @@ public class User implements UserDetails {
     @Column(name = "locale_explicit", nullable = false, insertable = false, updatable = false)
     private boolean localeExplicit = false;
 
-    /** IANA zone id reported by the browser; last value wins. */
+    /**
+     * IANA zone id. Reported by the browser (last value wins) until the person picks one in
+     * Settings, after which {@link #timeZoneExplicit} pins it.
+     */
     @Column(name = "time_zone", length = 64, insertable = false, updatable = false)
     private String timeZone;
+
+    /**
+     * True once the person picked a zone in Settings: a browser report never overwrites it.
+     *
+     * <p>{@code @ColumnDefault} is LOAD-BEARING here, not decoration, and it is worth saying so
+     * because it reads like decoration: the column is {@code insertable = false}, so every INSERT
+     * omits it, and it is {@code nullable = false}. Anything that generates the schema from this
+     * entity rather than from the migration - the test profile does - then produces a NOT NULL
+     * column with no default, and the first save of any User fails on it. Removing this annotation
+     * broke 202 tests at once. {@link #localeExplicit} carries it for the same reason.
+     */
+    @org.hibernate.annotations.ColumnDefault("false")
+    @Column(name = "time_zone_explicit", nullable = false, insertable = false, updatable = false)
+    private boolean timeZoneExplicit = false;
 
     /** ISO-3166 alpha-2 from Cloudflare, write-once. */
     @Column(name = "signup_country", length = 2, insertable = false, updatable = false)
@@ -322,6 +348,14 @@ public class User implements UserDetails {
         this.lastLoginAt = lastLoginAt;
     }
 
+    public String getSamlIdpAlias() {
+        return samlIdpAlias;
+    }
+
+    public void setSamlIdpAlias(String samlIdpAlias) {
+        this.samlIdpAlias = samlIdpAlias;
+    }
+
     public LocalDateTime getLastAuthenticatedAt() {
         return lastAuthenticatedAt;
     }
@@ -410,6 +444,9 @@ public class User implements UserDetails {
 
     public String getTimeZone() { return timeZone; }
     public void setTimeZone(String timeZone) { this.timeZone = timeZone; }
+
+    public boolean isTimeZoneExplicit() { return timeZoneExplicit; }
+    public void setTimeZoneExplicit(boolean timeZoneExplicit) { this.timeZoneExplicit = timeZoneExplicit; }
 
     public String getSignupCountry() { return signupCountry; }
     public void setSignupCountry(String signupCountry) { this.signupCountry = signupCountry; }

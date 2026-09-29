@@ -48,6 +48,9 @@ public class TaskLabelController {
 
     @PostMapping("/labels")
     public ResponseEntity<?> create(@RequestBody LabelBody body, HttpServletRequest request) {
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request))) {
+            return ResponseEntity.status(403).body(Map.of("error", "your workspace role is read-only (VIEWER): task label changes are not allowed"));
+        }
         String tenantId = tenantResolver.resolve(request);
         String orgId = tenantResolver.resolveOrgId(request);
         try {
@@ -60,6 +63,9 @@ public class TaskLabelController {
 
     @PatchMapping("/labels/{id}")
     public ResponseEntity<?> update(@PathVariable UUID id, @RequestBody LabelBody body, HttpServletRequest request) {
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request))) {
+            return ResponseEntity.status(403).body(Map.of("error", "your workspace role is read-only (VIEWER): task label changes are not allowed"));
+        }
         String tenantId = tenantResolver.resolve(request);
         String orgId = tenantResolver.resolveOrgId(request);
         try {
@@ -72,6 +78,9 @@ public class TaskLabelController {
 
     @DeleteMapping("/labels/{id}")
     public ResponseEntity<?> delete(@PathVariable UUID id, HttpServletRequest request) {
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request))) {
+            return ResponseEntity.status(403).body(Map.of("error", "your workspace role is read-only (VIEWER): task label changes are not allowed"));
+        }
         String tenantId = tenantResolver.resolve(request);
         String orgId = tenantResolver.resolveOrgId(request);
         try {
@@ -86,6 +95,9 @@ public class TaskLabelController {
     @PutMapping("/{taskId}/labels")
     public ResponseEntity<?> setLabels(@PathVariable UUID taskId, @RequestBody SetLabelsBody body,
                                        HttpServletRequest request) {
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request))) {
+            return ResponseEntity.status(403).body(Map.of("error", "your workspace role is read-only (VIEWER): task label changes are not allowed"));
+        }
         String tenantId = tenantResolver.resolve(request);
         tenantResolver.resolveOrgId(request);
         try {

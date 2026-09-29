@@ -152,7 +152,8 @@ public class BillingController {
      *
      * <p>Body: {@code { "code": "ABCD2345" }}. Status codes: 200 immediate benefit,
      * 202 attributed pending conversion (or held over the soft cap), 404 INVALID_CODE,
-     * 409 NOT_REDEEMABLE / ALREADY_REDEEMED / EXHAUSTED / SELF_REFERRAL / ALREADY_PAID.
+     * 409 NOT_REDEEMABLE / ALREADY_REDEEMED / EXHAUSTED / SELF_REFERRAL / ALREADY_PAID / ALREADY_ATTRIBUTED /
+     * NOT_NEW_ACCOUNT / NOTHING_TO_GRANT, 403 EMAIL_NOT_VERIFIED (retryable once verified), 503 REDEEM_RETRY.
      */
     @PostMapping("/redeem")
     public ResponseEntity<Map<String, Object>> redeemRewardCode(
@@ -174,6 +175,13 @@ public class BillingController {
                     ok.put("benefitType", r.getBenefitType());
                     ok.put("benefitUntil", r.getBenefitUntil() != null ? r.getBenefitUntil().toString() : null);
                     ok.put("freeCreditsCap", r.getFreeCreditsCap());
+                    // V549: what a credit / plan code actually gave, so the UI can say it.
+                    ok.put("grantedCredits", result.grantedCredits());
+                    ok.put("grantedPlan", result.grantedPlanCode());
+                    // An instant with its offset, so the browser shows the right day in any zone.
+                    ok.put("planEndsAt", result.planEndsAt() != null
+                            ? result.planEndsAt().atZone(java.time.ZoneId.systemDefault()).toInstant().toString()
+                            : null);
                     logger.info("Reward code redeemed by user {} (status {})", userId, r.getStatus());
                     return ResponseEntity.ok(ok);
                 }
@@ -204,13 +212,37 @@ public class BillingController {
                 case ALREADY_PAID -> {
                     return rewardError(409, "ALREADY_PAID", "This code is for new subscriptions only.");
                 }
+                case ALREADY_ATTRIBUTED -> {
+                    return rewardError(409, "ALREADY_ATTRIBUTED", "Your account already uses a partner code.");
+                }
+                case EMAIL_NOT_VERIFIED -> {
+                    // 403, not 409: not final, the same code works once the email is verified.
+                    return rewardError(403, "EMAIL_NOT_VERIFIED", "Verify your email address to use this code.");
+                }
+                case NOT_NEW_ACCOUNT -> {
+                    return rewardError(409, "NOT_NEW_ACCOUNT", "This code is for new accounts.");
+                }
+                case NOTHING_TO_GRANT -> {
+                    return rewardError(409, "NOTHING_TO_GRANT", "Your account already has this plan or a better one.");
+                }
                 default -> {
                     return rewardError(400, "REDEEM_FAILED", "Could not redeem this code.");
                 }
             }
         } catch (org.springframework.dao.DataIntegrityViolationException dup) {
-            // Rare concurrent double-redeem by the same user trips a unique constraint.
-            return rewardError(409, "ALREADY_REDEEMED", "You've already redeemed a code.");
+            // Rare concurrent double-redeem by the same user trips a unique constraint. Two partner
+            // codes redeemed at once lose on the one-partner-per-customer index instead.
+            String detail = String.valueOf(dup.getMostSpecificCause().getMessage());
+            if (detail.contains("uq_reward_redemption_partner_redeemer")) {
+                return rewardError(409, "ALREADY_ATTRIBUTED", "Your account already uses a partner code.");
+            }
+            if (detail.contains("uq_reward_redemption_user_code") || detail.contains("uq_reward_redemption_referral_referee")) {
+                return rewardError(409, "ALREADY_REDEEMED", "You've already redeemed a code.");
+            }
+            // Any other constraint rolled the whole redeem back and consumed nothing: retryable,
+            // so a code waiting in the browser is kept rather than dropped as "already used".
+            logger.warn("Reward redeem for user {} rolled back on an unexpected constraint: {}", userId, detail);
+            return rewardError(503, "REDEEM_RETRY", "Could not redeem this code right now. Try again.");
         }
     }
 

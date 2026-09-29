@@ -64,6 +64,14 @@ public class Subscription {
     private Integer creditQuantity = 0;
 
     /**
+     * V549: end of a complimentary internal plan (a partner creator code). The hourly internal
+     * renewal scheduler reverts the account to FREE on this date (within the hour), whatever the
+     * billing period. NULL = permanent (an admin grant, or not a comp at all).
+     */
+    @Column(name = "comp_ends_at")
+    private LocalDateTime compEndsAt;
+
+    /**
      * Yearly Stripe subscriptions only: index of the last MONTHLY credit cycle granted (V498).
      *
      * <p>The credit pack is priced per unit per month, on every cadence, and sold as "credits
@@ -258,6 +266,14 @@ public class Subscription {
 
     public void setCurrentPeriodEnd(LocalDateTime currentPeriodEnd) {
         this.currentPeriodEnd = currentPeriodEnd;
+    }
+
+    public LocalDateTime getCompEndsAt() {
+        return compEndsAt;
+    }
+
+    public void setCompEndsAt(LocalDateTime compEndsAt) {
+        this.compEndsAt = compEndsAt;
     }
 
     public Boolean getCancelAtPeriodEnd() {

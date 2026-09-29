@@ -8,7 +8,9 @@ import type { Edge, Node } from 'reactflow';
 import type { BuilderNodeData } from '@/app/workflows/builder/types';
 import { nodeRegistry } from '@/app/workflows/builder/registry/nodeRegistry';
 import fr from '@/messages/fr.json';
-import HeroWorkflowShowcase from '../HeroWorkflowShowcase';
+import HeroWorkflowShowcase, { HERO_PANEL_TEXTURE } from '../HeroWorkflowShowcase';
+import { preload } from 'react-dom';
+import { landingStyles } from '@/components/landing/landingStyles';
 import { HERO_EXAMPLE_KEYS, PERSONA_KEYS, type PersonaKey } from '../personas';
 
 const captures = vi.hoisted(() => ({
@@ -24,6 +26,7 @@ const captures = vi.hoisted(() => ({
 }));
 
 vi.mock('next/dynamic', () => ({ default: () => () => null }));
+vi.mock('react-dom', async (importOriginal) => ({ ...(await importOriginal<typeof import('react-dom')>()), preload: vi.fn() }));
 vi.mock('reactflow', () => ({
   default: (props: Record<string, unknown>) => { captures.graph = props; return <>{props.children as ReactNode}</>; },
   Background: () => null,
@@ -372,5 +375,30 @@ describe('hero workflow demonstration', () => {
     expect(fan).toHaveLength(6);
     expect(new Set(fan.map((node) => node.position.y)).size).toBe(2);
     expect(new Set(fan.map((node) => node.position.x)).size).toBe(3);
+  });
+});
+
+// The panel's background texture was the Largest Contentful Paint on a phone and was only
+// discovered once the inline stylesheet naming it had been parsed, behind every script:
+// Lighthouse measured it painting last. The hero hints it from the head instead.
+describe('HeroWorkflowShowcase LCP texture', () => {
+  it('preloads the panel texture with high priority', () => {
+    render(hero());
+    expect(preload).toHaveBeenCalledWith(HERO_PANEL_TEXTURE, { as: 'image', fetchPriority: 'high' });
+  });
+
+  it('preloads the very file the panel stylesheet draws, so the hint cannot go stale', () => {
+    expect(landingStyles).toContain(`url(${HERO_PANEL_TEXTURE})`);
+  });
+});
+
+// ReactFlow's own handle positions are shrunk by the hero's CSS scale on a phone, which drew
+// every connection off to the left of its cards. The canvas must draw its edges with HeroEdge.
+describe('HeroWorkflowShowcase edges', () => {
+  it('draws every edge with HeroEdge, which corrects the endpoints for the CSS scale', () => {
+    render(hero());
+    const edgeTypes = captures.graph.edgeTypes as Record<string, { name?: string }>;
+    expect(edgeTypes.builderEdge?.name).toBe('HeroEdge');
+    expect(edges().every((edge) => edge.type === 'builderEdge')).toBe(true);
   });
 });

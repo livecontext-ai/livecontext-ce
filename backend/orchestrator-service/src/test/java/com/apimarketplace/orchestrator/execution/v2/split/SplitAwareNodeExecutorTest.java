@@ -3605,6 +3605,177 @@ class SplitAwareNodeExecutorTest {
     }
 
     /**
+     * The engine's unreachable-merge gate asks this before trusting a per-item verdict read with
+     * the context's item index (prod run {@code run_<id>}). Each answer must
+     * match what {@code execute()} actually does for the same node.
+     */
+    @Nested
+    @DisplayName("executesForEverySplitItem()")
+    class ExecutesForEverySplitItem {
+
+        private final SplitContext splitContext = SplitContext.create("core:split1:0", List.of("a", "b", "c"));
+
+        private TestNode inSplitScope(String nodeId, NodeType type, String... predecessors) {
+            TestNode node = new TestNode(nodeId, type);
+            node.setPredecessors(List.of(predecessors));
+            nodeMap.put(nodeId, node);
+            when(contextManager.findActiveContext(eq("run1"), eq(nodeId), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            return node;
+        }
+
+        @Test
+        @DisplayName("branch-rejoin merge in a split: runs for every item, in AUTO and step-by-step")
+        void branchRejoinMergeFansOut() {
+            TestNode merge = inSplitScope("core:join", NodeType.MERGE, "mcp:a", "mcp:b");
+
+            assertThat(executor.executesForEverySplitItem(merge, "run1", 0, nodeMap, false)).isTrue();
+            assertThat(executor.executesForEverySplitItem(merge, "run1", 0, nodeMap, true)).isTrue();
+        }
+
+        @Test
+        @DisplayName("chained node on an AUTO per-item traversal: runs once for the context's own item")
+        void chainedNodeInAutoRunsOnce() {
+            TestNode join = inSplitScope("mcp:join", NodeType.MCP, "mcp:a", "mcp:b");
+
+            assertThat(executor.executesForEverySplitItem(join, "run1", 0, nodeMap, false)).isFalse();
+        }
+
+        @Test
+        @DisplayName("chained node in step-by-step: every node in split scope runs for every item")
+        void chainedNodeInStepByStepFansOut() {
+            TestNode join = inSplitScope("mcp:join", NodeType.MCP, "mcp:a", "mcp:b");
+
+            assertThat(executor.executesForEverySplitItem(join, "run1", 0, nodeMap, true)).isTrue();
+        }
+
+        @Test
+        @DisplayName("direct successor of the split: runs for every item even in AUTO")
+        void directSplitSuccessorFansOut() {
+            TestNode first = inSplitScope("mcp:first", NodeType.MCP, "core:split1");
+
+            assertThat(executor.executesForEverySplitItem(first, "run1", 0, nodeMap, false)).isTrue();
+        }
+
+        @Test
+        @DisplayName("no split context for the item: runs once, the context item is the real item")
+        void noSplitContextRunsOnce() {
+            TestNode merge = new TestNode("core:join", NodeType.MERGE);
+            merge.setPredecessors(List.of("mcp:a", "mcp:b"));
+            nodeMap.put("core:join", merge);
+
+            assertThat(executor.executesForEverySplitItem(merge, "run1", 2, nodeMap, true)).isFalse();
+        }
+
+        @Test
+        @DisplayName("control node that skips split handling and is not per-item (trigger): never fans out")
+        void nonPerItemControlNodeNeverFansOut() {
+            TestNode trigger = new TestNode("trigger:start", NodeType.TRIGGER);
+            nodeMap.put("trigger:start", trigger);
+
+            assertThat(executor.executesForEverySplitItem(trigger, "run1", 0, nodeMap, true)).isFalse();
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "{0} in split scope fans out even in AUTO")
+        @org.junit.jupiter.params.provider.EnumSource(value = NodeType.class, names = {"DECISION", "SWITCH", "LOOP", "FORK"})
+        @DisplayName("every forced per-item control type fans out in AUTO, like the merge")
+        void forcedPerItemTypesFanOut(NodeType type) {
+            // TestNode only answers loop/fork by type; routing nodes answer through their own
+            // predicates, so give this one the ones its type implies.
+            TestNode node = new TestNode("core:ctl", type) {
+                @Override
+                public boolean isDecisionNode() {
+                    return type == NodeType.DECISION;
+                }
+
+                @Override
+                public boolean isSwitchNode() {
+                    return type == NodeType.SWITCH;
+                }
+            };
+            node.setPredecessors(List.of("mcp:a"));
+            nodeMap.put("core:ctl", node);
+            when(contextManager.findActiveContext(eq("run1"), eq("core:ctl"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+
+            assertThat(executor.executesForEverySplitItem(node, "run1", 0, nodeMap, false)).isTrue();
+        }
+
+        @Test
+        @DisplayName("forced per-item type with no split context: runs once")
+        void forcedTypeWithoutSplitContextRunsOnce() {
+            TestNode decision = new TestNode("core:check", NodeType.DECISION);
+            decision.setPredecessors(List.of("mcp:a"));
+            nodeMap.put("core:check", decision);
+
+            assertThat(executor.executesForEverySplitItem(decision, "run1", 0, nodeMap, false)).isFalse();
+        }
+
+        // Parity with execute(): the predicate is only worth something if it names what execute()
+        // really does for the same node, so each answer is checked against an actual execution.
+
+        @Test
+        @DisplayName("parity: chained node in AUTO - predicate says once, execute() runs the body once")
+        void parityChainedAutoRunsOnce() {
+            TestNode join = inSplitScope("mcp:join", NodeType.MCP, "mcp:a", "mcp:b");
+            join.setExecuteResult(NodeExecutionResult.success("mcp:join", Map.of("ok", true)));
+            SplitAwareNodeExecutor.SuccessorTraverser noopTraverser = (s, c, idx) -> c;
+
+            boolean predicate = executor.executesForEverySplitItem(join, "run1", 0, nodeMap, false);
+            executor.execute(join, context, "run1", nodeMap, null, null, 0, noopTraverser);
+
+            assertThat(predicate).isFalse();
+            assertThat(join.getExecuteCount()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("parity: same node in step-by-step - predicate says every item, execute() runs it per item")
+        void parityChainedStepByStepRunsPerItem() {
+            TestNode join = inSplitScope("mcp:join", NodeType.MCP, "mcp:a", "mcp:b");
+            join.setExecuteResult(NodeExecutionResult.success("mcp:join", Map.of("ok", true)));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(org.mockito.ArgumentMatchers.anyInt())).thenReturn(context);
+
+            boolean predicate = executor.executesForEverySplitItem(join, "run1", 0, nodeMap, true);
+            executor.execute(join, context, "run1", nodeMap, null, null, 0, null);
+
+            assertThat(predicate).isTrue();
+            assertThat(join.getExecuteCount()).isEqualTo(splitContext.itemCount());
+        }
+
+        @Test
+        @DisplayName("parity: branch-rejoin merge in AUTO - predicate says every item, execute() runs it per item")
+        void parityMergeAutoRunsPerItem() {
+            TestNode merge = inSplitScope("core:join", NodeType.MERGE, "mcp:a", "mcp:b");
+            merge.setExecuteResult(NodeExecutionResult.success("core:join", Map.of("ok", true)));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(org.mockito.ArgumentMatchers.anyInt())).thenReturn(context);
+            SplitAwareNodeExecutor.SuccessorTraverser noopTraverser = (s, c, idx) -> c;
+
+            boolean predicate = executor.executesForEverySplitItem(merge, "run1", 0, nodeMap, false);
+            executor.execute(merge, context, "run1", nodeMap, null, null, 0, noopTraverser);
+
+            assertThat(predicate).isTrue();
+            assertThat(merge.getExecuteCount()).isEqualTo(splitContext.itemCount());
+        }
+
+        @Test
+        @DisplayName("parity: merge with no split context - predicate says once, execute() runs the body once")
+        void parityMergeWithoutSplitContextRunsOnce() {
+            TestNode merge = new TestNode("core:join", NodeType.MERGE);
+            merge.setPredecessors(List.of("mcp:a", "mcp:b"));
+            merge.setExecuteResult(NodeExecutionResult.success("core:join", Map.of("ok", true)));
+            nodeMap.put("core:join", merge);
+
+            boolean predicate = executor.executesForEverySplitItem(merge, "run1", 2, nodeMap, true);
+            executor.execute(merge, context, "run1", nodeMap, null, null, 2, null);
+
+            assertThat(predicate).isFalse();
+            assertThat(merge.getExecuteCount()).isEqualTo(1);
+        }
+    }
+
+    /**
      * Test node implementation that properly delegates type-based checks.
      */
     private static class TestNode extends BaseNode {

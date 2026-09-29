@@ -86,7 +86,7 @@ class InterfaceControllerScopeGateTest {
     @Test
     @DisplayName("GET /{id}/render returns 404 when caller does not own the run (cross-tenant UUID-guess)")
     void renderRejectsWhenCallerDoesNotOwnRun() {
-        when(renderService.callerCanAccessRun(RUN_ID, CALLER_TENANT, null)).thenReturn(false);
+        when(renderService.callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, null)).thenReturn(false);
 
         ResponseEntity<InterfaceRenderResult> response = controller.renderInterface(
                 INTERFACE_ID, RUN_ID, 0, 10, null, null, request(CALLER_TENANT), null);
@@ -99,7 +99,7 @@ class InterfaceControllerScopeGateTest {
     @Test
     @DisplayName("GET /{id}/render returns 200 with body when caller owns the run")
     void renderAcceptsWhenCallerOwnsRun() {
-        when(renderService.callerCanAccessRun(RUN_ID, CALLER_TENANT, null)).thenReturn(true);
+        when(renderService.callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, null)).thenReturn(true);
         InterfaceRenderResult body = emptyResult();
         when(renderService.render(INTERFACE_ID, RUN_ID, CALLER_TENANT, 0, 10, null, java.util.Map.of())).thenReturn(body);
 
@@ -113,7 +113,7 @@ class InterfaceControllerScopeGateTest {
     @Test
     @DisplayName("GET /{id}/render accepts an org-scoped teammate run when X-Organization-ID matches")
     void renderAcceptsOrgScopedTeammateRun() {
-        when(renderService.callerCanAccessRun(RUN_ID, CALLER_TENANT, ORG_ID)).thenReturn(true);
+        when(renderService.callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, ORG_ID)).thenReturn(true);
         InterfaceRenderResult body = emptyResult();
         when(renderService.render(INTERFACE_ID, RUN_ID, CALLER_TENANT, 0, 10, null, java.util.Map.of())).thenReturn(body);
 
@@ -122,7 +122,7 @@ class InterfaceControllerScopeGateTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isSameAs(body);
-        verify(renderService).callerCanAccessRun(RUN_ID, CALLER_TENANT, ORG_ID);
+        verify(renderService).callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, ORG_ID);
     }
 
     // ===== /items/{itemIndex} =====
@@ -130,7 +130,7 @@ class InterfaceControllerScopeGateTest {
     @Test
     @DisplayName("GET /{id}/items/{itemIndex} returns 404 when caller does not own the run")
     void itemRejectsWhenCallerDoesNotOwnRun() {
-        when(renderService.callerCanAccessRun(RUN_ID, CALLER_TENANT, null)).thenReturn(false);
+        when(renderService.callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, null)).thenReturn(false);
 
         ResponseEntity<SingleItemResult> response = controller.getInterfaceItem(
                 INTERFACE_ID, 0, RUN_ID, 0, request(CALLER_TENANT), null);
@@ -142,7 +142,7 @@ class InterfaceControllerScopeGateTest {
     @Test
     @DisplayName("GET /{id}/items/{itemIndex} returns the item body when caller owns the run")
     void itemAcceptsWhenCallerOwnsRun() {
-        when(renderService.callerCanAccessRun(RUN_ID, CALLER_TENANT, null)).thenReturn(true);
+        when(renderService.callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, null)).thenReturn(true);
         SingleItemResult body = new SingleItemResult(0, 0, Map.of("k", "v"));
         when(renderService.renderItem(INTERFACE_ID, RUN_ID, CALLER_TENANT, 0, 0))
                 .thenReturn(Optional.of(body));
@@ -157,7 +157,7 @@ class InterfaceControllerScopeGateTest {
     @Test
     @DisplayName("GET /{id}/items/{itemIndex} accepts an org-scoped teammate run when X-Organization-ID matches")
     void itemAcceptsOrgScopedTeammateRun() {
-        when(renderService.callerCanAccessRun(RUN_ID, CALLER_TENANT, ORG_ID)).thenReturn(true);
+        when(renderService.callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, ORG_ID)).thenReturn(true);
         SingleItemResult body = new SingleItemResult(0, 0, Map.of("k", "v"));
         when(renderService.renderItem(INTERFACE_ID, RUN_ID, CALLER_TENANT, 0, 0))
                 .thenReturn(Optional.of(body));
@@ -167,7 +167,7 @@ class InterfaceControllerScopeGateTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isSameAs(body);
-        verify(renderService).callerCanAccessRun(RUN_ID, CALLER_TENANT, ORG_ID);
+        verify(renderService).callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, ORG_ID);
     }
 
     // ===== /run-info =====
@@ -175,7 +175,7 @@ class InterfaceControllerScopeGateTest {
     @Test
     @DisplayName("GET /{id}/run-info returns 404 when caller does not own the run")
     void runInfoRejectsWhenCallerDoesNotOwnRun() {
-        when(renderService.callerCanAccessRun(RUN_ID, CALLER_TENANT, null)).thenReturn(false);
+        when(renderService.callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, null)).thenReturn(false);
 
         ResponseEntity<Map<String, Object>> response = controller.getInterfaceRunInfo(
                 INTERFACE_ID, RUN_ID, request(CALLER_TENANT), null);
@@ -187,7 +187,7 @@ class InterfaceControllerScopeGateTest {
     @Test
     @DisplayName("GET /{id}/run-info returns the metadata when caller owns the run")
     void runInfoAcceptsWhenCallerOwnsRun() {
-        when(renderService.callerCanAccessRun(RUN_ID, CALLER_TENANT, null)).thenReturn(true);
+        when(renderService.callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, null)).thenReturn(true);
         Map<String, Object> info = Map.of("totalItems", 3L);
         when(renderService.getRunInfo(INTERFACE_ID, RUN_ID, CALLER_TENANT))
                 .thenReturn(Optional.of(info));
@@ -202,7 +202,7 @@ class InterfaceControllerScopeGateTest {
     @Test
     @DisplayName("GET /{id}/run-info accepts an org-scoped teammate run when X-Organization-ID matches")
     void runInfoAcceptsOrgScopedTeammateRun() {
-        when(renderService.callerCanAccessRun(RUN_ID, CALLER_TENANT, ORG_ID)).thenReturn(true);
+        when(renderService.callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, ORG_ID)).thenReturn(true);
         Map<String, Object> info = Map.of("totalItems", 3L);
         when(renderService.getRunInfo(INTERFACE_ID, RUN_ID, CALLER_TENANT))
                 .thenReturn(Optional.of(info));
@@ -212,7 +212,7 @@ class InterfaceControllerScopeGateTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).containsEntry("totalItems", 3L);
-        verify(renderService).callerCanAccessRun(RUN_ID, CALLER_TENANT, ORG_ID);
+        verify(renderService).callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, ORG_ID);
     }
 
     // ===== /items-count =====

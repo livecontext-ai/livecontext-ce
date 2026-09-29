@@ -91,8 +91,15 @@ public class WorkflowBuilderResultEnricher {
                 // get_node_output, describe, validate, list, …) - those interrupt
                 // the user's flow if they hijack focus.
                 if (!isReadOnly) {
-                    meta.putIfAbsent("visualization",
-                            Map.of("type", "workflow", "id", draftId, "title", session.getWorkflowName()));
+                    // planChanged: the action wrote the stored plan (auto-saved edit or explicit
+                    // save), so a page showing this workflow in run mode switches back to editing
+                    // to show the new version. load, present, run_node and the like leave it false.
+                    meta.putIfAbsent("visualization", Map.of(
+                            "type", "workflow",
+                            "id", draftId,
+                            "title", session.getWorkflowName(),
+                            "planChanged", canonicalAction != null
+                                    && WorkflowBuilderActionConfig.PLAN_WRITE_ACTIONS.contains(canonicalAction)));
                 }
 
                 if (result.data() instanceof Map) {

@@ -1,5 +1,6 @@
 package com.apimarketplace.interfaces.config;
 
+import com.apimarketplace.common.web.SharedApplicationScopeClient;
 import com.apimarketplace.interfaces.client.OrchestratorCascadeClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -28,5 +29,16 @@ public class OrchestratorClientConfig {
     public OrchestratorCascadeClient orchestratorCascadeClient(
             @Value("${services.orchestrator-url:http://localhost:8099}") String orchestratorUrl) {
         return new OrchestratorCascadeClient(orchestratorUrl);
+    }
+
+    /**
+     * Share-link scope checks (which interfaces belong to a shared application). Conditional so
+     * the CE monolith, which also wires storage-service's copy, ends up with exactly one bean.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public SharedApplicationScopeClient sharedApplicationScopeClient(
+            @Value("${services.orchestrator-url:http://localhost:8099}") String orchestratorUrl) {
+        return new SharedApplicationScopeClient(orchestratorUrl);
     }
 }

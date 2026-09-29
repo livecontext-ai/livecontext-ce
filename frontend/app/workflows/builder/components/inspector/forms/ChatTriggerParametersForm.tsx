@@ -13,6 +13,7 @@ import { InfoPopover } from '@/components/ui/info-popover';
 import { chatEndpointSettingsService } from '@/lib/api/orchestrator';
 import type { StandaloneChatEndpoint } from '@/lib/api/orchestrator';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { buildStandaloneSourceNodeId } from '../../../utils/standaloneSourceNodeId';
 import Link from 'next/link';
 
@@ -55,6 +56,8 @@ export function ChatTriggerParametersForm({
   const t = useTranslations('workflowBuilder.forms');
   const { isRunMode: isRunModeContext } = useWorkflowMode();
   const isRunMode = isRunModeContext;
+  // Auto-creating the chat endpoint is a workspace write: never for a read-only VIEWER.
+  const canMutate = useCanMutateInCurrentOrg();
 
   const [copied, setCopied] = React.useState(false);
 
@@ -109,7 +112,7 @@ export function ChatTriggerParametersForm({
 
   // Auto-create chat endpoint if node has none (waits for list to load for unique name)
   React.useEffect(() => {
-    if (!listLoaded || standaloneChatEndpointId || isRunMode || isCreatingRef.current) return;
+    if (!listLoaded || standaloneChatEndpointId || isRunMode || !canMutate || isCreatingRef.current) return;
     const nodeDataId = node.id;
     // Module-level dedup guard
     const existingId = pendingOrCreatedChatEndpoints.get(nodeDataId);
@@ -148,7 +151,7 @@ export function ChatTriggerParametersForm({
       })
       .finally(() => setIsLoadingEndpoint(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listLoaded, standaloneChatEndpointId, isRunMode]);
+  }, [listLoaded, standaloneChatEndpointId, isRunMode, canMutate]);
 
   // Determine effective endpoint ID and URL (from node data or local state fallback)
   const effectiveEndpointId = standaloneChatEndpointId || standaloneEndpoint?.id;

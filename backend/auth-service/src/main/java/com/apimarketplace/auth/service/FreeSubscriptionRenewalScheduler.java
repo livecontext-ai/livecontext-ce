@@ -39,11 +39,14 @@ public class FreeSubscriptionRenewalScheduler {
 
     private final SubscriptionRepository subscriptionRepository;
     private final CreditAttributionService creditAttributionService;
+    private final AdminPlanService adminPlanService;
 
     public FreeSubscriptionRenewalScheduler(SubscriptionRepository subscriptionRepository,
-                                             CreditAttributionService creditAttributionService) {
+                                             CreditAttributionService creditAttributionService,
+                                             AdminPlanService adminPlanService) {
         this.subscriptionRepository = subscriptionRepository;
         this.creditAttributionService = creditAttributionService;
+        this.adminPlanService = adminPlanService;
     }
 
     // Hourly by default. Overridable so a test that drives this pass explicitly can set "-"
@@ -52,6 +55,17 @@ public class FreeSubscriptionRenewalScheduler {
     @SchedulerLock(name = "free_subscription_renewal", lockAtMostFor = "PT10M", lockAtLeastFor = "PT30S")
     public void renewExpiredInternalSubscriptions() {
         LocalDateTime now = LocalDateTime.now();
+
+        // V549: timed comps end on their own date, before any renewal is considered. A revert
+        // re-anchors the cycle, so the reverted row is not picked up as expired just below.
+        for (Subscription comp : subscriptionRepository.findEndedInternalComps(now)) {
+            try {
+                adminPlanService.revertExpiredComp(comp.getBillingCustomer().getUser().getId(), now);
+            } catch (Exception e) {
+                log.error("Failed to revert ended comp subscription id={}: {}", comp.getId(), e.getMessage());
+            }
+        }
+
         List<Subscription> expired = subscriptionRepository.findExpiredInternalSubscriptions(now);
 
         if (expired.isEmpty()) {
@@ -63,6 +77,15 @@ public class FreeSubscriptionRenewalScheduler {
         for (Subscription sub : expired) {
             try {
                 Long userId = sub.getBillingCustomer().getUser().getId();
+
+                // V549: a timed comp (partner creator code) whose end has passed reverts to
+                // FREE instead of renewing. The revert re-anchors the cycle and grants the
+                // FREE allowance itself, so this sub must not also go through the renewal.
+                if (sub.getCompEndsAt() != null && !sub.getCompEndsAt().isAfter(now)) {
+                    if (adminPlanService.revertExpiredComp(userId, now)) {
+                        continue;
+                    }
+                }
 
                 // Period advance + reset + re-grant, all inside attributeOnRenewal's single
                 // transaction. This loop must NOT write the subscription row itself: `sub` is

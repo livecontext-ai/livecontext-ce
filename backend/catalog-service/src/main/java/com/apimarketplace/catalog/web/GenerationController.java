@@ -264,6 +264,15 @@ public class GenerationController {
                     "success", false,
                     "error", "Sign in to run a generation."));
         }
+        // A generation spends workspace credits and stores its output in the workspace:
+        // refused to the read-only VIEWER. The role is also passed on in the context below
+        // (it used to be hard-coded null there).
+        String orgRole = com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole();
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(orgId, orgRole)) {
+            return ResponseEntity.status(403).body(Map.of(
+                    "success", false,
+                    "error", "Your workspace role is read-only (VIEWER): generations are not allowed."));
+        }
 
         Map<String, Object> credentials = new LinkedHashMap<>();
         // One scope per request, minted here. It is a STREAM scope because this
@@ -273,7 +282,7 @@ public class GenerationController {
         putPinnedCredential(credentials, body);
 
         ToolExecutionContext context = new ToolExecutionContext(
-                userId, credentials, Map.of(), java.util.Set.of(), null, null, orgId, null);
+                userId, credentials, Map.of(), java.util.Set.of(), null, null, orgId, orgRole);
 
         Optional<ToolExecutionResult> result =
                 module.execute("create", body == null ? Map.of() : body, userId, context);

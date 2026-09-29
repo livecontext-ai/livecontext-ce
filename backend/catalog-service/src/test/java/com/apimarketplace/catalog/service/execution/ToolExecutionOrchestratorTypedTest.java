@@ -133,4 +133,17 @@ class ToolExecutionOrchestratorTypedTest {
         assertThat(out1).isEqualTo(Map.of("x", 1));
         assertThat(out2).isEqualTo(Map.of("x", 1));
     }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0} mode forwards keepUndeclared")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"sync", "upload", "async_poll", "streaming"})
+    void everyModeForwardsKeepUndeclared(String mode) {
+        String schema = "[{\"key\":\"a\",\"type\":\"number\",\"description\":\"\"}]";
+        Map<String, Object> raw = Map.of("a", 1, "selected", "by the caller");
+
+        Object kept = orchestrator.projectResult(raw, schema, mode, null, true);
+        Object dropped = orchestrator.projectResult(raw, schema, mode, null, false);
+
+        assertThat(kept).isEqualTo(Map.of("a", 1, "selected", "by the caller"));
+        assertThat(dropped).isEqualTo(Map.of("a", 1));
+    }
 }

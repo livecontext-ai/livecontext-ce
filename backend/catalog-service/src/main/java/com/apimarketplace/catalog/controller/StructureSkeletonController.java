@@ -2,6 +2,7 @@ package com.apimarketplace.catalog.controller;
 
 import com.apimarketplace.catalog.repository.ToolResponseRepository;
 import com.apimarketplace.catalog.service.StructureSkeletonService;
+import com.apimarketplace.catalog.web.CatalogAdminAccess;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,9 +14,11 @@ import java.util.UUID;
 public class StructureSkeletonController {
 
     private final StructureSkeletonService service;
+    private final CatalogAdminAccess adminAccess;
 
-    public StructureSkeletonController(StructureSkeletonService service) {
+    public StructureSkeletonController(StructureSkeletonService service, CatalogAdminAccess adminAccess) {
         this.service = service;
+        this.adminAccess = adminAccess;
     }
 
     /**
@@ -87,20 +90,31 @@ public class StructureSkeletonController {
     }
 
     /**
-     * Endpoint d'administration pour lancer un batch de migration
-     * A securiser ou a appeler via un job scheduler
+     * Admin only: runs a skeleton backfill batch over the GLOBAL tool responses.
+     * The route is reachable by any signed-in user through the gateway, so the
+     * admin check lives here (see {@link CatalogAdminAccess}).
      */
     @PostMapping("/migrate")
-    public ResponseEntity<String> triggerMigration(@RequestParam(defaultValue = "100") int batchSize) {
+    public ResponseEntity<?> triggerMigration(
+            @RequestParam(defaultValue = "100") int batchSize,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles,
+            @RequestHeader(value = CatalogAdminAccess.ADMIN_TOKEN_HEADER, required = false) String adminToken) {
+        var denied = adminAccess.denyIfNotAdmin(roles, adminToken);
+        if (denied != null) return denied;
         int count = service.runMigrationBatch(batchSize);
         return ResponseEntity.ok("Migration batch completed. Processed " + count + " items.");
     }
-    
+
     /**
-     * Endpoint pour forcer la regeneration du squelette d'une reponse specifique
+     * Admin only: rewrites the skeleton of one GLOBAL tool response.
      */
     @PostMapping("/{responseId}/regenerate")
-    public ResponseEntity<Void> regenerateSkeleton(@PathVariable UUID responseId) {
+    public ResponseEntity<?> regenerateSkeleton(
+            @PathVariable UUID responseId,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles,
+            @RequestHeader(value = CatalogAdminAccess.ADMIN_TOKEN_HEADER, required = false) String adminToken) {
+        var denied = adminAccess.denyIfNotAdmin(roles, adminToken);
+        if (denied != null) return denied;
         service.generateAndSaveSkeleton(responseId);
         return ResponseEntity.ok().build();
     }

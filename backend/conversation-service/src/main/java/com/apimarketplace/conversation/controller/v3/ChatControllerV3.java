@@ -38,6 +38,7 @@ public class ChatControllerV3 {
     private final AgentClient agentClient;
     private final CreditConsumptionClient creditClient;
     private final ChatBudgetEstimator budgetEstimator;
+    private final com.apimarketplace.conversation.service.ConversationQueryService conversationQueryService;
 
     /**
      * Chat endpoint returning JSON response for WebSocket-based streaming.
@@ -98,6 +99,16 @@ public class ChatControllerV3 {
             @RequestBody Map<String, String> requestBody) {
 
         String conversationId = requestBody.get("conversationId");
+        // A stop writes the stream's partial text into the conversation, cancels its stream and
+        // cascades the cancel to its workflow runs and tasks, then answers with the streamId: the
+        // conversation must be in the caller's active workspace (404 otherwise, same as the turn).
+        if (conversationId != null && !conversationId.isEmpty()
+                && !conversationQueryService.isConversationInStrictScope(conversationId, userId, organizationId)) {
+            log.warn("Stop refused - user {} (org: {}) may not write conversation {}",
+                    userId, organizationId, conversationId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("success", false, "message", "Conversation not found"));
+        }
         StreamStopHandler.StopResult result = stopHandler.stopStream(userId, conversationId, organizationId);
 
         if (!result.success() && "Conversation ID is required".equals(result.message())) {

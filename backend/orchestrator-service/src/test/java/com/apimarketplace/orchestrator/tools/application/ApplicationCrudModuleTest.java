@@ -1337,7 +1337,7 @@ class ApplicationCrudModuleTest {
 
             assertThat(result.success()).isFalse();
             assertThat(result.errorCode()).isEqualTo(ToolErrorCode.MISSING_PARAMETER);
-            verify(workflowManagementService, never()).deleteWorkflow(any(), any());
+            verify(workflowManagementService, never()).deleteWorkflow(any(), any(), any());
         }
 
         @Test
@@ -1353,7 +1353,7 @@ class ApplicationCrudModuleTest {
 
             assertThat(result.success()).isFalse();
             assertThat(result.errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
-            verify(workflowManagementService, never()).deleteWorkflow(any(), any());
+            verify(workflowManagementService, never()).deleteWorkflow(any(), any(), any());
         }
 
         @Test
@@ -1368,14 +1368,14 @@ class ApplicationCrudModuleTest {
 
             assertThat(result.success()).isFalse();
             assertThat(result.errorCode()).isEqualTo(ToolErrorCode.RESOURCE_NOT_FOUND);
-            verify(workflowManagementService, never()).deleteWorkflow(any(), any());
+            verify(workflowManagementService, never()).deleteWorkflow(any(), any(), any());
         }
 
         @Test
         @DisplayName("Deletes the local clone via the cascade delete and returns the removed workflow id")
         void deletesCloneAndReportsId() {
             stubClone();
-            when(workflowManagementService.deleteWorkflow(cloneId, TENANT_ID)).thenReturn(true);
+            when(workflowManagementService.deleteWorkflow(cloneId, TENANT_ID, null)).thenReturn(true);
 
             ToolExecutionResult result = module.execute("uninstall",
                     Map.of("application_id", APP_PUB_ID.toString()), TENANT_ID, contextWithOrg()).orElseThrow();
@@ -1386,14 +1386,14 @@ class ApplicationCrudModuleTest {
             assertThat(data.get("status")).isEqualTo("OK");
             assertThat(data.get("application_id")).isEqualTo(APP_PUB_ID.toString());
             assertThat(data.get("removed_workflow_id")).isEqualTo(cloneId.toString());
-            verify(workflowManagementService).deleteWorkflow(cloneId, TENANT_ID);
+            verify(workflowManagementService).deleteWorkflow(cloneId, TENANT_ID, null);
         }
 
         @Test
         @DisplayName("A failed cascade delete (returns false) surfaces EXECUTION_FAILED")
         void deleteFalseFails() {
             stubClone();
-            when(workflowManagementService.deleteWorkflow(cloneId, TENANT_ID)).thenReturn(false);
+            when(workflowManagementService.deleteWorkflow(cloneId, TENANT_ID, null)).thenReturn(false);
 
             ToolExecutionResult result = module.execute("uninstall",
                     Map.of("application_id", APP_PUB_ID.toString()), TENANT_ID, contextWithOrg()).orElseThrow();

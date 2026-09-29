@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, type RefObject } from 'react';
+import { useTranslations } from 'next-intl';
+import { useCanDriveRuns } from '@/lib/hooks/useCanDriveRuns';
 import { isEventForWorkflow } from '@/lib/workflow/workflowEventScope';
 import {
   INTERFACE_CONTINUE_EVENT,
@@ -30,18 +32,39 @@ export function useWorkflowEventBridge(
    */
   workflowId?: string,
 ) {
+  const tCommon = useTranslations('common');
+  // Firing a trigger, an app action or an interface __continue drives the run: a read-only
+  // VIEWER is answered at once (translated toast + an explicit forbidden ack) instead of a
+  // request the backend refuses and a spinner that never stops. A public share page is
+  // never gated here: its visitor acts under the share link, not their own workspace role.
+  const canMutate = useCanDriveRuns();
+  const readOnlyMessage = tCommon('viewerReadOnly');
+  const notifyReadOnly = () => {
+    window.dispatchEvent(new CustomEvent('workflowToast', {
+      detail: { type: 'warning', message: readOnlyMessage },
+    }));
+  };
+
   // Listen for trigger execution requests from WorkflowPanelContent
   useEffect(() => {
     const handler = async (event: CustomEvent) => {
       if (!isEventForWorkflow(event.detail, workflowId)) return;
       const { requestId, triggerId, triggerType, payload } = event.detail;
       let result: string[] | undefined;
+      if (!canMutate) {
+        notifyReadOnly();
+        window.dispatchEvent(new CustomEvent('workflowExecuteTriggerResponse', {
+          detail: { requestId, result: undefined, forbidden: true },
+        }));
+        return;
+      }
       try {
         if (executeTriggerRef.current) {
           result = await executeTriggerRef.current(triggerId, triggerType, payload);
         }
       } catch (err) {
         console.error('[useWorkflowEventBridge] Trigger execution failed:', err);
+        if ((err as { status?: number } | null)?.status === 403) notifyReadOnly();
       }
       window.dispatchEvent(new CustomEvent('workflowExecuteTriggerResponse', {
         detail: { requestId, result },
@@ -49,24 +72,31 @@ export function useWorkflowEventBridge(
     };
     window.addEventListener('workflowExecuteTriggerRequest', handler as EventListener);
     return () => window.removeEventListener('workflowExecuteTriggerRequest', handler as EventListener);
-  }, [executeTriggerRef, workflowId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [executeTriggerRef, workflowId, canMutate, readOnlyMessage]);
 
   // Listen for application action requests from WorkflowPanelContent
   useEffect(() => {
     const handler = async (event: CustomEvent) => {
       if (!isEventForWorkflow(event.detail, workflowId)) return;
       const { triggerRef, data } = event.detail;
+      if (!canMutate) {
+        notifyReadOnly();
+        return;
+      }
       try {
         if (applicationActionRef.current) {
           await applicationActionRef.current(triggerRef, data);
         }
       } catch (err) {
         console.error('[useWorkflowEventBridge] Application action failed:', err);
+        if ((err as { status?: number } | null)?.status === 403) notifyReadOnly();
       }
     };
     window.addEventListener('workflowApplicationActionRequest', handler as EventListener);
     return () => window.removeEventListener('workflowApplicationActionRequest', handler as EventListener);
-  }, [applicationActionRef, workflowId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applicationActionRef, workflowId, canMutate, readOnlyMessage]);
 
   // Listen for __continue events: resolve interface signal via fire API
   useEffect(() => {
@@ -83,6 +113,11 @@ export function useWorkflowEventBridge(
           detail: { requestId, ...response },
         }));
       };
+      if (!canMutate) {
+        // Same shape as a backend 403, so the continue button shows its "forbidden" state.
+        ack({ ok: false, alreadyResolved: false, status: 403, error: 'forbidden' });
+        return;
+      }
       try {
         const { interfaceService } = await import('@/lib/api/orchestrator/interface.service');
         const result = await interfaceService.fireInterfaceAction(runId, nodeId, actionKey, data, itemIndex);
@@ -119,5 +154,5 @@ export function useWorkflowEventBridge(
     };
     window.addEventListener(INTERFACE_CONTINUE_EVENT, handler as EventListener);
     return () => window.removeEventListener(INTERFACE_CONTINUE_EVENT, handler as EventListener);
-  }, [runContext, workflowId]);
+  }, [runContext, workflowId, canMutate]);
 }

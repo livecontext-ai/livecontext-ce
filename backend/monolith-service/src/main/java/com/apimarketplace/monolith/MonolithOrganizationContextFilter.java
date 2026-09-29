@@ -43,6 +43,8 @@ public class MonolithOrganizationContextFilter implements Filter {
     private static final String HEADER_ACTIVE_ORG_ID = "X-Active-Organization-ID";
     private static final String HEADER_ORGANIZATION_ID = "X-Organization-ID";
     private static final String HEADER_ORGANIZATION_ROLE = "X-Organization-Role";
+    /** Set (never client-supplied: the Order(0) MonolithSecurityFilter strips it) on share-token requests. */
+    private static final String HEADER_SHARE_CONTEXT = "X-Share-Context";
     private static final String HEADER_MONOLITH_ACTIVE_ORG_CLAIM =
             MonolithSecurityFilter.MONOLITH_ACTIVE_ORG_CLAIM_HEADER;
     private static final Set<String> ORG_CONTEXT_HEADERS = Set.of(
@@ -123,7 +125,13 @@ public class MonolithOrganizationContextFilter implements Filter {
         OrganizationMember membership = resolvedMembership.get();
         Map<String, String> injectedHeaders = new LinkedHashMap<>();
         injectedHeaders.put(HEADER_ORGANIZATION_ID, membership.getOrganization().getId().toString());
-        injectedHeaders.put(HEADER_ORGANIZATION_ROLE, membership.getRole().name());
+        // A share-token request runs under the link OWNER's identity, but the visitor is not a
+        // member: injecting the owner's real role would hand them OWNER/ADMIN rights (or, for
+        // a VIEWER owner, block a published app). Mirror the cloud gateway, which sends no role
+        // header in a share context: the org id stays, the role does not.
+        if (!"true".equalsIgnoreCase(httpRequest.getHeader(HEADER_SHARE_CONTEXT))) {
+            injectedHeaders.put(HEADER_ORGANIZATION_ROLE, membership.getRole().name());
+        }
         doFilterWithBoundRequest(
                 new OrganizationHeadersRequestWrapper(httpRequest, injectedHeaders, ORG_CONTEXT_HEADERS),
                 response,

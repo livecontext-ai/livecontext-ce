@@ -37,6 +37,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { slugOrNull, track } from "@/lib/analytics/analytics";
 import { useTranslations } from "next-intl";
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { useToast, type ToastData } from "@/components/Toast";
 import { formatDateTime } from "@/lib/utils/dateFormatters";
 import { invalidateCredentialCaches } from "@/lib/credentials/invalidateCredentialCaches";
@@ -144,6 +145,10 @@ export function MyCredentialsList({
   focusCredentialId,
 }: MyCredentialsListProps = {}) {
   const t = useTranslations('credentials.myCredentials');
+  const tCommon = useTranslations('common');
+  // A read-only VIEWER sees the workspace credentials but cannot rename, delete, reconnect
+  // or swap the default one (the backend refuses those writes too).
+  const canMutate = useCanMutateInCurrentOrg();
   const locale = getClientLocale();
   // Prefer the page-level addToast so toasts actually render. Local useToast
   // is the dead-letter fallback (see prop javadoc above).
@@ -379,7 +384,7 @@ export function MyCredentialsList({
   // backend refuses to rename it (422 name_is_identity). Reflect that on the row: the
   // payload already carries `integration`, and offering a dialog that can only end in
   // a refusal wastes the user's typing.
-  const canRename = (credential: Credential): boolean =>
+  const canRename = (credential: Credential): boolean => canMutate &&
     Boolean(credential.integration && credential.integration.trim());
 
   const openRename = (credential: Credential, e: React.MouseEvent) => {
@@ -517,7 +522,7 @@ export function MyCredentialsList({
       </div>
 
       {/* Selection actions */}
-      {selectedCredentials.size > 0 && (
+      {selectedCredentials.size > 0 && canMutate && (
         <div className="flex items-center gap-2">
           <Button
             variant="destructive"
@@ -689,7 +694,7 @@ export function MyCredentialsList({
                           >
                             {t("reconnectRequired")}
                           </span>
-                          {onReconnect && (
+                          {onReconnect && canMutate && (
                             <Button
                               size="sm"
                               variant="outline"
@@ -718,8 +723,10 @@ export function MyCredentialsList({
                   <td className="px-4 py-3 text-center">
                     {(() => {
                       const isOnlyDefault = credential.is_default && isOnlyCredentialForIntegration(credential);
-                      const isDisabled = togglingDefaultId === credential.id || isOnlyDefault;
-                      const title = isOnlyDefault
+                      const isDisabled = togglingDefaultId === credential.id || isOnlyDefault || !canMutate;
+                      const title = !canMutate
+                        ? tCommon('viewerReadOnly')
+                        : isOnlyDefault
                         ? t('cannotRemoveOnlyCredential')
                         : credential.is_default
                           ? t('removeDefault')

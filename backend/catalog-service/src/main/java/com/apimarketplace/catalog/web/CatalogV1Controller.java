@@ -257,6 +257,19 @@ public class CatalogV1Controller {
                                                   String userId,
                                                   String orgId,
                                                   String requestId) {
+        // A VIEWER is read-only: running a tool acts on a third-party service with the
+        // workspace credentials (and may spend its credits). The chat tool
+        // (CatalogExecuteModule) refuses the same call. Internal callers forward the
+        // caller's own X-Organization-Role, and share visitors carry none.
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(
+                orgId, com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole())) {
+            log.warn("OrgAccess denied: VIEWER user {} attempted to execute tool {} in org {}",
+                    userId, toolId, orgId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "success", false,
+                    "error", "ROLE_READ_ONLY",
+                    "message", "Your workspace role is read-only (VIEWER): running tools is not allowed."));
+        }
         try {
             // Accept both UUIDs and slugs (e.g., "api-slug/tool-slug" or "tool-slug")
             ToolExecutionRequest safeRequest = request != null ? request : ToolExecutionRequest.builder().build();

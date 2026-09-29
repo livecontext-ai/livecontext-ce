@@ -58,7 +58,9 @@ class OrganizationSamlLoginServiceTest {
         organization = new Organization("Acme", "acme", false, owner);
         organization.setId(ORG_ID);
 
-        user = new User("member", "member@example.com", AuthProvider.KEYCLOAK, "kc-member");
+        // The account this workspace's IdP created: the only kind a workspace SAML login may reach.
+        user = new User("member", "member@example.com", AuthProvider.SAML, "kc-member");
+        user.setSamlIdpAlias(ALIAS);
         user.setId(42L);
 
         service = new OrganizationSamlLoginService(
@@ -80,6 +82,7 @@ class OrganizationSamlLoginServiceTest {
         // rule a Team workspace could mint a member in the name of user@example.com.
         when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
         User outsider = new User("outsider", "user@example.com", AuthProvider.SAML, "kc-outsider");
+        outsider.setSamlIdpAlias(ALIAS);
         outsider.setId(77L);
         when(memberRepository.findActiveByOrganizationIdAndUserId(ORG_ID, 77L)).thenReturn(Optional.empty());
         when(domainService.isEmailOnVerifiedDomain(ORG_ID, "user@example.com")).thenReturn(false);
@@ -231,6 +234,122 @@ class OrganizationSamlLoginServiceTest {
 
         verify(memberRepository, never()).save(any());
         verify(auditService, never()).record(any(), any(), any(), any());
+    }
+
+    // -- account takeover: a workspace IdP may only reach the account it created --
+
+    @Test
+    @DisplayName("takeover: an EXISTING member whose account is a password account is refused through the workspace IdP")
+    void existingMemberPasswordAccountIsRefusedThroughWorkspaceIdp() {
+        // Keycloak linked the admin's IdP to the member's own password account (same email).
+        // Before the fix the existing-member return let the admin's IdP sign in as the member.
+        User passwordMember = new User("victim", "victim@example.com", AuthProvider.KEYCLOAK, "kc-victim");
+        passwordMember.setId(55L);
+        org.mockito.Mockito.lenient().when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+        org.mockito.Mockito.lenient().when(memberRepository.findActiveByOrganizationIdAndUserId(ORG_ID, 55L))
+                .thenReturn(Optional.of(new OrganizationMember(organization, passwordMember, OrganizationRole.MEMBER, true)));
+
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(passwordMember, ALIAS))
+                .isInstanceOf(SamlAccountNotProvisionedException.class)
+                .hasMessageContaining("not created through this workspace's SSO");
+
+        verify(memberRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("takeover: a Google or GitHub account is never resolved through a workspace IdP, member or not")
+    void socialAccountsAreRefusedThroughWorkspaceIdp() {
+        for (AuthProvider provider : new AuthProvider[]{AuthProvider.GOOGLE, AuthProvider.GITHUB, AuthProvider.LOCAL}) {
+            User social = new User("s-" + provider, "s@example.com", provider, "kc-" + provider);
+            social.setId(60L);
+            assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(social, ALIAS))
+                    .as(provider.name())
+                    .isInstanceOf(SamlAccountNotProvisionedException.class);
+        }
+        verify(memberRepository, never()).findActiveByOrganizationIdAndUserId(any(), any());
+        verify(memberRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("takeover: a SAML account created by ANOTHER workspace's IdP, or with no recorded IdP, is refused")
+    void samlAccountOfAnotherIdpIsRefused() {
+        User otherIdp = new User("other", "other@example.com", AuthProvider.SAML, "kc-other");
+        otherIdp.setSamlIdpAlias("org-11111111222233334444555555555555-saml");
+        otherIdp.setId(61L);
+        User unrecorded = new User("legacy", "legacy@example.com", AuthProvider.SAML, "kc-legacy");
+        unrecorded.setId(62L);
+
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(otherIdp, ALIAS))
+                .isInstanceOf(SamlAccountNotProvisionedException.class);
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(unrecorded, ALIAS))
+                .isInstanceOf(SamlAccountNotProvisionedException.class);
+        verify(memberRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("takeover: the refusal is reported to analytics as not_provisioned_by_idp")
+    void notProvisionedRefusalIsReported() {
+        var analytics = wireAnalytics();
+        User passwordMember = new User("victim", "victim@example.com", AuthProvider.KEYCLOAK, "kc-victim");
+        passwordMember.setId(55L);
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(passwordMember, ALIAS))
+                .isInstanceOf(SamlAccountNotProvisionedException.class);
+
+        verify(analytics).ssoMemberJoined(55L, ORG_ID.toString(), "rejected", "not_provisioned_by_idp", null);
+    }
+
+    // -- admission of a login that has no app account yet --
+
+    @Test
+    @DisplayName("new account admission: an off-domain email is refused before any account exists")
+    void newAccountAdmissionRefusesOffDomainEmail() {
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+        when(domainService.isEmailOnVerifiedDomain(ORG_ID, "user@example.com")).thenReturn(false);
+
+        assertThatThrownBy(() -> service.checkNewAccountAdmission("user@example.com", ALIAS, true))
+                .isInstanceOf(SamlMembershipException.class)
+                .hasMessageContaining("not on a domain verified");
+        verify(memberService, never()).getTeamStatus(any());
+    }
+
+    @Test
+    @DisplayName("new account admission: inactive connection, plan below Team and a full workspace are each refused")
+    void newAccountAdmissionRefusesInactivePlanAndLimit() {
+        OrganizationSamlConnection inactive = activeConnection();
+        inactive.setStatus(OrganizationSamlConnection.Status.ERROR);
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(inactive));
+        assertThatThrownBy(() -> service.checkNewAccountAdmission("member@example.com", ALIAS, false))
+                .hasMessageContaining("not active");
+
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+        when(memberService.getTeamStatus(ORG_ID))
+                .thenReturn(new OrganizationMemberService.TeamStatus(false, 1, 1, 0, "FREE"))
+                .thenReturn(new OrganizationMemberService.TeamStatus(true, 2, 2, 0, "TEAM"));
+        assertThatThrownBy(() -> service.checkNewAccountAdmission("member@example.com", ALIAS, false))
+                .hasMessageContaining("Team or Enterprise");
+        assertThatThrownBy(() -> service.checkNewAccountAdmission("member@example.com", ALIAS, false))
+                .hasMessageContaining("Member limit reached");
+    }
+
+    @Test
+    @DisplayName("new account admission: a verified-domain email on a Team workspace with room passes, and writes nothing")
+    void newAccountAdmissionAcceptsVerifiedDomain() {
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(activeConnection()));
+        stubTeamStatus(true, 10, 1, 0);
+
+        service.checkNewAccountAdmission("member@example.com", ALIAS, true);
+
+        verify(memberRepository, never()).save(any());
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    @DisplayName("new account admission: a non-workspace identity provider is not its business")
+    void newAccountAdmissionIgnoresOtherProviders() {
+        service.checkNewAccountAdmission("user@example.com", "google", true);
+        verifyNoInteractions(samlRepository, domainService, memberService);
     }
 
     private OrganizationSamlConnection activeConnection() {

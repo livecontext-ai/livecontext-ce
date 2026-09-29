@@ -261,7 +261,9 @@ class WorkflowBuilderModifierMergeTest {
             agent.put("label", "Classifier");
             agent.put("isAgent", true);
             agent.put("isClassify", true);
-            agent.put("classifyCategories", List.of(
+            // The session shape every entry path produces (add_node, load, set_plan):
+            // 'classifyCategories' is only the stored plan's spelling.
+            agent.put("categories", List.of(
                     new LinkedHashMap<>(Map.of("label", "Finance", "description", "Bank")),
                     new LinkedHashMap<>(Map.of("label", "Tech", "description", "Dev tools"))
             ));
@@ -284,10 +286,13 @@ class WorkflowBuilderModifierMergeTest {
 
             Map<String, Object> node = findMcp(session, "Classifier");
             @SuppressWarnings("unchecked")
-            List<Map<String, Object>> categories = (List<Map<String, Object>>) node.get("classifyCategories");
+            List<Map<String, Object>> categories = (List<Map<String, Object>>) node.get("categories");
             assertThat(categories).hasSize(3);
+            // Existing categories keep their port index; the new one is appended
             assertThat(categories).extracting(c -> c.get("label"))
-                    .containsExactly("Spam", "Finance", "Tech");
+                    .containsExactly("Finance", "Tech", "Spam");
+            assertThat(node).as("the plan spelling must not sit beside the session key")
+                    .doesNotContainKey("classifyCategories");
         }
 
         @Test
@@ -305,7 +310,7 @@ class WorkflowBuilderModifierMergeTest {
 
             Map<String, Object> node = findMcp(session, "Classifier");
             @SuppressWarnings("unchecked")
-            List<Map<String, Object>> categories = (List<Map<String, Object>>) node.get("classifyCategories");
+            List<Map<String, Object>> categories = (List<Map<String, Object>>) node.get("categories");
             assertThat(categories).hasSize(2);
             Map<String, Object> finance = categories.stream()
                     .filter(c -> "Finance".equals(c.get("label"))).findFirst().orElseThrow();
@@ -607,7 +612,9 @@ class WorkflowBuilderModifierMergeTest {
             List<Map<String, Object>> cases = (List<Map<String, Object>>) modified.get("switchCases");
             assertThat(cases).hasSize(3);
             assertThat(cases).extracting(c -> c.get("label"))
-                    .containsExactly("C", "A", "B"); // incoming first, preserved last
+                    // Positions kept: SwitchNodeWirer numbers ports case_0, case_1... by index,
+                    // so moving C first would re-point the edge wired for A to C's matches
+                    .containsExactly("A", "B", "C");
             // Updated A keeps its original auto-generated id
             Map<String, Object> aCase = cases.stream()
                     .filter(c -> "A".equals(c.get("label"))).findFirst().orElseThrow();

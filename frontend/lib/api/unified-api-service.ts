@@ -167,6 +167,8 @@ export class UnifiedApiService {
   restoreAccount = () => this.userService.restoreAccount();
   reportProfileContext = (payload: ProfileContextPayload) => this.userService.reportProfileContext(payload);
   reportExplicitLocale = (locale: string) => this.userService.reportExplicitLocale(locale);
+  reportExplicitTimeZone = (timeZone: string) => this.userService.reportExplicitTimeZone(timeZone);
+  reportDeviceTimeZone = (timeZone: string) => this.userService.reportDeviceTimeZone(timeZone);
   getMarketingConsent = () => this.userService.getMarketingConsent();
   setMarketingConsent = (consent: boolean) => this.userService.setMarketingConsent(consent);
   getMfaStatus = () => this.userService.getMfaStatus();

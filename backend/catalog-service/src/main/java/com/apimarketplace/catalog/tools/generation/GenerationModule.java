@@ -113,6 +113,13 @@ public class GenerationModule implements ToolModule {
         return List.of(); // definitions live on GenerationToolsProvider
     }
 
+    /** Agent-facing refusal for a VIEWER asking for a generation. */
+    static final String VIEWER_GENERATION_REFUSAL =
+            "The user's role in this workspace is read-only (VIEWER), so no generation can run: "
+            + "a generation spends workspace credits and saves its output in the workspace. "
+            + "action='models' and action='options' still work. Do not retry; tell the user that "
+            + "only the workspace owner can change their role.";
+
     @Override
     public boolean canHandle(String action) {
         return HANDLED_ACTIONS.contains(action);
@@ -129,6 +136,15 @@ public class GenerationModule implements ToolModule {
         }
         // 'generate' is the legacy verb from the image-only tool. Same behaviour.
         if ("create".equals(action) || "generate".equals(action)) {
+            // A generation spends workspace credits and stores its output in the workspace:
+            // refused to the read-only VIEWER, like its REST twin (GenerationController).
+            // Checked before any preparation so nothing is uploaded or reserved.
+            if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(
+                    context != null ? context.orgId() : null,
+                    context != null ? context.orgRole() : null)) {
+                return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED,
+                        VIEWER_GENERATION_REFUSAL));
+            }
             return Optional.of(create(parameters, tenantId, context));
         }
         return Optional.empty();

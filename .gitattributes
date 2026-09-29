@@ -1,5 +1,7 @@
 # Force LF line endings for shell scripts - they run on Linux servers only
 *.sh text eol=lf
+# Git hooks have no extension; a CRLF shebang fails with "bad interpreter" on Linux.
+scripts/git-hooks/* text eol=lf
 
 # Host files copied by hand onto the k3s workers / lc-data: systemd refuses a
 # unit with CRLF, k3s ignores a drop-in it cannot parse, cron wants LF.

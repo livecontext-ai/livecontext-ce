@@ -90,6 +90,17 @@ public interface FileStorageService {
      */
     Optional<DownloadStream> openStream(String key);
 
+    /**
+     * Open one byte range of an object ({@code rangeSpec} is a single {@code bytes=a-b} /
+     * {@code bytes=a-} / {@code bytes=-n} spec, see {@code ByteRanges}). Empty when the store cannot
+     * serve that range (unsatisfiable, unsupported, missing object): the caller then serves the
+     * whole object, which is always a valid answer to a range request. The default serves no
+     * ranges, so an implementation that does not override it keeps its current full-body behaviour.
+     */
+    default Optional<RangedDownload> openStreamRange(String key, String rangeSpec) {
+        return Optional.empty();
+    }
+
     boolean delete(String key);
 
     int deleteRunFiles(String tenantId, String workflowId, String runId);

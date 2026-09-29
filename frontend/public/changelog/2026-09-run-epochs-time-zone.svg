@@ -45,28 +45,29 @@
 
   <rect width="720" height="260" fill="var(--page)"/>
 
-  <!-- ── Left: a chat bubble, the new chat channels ──────────────────────────── -->
-  <g transform="translate(144,40)" stroke="var(--mark)" stroke-width="5" fill="none"
+  <!-- ── Left: a timeline of epochs, one bar each ─────────────────────────────── -->
+  <g transform="translate(140,40)" stroke="var(--mark)" stroke-width="5" fill="none"
      stroke-linecap="round" stroke-linejoin="round">
-    <path d="M8 8 H64 A8 8 0 0 1 72 16 V50 A8 8 0 0 1 64 58 H30 L14 72 V58 H8 A8 8 0 0 1 0 50 V16 A8 8 0 0 1 8 8 Z"/>
-    <path d="M18 26 H54"/>
-    <path d="M18 40 H44"/>
+    <path d="M4 72 H76"/>
+    <path d="M12 64 V44"/>
+    <path d="M28 64 V24"/>
+    <path d="M44 64 V36"/>
+    <path d="M60 64 V8"/>
   </g>
 
-  <text class="t-title" x="180" y="172">Chat channels</text>
-  <text class="t-sub" x="180" y="208">where you already chat</text>
+  <text class="t-title" x="180" y="172">Epoch by epoch</text>
+  <text class="t-sub" x="180" y="208">canvas, Analysis and Logs</text>
 
   <!-- ── Divider ─────────────────────────────────────────────────────────────── -->
   <line x1="360" y1="52" x2="360" y2="208" stroke="var(--line)" stroke-width="2"/>
 
-  <!-- ── Right: a bell, alerts that leave the app ───────────────────────────── -->
+  <!-- ── Right: a clock, the account time zone and language ────────────────── -->
   <g transform="translate(504,40)" stroke="var(--mark)" stroke-width="5" fill="none"
      stroke-linecap="round" stroke-linejoin="round">
-    <path d="M36 6 V10"/>
-    <path d="M12 56 V36 A24 24 0 0 1 60 36 V56 L68 64 H4 Z"/>
-    <path d="M28 70 A8 8 0 0 0 44 70"/>
+    <circle cx="36" cy="38" r="32"/>
+    <path d="M36 18 V38 L50 46"/>
   </g>
 
-  <text class="t-title" x="540" y="172">Alerts that find you</text>
-  <text class="t-sub" x="540" y="208">by email or on a channel</text>
+  <text class="t-title" x="540" y="172">Your time zone</text>
+  <text class="t-sub" x="540" y="208">and language, everywhere</text>
 </svg>

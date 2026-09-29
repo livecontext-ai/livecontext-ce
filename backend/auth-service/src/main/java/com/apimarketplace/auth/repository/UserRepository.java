@@ -176,10 +176,39 @@ public interface UserRepository extends JpaRepository<User, Long> {
            "WHERE u.id = :userId AND u.localeExplicit = false AND (u.locale IS NULL OR u.locale <> :locale)")
     int updateLocaleImplicit(@Param("userId") Long userId, @Param("locale") String locale);
 
+    /**
+     * An explicit pick in Settings always wins and pins the zone (V540).
+     *
+     * <p>Answers a row count for a FLAG-only transition too (same zone, newly pinned), which the
+     * caller reads as "contact changed" and turns into one outbound contact sync whose fields are
+     * unchanged. Deliberate and cheap: the alternative is a narrower predicate that cannot tell
+     * "already pinned to this" from "not stored at all", and a missed sync is worse than a
+     * redundant one.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE User u SET u.timeZone = :timeZone, u.timeZoneExplicit = true " +
+           "WHERE u.id = :userId AND (u.timeZone IS NULL OR u.timeZone <> :timeZone OR u.timeZoneExplicit = false)")
+    int updateTimeZoneExplicit(@Param("userId") Long userId, @Param("timeZone") String timeZone);
+
+    /** The zone the browser reported: never overwrites an explicit pick (V540). */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE User u SET u.timeZone = :timeZone " +
-           "WHERE u.id = :userId AND (u.timeZone IS NULL OR u.timeZone <> :timeZone)")
-    int updateTimeZone(@Param("userId") Long userId, @Param("timeZone") String timeZone);
+           "WHERE u.id = :userId AND u.timeZoneExplicit = false AND (u.timeZone IS NULL OR u.timeZone <> :timeZone)")
+    int updateTimeZoneImplicit(@Param("userId") Long userId, @Param("timeZone") String timeZone);
+
+    /**
+     * Back to following the device: un-pins the zone AND stores the one just reported, so the
+     * browser report of every later session is free to keep it current again.
+     *
+     * <p>The one write here that is NOT guarded by {@code timeZoneExplicit = false}, on purpose:
+     * releasing a pick is the only operation whose whole point is to clear that flag. It reports
+     * a change when the flag was set even if the zone itself is unchanged, because the contact
+     * the emails are addressed from now follows a different rule. (V540)
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE User u SET u.timeZone = :timeZone, u.timeZoneExplicit = false " +
+           "WHERE u.id = :userId AND (u.timeZoneExplicit = true OR u.timeZone IS NULL OR u.timeZone <> :timeZone)")
+    int releaseTimeZone(@Param("userId") Long userId, @Param("timeZone") String timeZone);
 
     /** Write-once. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)

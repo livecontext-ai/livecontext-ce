@@ -1,9 +1,22 @@
 'use client';
 
 import * as React from 'react';
+import dynamic from 'next/dynamic';
 import { Folder } from 'lucide-react';
-import { FileDetailView } from '@/components/app/FileDetailView';
-import { StorageExplorerTab } from '@/app/workflows/builder/components/inspector/StorageExplorerTab';
+
+// Loaded apart from the opener. Every file-producing node imports this module, and a
+// static import put the file viewer (markdown, syntax highlighting, media players) and
+// the storage explorer into every workflow canvas, the landing hero included, before
+// anyone opened a file. Where a side panel exists, preloadNodePanels fetches them
+// ahead of the first click, so the tab does not open blank.
+const FileDetailView = dynamic(
+  () => import('@/components/app/FileDetailView').then((m) => m.FileDetailView),
+  { ssr: false },
+);
+const StorageExplorerTab = dynamic(
+  () => import('@/app/workflows/builder/components/inspector/StorageExplorerTab').then((m) => m.StorageExplorerTab),
+  { ssr: false },
+);
 
 export const FILES_TAB_ID = 'files-panel';
 const PREFERRED_WIDTH = 0.4;

@@ -1,6 +1,8 @@
 package com.apimarketplace.orchestrator.services;
 
 import com.apimarketplace.common.scope.ScopeGuard;
+import com.apimarketplace.common.web.SharedApplicationScope;
+import com.apimarketplace.orchestrator.services.interfaces.InterfacePlanExtractor;
 import com.apimarketplace.orchestrator.controllers.workflow.WorkflowControllerHelper;
 import com.apimarketplace.interfaces.client.InterfaceClient;
 import com.apimarketplace.interfaces.client.dto.InterfaceDto;
@@ -77,6 +79,12 @@ public class InterfaceRenderService implements InterfaceRenderer {
 
     @Autowired
     private OrchestratorLimitsConfig renderLimits;
+
+    @Autowired(required = false)
+    private InterfacePlanExtractor interfacePlanExtractor;
+
+    @Autowired(required = false)
+    private SharedApplicationScopeService sharedApplicationScopeService;
 
     // Per-run {{$vars.*}} bundle for interface variable_mapping resolution.
     // Optional: absent in plain unit tests -> $vars simply does not resolve there
@@ -215,7 +223,7 @@ public class InterfaceRenderService implements InterfaceRenderer {
         UUID workflowRunId = findWorkflowRunId(runId);
 
         // 2. Get snapshot (frozen template) or live interface with config
-        TemplateConfig config = getTemplateConfigForRun(interfaceId, workflowRunId, ownerTenantId);
+        TemplateConfig config = getTemplateConfigForRun(interfaceId, runId, workflowRunId, ownerTenantId);
         String htmlTemplate = config.htmlTemplate();
         String cssTemplate = config.cssTemplate();
         String jsTemplate = config.jsTemplate();
@@ -362,7 +370,7 @@ public class InterfaceRenderService implements InterfaceRenderer {
      * Get template config for a run (snapshot if exists, otherwise live interface).
      * Uses InterfaceClient to fetch from interface-service.
      */
-    private TemplateConfig getTemplateConfigForRun(UUID interfaceId, UUID workflowRunId, String tenantId) {
+    private TemplateConfig getTemplateConfigForRun(UUID interfaceId, String runId, UUID workflowRunId, String tenantId) {
         // First try snapshot via interface-service. The format travels with the templates: the
         // snapshot wins over the live interface, so reading the format from anywhere else here
         // would silently revert a snapshot-backed run to the 1280x800 default.
@@ -375,13 +383,74 @@ public class InterfaceRenderService implements InterfaceRenderer {
             }
         }
 
-        // Fallback to live interface (no tenant restriction for internal lookup)
+        // Fallback to the live interface. The template lookup itself is unscoped, so the row must
+        // be checked against the RUN's scope here: without it, any caller could render ANOTHER
+        // workspace's interface by pairing its id with a run of their own.
         InterfaceDto iface = interfaceClient.getInterfaceTemplateForRender(interfaceId);
-        if (iface != null) {
+        if (iface != null && liveInterfaceInRunScope(iface, runId)) {
             return new TemplateConfig(iface.getHtmlTemplate(), iface.getCssTemplate(), iface.getJsTemplate(), Map.of(), Map.of(), iface.getFormat());
         }
 
         return new TemplateConfig(null, null, null, Map.of(), Map.of(), null);
+    }
+
+    /**
+     * Whether a live interface row may be rendered against {@code runId}: the interface must sit
+     * in the run's own workspace (the run owner's strict scope). A run that cannot be resolved
+     * renders nothing. Snapshot-backed renders never reach this: a snapshot is keyed by the run.
+     */
+    private boolean liveInterfaceInRunScope(InterfaceDto iface, String runId) {
+        if (runId == null) {
+            return false;
+        }
+        Optional<WorkflowRunEntity> run = workflowRunRepository.findByRunIdPublic(runId);
+        if (run.isEmpty()) {
+            logger.warn("[InterfaceRender] refusing live interface {}: run {} not found", iface.getId(), runId);
+            return false;
+        }
+        boolean inScope = ScopeGuard.isInStrictScope(
+                run.get().getTenantId(), run.get().getOrganizationId(),
+                iface.getTenantId(), iface.getOrganizationId());
+        if (!inScope) {
+            logger.warn("[InterfaceRender] refusing live interface {} outside the scope of run {}",
+                    iface.getId(), runId);
+        }
+        return inScope;
+    }
+
+    /**
+     * Render gate for the public interface endpoints: the caller may read the run
+     * ({@link #callerCanAccessRun}) AND, in a share-link context, the interface belongs to the
+     * shared application: referenced by the run's own plan, or by the application's current plan
+     * (a clone of the shared publication, the plan the viewer renders from the publication
+     * snapshot). A share holder acts as the owner, so without this they could render any
+     * interface of the owner's workspace against the shared run.
+     */
+    @Transactional(readOnly = true)
+    public boolean callerCanRenderInterface(UUID interfaceId, String runId, String tenantId, String organizationId) {
+        if (!callerCanAccessRun(runId, tenantId, organizationId)) {
+            return false;
+        }
+        if (!SharedApplicationScope.current().isShare()) {
+            return true;
+        }
+        InterfacePlanExtractor extractor = interfacePlanExtractor != null
+                ? interfacePlanExtractor : new InterfacePlanExtractor();
+        if (interfaceId == null) {
+            return false;
+        }
+        Optional<WorkflowRunEntity> run = workflowRunRepository.findByRunIdPublic(runId);
+        if (run.isEmpty()) {
+            return false;
+        }
+        if (extractor.extractInterfaceIds(run.get().getPlan()).contains(interfaceId)) {
+            return true;
+        }
+        // callerCanAccessRun already bound the run to the shared publication.
+        UUID publicationId = SharedApplicationScope.current().publicationId();
+        return sharedApplicationScopeService != null
+                && sharedApplicationScopeService.interfaceBelongsToApplication(
+                        publicationId, run.get().getOrganizationId(), interfaceId);
     }
 
     /**
@@ -567,7 +636,7 @@ public class InterfaceRenderService implements InterfaceRenderer {
         // Get workflowRunId with lightweight query (no JSONB loading)
         UUID workflowRunId = findWorkflowRunId(runId);
 
-        TemplateConfig config = getTemplateConfigForRun(interfaceId, workflowRunId, ownerTenantId);
+        TemplateConfig config = getTemplateConfigForRun(interfaceId, runId, workflowRunId, ownerTenantId);
         Map<String, String> mappings = config.variableMappings();
         boolean hasMappings = mappings != null && !mappings.isEmpty();
 
@@ -890,7 +959,7 @@ public class InterfaceRenderService implements InterfaceRenderer {
         // Get workflowRunId with lightweight query (no JSONB loading)
         UUID workflowRunId = findWorkflowRunId(runId);
 
-        TemplateConfig config = getTemplateConfigForRun(interfaceId, workflowRunId, ownerTenantId);
+        TemplateConfig config = getTemplateConfigForRun(interfaceId, runId, workflowRunId, ownerTenantId);
         if (config.htmlTemplate() == null) return Optional.empty();
 
         // Get distinct (epoch, spawn, itemIndex) triples scoped to the interface node.

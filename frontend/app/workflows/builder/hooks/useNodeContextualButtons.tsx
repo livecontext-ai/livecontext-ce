@@ -3,13 +3,27 @@
 import * as React from 'react';
 import { Bot, Settings, MessageSquare, Table, FolderOpen, Workflow } from 'lucide-react';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
-import { AgentPanelContent, AGENT_CONVERSATION_TAB, AGENT_CONFIGURATION_TAB } from '@/components/app/AgentPanelContent';
-import { DataSourcePanelContent } from '@/components/app/DataSourcePanelContent';
+import dynamic from 'next/dynamic';
+import { AGENT_CONVERSATION_TAB, AGENT_CONFIGURATION_TAB, type AgentPanelTab } from '@/components/app/agentPanelTabs';
 import { openFilesPanel, type FilePanelTarget } from '@/lib/sidePanel/openFilesPanel';
 import type { BuilderNodeData } from '@/app/workflows/builder/types';
 import type { TriggerButtonVariant } from '../components/NodePlayButton';
 import { openWorkflowBuilderTab, requestOpenRelatedWorkflow } from '@/lib/sidePanel/openWorkflowBuilderTab';
+import { preloadNodePanels } from '@/lib/sidePanel/preloadNodePanels';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
+
+// The panels these buttons open are loaded apart from the node: a static import put the
+// agent fleet canvas, the conversation UI and the data table into every canvas that
+// shows a node, the landing hero included, for buttons that only exist on hover. Where
+// a side panel exists, the hook below preloads them so the first open is not blank.
+const AgentPanelContent = dynamic(
+  () => import('@/components/app/AgentPanelContent').then((m) => m.AgentPanelContent),
+  { ssr: false },
+);
+const DataSourcePanelContent = dynamic(
+  () => import('@/components/app/DataSourcePanelContent').then((m) => m.DataSourcePanelContent),
+  { ssr: false },
+);
 
 /**
  * Centralized derivation of the node-type flags that drive the contextual
@@ -173,6 +187,10 @@ export function useNodeContextualButtons({
   currentFile = null,
 }: UseNodeContextualButtonsParams): NodeContextualButton[] {
   const sidePanel = useSidePanelSafe();
+  const canOpenPanels = sidePanel != null;
+  React.useEffect(() => {
+    if (canOpenPanels) preloadNodePanels();
+  }, [canOpenPanels]);
   // Which workflow this button belongs to, so a run-mode sub-workflow request is
   // answered by the view hosting THIS canvas rather than by every mounted one.
   // The hook is used outside a provider too (the run-info popover), where this is
@@ -185,7 +203,7 @@ export function useNodeContextualButtons({
     const agentCfgId = (data as any).agentConfigId;
     const agentName = (data as any).agentConfigName || data.label || 'Agent';
     const tabId = `agent-${agentCfgId}`;
-    const openAgentTab = (initialTab: typeof AGENT_CONFIGURATION_TAB | typeof AGENT_CONVERSATION_TAB) => {
+    const openAgentTab = (initialTab: AgentPanelTab) => {
       const existing = sidePanel?.tabs?.some((t) => t.id === tabId);
       if (existing) {
         sidePanel?.updateTab(tabId, { content: <AgentPanelContent agentId={agentCfgId} initialTab={initialTab} /> });

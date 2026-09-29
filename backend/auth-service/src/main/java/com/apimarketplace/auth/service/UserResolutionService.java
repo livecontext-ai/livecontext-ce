@@ -1,5 +1,6 @@
 package com.apimarketplace.auth.service;
 
+import com.apimarketplace.auth.util.EmailNormalizer;
 import com.apimarketplace.auth.audit.AuthEventRecorder;
 import com.apimarketplace.auth.metrics.AuthMetrics;
 import org.springframework.context.annotation.Lazy;
@@ -157,6 +158,23 @@ public class UserResolutionService {
     private final Map<Long, LocalDateTime> samlRejectionReported = new ConcurrentHashMap<>();
     static final int SAML_REJECTION_MEMO_MAX = 10_000;
 
+    /**
+     * Keycloak subjects whose new-account SAML refusal was already reported. Same purpose as
+     * {@link #samlRejectionReported} for a login that has no app account (no user id) yet.
+     */
+    private final Set<String> newSamlAccountRefusalReported = ConcurrentHashMap.newKeySet();
+
+    /** (Keycloak user, IdP) pairs already released after a refused SAML login. */
+    private final Set<String> samlReleaseDone = ConcurrentHashMap.newKeySet();
+
+
+    /**
+     * Keycloak admin adapter for workspace IdPs; releases what Keycloak created for a refused
+     * SAML login. Absent outside auth.mode=keycloak (no SAML there).
+     */
+    @Autowired(required = false)
+    private KeycloakSamlIdentityProviderClient samlIdentityProviderClient;
+
     @Autowired(required = false)
     private AuthEventRecorder authEventRecorder;
 
@@ -217,6 +235,8 @@ public class UserResolutionService {
     public UserResolutionResponse resolveUser(String providerId, String keycloakJwt) {
         log.debug("Resolving user for providerId: {}", providerId);
 
+        // Non-null only for a token a workspace SAML IdP brokered (org-<uuid>-saml).
+        String samlAlias = organizationSamlAliasOf(keycloakJwt);
         try {
             // 1. Find user by providerId
             Optional<User> userOpt = userRepository.findByProviderId(providerId);
@@ -229,6 +249,12 @@ public class UserResolutionService {
             // 2. If not found, try to create (with race condition handling)
             if (userOpt.isEmpty()) {
                 if (keycloakJwt != null) {
+                    // A workspace SAML login is admitted BEFORE anything is created for it: no
+                    // app account, FREE subscription or credit grant for a login that is then
+                    // refused, and the Keycloak user that login created is released.
+                    if (samlAlias != null) {
+                        admitNewSamlAccount(providerId, keycloakJwt, samlAlias);
+                    }
                     Optional<User> created = findOrCreateUser(providerId, keycloakJwt);
                     // findOrCreateUser may return an existing-by-email user (Keycloak
                     // recreation) - in that case it's NOT a new user. Detect via
@@ -251,6 +277,22 @@ public class UserResolutionService {
             User user = userOpt.get();
             log.debug("User found: {} (ID: {})", user.getEmail(), user.getId());
 
+            // Read here (it only parses the token) so the SAML check below knows whether this
+            // resolution is a real sign-in: its refusal is reported once per sign-in, not once
+            // per request that re-resolves the same token.
+            LocalDateTime authenticatedAt = authenticationInstant(keycloakJwt, user);
+            // The SAML gate runs BEFORE the bookkeeping below, so a refused SAML login never
+            // gets a FREE subscription or a credit grant on the account it reached.
+            ensureSamlMembershipForBrokeredLogin(user, keycloakJwt,
+                    isNewUser || isUnreportedNewAuthentication(user, authenticatedAt), authenticatedAt);
+
+            // 2b. Keycloak owns email verification. The local flag used to be copied only
+            // when the row was created, so an account verified in Keycloak later (or re-pointed
+            // onto a new subject) stayed unverified here forever and was refused everywhere
+            // the local flag gates (invitations, credits, notification mail). After the SAML
+            // gate: a refused SAML login must not mark the account it reached as verified.
+            syncEmailVerifiedFromToken(user, keycloakJwt);
+
             // 3. Ensure user has a username
             ensureUsername(user);
 
@@ -259,13 +301,6 @@ public class UserResolutionService {
 
             // 4b. Attribute credits if email is verified (idempotent)
             attributeCreditsSafely(user);
-
-            // Read here (it only parses the token) so the SAML check below knows whether this
-            // resolution is a real sign-in: its refusal is reported once per sign-in, not once
-            // per request that re-resolves the same token.
-            LocalDateTime authenticatedAt = authenticationInstant(keycloakJwt, user);
-            ensureSamlMembershipForBrokeredLogin(user, keycloakJwt,
-                    isNewUser || isUnreportedNewAuthentication(user, authenticatedAt), authenticatedAt);
 
             // 5. "Last seen" bookkeeping. Throttled, and deliberately not a login signal.
             // Goes through the self-injected proxy so @Transactional applies, and through a
@@ -321,6 +356,20 @@ public class UserResolutionService {
             // different sign-in method - deny (fail closed), never merge.
             log.warn("Resolution denied for providerId {} - {}", providerId, e.getMessage());
             recordFailure(providerTagFromJwt(keycloakJwt), "cross_provider_conflict");
+            if (samlAlias != null) {
+                // The Keycloak user this SAML login created holds an email an app account owns.
+                releaseRefusedKeycloakUser(providerId, samlAlias, true);
+            }
+            return null;
+        } catch (SamlMembershipException e) {
+            // A refused workspace SAML login: an expected outcome, not an internal error.
+            log.warn("Workspace SAML login refused for providerId {} (idp {}): {}", providerId, samlAlias, e.getMessage());
+            recordFailure(providerTagFromJwt(keycloakJwt), "saml_rejected");
+            if (e instanceof SamlAccountNotProvisionedException && samlAlias != null) {
+                // Keycloak linked the workspace IdP to an account it did not create: undo the link
+                // and end the session the IdP obtained. Never a delete: an app account sits on it.
+                releaseRefusedKeycloakUser(providerId, samlAlias, false);
+            }
             return null;
         } catch (Exception e) {
             log.error("Error resolving user for providerId: {}", providerId, e);
@@ -345,11 +394,49 @@ public class UserResolutionService {
     }
 
     /**
+     * Upgrade the local {@code emailVerified} flag from the token: false to true ONLY,
+     * and only when the token asserts {@code email_verified=true} for the SAME address
+     * as the account (compared with {@link EmailNormalizer}). A false or missing claim
+     * never downgrades a verified account, and a token for another address (a changed
+     * email not yet synced) proves nothing about this one. Best-effort: a parse or save
+     * failure never fails the resolve.
+     */
+    void syncEmailVerifiedFromToken(User user, String jwt) {
+        if (user == null || user.isEmailVerified() || jwt == null || jwt.isBlank()) {
+            return;
+        }
+        try {
+            var claims = SignedJWT.parse(jwt).getJWTClaimsSet();
+            if (!Boolean.TRUE.equals(claims.getBooleanClaim("email_verified"))) {
+                return;
+            }
+            if (!EmailNormalizer.matches(claims.getStringClaim("email"), user.getEmail())) {
+                return;
+            }
+            user.setEmailVerified(true);
+            userRepository.save(user);
+            log.info("Email of user {} marked verified from the identity token", user.getId());
+            // Same hand-off as EmailVerificationService.verifyCode: lifecycle emails skip
+            // unverified accounts, so this transition is when the signup event is owed.
+            // recordSignup is write-once guarded; its own catch keeps a hand-off failure
+            // from being logged as a failed sync.
+            if (lifecycleContext != null) {
+                try {
+                    lifecycleContext.recordSignup(user.getId());
+                } catch (RuntimeException e) {
+                    log.warn("user.signed_up not recorded for user {}: {}", user.getId(), e.toString());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not sync email_verified from the token for user {}: {}", user.getId(), e.getMessage());
+        }
+    }
+
+    /**
      * The sign-in method of THIS authentication. A workspace SAML login is {@code saml}
-     * whatever the account was created with: Keycloak links a SAML identity provider to an
-     * existing account (a Google or password account) without touching its stored
-     * {@code authProvider}, so the stored value would name the wrong method. Every other
-     * login keeps the stored provider, as before.
+     * whatever the stored provider says (a SAML login that reaches an account the IdP did not
+     * create is refused before this point, see ensureSamlMembershipForBrokeredLogin). Every
+     * other login keeps the stored provider, as before.
      */
     private String loginMethodTag(User user, String jwt) {
         if ("saml".equals(providerTagFromJwt(jwt))) return "saml";
@@ -439,9 +526,106 @@ public class UserResolutionService {
         return !authenticatedAt.equals(samlRejectionReported.get(user.getId()));
     }
 
+    /** The {@code identity_provider} claim when it names a workspace SAML IdP, else null. */
+    private static String organizationSamlAliasOf(String jwt) {
+        if (jwt == null || jwt.isBlank()) {
+            return null;
+        }
+        try {
+            String idp = SignedJWT.parse(jwt).getJWTClaimsSet().getStringClaim("identity_provider");
+            return OrganizationSamlService.isOrganizationSamlAlias(idp) ? idp : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Admission of a workspace SAML login that has no app account yet (see
+     * {@link OrganizationSamlLoginService#checkNewAccountAdmission}). On refusal the Keycloak user
+     * this login created is released before the refusal propagates, so no Keycloak user is left
+     * holding an email address the workspace could not prove it owns.
+     *
+     * <p>Not applied to a RE-POINT: when the email already belongs to the SAML account this same
+     * IdP created (its Keycloak user was recreated), nothing new is created, the account keeps
+     * its place, and the membership rules that run next decide (an existing member passes; a
+     * member removed since goes through the join admission, seat check included). Applying the
+     * new-account admission there locked a member out whenever the workspace was full.
+     */
+    private void admitNewSamlAccount(String providerId, String jwt, String alias) {
+        if (samlLoginService == null) {
+            throw new SamlMembershipException("SAML SSO admission is unavailable");
+        }
+        String email = null;
+        try {
+            email = SignedJWT.parse(jwt).getJWTClaimsSet().getStringClaim("email");
+        } catch (Exception e) {
+            // No readable email: the admission below refuses it (no verified domain matches).
+        }
+        if (isRepointOfSamlAccount(email, alias)) {
+            return;
+        }
+        boolean report = !newSamlAccountRefusalReported.contains(providerId);
+        try {
+            samlLoginService.checkNewAccountAdmission(email, alias, report);
+        } catch (SamlMembershipException e) {
+            if (newSamlAccountRefusalReported.size() >= SAML_REJECTION_MEMO_MAX) newSamlAccountRefusalReported.clear();
+            newSamlAccountRefusalReported.add(providerId);
+            releaseRefusedKeycloakUser(providerId, alias, true);
+            throw e;
+        }
+    }
+
+    /** The same test createUserFromKeycloakJwt applies before re-pointing an account onto a new sub. */
+    private boolean isRepointOfSamlAccount(String email, String alias) {
+        if (email == null || email.isEmpty()) {
+            return false;
+        }
+        return userRepository.findByEmail(email)
+                .filter(u -> OrganizationSamlLoginService.isProvisionedBy(u, alias))
+                .isPresent();
+    }
+
+    /**
+     * Best effort: removes what Keycloak created or linked for a refused workspace SAML login
+     * (the user it created, or only its link to the IdP, plus a logout, when the user has another
+     * sign-in method or an app account). Never throws: the refusal stands whatever Keycloak
+     * answers. Done once per (Keycloak user, IdP): the refused token keeps coming back until it
+     * expires, and repeating the admin calls on each request would buy nothing.
+     *
+     * @param allowDelete false when an app account sits on this Keycloak user (unlink only)
+     */
+    private void releaseRefusedKeycloakUser(String keycloakUserId, String alias, boolean allowDelete) {
+        if (samlIdentityProviderClient == null) {
+            return;
+        }
+        String memoKey = keycloakUserId + "|" + alias;
+        if (samlReleaseDone.contains(memoKey)) {
+            return;
+        }
+        try {
+            KeycloakSamlIdentityProviderClient.ReleaseOutcome outcome =
+                    samlIdentityProviderClient.releaseRefusedBrokeredUser(keycloakUserId, alias, allowDelete);
+            log.info("Refused workspace SAML login: Keycloak user {} {} (idp {})", keycloakUserId,
+                    outcome == null ? "unchanged" : outcome.name().toLowerCase(java.util.Locale.ROOT), alias);
+            if (samlReleaseDone.size() >= SAML_REJECTION_MEMO_MAX) samlReleaseDone.clear();
+            samlReleaseDone.add(memoKey);
+        } catch (Exception e) {
+            // Not memoized: the next refused request retries, and the orphan sweep is the backstop.
+            log.error("Refused workspace SAML login: could not release Keycloak user {} (idp {}): {}",
+                    keycloakUserId, alias, e.toString());
+        }
+    }
+
     private void ensureSamlMembershipForBrokeredLogin(User user, String jwt, boolean realSignIn,
                                                       LocalDateTime authenticatedAt) {
-        if (samlLoginService == null || jwt == null || jwt.isBlank()) {
+        if (jwt == null || jwt.isBlank()) {
+            return;
+        }
+        if (samlLoginService == null) {
+            // Fail closed: without the service nothing can check a workspace SAML token.
+            if (organizationSamlAliasOf(jwt) != null) {
+                throw new SamlMembershipException("SAML SSO admission is unavailable");
+            }
             return;
         }
         String identityProvider = null;
@@ -1044,8 +1228,11 @@ public class UserResolutionService {
             var claims = jwt.getJWTClaimsSet();
 
             String email = claims.getStringClaim("email");
-            AuthProvider incomingProvider = resolveAuthProviderFromIdentityProvider(
-                    claims.getStringClaim("identity_provider"));
+            String identityProvider = claims.getStringClaim("identity_provider");
+            AuthProvider incomingProvider = resolveAuthProviderFromIdentityProvider(identityProvider);
+            // The workspace IdP creating this account, recorded so that only this IdP can ever
+            // sign it in again (null for any other provider).
+            String samlIdpAlias = incomingProvider == AuthProvider.SAML ? identityProvider : null;
 
             // Re-point an existing account onto a NEW Keycloak sub ONLY when the
             // SAME sign-in method is being recreated (legitimate Keycloak user
@@ -1063,7 +1250,11 @@ public class UserResolutionService {
                     // it is treated as KEYCLOAK (the original password default).
                     AuthProvider existingProvider = existing.getAuthProvider() != null
                             ? existing.getAuthProvider() : AuthProvider.KEYCLOAK;
-                    if (existingProvider == incomingProvider) {
+                    // A SAML recreation must also come from the SAME workspace IdP: another
+                    // workspace's IdP asserting this email is a different sign-in method.
+                    boolean sameMethod = existingProvider == incomingProvider
+                            && (samlIdpAlias == null || samlIdpAlias.equals(existing.getSamlIdpAlias()));
+                    if (sameMethod) {
                         log.info("Keycloak user recreation for email {} (provider {}): re-pointing providerId {} -> {}",
                                 email, incomingProvider, existing.getProviderId(), providerId);
                         existing.setProviderId(providerId);
@@ -1123,6 +1314,7 @@ public class UserResolutionService {
 
             // Auth provider - resolved once above from the identity_provider claim.
             newUser.setAuthProvider(incomingProvider);
+            newUser.setSamlIdpAlias(samlIdpAlias);
 
             newUser.setEnabled(true);
             newUser.setRoles(new java.util.HashSet<>(Set.of("USER")));

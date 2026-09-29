@@ -63,6 +63,8 @@ export const CREDIT_SOURCE_LABEL_KEYS = {
   MARKETPLACE_PURCHASE: 'types.marketplacePurchase',
   PAYG_TOPUP: 'types.paygTopup',
   REWARD_REFERRAL: 'types.rewardReferral',
+  // A creator or partner code's credits, granted the moment the code is redeemed (V549).
+  REWARD_CODE: 'types.rewardCode',
   REWARD_CLAWBACK: 'types.rewardClawback',
   MANUAL_ADJUSTMENT: 'types.manualAdjustment',
   // `as const` so a mistyped key is a compile error rather than an `undefined` handed to the
@@ -124,6 +126,7 @@ export const CREDIT_SOURCE_FILTERS: readonly string[] = [
   'MARKETPLACE_PURCHASE',
   'PAYG_TOPUP',
   'REWARD_REFERRAL',
+  'REWARD_CODE',
   'REWARD_CLAWBACK',
   'MANUAL_ADJUSTMENT',
 ];

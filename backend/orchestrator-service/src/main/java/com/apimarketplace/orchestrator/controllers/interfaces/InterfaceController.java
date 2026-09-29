@@ -58,7 +58,7 @@ public class InterfaceController {
 
         String tenantId = tenantResolver.resolveOrNull(request);
         String organizationId = request.getHeader("X-Organization-ID");
-        if (!interfaceRenderService.callerCanAccessRun(runId, tenantId, organizationId)) {
+        if (!interfaceRenderService.callerCanRenderInterface(id, runId, tenantId, organizationId)) {
             return ResponseEntity.notFound().build();
         }
         Map<String, Integer> variablePages = parseVariablePages(variablePagesJson);
@@ -82,7 +82,7 @@ public class InterfaceController {
 
         String tenantId = tenantResolver.resolveOrNull(request);
         String organizationId = request.getHeader("X-Organization-ID");
-        if (!interfaceRenderService.callerCanAccessRun(runId, tenantId, organizationId)) {
+        if (!interfaceRenderService.callerCanRenderInterface(id, runId, tenantId, organizationId)) {
             return ResponseEntity.notFound().build();
         }
         return interfaceRenderService.renderItem(id, runId, tenantId, epoch, itemIndex)
@@ -104,7 +104,7 @@ public class InterfaceController {
 
         String tenantId = tenantResolver.resolveOrNull(request);
         String organizationId = request.getHeader("X-Organization-ID");
-        if (!interfaceRenderService.callerCanAccessRun(runId, tenantId, organizationId)) {
+        if (!interfaceRenderService.callerCanRenderInterface(id, runId, tenantId, organizationId)) {
             return ResponseEntity.notFound().build();
         }
         return interfaceRenderService.getRunInfo(id, runId, tenantId)

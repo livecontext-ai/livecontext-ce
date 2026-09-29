@@ -70,6 +70,7 @@ class UserControllerLifecycleContextTest {
                         .header("CF-Connecting-IP", "203.0.113.7")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"locale\":\"fr\",\"localeExplicit\":true,\"timeZone\":\"Europe/Paris\","
+                                + "\"timeZoneExplicit\":true,\"timeZoneFollowsDevice\":true,"
                                 + "\"acquisition\":{\"utmSource\":\"google\",\"landingPath\":\"/fr\"},\"unknown\":1}"))
                 .andExpect(status().isNoContent());
 
@@ -79,6 +80,61 @@ class UserControllerLifecycleContextTest {
         assertThat(body.getValue().localeExplicit()).isTrue();
         assertThat(body.getValue().timeZone()).isEqualTo("Europe/Paris");
         assertThat(body.getValue().acquisition().utmSource()).isEqualTo("google");
+
+        // The two flags that SELECT which of the three time-zone writes runs: pin, release, or
+        // leave a browser report in charge. This is the only test in the module that binds this
+        // record from real JSON - every other one constructs it positionally in Java, which
+        // bypasses Jackson entirely. So nothing else can see a renamed field, a stray
+        // @JsonProperty, or a build that loses record parameter names: the endpoint would go on
+        // answering 204 while silently ignoring both flags, and the symptom is the pre-V540 bug
+        // the migration exists to fix - a browser report quietly un-pinning a chosen zone.
+        assertThat(body.getValue().timeZoneExplicit()).isTrue();
+        assertThat(body.getValue().timeZoneFollowsDevice()).isTrue();
+    }
+
+    @Test
+    @DisplayName("PUT /profile/context binds the two time-zone flags as FALSE when the body says so, "
+            + "rather than reading a missing field as either")
+    void contextBindsTimeZoneFlagsAsFalse() throws Exception {
+        // false and absent are different answers here, and they pick different writes: false means
+        // "the browser is reporting this zone, do not overwrite a pick", absent means the same by
+        // default. A Boolean that bound as null when the body said false would send an implicit
+        // report down the explicit path and pin a zone nobody chose.
+        userExists(7L);
+
+        mvc.perform(put("/api/users/profile/context")
+                        .header("X-User-ID", "7")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"timeZone\":\"Asia/Tokyo\",\"timeZoneExplicit\":false,"
+                                + "\"timeZoneFollowsDevice\":false}"))
+                .andExpect(status().isNoContent());
+
+        ArgumentCaptor<ProfileContextRequest> body = ArgumentCaptor.forClass(ProfileContextRequest.class);
+        verify(lifecycleContextService).updateContext(eq(7L), body.capture(), any(), any());
+        assertThat(body.getValue().timeZone()).isEqualTo("Asia/Tokyo");
+        assertThat(body.getValue().timeZoneExplicit()).isFalse();
+        assertThat(body.getValue().timeZoneFollowsDevice()).isFalse();
+    }
+
+    @Test
+    @DisplayName("PUT /profile/context leaves both time-zone flags NULL when the body omits them, "
+            + "so an old client cannot un-pin a zone")
+    void contextLeavesTimeZoneFlagsNullWhenAbsent() throws Exception {
+        // A client that predates this feature sends a zone and no flags. The service reads null as
+        // "implicit", which is what keeps such a report from touching a pinned zone; binding it as
+        // FALSE would look the same here and differently in the release branch.
+        userExists(7L);
+
+        mvc.perform(put("/api/users/profile/context")
+                        .header("X-User-ID", "7")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"timeZone\":\"Asia/Tokyo\"}"))
+                .andExpect(status().isNoContent());
+
+        ArgumentCaptor<ProfileContextRequest> body = ArgumentCaptor.forClass(ProfileContextRequest.class);
+        verify(lifecycleContextService).updateContext(eq(7L), body.capture(), any(), any());
+        assertThat(body.getValue().timeZoneExplicit()).isNull();
+        assertThat(body.getValue().timeZoneFollowsDevice()).isNull();
     }
 
     @Test

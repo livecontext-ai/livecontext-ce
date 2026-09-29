@@ -46,6 +46,9 @@ class FreeSubscriptionRenewalSchedulerTest {
     @Mock
     private CreditAttributionService creditAttributionService;
 
+    @Mock
+    private AdminPlanService adminPlanService;
+
     @InjectMocks
     private FreeSubscriptionRenewalScheduler scheduler;
 
@@ -305,5 +308,77 @@ class FreeSubscriptionRenewalSchedulerTest {
 
         // Assert - the comp PRO row is renewed exactly like a FREE row.
         verify(creditAttributionService).attributeOnRenewal(eq(USER_ID), eq(compPro), any(LocalDateTime.class));
+    }
+
+    @Test
+    @DisplayName("V549: a timed comp past its end reverts to FREE and is NOT also renewed")
+    void expiredTimedCompRevertsInsteadOfRenewing() {
+        Subscription sub = createExpiredFreeSubscription(LocalDateTime.of(2026, 1, 15, 0, 0));
+        sub.setCompEndsAt(LocalDateTime.of(2026, 1, 10, 0, 0));
+        when(subscriptionRepository.findExpiredInternalSubscriptions(any(LocalDateTime.class)))
+                .thenReturn(List.of(sub));
+        when(adminPlanService.revertExpiredComp(eq(USER_ID), any(LocalDateTime.class))).thenReturn(true);
+
+        scheduler.renewExpiredInternalSubscriptions();
+
+        verify(adminPlanService).revertExpiredComp(eq(USER_ID), any(LocalDateTime.class));
+        verify(creditAttributionService, never()).attributeOnRenewal(any(), any(), any(LocalDateTime.class));
+    }
+
+    @Test
+    @DisplayName("V549: a timed comp still running renews normally and is never reverted")
+    void runningTimedCompRenewsNormally() {
+        Subscription sub = createExpiredFreeSubscription(LocalDateTime.of(2026, 1, 15, 0, 0));
+        sub.setCompEndsAt(LocalDateTime.now().plusDays(30));
+        when(subscriptionRepository.findExpiredInternalSubscriptions(any(LocalDateTime.class)))
+                .thenReturn(List.of(sub));
+
+        scheduler.renewExpiredInternalSubscriptions();
+
+        verify(adminPlanService, never()).revertExpiredComp(any(), any());
+        verify(creditAttributionService).attributeOnRenewal(eq(USER_ID), eq(sub), any(LocalDateTime.class));
+    }
+
+    @Test
+    @DisplayName("V549: when the revert declines (row changed under the lock) the sub still renews")
+    void declinedRevertFallsBackToRenewal() {
+        Subscription sub = createExpiredFreeSubscription(LocalDateTime.of(2026, 1, 15, 0, 0));
+        sub.setCompEndsAt(LocalDateTime.of(2026, 1, 10, 0, 0));
+        when(subscriptionRepository.findExpiredInternalSubscriptions(any(LocalDateTime.class)))
+                .thenReturn(List.of(sub));
+        when(adminPlanService.revertExpiredComp(eq(USER_ID), any(LocalDateTime.class))).thenReturn(false);
+
+        scheduler.renewExpiredInternalSubscriptions();
+
+        verify(creditAttributionService).attributeOnRenewal(eq(USER_ID), eq(sub), any(LocalDateTime.class));
+    }
+
+    @Test
+    @DisplayName("V549: a timed comp ends on its own date, mid-period, without waiting for the monthly renewal")
+    void endedCompRevertsMidPeriod() {
+        Subscription sub = createExpiredFreeSubscription(LocalDateTime.now().plusDays(20)); // period still running
+        sub.setCompEndsAt(LocalDateTime.now().minusMinutes(5));
+        when(subscriptionRepository.findEndedInternalComps(any(LocalDateTime.class))).thenReturn(List.of(sub));
+        when(subscriptionRepository.findExpiredInternalSubscriptions(any(LocalDateTime.class))).thenReturn(List.of());
+
+        scheduler.renewExpiredInternalSubscriptions();
+
+        verify(adminPlanService).revertExpiredComp(eq(USER_ID), any(LocalDateTime.class));
+        verify(creditAttributionService, never()).attributeOnRenewal(any(), any(), any(LocalDateTime.class));
+    }
+
+    @Test
+    @DisplayName("V549: a failing revert does not stop the renewal pass for everyone else")
+    void failingRevertDoesNotStopRenewals() {
+        Subscription comp = createExpiredFreeSubscription(LocalDateTime.now().plusDays(20));
+        comp.setCompEndsAt(LocalDateTime.now().minusMinutes(5));
+        Subscription other = createExpiredFreeSubscription(LocalDateTime.of(2026, 1, 15, 0, 0));
+        when(subscriptionRepository.findEndedInternalComps(any(LocalDateTime.class))).thenReturn(List.of(comp));
+        when(adminPlanService.revertExpiredComp(eq(USER_ID), any(LocalDateTime.class))).thenThrow(new RuntimeException("boom"));
+        when(subscriptionRepository.findExpiredInternalSubscriptions(any(LocalDateTime.class))).thenReturn(List.of(other));
+
+        scheduler.renewExpiredInternalSubscriptions();
+
+        verify(creditAttributionService).attributeOnRenewal(eq(USER_ID), eq(other), any(LocalDateTime.class));
     }
 }

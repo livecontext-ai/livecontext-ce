@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   deriveEffectiveStatus,
+  epochTone,
   formatCompactDuration,
   getBarColor,
   isRunStatusActive,
@@ -186,5 +187,21 @@ describe('isRunStatusActive', () => {
   it('is false when the status is unknown', () => {
     expect(isRunStatusActive(null)).toBe(false);
     expect(isRunStatusActive('')).toBe(false);
+  });
+});
+
+describe('epochTone', () => {
+  it('maps every epoch badge status onto the colour family both epoch surfaces paint', () => {
+    expect(epochTone('RUNNING')).toBe('running');
+    expect(epochTone('FAILED')).toBe('failed');
+    expect(epochTone('CANCELLED')).toBe('stopped');
+    expect(epochTone('STOPPED')).toBe('stopped');
+    expect(epochTone('TIMEOUT')).toBe('stopped');
+    expect(epochTone('COMPLETED')).toBe('ok');
+  });
+
+  it('gives no outcome to an epoch that carries none yet', () => {
+    expect(epochTone(null)).toBe('none');
+    expect(epochTone(undefined)).toBe('none');
   });
 });

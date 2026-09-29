@@ -82,7 +82,7 @@ describe('credit source types', () => {
     // Money moving the other way, and one debit that is not a tool call. Each is written today and
     // lands in the same table; before this list learned about them they rendered as their own wire
     // names in front of a reader, which is the web-tools bug wearing another hat.
-    for (const type of ['MARKETPLACE_PURCHASE', 'PAYG_TOPUP', 'REWARD_REFERRAL',
+    for (const type of ['MARKETPLACE_PURCHASE', 'PAYG_TOPUP', 'REWARD_REFERRAL', 'REWARD_CODE',
       'REWARD_CLAWBACK', 'MANUAL_ADJUSTMENT']) {
       expect(CREDIT_SOURCE_LABEL_KEYS[type], `${type} has no label`).toBeTruthy();
       expect(CREDIT_SOURCE_FILTERS, `${type} is not filterable`).toContain(type);

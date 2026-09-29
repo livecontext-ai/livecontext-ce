@@ -180,6 +180,11 @@ describe('toAutoOpenDetail', () => {
     const detail = toAutoOpenDetail({ type: 'workflow_run', id: 'wf1', title: 'Run', runId: 'r9' } as ToolVisualization);
     expect(detail).toEqual({ type: 'workflow_run', id: 'wf1', title: 'Run', runId: 'r9' });
   });
+
+  it("forwards the run's plan version (the workflow page loads an old or pinned run's own plan)", () => {
+    const detail = toAutoOpenDetail({ type: 'workflow_run', id: 'wf1', runId: 'r9', planVersion: 13 } as ToolVisualization);
+    expect(detail.planVersion).toBe(13);
+  });
 });
 
 describe('isOpenableVisualization - workflow(action=present) rows', () => {

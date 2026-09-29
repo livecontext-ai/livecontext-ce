@@ -21,6 +21,7 @@ import {
   INSPECTOR_TAB_ID,
   NODE_CREATOR_TAB_ID,
   RUN_TAB_ID,
+  ANALYSIS_TAB_ID,
 } from '@/components/app/WorkflowPanelContent';
 import {
   OPEN_INSPECTOR_PANEL_EVENT,
@@ -45,6 +46,14 @@ import { runRoutePathFor } from '@/lib/workflow/runRoutePath';
 import { useAutoCollapseSidebar } from './hooks';
 import { OPEN_TRIGGER_TAB_EVENT, findTriggerTabConfig, type OpenTriggerTabDetail } from '@/lib/workflow/triggerTabEvent';
 import { openWorkflowBuilderTab } from '@/lib/sidePanel/openWorkflowBuilderTab';
+import { useStreamingSafe } from '@/contexts/StreamingContext';
+import type { AutoOpenVisualization } from '@/contexts/sidePanelAutoOpen';
+import {
+  WORKFLOW_PANEL_CHAT_TAB_ID,
+  consumeUserModeToggle,
+  reactionToAgentMarker,
+  workflowPanelConversation,
+} from '@/lib/workflow/workflowPanelChat';
 
 // ============================================
 // Types
@@ -72,7 +81,9 @@ interface WorkflowDetailViewProps {
 export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }: WorkflowDetailViewProps) {
   const router = useRouter();
   const { isAuthenticated, isAuthChecking } = useAuthGuard();
-  const { isPreviewOnly, runId: contextRunId, setRunId } = useWorkflowMode();
+  const {
+    isPreviewOnly, runId: contextRunId, setRunId, activeVersion, currentVersion,
+  } = useWorkflowMode();
   const effectiveRunId = contextRunId || runIdProp || null;
   const sidePanel = useSidePanelSafe();
 
@@ -153,11 +164,50 @@ export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }
     }
   }, [sidePanel, workflowId]);
 
+  // ── The workflow panel's own agent (see workflowPanelChat) ──
+  // Read through a ref: the answer is needed inside event handlers and effects that must not
+  // re-subscribe on every streamed chunk.
+  const streaming = useStreamingSafe();
+  const streamingRef = useRef(streaming);
+  streamingRef.current = streaming;
+  const isPanelAgentStreaming = useCallback(() => {
+    const conversationId = workflowPanelConversation(workflowId);
+    return !!conversationId && !!streamingRef.current?.isStreamingConversation(conversationId);
+  }, [workflowId]);
+
+  // Show the agent's chat. The pending tab covers an unmounted panel body, the activate event a
+  // mounted one (openWorkflowPanelOnTab alone leaves a mounted panel on its current sub-tab).
+  const openPanelOnAgentChat = useCallback(() => {
+    openWorkflowPanelOnTab(WORKFLOW_PANEL_CHAT_TAB_ID);
+    window.dispatchEvent(new CustomEvent('workflowPanelActivateTab', {
+      detail: { tabId: WORKFLOW_PANEL_CHAT_TAB_ID, workflowId },
+    }));
+  }, [openWorkflowPanelOnTab, workflowId]);
+
+  // Claimed once per run by the auto-opens further down (Run tab, application, trigger).
+  const hasAutoOpenedForRunRef = useRef<string | null>(null);
+
+  // The user toggles edit <-> run while the panel's agent is working: its chat stays in front.
+  // The toggle otherwise lands on the Run tab (a live run auto-opens it) or on whatever sub-tab
+  // survived, and the user loses sight of the agent they are waiting on. Only the TOGGLE counts
+  // (it marks its clicks): a Run press, a history pick and the agent's own bindings keep their
+  // usual tabs.
+  const lastBoundRunRef = useRef(effectiveRunId);
+  useEffect(() => {
+    if (lastBoundRunRef.current === effectiveRunId) return;
+    lastBoundRunRef.current = effectiveRunId;
+    const userToggled = consumeUserModeToggle(workflowId, effectiveRunId);
+    if (!userToggled || isPreviewOnly || !isPanelAgentStreaming()) return;
+    // The Run tab is for a launch; this was a toggle, so its auto-open stands down for this run.
+    if (effectiveRunId) hasAutoOpenedForRunRef.current = effectiveRunId;
+    openPanelOnAgentChat();
+  }, [effectiveRunId, workflowId, isPreviewOnly, isPanelAgentStreaming, openPanelOnAgentChat]);
+
   useEffect(() => {
     const handleOpenRun = (event: Event) => {
       const detail = (event as CustomEvent<OpenRunPanelDetail>).detail ?? {};
       if (detail.workflowId && detail.workflowId !== workflowId) return;
-      openWorkflowPanelOnTab(RUN_TAB_ID);
+      openWorkflowPanelOnTab(detail.tab === 'analysis' ? ANALYSIS_TAB_ID : RUN_TAB_ID);
     };
     const handleOpenNodeCreator = (event: Event) => {
       const detail = (event as CustomEvent<{ workflowId?: string }>).detail ?? {};
@@ -253,33 +303,54 @@ export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }
   // We flip IN PLACE, not by navigating: `setRunId` binds the run without a URL
   // change, and `markRunAsJustExecuted` tells the loader to KEEP the current
   // canvas plan (the one the agent just saved) instead of reloading the run's
-  // plan. So the run statuses overlay on the existing nodes with zero refresh -
+  // plan, WHEN that plan is the version the run executes (keepPlan); otherwise the
+  // run's own plan loads. So the run statuses overlay on the existing nodes with zero refresh -
   // the user's canvas view and context are preserved. (An earlier version did a
   // `router.push` to the run URL, which reloaded the plan and wiped the context.)
   // Only a run of THIS workflow flips the canvas - a different workflow's run is
   // not this canvas's concern. ──
+  //
+  // The panel's own agent also brings the canvas back to EDITING when it changes the stored
+  // plan while a run is on screen, so the user sees the version it just wrote. The rule is
+  // reactionToAgentMarker (workflowPanelChat), tested on its own.
   useEffect(() => {
     if (isPreviewOnly) return;
-    const handleWorkflowRunAutoOpen = (event: CustomEvent<{ type: string; id: string; runId?: string }>) => {
-      const { type, id, runId: eventRunId } = event.detail;
-      // Other present_* views (table, file, agent...) open from AppHeader, on every page.
-      if ((type !== 'workflow_run' && type !== 'present_run' && type !== 'present_application') || !eventRunId) return;
-      if (id !== workflowId) return;
+    const handleAgentMarker = (event: CustomEvent<AutoOpenVisualization>) => {
+      const reaction = reactionToAgentMarker(event.detail, {
+        workflowId,
+        boundRunId: effectiveRunId,
+        shownVersion: activeVersion ?? currentVersion,
+      });
+      if (reaction.kind === 'edit') {
+        // Same destination as the Edit toggle. The address bar follows through the native
+        // History API (as a run pick does), so nothing remounts, and a reload keeps editing.
+        const path = window.location.pathname;
+        const runAt = path.indexOf(`/app/workflow/${workflowId}/run/`);
+        if (runAt >= 0) {
+          const editPath = path.slice(0, runAt) + `/app/workflow/${workflowId}`;
+          window.history.pushState(null, '', `${editPath}${window.location.search}${window.location.hash}`);
+        }
+        // The epoch resets with the mode (WorkflowModeToggle), as it does for the Edit click.
+        setRunId(null);
+        return;
+      }
+      if (reaction.kind !== 'bindRun') return;
+      const eventRunId = reaction.runId;
       if (effectiveRunId !== eventRunId) {
-        markRunAsJustExecuted(eventRunId); // keep the current plan - overlay, don't reload
-        setRunId(eventRunId);              // bind run in place (no navigation)
+        if (reaction.keepPlan) markRunAsJustExecuted(eventRunId); // overlay, don't reload
+        setRunId(eventRunId);                                        // bind run in place (no navigation)
       }
       // workflow(action='present', view='application'): the agent shows the run's
       // interfaces. A request, not a switch: the panel takes it once it shows that
       // run with its interfaces (see requestPresentApplication).
-      if (type === 'present_application') {
+      if (event.detail.type === 'present_application') {
         requestPresentApplication(workflowId, eventRunId);
         openWorkflowPanelOnTab(APP_TAB_ID);
       }
     };
-    window.addEventListener('sidePanelAutoOpen', handleWorkflowRunAutoOpen as EventListener);
-    return () => window.removeEventListener('sidePanelAutoOpen', handleWorkflowRunAutoOpen as EventListener);
-  }, [workflowId, effectiveRunId, isPreviewOnly, setRunId, openWorkflowPanelOnTab]);
+    window.addEventListener('sidePanelAutoOpen', handleAgentMarker as EventListener);
+    return () => window.removeEventListener('sidePanelAutoOpen', handleAgentMarker as EventListener);
+  }, [workflowId, effectiveRunId, isPreviewOnly, setRunId, activeVersion, currentVersion, openWorkflowPanelOnTab]);
 
   // ── Dispatch triggerData changes to WorkflowPanelContent ──
   // Gate on `effectiveRunId`, NOT `runIdProp`: an agent-launched run is now bound
@@ -502,7 +573,6 @@ export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }
   // the Application / Trigger tabs stay one click away in the tab bar.
   // Only auto-opens once per runId to avoid re-opening after user closes the panel.
   // Only opens when run is active (RUNNING, WAITING_TRIGGER, PAUSED) - not for terminal runs.
-  const hasAutoOpenedForRunRef = useRef<string | null>(null);
   const ACTIVE_RUN_STATUSES = ['RUNNING', 'WAITING_TRIGGER', 'PAUSED'];
   const currentRunStatus = triggerData?.runStatus;
   const isActiveRun = !!currentRunStatus && ACTIVE_RUN_STATUSES.includes(currentRunStatus);

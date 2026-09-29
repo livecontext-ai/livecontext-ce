@@ -80,3 +80,26 @@ export const getClientLocale = (): string => {
   }
   return 'en';
 };
+
+/**
+ * The app locale as the identity provider spells it, for the `ui_locales` parameter of the
+ * authorization request.
+ *
+ * Keycloak's base theme ships `pt-BR` and `zh-CN`, not `pt` and `zh`, and those are the codes the
+ * realm lists as supported. Rather than rely on how it narrows a language-only tag down to a
+ * regional one, the two that differ are spelled its way here. Everything else passes through, and
+ * an unknown value would simply leave Keycloak on its default locale.
+ *
+ * Mirrors `KeycloakAdminEmailVerifier.toKeycloakLocale` on the server, which writes the same
+ * mapping onto the user for the pages reached without the app (password reset).
+ */
+export const toIdpUiLocale = (appLocale: string): string => {
+  switch (appLocale) {
+    case 'pt':
+      return 'pt-BR';
+    case 'zh':
+      return 'zh-CN';
+    default:
+      return appLocale;
+  }
+};

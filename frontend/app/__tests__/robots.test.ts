@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRobotsTxt, privatePaths, DOCS_ORIGIN } from '@/lib/seo/robotsTxt';
-import { ANSWER_ENGINE_CRAWLERS, TRAINING_CRAWLERS } from '@/lib/seo/crawlers';
+import { buildRobotsTxt, DOCS_ORIGIN } from '@/lib/seo/robotsTxt';
 import { sitemapUrls } from '@/lib/seo/sitemaps';
 import { routing } from '@/i18n/routing';
 
@@ -94,97 +93,65 @@ describe('robots.txt - the private surface', () => {
 });
 
 describe('robots.txt - crawl policy', () => {
-  it('lets the answer engines in and keeps the training crawlers out', () => {
+  it('opens the public site to every crawler, AI agents included, through one wildcard group', () => {
     const text = cloud();
 
-    // The decision, stated on the two crawlers that make it concrete: OpenAI
-    // and Anthropic each run a search crawler and a training crawler.
-    expect(groupFor(text, 'OAI-SearchBot')).toContain('Allow: /');
-    expect(groupFor(text, 'Claude-SearchBot')).toContain('Allow: /');
-    expect(groupFor(text, 'GPTBot')).toEqual(['Disallow: /']);
-    expect(groupFor(text, 'ClaudeBot')).toEqual(['Disallow: /']);
-
-    for (const agent of ANSWER_ENGINE_CRAWLERS) {
-      expect(groupFor(text, agent), `${agent} should be allowed`).toContain('Allow: /');
+    // One group only: a crawler named in a group of its own would be freed from
+    // every private-path rule under `*`, because groups do not inherit.
+    expect(text.match(/^User-agent:/gm)).toEqual(['User-agent:']);
+    expect(text).toContain('User-agent: *');
+    // The training crawlers that used to be refused now fall under `*` like
+    // every other agent, so none of them is named anywhere.
+    for (const agent of ['GPTBot', 'ClaudeBot', 'CCBot', 'Google-Extended', 'Bytespider']) {
+      expect(text).not.toContain(agent);
     }
-    for (const agent of TRAINING_CRAWLERS) {
-      expect(groupFor(text, agent), `${agent} should be refused`).toEqual(['Disallow: /']);
-    }
+    expect(text).not.toMatch(/^Disallow: \/$/m);
   });
 
-  it('no crawler is in both lists, so no group can contradict the other', () => {
-    const both = ANSWER_ENGINE_CRAWLERS.filter((a) => (TRAINING_CRAWLERS as readonly string[]).includes(a));
-    expect(both).toEqual([]);
+  it('emits no Content-Signal line, which validators report as an unknown directive', () => {
+    expect(cloud()).not.toContain('Content-Signal');
+    expect(cloud('docs.livecontext.ai')).not.toContain('Content-Signal');
   });
 
-  it('repeats the private paths inside the answer-engine group, because groups do NOT inherit', () => {
-    // Naming a crawler in its own group frees it from every rule under `*`.
-    // Without this repetition, opening the site to answer engines would also
-    // have opened /app/, /billing/ and the token URLs to them.
-    const answers = groupFor(cloud(), 'OAI-SearchBot');
-    const star = groupFor(cloud(), '*');
+  it('uses only standard directives, so a validator finds nothing to flag', () => {
+    const directives = cloud()
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '' && !line.startsWith('#'))
+      .map((line) => line.split(':')[0].toLowerCase());
 
-    for (const path of privatePaths(LOCALES)) {
-      expect(answers, `${path} must be disallowed for answer engines too`).toContain(`Disallow: ${path}`);
+    for (const directive of new Set(directives)) {
+      expect(['user-agent', 'allow', 'disallow', 'host', 'sitemap']).toContain(directive);
     }
-    expect(answers.filter((d) => d.startsWith('Disallow: ')))
-      .toEqual(star.filter((d) => d.startsWith('Disallow: ')));
-  });
-
-  it('states the content signals in BOTH groups, since a crawler obeys only one', () => {
-    // The answer engines are the only crawlers allowed to fetch. Emitting the
-    // signal for `*` alone meant they were the only ones never told ai-train=no,
-    // which is what carries the reservation of rights.
-    const signal = 'Content-Signal: search=yes,ai-input=yes,ai-train=no,use=reference';
-    expect(groupFor(cloud(), '*')).toContain(signal);
-    expect(groupFor(cloud(), 'OAI-SearchBot')).toContain(signal);
-    expect(groupFor(cloud(), 'Applebot')).toContain(signal);
-    // Not to the ones refused outright: they are told nothing but no.
-    expect(groupFor(cloud(), 'GPTBot')).toEqual(['Disallow: /']);
   });
 });
 
 describe('robots.txt - the shape of the file itself', () => {
-  // `groupFor` above is a model of a parser, written by this same change, so it
+  // `groupFor` above is a model of a parser written alongside this file, so it
   // can agree with a file a real crawler would read differently. These assert
-  // the literal text: the order of the groups, the blank line that separates
-  // them, and the trailing newline. None of them is visible to a test that only
-  // asks the model questions.
-  it('orders the groups: the wildcard, then the answer engines, then the training crawlers', () => {
+  // the literal text.
+  it('puts the wildcard group first and the global records after it', () => {
     const text = cloud();
     const star = text.indexOf('User-agent: *');
-    const answers = text.indexOf('User-agent: OAI-SearchBot');
-    const training = text.indexOf('User-agent: GPTBot');
-    const global = text.indexOf('Host: ');
 
     expect(star).toBeGreaterThan(-1);
-    expect(answers).toBeGreaterThan(star);
-    expect(training).toBeGreaterThan(answers);
-    // `Sitemap` is a non-group record valid anywhere, but putting it last is
-    // what keeps it from reading as part of the training group.
-    expect(global).toBeGreaterThan(training);
-    expect(text.indexOf('Sitemap: ')).toBeGreaterThan(training);
+    expect(text.indexOf('Host: ')).toBeGreaterThan(star);
+    expect(text.indexOf('Sitemap: ')).toBeGreaterThan(star);
   });
 
-  it('separates every group with a blank line and ends with exactly one newline', () => {
+  it('separates the group from the global records with a blank line and ends with exactly one newline', () => {
     const text = cloud();
-    // A `User-agent` line directly after a rule line opens a new group, but
-    // reading the file is a human job too, and a missing separator is the first
-    // sign that two groups were accidentally concatenated into one.
-    for (const agent of ['User-agent: OAI-SearchBot', 'User-agent: GPTBot']) {
-      const before = text.slice(0, text.indexOf(agent));
-      expect(before.endsWith('\n\n') || /\n#[^\n]*\n$/.test(before), agent).toBe(true);
-    }
+    const before = text.slice(0, text.indexOf('Host: '));
+
+    expect(before.endsWith('\n\n')).toBe(true);
     expect(text.endsWith('\n')).toBe(true);
     expect(text.endsWith('\n\n')).toBe(false);
   });
 
-  it('puts no directive between the last group and the global records', () => {
-    const tail = cloud().slice(cloud().indexOf('User-agent: GPTBot'));
-    const lines = tail.split('\n').filter((line) => line.trim() !== '');
-    // user-agents, one Disallow, then Host and the sitemaps. Nothing else.
-    const kinds = [...new Set(lines.map((line) => line.split(':')[0]))];
-    expect(kinds).toEqual(['User-agent', 'Disallow', 'Host', 'Sitemap']);
+  it('puts nothing but Host and the sitemaps after the group', () => {
+    const tail = cloud().slice(cloud().indexOf('Host: '));
+    const kinds = [...new Set(tail.split('\n').filter((line) => line.trim() !== '').map((line) => line.split(':')[0]))];
+    expect(kinds).toEqual(['Host', 'Sitemap']);
   });
 });
 

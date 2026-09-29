@@ -895,8 +895,17 @@ export function BuilderCanvas({
     event.dataTransfer.dropEffect = 'copy';
   }, []);
 
-  // Guard node/edge changes in run/readonly mode: filter out 'remove' events
+  // Guard node/edge changes in run/readonly mode: filter out 'remove' events.
+  // Toolbar lock: nodesDraggable=false stops new drags, but a drag already under way
+  // (a second finger taps the lock) keeps emitting moves, so they are dropped here.
+  // Only moves flagged `dragging` are dropped: the drag-end change carries no
+  // position and clears the node's dragging state, and the measured-layout
+  // correction is a position change without the flag.
   const guardedOnNodesChange: OnNodesChange = React.useCallback((changes) => {
+    if (!isInteractive) {
+      changes = changes.filter(c => !(c.type === 'position' && c.dragging));
+      if (changes.length === 0) return;
+    }
     if (isLocked) {
       const filtered = changes.filter(c => c.type !== 'remove');
       if (filtered.length > 0) onNodesChange(filtered);
@@ -907,7 +916,7 @@ export function BuilderCanvas({
       setHoveredNodeId(null);
     }
     onNodesChange(changes);
-  }, [isLocked, onNodesChange, hoveredNodeId]);
+  }, [isInteractive, isLocked, onNodesChange, hoveredNodeId]);
 
   const guardedOnEdgesChange: OnEdgesChange = React.useCallback((changes) => {
     // Filter out edge select changes when nodes are selected - usePreparedGraph
@@ -1281,9 +1290,9 @@ export function BuilderCanvas({
             // on, only the visible subset re-renders on scroll/zoom - ~70% UX win
             // confirmed by the audit, single-line change.
             onlyRenderVisibleElements
-            // Locked wherever the canvas cannot save a move (run mode, read-only preview):
-            // a dragged node looked moved and silently snapped back on the next edit load.
-            nodesDraggable={isInteractive && !isSelecting && !isLocked}
+            // Run mode lets nodes be rearranged for reading (not saved); a read-only preview
+            // stays fixed. The toolbar lock (isInteractive) freezes them in every mode.
+            nodesDraggable={isInteractive && !isSelecting && !isPreviewOnly}
             nodesConnectable={isInteractive && !isLocked}
             elementsSelectable={false}
             onNodesChange={guardedOnNodesChange}

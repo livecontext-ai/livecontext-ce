@@ -378,4 +378,74 @@ class MonolithFileControllerTest {
             verify(fileStorageService, never()).download(anyString());
         }
     }
+
+    /** CE mount of the signed link that interface media streams from (see FileController.signedUrlById). */
+    @Nested
+    @DisplayName("by-id/{id}/signed-url")
+    class SignedUrlById {
+
+        private final UUID id = UUID.fromString("00000000-0000-0000-0000-0000000000bb");
+        private final com.apimarketplace.common.storage.signing.ShowcaseUrlSigner signer =
+                new com.apimarketplace.common.storage.signing.ShowcaseUrlSigner("ce-secret");
+
+        private MonolithFileController signing() {
+            return new MonolithFileController(fileStorageService, publicFileUrlBuilder, storageService, orgAccessGuard,
+                    signer, new com.apimarketplace.storage.util.MimeTypeRegistry(),
+                    new com.apimarketplace.storage.service.file.StorageStreamingMetrics(
+                            new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        }
+
+        private StorageEntity video() {
+            StorageEntity entity = mock(StorageEntity.class);
+            lenient().when(entity.getFileName()).thenReturn("ep01.mp4");
+            lenient().when(entity.getS3Key()).thenReturn("42/general/general/ep01.mp4");
+            lenient().when(entity.getOrganizationId()).thenReturn("org-9");
+            return entity;
+        }
+
+        @Test
+        @DisplayName("A readable stored file gets a proxy-signed link the verifier accepts")
+        void readableFileGetsVerifiableLink() {
+            // Built BEFORE when(...): video() stubs the mock entity, and stubbing inside another
+            // stubbing's argument is Mockito's UnfinishedStubbing.
+            StorageEntity entity = video();
+            when(storageService.getEntityByIdForScope(id, "42", "org-9")).thenReturn(Optional.of(entity));
+            when(orgAccessGuard.canAccess("org-9", "42", "file", id.toString(), "ADMIN")).thenReturn(true);
+
+            ResponseEntity<java.util.Map<String, Object>> response = signing().signedUrlById(id, "inline", "42", "org-9", "ADMIN");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            var parsed = com.apimarketplace.common.storage.url.FileProxyUrls.parse((String) response.getBody().get("url"));
+            assertThat(parsed.signed()).isTrue();
+            assertThat(parsed.key()).isEqualTo("42/general/general/ep01.mp4");
+            assertThat(signer.verify(parsed.key(), parsed.exp(), "inline", parsed.sig(),
+                    java.time.Instant.now().getEpochSecond())).isTrue();
+        }
+
+        @Test
+        @DisplayName("404 when the org-access guard denies the file, as /raw does")
+        void deniedFileIs404() {
+            // Built BEFORE when(...): video() stubs the mock entity, and stubbing inside another
+            // stubbing's argument is Mockito's UnfinishedStubbing.
+            StorageEntity entity = video();
+            when(storageService.getEntityByIdForScope(id, "42", "org-9")).thenReturn(Optional.of(entity));
+            when(orgAccessGuard.canAccess("org-9", "42", "file", id.toString(), "MEMBER")).thenReturn(false);
+
+            assertThat(signing().signedUrlById(id, "inline", "42", "org-9", "MEMBER").getStatusCode())
+                    .isEqualTo(HttpStatus.NOT_FOUND);
+        }
+
+        @Test
+        @DisplayName("503 without a signing secret (STORAGE_SHOWCASE_HMAC_SECRET unset on this install)")
+        void noSecretIs503() {
+            // Built BEFORE when(...): video() stubs the mock entity, and stubbing inside another
+            // stubbing's argument is Mockito's UnfinishedStubbing.
+            StorageEntity entity = video();
+            when(storageService.getEntityByIdForScope(id, "42", "org-9")).thenReturn(Optional.of(entity));
+            when(orgAccessGuard.canAccess("org-9", "42", "file", id.toString(), "ADMIN")).thenReturn(true);
+
+            assertThat(controller().signedUrlById(id, "inline", "42", "org-9", "ADMIN").getStatusCode())
+                    .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        }
+    }
 }

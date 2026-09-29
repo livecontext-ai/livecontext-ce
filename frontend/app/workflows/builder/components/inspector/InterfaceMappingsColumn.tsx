@@ -10,6 +10,7 @@ import { FileText, Save, Edit, X, Plus, Trash2, ChevronRight } from 'lucide-reac
 import { useInterfaceById } from '../../hooks/useInterfaces';
 import { orchestratorApi } from '@/lib/api';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
+import { stripEditorHighlightSpans } from '@/lib/utils/editorHighlightSpans';
 import { InterfaceFormatSelect } from '@/components/interfaces/InterfaceFormatSelect';
 import { getDefaultForType } from '../../utils/interfaceHtmlUtils';
 import { clampVideoMaxDuration } from '../../utils/videoParams';
@@ -505,20 +506,8 @@ export const InterfaceMappingsColumn = ({
   // Track if we just saved to prevent re-entering edit mode and hasChanges recalculation
   const [justSaved, setJustSaved] = React.useState(false);
 
-  // Helper to strip HTML tags from a string (in case HTML was incorrectly saved)
-  const stripHtmlTags = React.useCallback((html: string): string => {
-    if (!html) return '';
-    // Only strip <span> tags added by the expression editor (syntax highlighting)
-    // Keep all other HTML tags intact (user's template HTML)
-    if (!html.includes('<span') && !html.includes('</span>')) return html;
-
-    // Remove only <span> tags with specific classes used by the editor
-    // This regex removes spans but keeps their content and all other HTML
-    return html
-      .replace(/<span[^>]*class="[^"]*token[^"]*"[^>]*>/gi, '')
-      .replace(/<\/span>/gi, '')
-      .trim();
-  }, []);
+  // Removes the expression editor's highlight wrappers only, never the template's own spans.
+  const stripHtmlTags = stripEditorHighlightSpans;
 
   // Get current expression based on edit mode
   const currentExpression = isEditMode ? editedHtmlTemplate : getEditorExpression();

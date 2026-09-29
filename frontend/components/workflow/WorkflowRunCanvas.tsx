@@ -355,6 +355,7 @@ export function WorkflowRunCanvas({
            must not paint that run's control as having failed. */
         actionFailed={pillFailed !== undefined && pillFailed === activeRunId}
         epochCount={epochTimestamps.length}
+        epochTimestamps={epochTimestamps}
         pinnedVersion={pinnedVersion}
         isSettingsOpen={isSettingsOpen}
       />

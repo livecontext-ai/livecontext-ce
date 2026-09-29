@@ -63,6 +63,7 @@ describe('the radius ladder', () => {
   it('the wrapper ladder agrees with the tile ladder at the sizes they share', () => {
     // A bubble and the tile inside it must not disagree, or the icon and its
     // frame draw two different corners at the same spot.
+    expect(nodeIconBoxRadiusClass(16)).toBe(nodeIconRadiusClass('2xs'));
     expect(nodeIconBoxRadiusClass(24)).toBe(nodeIconRadiusClass('xs'));
     expect(nodeIconBoxRadiusClass(32)).toBe(nodeIconRadiusClass('sm'));
     expect(nodeIconBoxRadiusClass(36)).toBe(nodeIconRadiusClass('md'));

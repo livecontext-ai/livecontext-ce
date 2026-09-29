@@ -347,6 +347,14 @@ public class PlatformCredentialsController {
         if (tenantId == null || tenantId.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "X-User-ID header is required"));
         }
+        if (CredentialController.isViewerWriteBlocked(
+                tenantResolver.resolveOrgId(httpRequest), tenantResolver.resolveOrgRole(httpRequest))) {
+            // The workspace's own OAuth app backs every credential connected through it:
+            // saving or deleting it is a workspace write, refused to the read-only VIEWER.
+            return ResponseEntity.status(403).body(Map.of(
+                    "error", "Viewers cannot modify workspace OAuth apps", "code", "org_role_read_only"));
+        }
+
         if (request.integrationName() == null || request.integrationName().isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "integrationName is required"));
         }
@@ -441,6 +449,14 @@ public class PlatformCredentialsController {
         if (!"true".equalsIgnoreCase(authenticated)) {
             return ResponseEntity.status(401).body(Map.of("error", "authentication required"));
         }
+        if (CredentialController.isViewerWriteBlocked(
+                tenantResolver.resolveOrgId(httpRequest), tenantResolver.resolveOrgRole(httpRequest))) {
+            // The workspace's own OAuth app backs every credential connected through it:
+            // saving or deleting it is a workspace write, refused to the read-only VIEWER.
+            return ResponseEntity.status(403).body(Map.of(
+                    "error", "Viewers cannot modify workspace OAuth apps", "code", "org_role_read_only"));
+        }
+
         if (tenantId == null || tenantId.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "X-User-ID header is required"));
         }

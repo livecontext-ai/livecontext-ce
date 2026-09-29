@@ -61,25 +61,17 @@ function SharedApplicationInner({ publicationId, title }: { publicationId: strin
     try {
       const pub = await publicationService.getPublicationById(publicationId);
 
-      // Determine workflowId (same logic as authenticated app layout)
+      // Determine workflowId. A share link may not list the owner's acquired apps (that list
+      // names every other app the owner installed), so the application workflow is resolved
+      // for THIS publication only; the server returns the owner's application clone. There is
+      // deliberately no fallback to pub.workflowId: a share link may only read the shared
+      // application's own clone, so the publisher's source workflow would 404 further down.
       let targetWorkflowId: string | null = null;
       try {
-        const acquiredRes = await publicationService.getAcquiredApplications();
-        const acquiredApp = acquiredRes.applications?.find(
-          (app) => app.sourcePublicationId === publicationId
-        );
-        if (acquiredApp?.workflowId) {
-          targetWorkflowId = acquiredApp.workflowId;
-        }
-      } catch { /* not acquired, use publisher's workflow */ }
-
-      if (!targetWorkflowId) {
-        try {
-          const appWorkflow = await publicationService.getApplicationWorkflow(publicationId);
-          targetWorkflowId = appWorkflow?.workflowId || pub.workflowId;
-        } catch {
-          targetWorkflowId = pub.workflowId;
-        }
+        const appWorkflow = await publicationService.getApplicationWorkflow(publicationId);
+        targetWorkflowId = appWorkflow?.workflowId || null;
+      } catch {
+        targetWorkflowId = null;
       }
 
       if (!targetWorkflowId) {

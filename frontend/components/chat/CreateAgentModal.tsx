@@ -45,6 +45,7 @@ import { storageApi, S3_FILES_FILTER } from '@/lib/api/storage-api';
 import { agentService } from '@/lib/api/orchestrator/agent.service';
 import { scheduleSettingsService } from '@/lib/api/orchestrator/schedule-settings.service';
 import { timezoneOptionsFor } from '@/lib/schedule/timezoneOptions';
+import { getClientTimeZone } from '@/lib/utils/timezone';
 import { computeAncestorIds } from './ancestorDetection';
 import type { AcquiredApplication, WorkflowPublication, DataSource, Interface, Agent } from '@/lib/api/orchestrator/types';
 import { SkillFolderTree } from '@/components/skills/SkillFolderTree';
@@ -605,9 +606,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
   const [scheduleEnabled, setScheduleEnabled] = useState(Boolean(seededSchedule));
   const [scheduleData, setScheduleData] = useState<AgentSchedule | null>(null);
   const [scheduleCron, setScheduleCron] = useState(seededSchedule?.cron || '0 9 * * *');
+  // A NEW recurrence starts in the account's display zone, so the hour picked here means the
+  // same hour the person reads everywhere else. A seeded/edited one keeps its own zone.
   const [scheduleTimezone, setScheduleTimezone] = useState(
-    seededSchedule?.timezone
-      || (typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC')
+    seededSchedule?.timezone || getClientTimeZone()
   );
   const [scheduleMaxExecutions, setScheduleMaxExecutions] = useState<number | null>(null);
   const [schedulePrompt, setSchedulePrompt] = useState('');
@@ -3341,7 +3343,20 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                             <div className="flex items-center justify-between text-xs">
                               <span className="text-theme-secondary">{t('scheduleNextRun')}</span>
                               <span className="text-theme-primary font-medium">
-                                {formatUtcDateTime(scheduleData.nextExecutionAt)}
+                                {/* Both timestamps in this card are drawn in the SCHEDULE's zone, not
+                                    the reader's: a fire time in another one invites the wrong arithmetic
+                                    and reads as a broken schedule. Same rule as the builder's panel.
+
+                                    When the zone differs from the reader's, it travels WITH the value,
+                                    as the label the formatter appends for a pinned zone - and that is
+                                    the only thing on this card that says it: the zone Select sits inside
+                                    the Advanced section, collapsed by default, and the cron expression
+                                    renders only on the custom preset. A schedule seeded from the
+                                    reader's own zone (the default) shows no label, which is correct since
+                                    there is nothing to disambiguate. Naming the zone in full next to
+                                    these two lines, the way the public-access card does with
+                                    "0 9 * * * (Asia/Tokyo)", would be better still. */}
+                                {formatUtcDateTime(scheduleData.nextExecutionAt, { timeZone: scheduleData.timezone })}
                               </span>
                             </div>
                           )}
@@ -3349,7 +3364,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                             <div className="flex items-center justify-between text-xs">
                               <span className="text-theme-secondary">{t('scheduleLastRun')}</span>
                               <span className="text-theme-primary font-medium">
-                                {formatUtcDateTime(scheduleData.lastExecutionAt)}
+                                {formatUtcDateTime(scheduleData.lastExecutionAt, { timeZone: scheduleData.timezone })}
                               </span>
                             </div>
                           )}

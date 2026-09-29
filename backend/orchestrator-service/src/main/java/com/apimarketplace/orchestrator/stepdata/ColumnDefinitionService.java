@@ -20,12 +20,12 @@ public class ColumnDefinitionService {
 
     // Ordered list of known fields for stable column ordering
     private static final List<String> FIELD_ORDER = List.of(
-            // 1. Where does this row come from? (the id IS these coordinates, always first)
-            "id", "epoch", "spawn", "iteration", "itemIndex",
-            // 2. Essential - what happened?
-            "status", "nodeType", "durationMs",
-            // 3. Data - what went in / out / wrong?
+            // 1. Essential - what happened? (the id already carries the row's coordinates)
+            "id", "status", "nodeType", "durationMs",
+            // 2. Data - what went in / out / wrong?
             "input", "output", "errorMessage",
+            // 3. The coordinates spelled out, one per column, for filtering and sorting
+            "epoch", "spawn", "iteration", "itemIndex",
             // --- Node-specific fields ---
             // Decision
             "selectedBranch", "conditionExpression", "conditionResolved", "conditionResult", "evaluations",

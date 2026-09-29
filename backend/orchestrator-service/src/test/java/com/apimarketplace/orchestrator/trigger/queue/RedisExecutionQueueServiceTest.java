@@ -233,8 +233,13 @@ class RedisExecutionQueueServiceTest {
                     release.await(5, TimeUnit.SECONDS);
                     return TriggerExecutionResult.success("run-active", "trigger:t", TriggerType.MANUAL, Set.of(), 1);
                 });
-        RedisExecutionQueueService service = newService(triggerService, runRepository, 2, 2, 5, true);
-        assertEquals(0, service.getLocalActiveExecutions());
+        // ONE worker: an idle worker is deliberately counted while it is between the drain gate
+        // and its (empty) dequeue (see workerBetweenGateAndDequeueIsCounted), so with a second,
+        // idle worker the count during the execution is 1 or 2 depending on where that worker
+        // is in its poll. With one worker, while it executes it holds no claim: exactly 1.
+        RedisExecutionQueueService service = newService(triggerService, runRepository, 1, 1, 5, true);
+        // The idle worker's own poll holds a momentary claim, so idle means "settles to zero".
+        waitUntil(() -> service.getLocalActiveExecutions() == 0, "an idle instance reports no active execution");
 
         QueuedExecutionMessage message = QueuedExecutionMessage.fromRun(
                 run, "trigger:t", TriggerType.MANUAL, Map.of(), "FREE", "req-active",
@@ -541,33 +546,46 @@ class RedisExecutionQueueServiceTest {
     /**
      * The run finished in the instant between the loop's result read and its deadline check: the
      * deadline block sees DONE, and one more pass must return the REAL result, not still-running
-     * and not a timeout. The store hides the result for exactly that first post-deadline read, so
-     * the interleaving is forced rather than hoped for.
+     * and not a timeout.
+     *
+     * <p>The interleaving is forced on the service's OWN clock, not on the wall clock. The service
+     * runs on a manual clock that only moves inside the store: the first result read that sees the
+     * ledger DONE returns nothing and, in the same call, moves the clock to the deadline. That very
+     * pass then reaches the deadline check with the clock already there, so the deadline block
+     * runs, and every later read is post-deadline and sees the result. A wall-clock version raced:
+     * a read just before the deadline followed by a deadline check just after it skipped the
+     * hidden read, and the only post-deadline read left was the hidden one (still-running, epoch -1).
      */
     @Test
     @DisplayName("run that finished right at the deadline returns its real result (one re-read), counted once")
     void finishedRightAtDeadlineReturnsRealResult() throws Exception {
         String requestId = "req-finished-at-deadline";
+        ManualClock clock = new ManualClock(Instant.parse("2026-09-27T10:00:00Z"));
         AtomicReference<Instant> deadline = new AtomicReference<>();
-        AtomicInteger hiddenPostDeadlineReads = new AtomicInteger(1);
+        AtomicInteger readsHiddenAtDeadline = new AtomicInteger();
+        AtomicInteger readsAfterDeadline = new AtomicInteger();
         InMemoryKeyValueStore store = new InMemoryKeyValueStore() {
             @Override
             public Optional<String> get(String key) {
                 if (key.endsWith(":result:" + requestId)) {
                     Instant d = deadline.get();
-                    if (d == null || Instant.now().isBefore(d)) {
+                    if (d == null || clock.instant().isBefore(d)) {
+                        if (d != null && "DONE".equals(hashGetAll("test:exec:ledger:" + requestId).get("status"))) {
+                            // The run finishes now: this read misses it, the deadline check that
+                            // follows in the same pass does not.
+                            readsHiddenAtDeadline.incrementAndGet();
+                            clock.set(d);
+                        }
                         return Optional.empty();
                     }
-                    if (hiddenPostDeadlineReads.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
-                        return Optional.empty();
-                    }
+                    readsAfterDeadline.incrementAndGet();
                 }
                 return super.get(key);
             }
         };
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         RedisExecutionQueueService service = newService(mock(ReusableTriggerService.class),
-                mock(WorkflowRunRepository.class), 1, 1, 1, false, store, registry);
+                mock(WorkflowRunRepository.class), 1, 1, 1, false, store, registry, clock);
         WorkflowRunEntity run = mockRun("run-finished", "tenant-a", "org-a", "OWNER");
         TriggerExecutionResult real = TriggerExecutionResult.success("run-finished", "trigger:t", TriggerType.MANUAL, Set.of(), 4);
         store.set("test:exec:result:" + requestId, objectMapper.writeValueAsString(real), Duration.ofMinutes(5));
@@ -581,7 +599,7 @@ class RedisExecutionQueueServiceTest {
             }
             deadline.set(queued.get().getPayload().expiresAt());
             store.hashPutAll(service.ledgerKey(requestId), Map.of("status", "DONE",
-                    RedisExecutionQueueService.LEDGER_EXECUTING_AT, Instant.now().toString()), Duration.ofMinutes(5));
+                    RedisExecutionQueueService.LEDGER_EXECUTING_AT, clock.instant().toString()), Duration.ofMinutes(5));
         });
         worker.start();
 
@@ -589,12 +607,41 @@ class RedisExecutionQueueServiceTest {
                 run, "trigger:t", TriggerType.MANUAL, Map.of(), "FREE", requestId);
         worker.join();
 
+        assertEquals(1, readsHiddenAtDeadline.get(), "the result must have been missed exactly once, at the deadline");
+        assertEquals(1, readsAfterDeadline.get(), "the deadline block must re-read exactly once");
         assertTrue(result.success());
         assertEquals(4, result.epoch(), "the real result, not still-running (epoch -1)");
-        assertEquals(0, hiddenPostDeadlineReads.get(), "the deadline block must have been reached");
         assertEquals(1.0, completedCount(registry, "success"));
         assertEquals(0.0, completedCount(registry, "still_running"));
         assertEquals(0.0, completedCount(registry, "timeout"));
+    }
+
+    /** A clock that moves only when the test moves it, so "deadline passed" is decided by the test. */
+    private static final class ManualClock extends Clock {
+        private final AtomicReference<Instant> now;
+
+        ManualClock(Instant start) {
+            this.now = new AtomicReference<>(start);
+        }
+
+        void set(Instant instant) {
+            now.set(instant);
+        }
+
+        @Override
+        public Instant instant() {
+            return now.get();
+        }
+
+        @Override
+        public java.time.ZoneId getZone() {
+            return java.time.ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(java.time.ZoneId zone) {
+            return this;
+        }
     }
 
     private static double completedCount(SimpleMeterRegistry registry, String outcome) {
@@ -686,6 +733,20 @@ class RedisExecutionQueueServiceTest {
             boolean startWorkers,
             InMemoryKeyValueStore store,
             SimpleMeterRegistry registry) {
+        return newService(triggerService, runRepository, workerThreads, globalWorkerPermits, timeoutSeconds,
+                startWorkers, store, registry, Clock.systemUTC());
+    }
+
+    private RedisExecutionQueueService newService(
+            ReusableTriggerService triggerService,
+            WorkflowRunRepository runRepository,
+            int workerThreads,
+            int globalWorkerPermits,
+            int timeoutSeconds,
+            boolean startWorkers,
+            InMemoryKeyValueStore store,
+            SimpleMeterRegistry registry,
+            Clock clock) {
         RedisExecutionQueueService service = new RedisExecutionQueueService(
                 triggerService,
                 runRepository,
@@ -704,7 +765,7 @@ class RedisExecutionQueueServiceTest {
                 Duration.ofSeconds(2),
                 Duration.ofSeconds(2),
                 "test:exec",
-                Clock.systemUTC(),
+                clock,
                 startWorkers);
         services.add(service);
         return service;
@@ -730,10 +791,14 @@ class RedisExecutionQueueServiceTest {
 
     private void waitUntil(BooleanSupplier condition, String failureMessage) throws InterruptedException {
         long deadline = System.currentTimeMillis() + 3_000;
-        while (!condition.getAsBoolean() && System.currentTimeMillis() < deadline) {
+        // Assert on the observation that ended the wait, not on a fresh read: a transient
+        // condition (an idle worker's momentary claim) can flip back between the two.
+        boolean met = condition.getAsBoolean();
+        while (!met && System.currentTimeMillis() < deadline) {
             Thread.sleep(10);
+            met = condition.getAsBoolean();
         }
-        assertTrue(condition.getAsBoolean(), failureMessage);
+        assertTrue(met, failureMessage);
     }
 
     private static final class TrackingPriorityQueue extends InMemoryPriorityQueue<QueuedExecutionMessage> {

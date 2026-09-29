@@ -11,14 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.annotation.Order;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.security.InvalidKeyException;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.Base64;
 import java.util.List;
 
 /**
@@ -42,9 +35,6 @@ public class GatewayAuthenticationFilter implements Filter {
     private static final String HEADER_GATEWAY_SECRET = "X-Gateway-Secret";
     private static final String HEADER_GATEWAY_TIMESTAMP = "X-Gateway-Timestamp";
     private static final String HEADER_PROVIDER_ID = "X-Provider-ID";
-
-    /** Maximum allowed clock skew between gateway and this service (5 minutes). */
-    private static final long MAX_TIMESTAMP_AGE_MS = 300_000;
 
     private final GatewayFilterProperties properties;
 
@@ -109,11 +99,10 @@ public class GatewayAuthenticationFilter implements Filter {
             return;
         }
 
-        // Audit 2026-05-17 round-3 F16 - pass user + org headers into the
-        // verification step so the signature binds to them.
-        String userIdHdr = httpRequest.getHeader("X-User-ID");
-        String orgIdHdr = httpRequest.getHeader("X-Organization-ID");
-        if (!isValidGatewaySecret(gatewaySecretHeader, providerId, gatewayTimestamp, userIdHdr, orgIdHdr)) {
+        // Audit 2026-05-17 round-3 F16 - the user + org headers are part of the signed data.
+        // GatewaySignatureVerifier.verify reads them (the same code the gateway tests its
+        // signer against), so the binding cannot drift between the two sides.
+        if (!verifyFromHeaders(httpRequest, providerId)) {
             log.warn("Invalid gateway secret for path={} providerId={}", LogSafePath.of(requestPath), providerId);
             rejectRequest(httpResponse, HttpServletResponse.SC_UNAUTHORIZED, "Invalid gateway secret");
             return;
@@ -154,8 +143,6 @@ public class GatewayAuthenticationFilter implements Filter {
                 || GatewayFilterProperties.DEFAULT_SECRET_KEY.equals(secret);
     }
 
-    private static final String HMAC_ALGO = "HmacSHA256";
-    private static final String SIGNATURE_PREFIX = "gw_";
 
     /**
      * Verify the HMAC-SHA256 signature emitted by
@@ -163,25 +150,14 @@ public class GatewayAuthenticationFilter implements Filter {
      * string; both sides use the identical data shape:
      * {@code HMAC(secret, providerId|userId|orgId|timestamp)}.
      *
-     * <p>Comparison is constant-time via {@link MessageDigest#isEqual} to
+     * <p>Delegates to {@link GatewaySignatureVerifier}: comparison is constant-time, to
      * defeat timing-side-channel attacks on the signature byte slice.
      */
     boolean isValidGatewaySecret(String receivedSecret, String providerId, String timestamp,
                                   String userId, String organizationId) {
         try {
-            if (receivedSecret == null || !receivedSecret.startsWith(SIGNATURE_PREFIX)) {
-                return false;
-            }
-            long requestTime = Long.parseLong(timestamp);
-            if (System.currentTimeMillis() - requestTime > MAX_TIMESTAMP_AGE_MS) {
-                log.debug("Gateway timestamp expired: age={}ms",
-                        System.currentTimeMillis() - requestTime);
-                return false;
-            }
-            String expected = generateExpectedSecret(providerId, timestamp, userId, organizationId);
-            return MessageDigest.isEqual(
-                    receivedSecret.getBytes(StandardCharsets.UTF_8),
-                    expected.getBytes(StandardCharsets.UTF_8));
+            return new GatewaySignatureVerifier(properties.getSecretKey())
+                    .isValid(receivedSecret, providerId, timestamp, userId, organizationId);
         } catch (NumberFormatException e) {
             log.warn("Invalid gateway timestamp format: {}", timestamp);
             return false;
@@ -197,17 +173,21 @@ public class GatewayAuthenticationFilter implements Filter {
      * {@code gateway.GatewaySecurityService.computeSignature}.
      */
     String generateExpectedSecret(String providerId, String timestamp, String userId, String organizationId) {
-        String safeUser = userId != null ? userId : "";
-        String safeOrg = organizationId != null ? organizationId : "";
-        String data = providerId + "|" + safeUser + "|" + safeOrg + "|" + timestamp;
+        return new GatewaySignatureVerifier(properties.getSecretKey())
+                .expectedSecret(providerId, timestamp, userId, organizationId);
+    }
+
+    /** Verification with the signed user/org read from the request headers. */
+    private boolean verifyFromHeaders(HttpServletRequest httpRequest, String providerId) {
         try {
-            Mac mac = Mac.getInstance(HMAC_ALGO);
-            mac.init(new SecretKeySpec(
-                    properties.getSecretKey().getBytes(StandardCharsets.UTF_8), HMAC_ALGO));
-            byte[] hash = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
-            return SIGNATURE_PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(hash);
-        } catch (NoSuchAlgorithmException | InvalidKeyException e) {
-            throw new IllegalStateException("HmacSHA256 unavailable", e);
+            return new GatewaySignatureVerifier(properties.getSecretKey())
+                    .verify(httpRequest::getHeader, providerId);
+        } catch (NumberFormatException e) {
+            log.warn("Invalid gateway timestamp format: {}", httpRequest.getHeader(HEADER_GATEWAY_TIMESTAMP));
+            return false;
+        } catch (Exception e) {
+            log.error("Error validating gateway secret: {}", e.getMessage());
+            return false;
         }
     }
 

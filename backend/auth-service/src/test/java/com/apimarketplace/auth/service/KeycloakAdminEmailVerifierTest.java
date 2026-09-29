@@ -18,6 +18,8 @@ import org.springframework.web.client.RestTemplate;
 
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -168,5 +170,120 @@ class KeycloakAdminEmailVerifierTest {
         assertThat(form.getFirst("grant_type")).isEqualTo("password");
         assertThat(form.getFirst("client_id")).isEqualTo("admin-cli");
         assertThat(form.getFirst("username")).isEqualTo("admin");
+    }
+
+    // ===== setUserLocale: the write that makes Keycloak render in the person's language =====
+
+    @Test
+    @DisplayName("writes back the WHOLE representation, so the declared root fields survive")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void setLocaleRoundTripsTheRepresentation() {
+        stubToken(KC + "/realms/livecontext/protocol/openid-connect/token");
+        Map<String, Object> existing = new java.util.LinkedHashMap<>();
+        existing.put("id", PROVIDER_ID);
+        existing.put("username", "alice");
+        existing.put("email", "alice@example.com");
+        existing.put("firstName", "Alice");
+        existing.put("lastName", "Doe");
+        existing.put("emailVerified", Boolean.TRUE);
+        existing.put("requiredActions", java.util.List.of("VERIFY_EMAIL"));
+        existing.put("attributes", Map.of("someOtherThing", java.util.List.of("keep-me")));
+        when(restTemplate.exchange(eq(USER_URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(new ResponseEntity<>(existing, HttpStatus.OK));
+        ArgumentCaptor<HttpEntity> put = ArgumentCaptor.forClass(HttpEntity.class);
+        when(restTemplate.exchange(eq(USER_URL), eq(HttpMethod.PUT), put.capture(), eq(Void.class)))
+                .thenReturn(ResponseEntity.noContent().build());
+
+        verifier.setUserLocale(PROVIDER_ID, "fr");
+
+        Map<String, Object> body = (Map<String, Object>) put.getValue().getBody();
+        Map<String, Object> attributes = (Map<String, Object>) body.get("attributes");
+        assertThat(attributes.get("locale")).isEqualTo(java.util.List.of("fr"));
+        assertThat(attributes.get("someOtherThing")).isEqualTo(java.util.List.of("keep-me"));
+
+        // The part that is easy to get wrong and invisible in production until somebody loses
+        // their name: sending an `attributes` map switches Keycloak into "remove what is not in
+        // this body", and username / email / firstName / lastName are DECLARED attributes of the
+        // realm's user profile. A body carrying only `attributes` would either be rejected -
+        // making this method a silent no-op - or succeed and clear all four.
+        assertThat(body).containsEntry("username", "alice")
+                .containsEntry("email", "alice@example.com")
+                .containsEntry("firstName", "Alice")
+                .containsEntry("lastName", "Doe");
+
+        // And the fields another writer owns are NOT sent back: markEmailVerified writes
+        // emailVerified on the same user around signup, so echoing a stale value here would
+        // undo it and bounce the person to the verification step again. Keycloak leaves a root
+        // field alone when the representation omits it.
+        assertThat(body).doesNotContainKey("emailVerified").doesNotContainKey("requiredActions");
+    }
+
+    @Test
+    @DisplayName("a user Keycloak will not describe is never overwritten with a partial body")
+    void setLocaleSkipsWhenTheUserCannotBeRead() {
+        stubToken(KC + "/realms/livecontext/protocol/openid-connect/token");
+        when(restTemplate.exchange(eq(USER_URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(new ResponseEntity<>(null, HttpStatus.OK));
+
+        verifier.setUserLocale(PROVIDER_ID, "fr");
+
+        verify(restTemplate, never())
+                .exchange(eq(USER_URL), eq(HttpMethod.PUT), any(HttpEntity.class), eq(Void.class));
+    }
+
+    @Test
+
+    @DisplayName("sends the code KEYCLOAK spells, not the app one")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void setLocaleUsesKeycloakSpelling() {
+        stubToken(KC + "/realms/livecontext/protocol/openid-connect/token");
+        when(restTemplate.exchange(eq(USER_URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(new ResponseEntity<>(Map.of(), HttpStatus.OK));
+        ArgumentCaptor<HttpEntity> put = ArgumentCaptor.forClass(HttpEntity.class);
+        when(restTemplate.exchange(eq(USER_URL), eq(HttpMethod.PUT), put.capture(), eq(Void.class)))
+                .thenReturn(ResponseEntity.noContent().build());
+
+        verifier.setUserLocale(PROVIDER_ID, "pt");
+
+        Map<String, Object> attributes =
+                (Map<String, Object>) ((Map<String, Object>) put.getValue().getBody()).get("attributes");
+        // An unknown code makes Keycloak fall back to the realm default SILENTLY, so "pt" here
+        // would look like it worked and mail Brazilian readers in English forever.
+        assertThat(attributes.get("locale")).isEqualTo(java.util.List.of("pt-BR"));
+    }
+
+    @Test
+    @DisplayName("writes nothing when the stored locale already says the same thing")
+    void setLocaleSkipsAnIdenticalValue() {
+        stubToken(KC + "/realms/livecontext/protocol/openid-connect/token");
+        when(restTemplate.exchange(eq(USER_URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(new ResponseEntity<>(
+                        Map.of("attributes", Map.of("locale", java.util.List.of("fr"))), HttpStatus.OK));
+
+        verifier.setUserLocale(PROVIDER_ID, "fr");
+
+        verify(restTemplate, never()).exchange(eq(USER_URL), eq(HttpMethod.PUT), any(HttpEntity.class), eq(Void.class));
+    }
+
+    @Test
+    @DisplayName("an unsupported locale, or no provider id, never touches Keycloak at all")
+    void setLocaleRefusesWhatItCannotMap() {
+        verifier.setUserLocale(PROVIDER_ID, "it");
+        verifier.setUserLocale("", "fr");
+        verifier.setUserLocale(null, "fr");
+
+        // Not even a token is fetched: an unmappable value must not become a write that stores a
+        // code Keycloak ignores over one it was already using.
+        verifyNoInteractions(restTemplate);
+    }
+
+    @Test
+    @DisplayName("a Keycloak failure is swallowed: a lagging language must not fail the request")
+    void setLocaleSwallowsFailure() {
+        stubToken(KC + "/realms/livecontext/protocol/openid-connect/token");
+        when(restTemplate.exchange(eq(USER_URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenThrow(new RuntimeException("KC down"));
+
+        assertThatCode(() -> verifier.setUserLocale(PROVIDER_ID, "fr")).doesNotThrowAnyException();
     }
 }

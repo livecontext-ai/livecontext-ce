@@ -7,6 +7,7 @@ import com.apimarketplace.catalog.repository.LexicalSearchIndexRepository;
 import com.apimarketplace.catalog.service.CapabilityService;
 import com.apimarketplace.catalog.service.LexicalIndexSyncService;
 import com.apimarketplace.catalog.util.SearchScoreClassifier;
+import com.apimarketplace.catalog.web.CatalogAdminAccess;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -46,6 +47,10 @@ class CapabilityControllerIntegrationTest {
     private LexicalSearchIndexRepository lexicalSearchIndexRepository;
 
     private MockMvc mockMvc;
+
+    private static final String ADMIN_TOKEN = "catalog-admin-secret";
+    private static final String SYNTHESIS_BODY =
+            "{\"provider\":\"gmail\",\"resource\":\"message\",\"action\":\"send\",\"summary\":\"Send an email\"}";
     private ObjectMapper objectMapper;
 
     @BeforeEach
@@ -53,7 +58,8 @@ class CapabilityControllerIntegrationTest {
         CapabilityController controller = new CapabilityController(
                 capabilityService,
                 lexicalIndexSyncService,
-                lexicalSearchIndexRepository
+                lexicalSearchIndexRepository,
+                new CatalogAdminAccess(ADMIN_TOKEN)
         );
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
         objectMapper = new ObjectMapper();
@@ -427,6 +433,131 @@ class CapabilityControllerIntegrationTest {
                             .content(requestBody))
                     .andExpect(status().isOk())
                     .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON));
+        }
+    }
+    /**
+     * Regression: POST /api/tools/{toolId}/synthesis and /api/tools/synthesis/batch had no
+     * authorization, and the gateway routes /api/tools/** to any signed-in user. They
+     * overwrite the GLOBAL lexical search index (summary text every tenant's agent reads
+     * back from tool search), so they must be admin only.
+     */
+    @Nested
+    @DisplayName("Admin gate on synthesis writes")
+    class SynthesisAdminGateTests {
+
+        @Test
+        @DisplayName("single write refuses a plain signed-in user with 403 and leaves the index untouched")
+        void singleRefusesNonAdmin() throws Exception {
+            mockMvc.perform(post("/api/tools/" + UUID.randomUUID() + "/synthesis")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .header("X-User-ID", "42")
+                            .header("X-User-Roles", "USER")
+                            .content(SYNTHESIS_BODY))
+                    .andExpect(status().isForbidden());
+
+            verify(lexicalIndexSyncService, never()).syncApiToolEnriched(any(), any());
+        }
+
+        @Test
+        @DisplayName("single write refuses a wrong admin token")
+        void singleRefusesWrongToken() throws Exception {
+            mockMvc.perform(post("/api/tools/" + UUID.randomUUID() + "/synthesis")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .header("X-Internal-Admin-Token", "guess")
+                            .content(SYNTHESIS_BODY))
+                    .andExpect(status().isForbidden());
+
+            verify(lexicalIndexSyncService, never()).syncApiToolEnriched(any(), any());
+        }
+
+        @Test
+        @DisplayName("single write accepts the catalog import token")
+        void singleAcceptsAdminToken() throws Exception {
+            UUID toolId = UUID.randomUUID();
+
+            mockMvc.perform(post("/api/tools/" + toolId + "/synthesis")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .header("X-Internal-Admin-Token", ADMIN_TOKEN)
+                            .content(SYNTHESIS_BODY))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.success").value(true));
+
+            verify(lexicalIndexSyncService).syncApiToolEnriched(eq(toolId), any());
+        }
+
+        @Test
+        @DisplayName("single write accepts a platform admin")
+        void singleAcceptsAdminRole() throws Exception {
+            UUID toolId = UUID.randomUUID();
+
+            mockMvc.perform(post("/api/tools/" + toolId + "/synthesis")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .header("X-User-Roles", "USER,ADMIN")
+                            .content(SYNTHESIS_BODY))
+                    .andExpect(status().isOk());
+
+            verify(lexicalIndexSyncService).syncApiToolEnriched(eq(toolId), any());
+        }
+
+        @Test
+        @DisplayName("batch write refuses a plain signed-in user with 403 and leaves the index untouched")
+        void batchRefusesNonAdmin() throws Exception {
+            String body = "{\"" + UUID.randomUUID() + "\":" + SYNTHESIS_BODY + "}";
+
+            mockMvc.perform(post("/api/tools/synthesis/batch")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .header("X-User-ID", "42")
+                            .header("X-User-Roles", "USER")
+                            .content(body))
+                    .andExpect(status().isForbidden());
+
+            verify(lexicalIndexSyncService, never()).syncApiToolEnriched(any(), any());
+        }
+
+        @Test
+        @DisplayName("batch write refuses a wrong admin token")
+        void batchRefusesWrongToken() throws Exception {
+            String body = "{\"" + UUID.randomUUID() + "\":" + SYNTHESIS_BODY + "}";
+
+            mockMvc.perform(post("/api/tools/synthesis/batch")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .header("X-Internal-Admin-Token", "guess")
+                            .content(body))
+                    .andExpect(status().isForbidden());
+
+            verify(lexicalIndexSyncService, never()).syncApiToolEnriched(any(), any());
+        }
+
+        @Test
+        @DisplayName("batch write accepts the catalog import token")
+        void batchAcceptsAdminToken() throws Exception {
+            UUID toolId = UUID.randomUUID();
+            String body = "{\"" + toolId + "\":" + SYNTHESIS_BODY + "}";
+
+            mockMvc.perform(post("/api/tools/synthesis/batch")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .header("X-Internal-Admin-Token", ADMIN_TOKEN)
+                            .content(body))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.successCount").value(1));
+
+            verify(lexicalIndexSyncService).syncApiToolEnriched(eq(toolId), any());
+        }
+
+        @Test
+        @DisplayName("batch write accepts a platform admin")
+        void batchAcceptsAdminRole() throws Exception {
+            UUID toolId = UUID.randomUUID();
+            String body = "{\"" + toolId + "\":" + SYNTHESIS_BODY + "}";
+
+            mockMvc.perform(post("/api/tools/synthesis/batch")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .header("X-User-Roles", "ADMIN")
+                            .content(body))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.successCount").value(1));
+
+            verify(lexicalIndexSyncService).syncApiToolEnriched(eq(toolId), any());
         }
     }
 }

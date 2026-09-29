@@ -61,6 +61,11 @@ public class InterfacePublishModule implements ToolModule {
         var accessDenied = ToolAccessControl.checkWriteAccess(
                 context != null ? context.credentials() : null, "interface", action);
         if (accessDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get()));
+        // Workspace role (VIEWER is read-only): the READ actions stay, every write is refused.
+        var roleDenied = ToolAccessControl.checkRoleWriteAccess(
+                context != null ? context.orgId() : null,
+                context != null ? context.orgRole() : null, "interface", action);
+        if (roleDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, roleDenied.get()));
 
         // Allow-list check: an interfaces=custom agent may only publish/unpublish its approved ids.
         var notAllowed = InterfaceToolAccess.denyIfNotAllowed(

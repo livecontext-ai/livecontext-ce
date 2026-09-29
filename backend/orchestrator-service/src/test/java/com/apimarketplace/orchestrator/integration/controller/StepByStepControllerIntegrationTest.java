@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.integration.controller;
 
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
@@ -48,6 +49,11 @@ class StepByStepControllerIntegrationTest extends BaseControllerIntegrationTest 
     @MockitoBean
     private CreditConsumptionClient creditClient;
 
+    // Not an access-control test: the run write gate consults the per-member deny-list,
+    // which lives in auth-service (absent here). Same stub as the execution twin.
+    @MockitoBean
+    private OrgAccessGuard orgAccessGuard;
+
     @Autowired
     private WorkflowRepository workflowRepository;
 
@@ -59,6 +65,7 @@ class StepByStepControllerIntegrationTest extends BaseControllerIntegrationTest 
         when(triggerClient.getTokensForWorkflow(any(UUID.class)))
             .thenReturn(Map.of());
         when(creditClient.checkCredits(anyString())).thenReturn(true);
+        lenient().when(orgAccessGuard.canWrite(any(), any(), any(), any(), any())).thenReturn(true);
         persistRun("run-123", TENANT_ID);
     }
 

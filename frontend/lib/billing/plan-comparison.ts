@@ -59,22 +59,22 @@ const SECTIONS: ReadonlyArray<{ id: string; dimensions: readonly string[]; flags
   {
     id: 'usage',
     dimensions: ['credits', 'nodes', 'concurrent', 'storage', 'logs'],
-    flags: ['priorityExecution', 'emailAlerts', 'overageProtection'],
+    flags: ['priorityExecution', 'channelAlerts', 'emailAlerts', 'overageProtection'],
   },
   {
     id: 'building',
     dimensions: ['variables'],
-    flags: ['versioning', 'apiAccess', 'executionSearch', 'cePlatformCreds', 'vectorSearch', 'browserAgent'],
+    flags: ['agentToolkit', 'mcpServer', 'versioning', 'apiAccess', 'executionSearch', 'cePlatformCreds', 'vectorSearch', 'browserAgent'],
   },
   {
     id: 'collaboration',
     dimensions: ['users', 'workspaces'],
-    flags: ['sharedTemplates', 'centralizedBilling'],
+    flags: ['chatChannels', 'sharedTemplates', 'centralizedBilling'],
   },
   {
     id: 'security',
     dimensions: [],
-    flags: ['sso', 'rbac', 'auditLogs', 'compliance', 'dedicatedInstance'],
+    flags: ['twoFactor', 'sso', 'rbac', 'auditLogs', 'compliance', 'dedicatedInstance'],
   },
   {
     id: 'support',

@@ -32,6 +32,11 @@ public class ProjectController {
             @RequestHeader("X-User-ID") String userId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
             @RequestBody Map<String, Object> body) {
+        // Org VIEWERs are read-only (update / delete / membership are gated in
+        // ProjectService; creation had no check at all).
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(organizationId, com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole())) {
+            return ResponseEntity.status(403).body(Map.of("error", "VIEWER role cannot create projects"));
+        }
         String name = (String) body.get("name");
         if (name == null || name.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Name is required"));

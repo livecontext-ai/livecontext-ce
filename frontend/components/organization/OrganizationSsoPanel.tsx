@@ -19,7 +19,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
   organizationApi,
@@ -42,7 +41,6 @@ type FormState = {
   idpEntityId: string;
   ssoUrl: string;
   x509Certificate: string;
-  hideOnLoginPage: boolean;
 };
 
 const EMPTY_FORM: FormState = {
@@ -50,7 +48,6 @@ const EMPTY_FORM: FormState = {
   idpEntityId: "",
   ssoUrl: "",
   x509Certificate: "",
-  hideOnLoginPage: true,
 };
 
 const STATUS_STYLES: Record<OrganizationSamlConnection["status"], string> = {
@@ -68,7 +65,6 @@ function buildForm(connection: OrganizationSamlConnection | undefined): FormStat
     idpEntityId: connection.idpEntityId || "",
     ssoUrl: connection.ssoUrl || "",
     x509Certificate: "",
-    hideOnLoginPage: connection.hideOnLoginPage,
   };
 }
 
@@ -80,7 +76,6 @@ function formSourceKey(connection: OrganizationSamlConnection | undefined): stri
     connection.displayName ?? "",
     connection.idpEntityId ?? "",
     connection.ssoUrl ?? "",
-    String(connection.hideOnLoginPage),
   ].join("|");
 }
 
@@ -154,7 +149,6 @@ export default function OrganizationSsoPanel({ orgId, currentUserRole, supportsT
         idpEntityId: form.idpEntityId.trim(),
         ssoUrl: form.ssoUrl.trim(),
         x509Certificate: form.x509Certificate.trim(),
-        hideOnLoginPage: form.hideOnLoginPage,
     }),
     onSuccess: (saved) => {
       queryClient.setQueryData(queryKey, saved);
@@ -393,18 +387,6 @@ export default function OrganizationSsoPanel({ orgId, currentUserRole, supportsT
                   className="min-h-[130px] font-mono text-xs"
                 />
                 <p className="mt-1.5 text-xs text-theme-secondary">{t("certificateHelp")}</p>
-              </div>
-
-              <div className="flex items-start justify-between gap-4 rounded-lg border border-theme bg-theme-secondary p-4">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-theme-primary">{t("hideOnLoginPage")}</p>
-                  <p className="mt-1 text-xs text-theme-secondary">{t("hideOnLoginPageHelp")}</p>
-                </div>
-                <Switch
-                  checked={form.hideOnLoginPage}
-                  onCheckedChange={(checked) => setForm((prev) => ({ ...prev, hideOnLoginPage: checked }))}
-                  aria-label={t("hideOnLoginPage")}
-                />
               </div>
 
               <div className="rounded-lg border border-theme bg-theme-secondary p-4">

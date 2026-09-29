@@ -1,6 +1,7 @@
 package com.apimarketplace.common.storage.url;
 
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -113,6 +114,20 @@ public final class FileProxyUrls {
         long exp = parseEpoch(param(query, "exp"));
         return new ProxyUrl(key, signed, absolute, exp,
                 disposition == null || disposition.isBlank() ? DEFAULT_DISPOSITION : disposition, sig);
+    }
+
+    /**
+     * The relative {@code /api/files/proxy-signed} URL for an already computed signature, in
+     * the exact shape {@link #parse} reads back. Building the string is all this does: the
+     * caller signs with {@code ShowcaseUrlSigner} and owns the decision that the key may be
+     * served at all.
+     */
+    public static String signedPath(String key, long exp, String disposition, String sig) {
+        return SIGNED_PATH
+                + "key=" + URLEncoder.encode(key, StandardCharsets.UTF_8)
+                + "&exp=" + exp
+                + "&disposition=" + ("attachment".equalsIgnoreCase(disposition) ? "attachment" : DEFAULT_DISPOSITION)
+                + "&sig=" + URLEncoder.encode(sig, StandardCharsets.UTF_8);
     }
 
     /**

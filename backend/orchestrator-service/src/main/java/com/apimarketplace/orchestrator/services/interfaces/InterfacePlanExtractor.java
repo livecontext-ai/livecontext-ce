@@ -22,8 +22,16 @@ public class InterfacePlanExtractor {
      */
     @SuppressWarnings("unchecked")
     public Set<UUID> extractInterfaceIds(WorkflowPlan plan) {
+        return extractInterfaceIds(plan.getOriginalPlan());
+    }
+
+    /**
+     * Same extraction over a raw plan map (a stored {@code workflows.plan} or
+     * {@code workflow_runs.plan}). A null map yields an empty set.
+     */
+    @SuppressWarnings("unchecked")
+    public Set<UUID> extractInterfaceIds(Map<String, Object> originalPlan) {
         Set<UUID> interfaceIds = new HashSet<>();
-        Map<String, Object> originalPlan = plan.getOriginalPlan();
 
         Map<String, UUID> labelToUuidMap = new HashMap<>();
 

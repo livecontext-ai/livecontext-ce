@@ -811,8 +811,9 @@ export function useDataFetching({
           }
         });
 
-        // Where each nested item comes from: the parent step row's epoch / spawn / iteration,
-        // always first, so a drilled-in value is never read without its execution coordinates.
+        // Where each nested item comes from: the parent step row's epoch / spawn / iteration.
+        // After the item's own fields: the row id already reads as those coordinates, so the
+        // data comes first and the coordinates stay on every row for filtering and sorting.
         const contextColumns: ColumnDefinition[] = STEP_CONTEXT_COLUMNS.map(({ field, header }) => ({
           col_id: field,
           field,
@@ -826,7 +827,7 @@ export function useDataFetching({
 
         // Filter out internal _ prefixed keys (context injection markers), and an item's own key
         // named like a context column: the context value takes that slot, one column per field.
-        const dataColumns: ColumnDefinition[] = [...contextColumns, ...Array.from(allKeys)
+        const dataColumns: ColumnDefinition[] = [...Array.from(allKeys)
           .filter(key => !key.startsWith('_') && !STEP_CONTEXT_COLUMNS.some(c => c.field === key))
           .map(key => ({
             col_id: key,
@@ -837,7 +838,7 @@ export function useDataFetching({
             sortable: true,
             filterable: true,
             isNavigable: false,
-          }))];
+          })), ...contextColumns];
 
         if (append && page > 1) {
           setColumns(previous => mergeInOrder(previous, dataColumns));

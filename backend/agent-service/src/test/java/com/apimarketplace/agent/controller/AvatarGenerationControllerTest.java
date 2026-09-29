@@ -100,4 +100,26 @@ class AvatarGenerationControllerTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
     }
+
+    @Test
+    @DisplayName("VIEWER in a workspace: 403 and nothing is generated (it spends workspace credits)")
+    void viewerRefused() {
+        when(tenantResolver.resolveOrgRole(httpRequest)).thenReturn("VIEWER");
+
+        ResponseEntity<?> response = controller.generateAvatar(httpRequest, Map.of("prompt", "a fox"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat((Map<String, Object>) response.getBody()).containsEntry("error", "avatar_generation_forbidden");
+        org.mockito.Mockito.verifyNoInteractions(avatarGenerationService);
+    }
+
+    @Test
+    @DisplayName("MEMBER in a workspace: the generation runs")
+    void memberGenerates() {
+        lenient().when(tenantResolver.resolveOrgRole(httpRequest)).thenReturn("MEMBER");
+        when(avatarGenerationService.generate("a fox", null, null, "tenant-1")).thenReturn("<svg/>");
+
+        assertThat(controller.generateAvatar(httpRequest, Map.of("prompt", "a fox")).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+    }
 }

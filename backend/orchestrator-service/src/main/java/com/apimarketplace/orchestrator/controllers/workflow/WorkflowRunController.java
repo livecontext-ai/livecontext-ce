@@ -19,6 +19,7 @@ import com.apimarketplace.orchestrator.domain.execution.DagState;
 import com.apimarketplace.orchestrator.domain.execution.EpochState;
 import com.apimarketplace.orchestrator.domain.execution.StateSnapshot;
 import com.apimarketplace.orchestrator.services.state.StateSnapshotService;
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.web.TenantResolver;
 import org.slf4j.Logger;
@@ -84,6 +85,10 @@ public class WorkflowRunController {
 
     @Autowired
     private AutoRestartExecutionService autoRestartExecutionService;
+
+    /** Per-member write gate (VIEWER role + deny-list), the same one execute uses. */
+    @Autowired
+    private OrgAccessGuard orgAccessGuard;
 
     /**
      * 2026-05-04 hot-fix (audit TR-1): the REST `/state` payload's `seq` MUST
@@ -610,13 +615,19 @@ public class WorkflowRunController {
     public ResponseEntity<?> pauseWorkflow(
             @PathVariable("runId") String runId,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
             if (tenantId == null || tenantId.isBlank()) return ResponseEntity.status(401).build();
+            if (isViewerRole(orgId, orgRole)) {
+                return viewerRunControlDenied("pause");
+            }
             Optional<WorkflowRunEntity> runOpt = workflowRunRepository.findByRunIdPublic(runId);
             if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
                 return ResponseEntity.notFound().build();
             }
+            ResponseEntity<?> writeDenied = denyRunWrite(runOpt.get(), tenantId, orgRole);
+            if (writeDenied != null) return writeDenied;
             logger.info("Pausing workflow: {}", runId);
             WorkflowRunState state = resumeService.pauseWorkflow(runId);
 
@@ -636,6 +647,11 @@ public class WorkflowRunController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("error", "Failed to pause workflow: " + e.getMessage()));
         }
+    }
+
+    /** Backward-compatible direct-call overload used by controller unit tests. */
+    public ResponseEntity<?> pauseWorkflow(String runId, String tenantId, String orgId) {
+        return pauseWorkflow(runId, tenantId, orgId, null);
     }
 
     /**
@@ -667,6 +683,8 @@ public class WorkflowRunController {
             if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
                 return ResponseEntity.notFound().build();
             }
+            ResponseEntity<?> writeDenied = denyRunWrite(runOpt.get(), tenantId, orgRole);
+            if (writeDenied != null) return writeDenied;
             logger.info("Cancelling workflow: {}", runId);
             // Record WHO stopped it, same keys the agent-facing stop_run writes, so a
             // later get_run can tell "the user stopped this" from "it crashed".
@@ -706,13 +724,19 @@ public class WorkflowRunController {
     public ResponseEntity<?> stopWorkflow(
             @PathVariable("runId") String runId,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
             if (tenantId == null || tenantId.isBlank()) return ResponseEntity.status(401).build();
+            if (isViewerRole(orgId, orgRole)) {
+                return viewerRunControlDenied("stop");
+            }
             Optional<WorkflowRunEntity> runOpt = workflowRunRepository.findByRunIdPublic(runId);
             if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
                 return ResponseEntity.notFound().build();
             }
+            ResponseEntity<?> writeDenied = denyRunWrite(runOpt.get(), tenantId, orgRole);
+            if (writeDenied != null) return writeDenied;
             logger.info("Stopping workflow: {}", runId);
             // Same attribution as cancel: the run reports who stopped it.
             resumeService.stopWorkflow(runId, userStopMetadata());
@@ -750,6 +774,11 @@ public class WorkflowRunController {
         }
     }
 
+    /** Backward-compatible direct-call overload used by controller unit tests. */
+    public ResponseEntity<?> stopWorkflow(String runId, String tenantId, String orgId) {
+        return stopWorkflow(runId, tenantId, orgId, null);
+    }
+
     /**
      * Reactivates a cancelled workflow run, returning it to WAITING_TRIGGER.
      * This allows triggers to fire again on a run that was previously cancelled.
@@ -770,6 +799,8 @@ public class WorkflowRunController {
             if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
                 return ResponseEntity.notFound().build();
             }
+            ResponseEntity<?> writeDenied = denyRunWrite(runOpt.get(), tenantId, orgRole);
+            if (writeDenied != null) return writeDenied;
             logger.info("Reactivating workflow: {}", runId);
             resumeService.reactivateWorkflow(runId);
 
@@ -796,7 +827,27 @@ public class WorkflowRunController {
     }
 
     private static boolean isViewerRole(String orgId, String orgRole) {
-        return orgId != null && orgRole != null && "VIEWER".equalsIgnoreCase(orgRole.trim());
+        return OrgAccessGuard.isRoleWriteBlocked(orgId, orgRole);
+    }
+
+    private static ResponseEntity<?> viewerRunControlDenied(String action) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("error", "VIEWER role cannot " + action + " workflow runs"));
+    }
+
+    /**
+     * Write gate for controlling a run. A run executes with its owner's credentials, so
+     * pausing, stopping, resuming, re-running or editing its plan is a write on the
+     * workflow, gated exactly like executing it ({@code WorkflowExecutionController}):
+     * {@link OrgAccessGuard#canWrite} refuses the VIEWER role AND a member the workflow
+     * is restricted from (DENY or READ-only). Returns the 403 to send, or null to proceed.
+     * Callers have already checked scope, so this never reveals a run's existence.
+     */
+    private ResponseEntity<?> denyRunWrite(WorkflowRunEntity run, String tenantId, String orgRole) {
+        // The VIEWER role is refused earlier by each endpoint; passing no org here keeps
+        // this call to the per-member deny-list only (see RunWriteGate).
+        String denial = RunWriteGate.denial(orgAccessGuard, run, tenantId, null, orgRole, "control");
+        return denial == null ? null : ResponseEntity.status(RunWriteGate.statusFor(denial)).body(Map.of("error", denial));
     }
 
     /**
@@ -806,13 +857,19 @@ public class WorkflowRunController {
     public ResponseEntity<?> resumeWorkflow(
             @PathVariable("runId") String runId,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
             if (tenantId == null || tenantId.isBlank()) return ResponseEntity.status(401).build();
+            if (isViewerRole(orgId, orgRole)) {
+                return viewerRunControlDenied("resume");
+            }
             Optional<WorkflowRunEntity> runOpt = workflowRunRepository.findByRunIdPublic(runId);
             if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
                 return ResponseEntity.notFound().build();
             }
+            ResponseEntity<?> writeDenied = denyRunWrite(runOpt.get(), tenantId, orgRole);
+            if (writeDenied != null) return writeDenied;
             logger.info("Resuming workflow: {}", runId);
             WorkflowRunState state = resumeService.resumeWorkflow(runId);
 
@@ -835,6 +892,11 @@ public class WorkflowRunController {
         }
     }
 
+    /** Backward-compatible direct-call overload used by controller unit tests. */
+    public ResponseEntity<?> resumeWorkflow(String runId, String tenantId, String orgId) {
+        return resumeWorkflow(runId, tenantId, orgId, null);
+    }
+
     /**
      * Re-runs a workflow from a specific step.
      * Optionally accepts a plan in the request body to update the run's plan before re-running.
@@ -847,15 +909,23 @@ public class WorkflowRunController {
             @RequestParam(value = "epoch", required = false) Integer epoch,
             @RequestBody(required = false) Map<String, Object> requestBody,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
             // Audit 2026-05-17 round-5 - scope check before rerun. Prior:
             // any caller could rerun + overwrite plan on any run by UUID.
             if (tenantId == null || tenantId.isBlank()) return ResponseEntity.status(401).build();
+            // A rerun executes nodes with the owner's credentials and may rewrite run.plan
+            // from the body: a write, refused before anything is touched.
+            if (isViewerRole(orgId, orgRole)) {
+                return viewerRunControlDenied("rerun");
+            }
             Optional<WorkflowRunEntity> runOpt = workflowRunRepository.findByRunIdPublic(runId);
             if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
                 return ResponseEntity.notFound().build();
             }
+            ResponseEntity<?> writeDenied = denyRunWrite(runOpt.get(), tenantId, orgRole);
+            if (writeDenied != null) return writeDenied;
             // Sanitize: a client must not be able to inject the internal marker
             // and bypass the workflow.plan refresh on rerun.
             requestBody = com.apimarketplace.orchestrator.trigger.ReusableTriggerService
@@ -945,6 +1015,12 @@ public class WorkflowRunController {
         }
     }
 
+    /** Backward-compatible direct-call overload used by controller unit tests. */
+    public ResponseEntity<?> rerunFromStep(String runId, String stepId, Integer epoch,
+                                           Map<String, Object> requestBody, String tenantId, String orgId) {
+        return rerunFromStep(runId, stepId, epoch, requestBody, tenantId, orgId, null);
+    }
+
     /**
      * Updates a run's plan without creating a version or modifying workflow.plan.
      * Used by the frontend to save parameter changes made during run mode.
@@ -954,8 +1030,16 @@ public class WorkflowRunController {
     public ResponseEntity<?> updateRunPlan(
             @PathVariable("runId") String runId,
             @RequestHeader("X-User-ID") String tenantId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
             @RequestBody Map<String, Object> request) {
         try {
+            // A run plan fires later with the owner's credentials: rewriting it is a write,
+            // refused for the VIEWER role before the body is even read.
+            String orgId = TenantResolver.currentRequestOrganizationId();
+            if (isViewerRole(orgId, orgRole)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "VIEWER role cannot modify workflow runs"));
+            }
             Object planObj = request.get("plan");
             if (planObj == null || !(planObj instanceof Map)) {
                 return ResponseEntity.badRequest().body(Map.of("error", "Missing or invalid 'plan' in request body"));
@@ -968,10 +1052,13 @@ public class WorkflowRunController {
             if (runOpt.isEmpty()) {
                 return ResponseEntity.notFound().build();
             }
-            String orgId = TenantResolver.currentRequestOrganizationId();
             if (!ScopeGuard.isInStrictScope(tenantId, orgId, runOpt.get().getTenantId(), runOpt.get().getOrganizationId())) {
                 return ResponseEntity.notFound().build();
             }
+            // Per-member deny-list: a member restricted from this workflow (DENY or READ-only)
+            // may not rewrite the plan of one of its runs either.
+            ResponseEntity<?> writeDenied = denyRunWrite(runOpt.get(), tenantId, orgRole);
+            if (writeDenied != null) return writeDenied;
 
             // Block plan updates on terminal runs
             if (runOpt.get().getStatus() != null && runOpt.get().getStatus().isTerminal()) {

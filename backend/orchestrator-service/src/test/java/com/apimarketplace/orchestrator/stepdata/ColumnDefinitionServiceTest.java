@@ -28,8 +28,8 @@ class ColumnDefinitionServiceTest {
     }
 
     @Test
-    @DisplayName("deriveColumnsFromRows puts id and its coordinates first, and hides the technical row key")
-    void derivedColumnsLeadWithExecutionCoordinates() {
+    @DisplayName("deriveColumnsFromRows reads id, status, input, output first, the coordinate columns after, and hides the technical row key")
+    void derivedColumnsPutDataBeforeCoordinates() {
         java.util.Map<String, Object> row = new java.util.LinkedHashMap<>();
         row.put("output", java.util.Map.of("a", 1));
         row.put("input", java.util.Map.of("b", 2));
@@ -44,8 +44,10 @@ class ColumnDefinitionServiceTest {
         List<String> fields = service.deriveColumnsFromRows(List.of(row)).stream()
                 .map(ColumnDefinition::field).toList();
 
-        // Before the fix epoch/spawn/iteration sat after input/output/error, off-screen.
-        assertThat(fields).startsWith("id", "epoch", "spawn", "iteration", "itemIndex", "status");
+        // The id already carries epoch.spawn.iteration.item, so what went in and out comes first;
+        // the coordinates follow, one per column, for filtering and sorting.
+        assertThat(fields).containsSubsequence("id", "status", "input", "output", "epoch", "spawn", "iteration", "itemIndex");
+        assertThat(fields.indexOf("epoch")).isGreaterThan(fields.indexOf("output"));
         assertThat(fields).doesNotContain(StepDataRowMapper.ROW_KEY_FIELD);
     }
 

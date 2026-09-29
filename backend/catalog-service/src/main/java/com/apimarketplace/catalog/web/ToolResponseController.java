@@ -34,8 +34,8 @@ import java.util.UUID;
  *
  * <p>DELETE endpoints are admin-only (mutations to global tool-mapping rows
  * affect every tenant - a wipe breaks Gmail/Slack/GCS/etc integrations
- * platform-wide). Caller MUST send {@code X-Internal-Admin-Token} matching
- * the {@code catalog.admin-token} property. Audit 2026-05-16: prior
+ * platform-wide). Caller MUST be a platform admin or send {@code X-Internal-Admin-Token}
+ * matching the {@code catalog.admin-token} property (see {@link CatalogAdminAccess}). Audit 2026-05-16: prior
  * implementation had no auth at all on these DELETE endpoints; gateway
  * routed them publicly so any authenticated user could wipe the catalog.
  */
@@ -45,31 +45,11 @@ import java.util.UUID;
 @Slf4j
 public class ToolResponseController {
 
-    @org.springframework.beans.factory.annotation.Value("${catalog.admin-token:}")
-    private String catalogAdminToken;
-
-    /**
-     * Constant-time string check for the admin token. Returns false on null or
-     * mismatch. Blank token configured = endpoint is locked down (return false
-     * to deny by default).
-     */
-    private boolean isAdminCaller(String headerToken) {
-        if (catalogAdminToken == null || catalogAdminToken.isBlank()) return false;
-        if (headerToken == null || headerToken.isBlank()) return false;
-        // Trim both sides: a trailing newline in the provisioned secret value must
-        // not silently 403 every legitimate caller (the importer trims what it sends).
-        String expected = catalogAdminToken.trim();
-        String presented = headerToken.trim();
-        if (expected.isEmpty() || presented.isEmpty()) return false;
-        // length-independent constant-time compare
-        return java.security.MessageDigest.isEqual(
-                expected.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                presented.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    }
-
     private final ToolResponseService toolResponseService;
     private final MappingResolverService mappingResolverService;
     private final MappingRegistry mappingRegistry;
+    /** Admin gate: platform ADMIN role or the catalog admin token (import Job). */
+    private final CatalogAdminAccess adminAccess;
 
     /**
      * Recupere toutes les reponses pour un outil donne
@@ -145,9 +125,10 @@ public class ToolResponseController {
     @PostMapping
     public ResponseEntity<ToolResponseDto> createResponse(@Valid @RequestBody ToolResponseDto responseDto,
                                                           @RequestHeader(value = "X-User-ID", required = false) String userId,
-                                                          @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
+                                                          @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken,
+                                                          @RequestHeader(value = "X-User-Roles", required = false) String roles) {
         // Catalog rows are global (every tenant sees them) - admin-only. Audit 2026-05-16 round-2.
-        if (!isAdminCaller(adminToken)) {
+        if (!adminAccess.isAdmin(roles, adminToken)) {
             log.warn("Refused unauthorized POST /api/tool-responses - admin-token mismatch");
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
@@ -176,8 +157,9 @@ public class ToolResponseController {
     public ResponseEntity<ToolResponseDto> updateResponse(@PathVariable java.util.UUID responseId,
                                                           @Valid @RequestBody ToolResponseDto responseDto,
                                                           @RequestHeader(value = "X-User-ID", defaultValue = "system") String userId,
-                                                          @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
-        if (!isAdminCaller(adminToken)) {
+                                                          @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken,
+                                                          @RequestHeader(value = "X-User-Roles", required = false) String roles) {
+        if (!adminAccess.isAdmin(roles, adminToken)) {
             log.warn("Refused unauthorized PUT /api/tool-responses/{} - admin-token mismatch", responseId);
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
@@ -200,8 +182,9 @@ public class ToolResponseController {
     @DeleteMapping("/{responseId}")
     public ResponseEntity<Void> deleteResponse(
             @PathVariable java.util.UUID responseId,
-            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
-        if (!isAdminCaller(adminToken)) {
+            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles) {
+        if (!adminAccess.isAdmin(roles, adminToken)) {
             log.warn("Refused unauthorized DELETE /api/tool-responses/{} - admin-token mismatch", responseId);
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
@@ -224,8 +207,9 @@ public class ToolResponseController {
     @DeleteMapping("/tool/{toolId}")
     public ResponseEntity<Void> deleteResponsesByTool(
             @PathVariable UUID toolId,
-            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
-        if (!isAdminCaller(adminToken)) {
+            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles) {
+        if (!adminAccess.isAdmin(roles, adminToken)) {
             log.warn("Refused unauthorized DELETE /api/tool-responses/tool/{} - admin-token mismatch", toolId);
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
@@ -245,10 +229,11 @@ public class ToolResponseController {
     @PutMapping("/{responseId}/set-default")
     public ResponseEntity<ToolResponseDto> setAsDefaultResponse(@PathVariable java.util.UUID responseId,
                                                                 @RequestHeader(value = "X-User-ID", defaultValue = "system") String userId,
-                                                                @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
+                                                                @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken,
+                                                                @RequestHeader(value = "X-User-Roles", required = false) String roles) {
         // set-default flips which response is served to ALL tenants for the tool.
         // Admin-only. Audit 2026-05-16 round-2.
-        if (!isAdminCaller(adminToken)) {
+        if (!adminAccess.isAdmin(roles, adminToken)) {
             log.warn("Refused unauthorized PUT /api/tool-responses/{}/set-default - admin-token mismatch", responseId);
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
@@ -309,10 +294,11 @@ public class ToolResponseController {
     public ResponseEntity<MappingResolutionResponse> createMapping(
             @RequestBody CreateMappingRequest request,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
+            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles) {
         // Mapping rows are global (every tenant uses them for tool result parsing).
         // Admin-only. Audit 2026-05-16 round-2.
-        if (!isAdminCaller(adminToken)) {
+        if (!adminAccess.isAdmin(roles, adminToken)) {
             log.warn("Refused unauthorized POST /api/tool-responses/mapping/create - admin-token mismatch");
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }

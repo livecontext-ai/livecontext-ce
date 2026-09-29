@@ -27,7 +27,7 @@ Use the repository installation described in the [main README](https://github.co
 - A machine supported by the release images. Prebuilt releases support x86-64; verify the release includes ARM64 before installing on Apple Silicon or other ARM hardware.
 - Node.js LTS with npm (`node --version` and `npm --version`)
 - Docker Engine 24+ with Compose v2 (or Docker Desktop 4.x and later)
-- 4 GB RAM minimum, 8 GB recommended
+- 6 GB RAM minimum (Docker Desktop: give its VM at least 4 GB), 8 GB recommended
 
 Run management commands from the same directory each time. `./livecontext` contains the configuration and model seed; application data lives in Docker volumes, so deleting that folder does not reset the database.
 

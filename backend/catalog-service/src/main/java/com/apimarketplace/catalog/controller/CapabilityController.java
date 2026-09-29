@@ -9,6 +9,7 @@ import com.apimarketplace.catalog.service.LexicalIndexSyncService;
 import com.apimarketplace.catalog.service.LexicalIndexSyncService.EnrichedSynthesisData;
 import com.apimarketplace.catalog.util.ApiScopedSearchParser;
 import com.apimarketplace.catalog.util.ApiScopedSearchParser.ParsedSearch;
+import com.apimarketplace.catalog.web.CatalogAdminAccess;
 
 import java.util.UUID;
 import jakarta.validation.Valid;
@@ -34,6 +35,7 @@ public class CapabilityController {
     private final CapabilityService capabilityService;
     private final LexicalIndexSyncService lexicalIndexSyncService;
     private final LexicalSearchIndexRepository lexicalSearchIndexRepository;
+    private final CatalogAdminAccess adminAccess;
     
     /**
      * Search for capabilities using hybrid embeddings + tsvector with RRF fusion
@@ -498,6 +500,10 @@ public class CapabilityController {
      * Directly populate lexical_search_index with pre-computed synthesis data.
      * This bypasses AI generation and uses synthesis data from API JSON files.
      *
+     * <p>Admin only (platform admin role or the catalog import token): the index is
+     * GLOBAL, its summary text is what every tenant and every agent reads back from
+     * tool search, and the route is reachable by any signed-in user.
+     *
      * POST /api/tools/{toolId}/synthesis
      *
      * Request body: SynthesisDataRequest with provider, resource, action, keywords, etc.
@@ -509,7 +515,11 @@ public class CapabilityController {
     @PostMapping("/tools/{toolId}/synthesis")
     public ResponseEntity<Map<String, Object>> saveSynthesisData(
             @PathVariable UUID toolId,
-            @RequestBody SynthesisDataRequest request) {
+            @RequestBody SynthesisDataRequest request,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles,
+            @RequestHeader(value = CatalogAdminAccess.ADMIN_TOKEN_HEADER, required = false) String adminToken) {
+        var denied = adminAccess.denyIfNotAdmin(roles, adminToken);
+        if (denied != null) return denied;
         try {
             log.info("Saving synthesis data for tool: {} - provider={}, resource={}, action={}",
                     toolId, request.provider(), request.resource(), request.action());
@@ -574,7 +584,11 @@ public class CapabilityController {
      */
     @PostMapping("/tools/synthesis/batch")
     public ResponseEntity<Map<String, Object>> saveSynthesisDataBatch(
-            @RequestBody Map<String, SynthesisDataRequest> requests) {
+            @RequestBody Map<String, SynthesisDataRequest> requests,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles,
+            @RequestHeader(value = CatalogAdminAccess.ADMIN_TOKEN_HEADER, required = false) String adminToken) {
+        var denied = adminAccess.denyIfNotAdmin(roles, adminToken);
+        if (denied != null) return denied;
         try {
             log.info("Batch saving synthesis data for {} tools", requests.size());
 

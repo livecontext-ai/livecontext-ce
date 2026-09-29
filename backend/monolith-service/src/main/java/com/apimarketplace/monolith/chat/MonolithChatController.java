@@ -9,6 +9,7 @@ import com.apimarketplace.common.credit.CreditConsumptionClient;
 import com.apimarketplace.conversation.controller.v3.chat.ChatRequestConfigMapper;
 import com.apimarketplace.conversation.dto.ChatRequest;
 import com.apimarketplace.conversation.service.ConversationHistoryService;
+import com.apimarketplace.conversation.service.ConversationQueryService;
 import com.apimarketplace.conversation.service.ai.ChatStreamingService;
 import com.apimarketplace.conversation.streaming.StreamingOutput;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -46,6 +47,7 @@ public class MonolithChatController {
     private final LLMProviderFactory llmProviderFactory;
     private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final ConversationQueryService conversationQueryService;
 
     @Autowired(required = false)
     private RuntimeLlmProviderResolver providerResolver;
@@ -107,6 +109,15 @@ public class MonolithChatController {
             }
             request.setConversationId(conversationId);
             log.info("[MonolithChat] Created conversation: {}", conversationId);
+        } else if (!conversationQueryService.isConversationInStrictScope(conversationId, userId, orgId)) {
+            // The turn below appends the user message, clears the pending cards, loads the
+            // conversation's history into the agent's context (unscoped, by id) and streams the
+            // answer on the conversation's channel: a foreign id was a write AND a read leak.
+            // 404, not 403: no existence disclosure. (Cloud parity: ChatStreamInitializer.)
+            log.warn("[MonolithChat] Chat turn refused - user {} (org: {}) may not write conversation {}",
+                    userId, orgId, conversationId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "Conversation not found"));
         } else if (request.isDefaultSkillIdsProvided()) {
             // Existing conversation + explicit composer skill selection - persist it
             // into chatConfig.defaultSkillIds (cloud parity: ChatStreamInitializer

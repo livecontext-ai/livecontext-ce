@@ -48,7 +48,8 @@ class InterfaceActionControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new InterfaceActionController(signalService, interfaceActionService, runRepository, interfaceClient);
+        controller = new InterfaceActionController(signalService, interfaceActionService, runRepository, interfaceClient,
+                com.apimarketplace.orchestrator.testsupport.OrgAccessGuardStubs.allowAll());
         // Audit 2026-05-17 round-4: fire-action and signal-list are now scoped
         // by caller. Stub a tenant-matching run for the happy-path tests.
         WorkflowRunEntity run = new WorkflowRunEntity();

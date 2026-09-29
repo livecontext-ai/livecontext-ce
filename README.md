@@ -72,7 +72,7 @@ This repository is the **Community Edition (CE)**: the full platform as a single
 
 - A machine supported by the release images; see [Images](#images) before choosing ARM hardware.
 - Docker Engine 24+ with Compose v2, or Docker Desktop with Linux containers, installed and running.
-- 4 GB RAM minimum, 8 GB recommended; allow several GB of free disk space for the images and your data.
+- 6 GB RAM minimum (Docker Desktop: give its VM at least 4 GB), 8 GB recommended; allow several GB of free disk space for the images and your data.
 - For the npm launcher: Node.js LTS with npm (`node --version`, `npm --version`).
 - For the repository installation: Git (`git --version`). Java and Maven are not needed to run the prebuilt images.
 - For AI features: a connected LiveContext Cloud account or your own supported provider key. Provider usage may incur charges.

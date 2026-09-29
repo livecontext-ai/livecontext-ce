@@ -43,13 +43,14 @@ class InternalChatControllerAsyncGateTest {
     @Mock private CreditConsumptionClient creditClient;
     @Mock private AgentObservabilityClient observabilityClient;
     @Mock private ConversationExecutionLockService executionLockService;
+    @Mock private com.apimarketplace.conversation.service.ConversationQueryService conversationQueryService;
 
     private InternalChatController controller;
 
     @BeforeEach
     void setUp() {
         controller = new InternalChatController(streamInitializer, agentService, messageService,
-                creditClient, observabilityClient, executionLockService);
+                creditClient, observabilityClient, executionLockService, conversationQueryService);
     }
 
     @Test
@@ -67,7 +68,7 @@ class InternalChatControllerAsyncGateTest {
                 CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION,
                 "anthropic", "claude-haiku-4-5")).thenReturn(false);
 
-        Mono<ResponseEntity<Map<String, String>>> mono = controller.chat(request, "user-9", "org-1");
+        Mono<ResponseEntity<Map<String, String>>> mono = controller.chat(request, "user-9", "org-1", null, null);
         ResponseEntity<Map<String, String>> response = mono.block();
 
         assertThat(response).isNotNull();
@@ -92,7 +93,7 @@ class InternalChatControllerAsyncGateTest {
                 .thenReturn(initialized);
 
         ResponseEntity<Map<String, String>> response =
-                controller.chat(request, "user-9", "org-1").block();
+                controller.chat(request, "user-9", "org-1", null, null).block();
 
         assertThat(response).isNotNull();
         assertThat(response.getStatusCode().value()).isEqualTo(200);

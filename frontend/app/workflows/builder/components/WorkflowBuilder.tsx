@@ -69,6 +69,7 @@ import {
 import { resolveEffectiveRunId } from '../utils/effectiveRunId';
 import Toast, { useToast } from '@/components/Toast';
 import { useTranslations } from 'next-intl';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { streamDebug } from '@/contexts/workflow-run/streamingDebug';
 import { TERMINAL_STATUSES, UNREVIVABLE_STATUSES } from '@/contexts/workflow-run/RunStateStore';
 
@@ -157,6 +158,9 @@ function WorkflowBuilderCanvas({
   const { direction: layoutDirection, setWorkflowDirection } = useWorkflowLayoutDirectionSafe();
   const t = useTranslations('workflowBuilder');
   const tCredentials = useTranslations('credentials');
+  const tCommon = useTranslations('common');
+  // A VIEWER sees the builder read-only: no edits, no deletes, no node creation.
+  const canMutate = useCanMutateInCurrentOrg();
   const { toasts, addToast, removeToast } = useToast();
 
   // Context hooks
@@ -554,6 +558,13 @@ function WorkflowBuilderCanvas({
         message: t('executionErrors.queueTimeoutMessage'),
         duration: 8000,
       });
+    } else if (error.type === 'read_only') {
+      addToast({
+        type: 'warning',
+        title: tCommon('viewerReadOnlyTitle'),
+        message: tCommon('viewerReadOnly'),
+        duration: 8000,
+      });
     } else if (error.type === 'rerun_refused') {
       addToast({
         type: 'warning',
@@ -569,7 +580,7 @@ function WorkflowBuilderCanvas({
         duration: 6000,
       });
     }
-  }, [addToast, t]);
+  }, [addToast, t, tCommon]);
 
   // Listen for runtime error events from WorkflowRunManager (workflow-level failures only)
   // Node failures are already visible on the node itself - no toast needed.
@@ -1721,7 +1732,7 @@ function WorkflowBuilderCanvas({
 
   // The palette lives in another React tree (side panel), so a pick arrives as an
   // event. The hook owns the two guards: right canvas, and never a read-only one.
-  useCreateNodeRequests({ workflowId, isPreviewOnly, onCreate: handleNodeCreatorSelect });
+  useCreateNodeRequests({ workflowId, isPreviewOnly: isPreviewOnly || !canMutate, onCreate: handleNodeCreatorSelect });
 
   return (
     <StepByStepProvider
@@ -1784,7 +1795,7 @@ function WorkflowBuilderCanvas({
             hasSelectedNodes={selectedNodeIds.length > 0}
             isFullscreen={isFullscreenMode}
             isAdvancedMode={isAdvancedMode}
-            readonly={!!effectiveRunId || isPreviewOnly}
+            readonly={!!effectiveRunId || isPreviewOnly || !canMutate}
             onForceNodesUpdate={setNodes}
             onForceEdgesUpdate={setEdges}
             onUndo={undo}
@@ -1812,7 +1823,7 @@ function WorkflowBuilderCanvas({
               <InspectorPanel
                 node={selectedNode}
                 selectedNodeIds={selectedNodeIds}
-                onUpdate={isPreviewOnly ? () => {} : handleNodeUpdate}
+                onUpdate={isPreviewOnly || !canMutate ? () => {} : handleNodeUpdate}
                 onClose={() => {
                   handleSelectionChange([]);
                   setIsAdvancedMode(false);
@@ -1822,10 +1833,10 @@ function WorkflowBuilderCanvas({
                 onAdvancedChange={setIsAdvancedMode}
                 isFullscreen={isFullscreenMode}
                 onFullscreenChange={setIsFullscreenMode}
-                onDeleteNode={isPreviewOnly ? undefined : handleDeleteNode}
-                onDuplicateNode={isPreviewOnly ? undefined : handleDuplicateNode}
-                onUndo={isPreviewOnly ? undefined : undo}
-                canUndo={isPreviewOnly ? false : canUndo}
+                onDeleteNode={isPreviewOnly || !canMutate ? undefined : handleDeleteNode}
+                onDuplicateNode={isPreviewOnly || !canMutate ? undefined : handleDuplicateNode}
+                onUndo={isPreviewOnly || !canMutate ? undefined : undo}
+                canUndo={isPreviewOnly || !canMutate ? false : canUndo}
                 connectionType={inspectorConnectionType}
                 onConnectionTypeChange={handleConnectionTypeChange}
                 allNodes={preparedNodes}

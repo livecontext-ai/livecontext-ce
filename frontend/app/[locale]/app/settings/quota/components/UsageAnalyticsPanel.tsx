@@ -18,7 +18,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { formatUtcDate } from '@/lib/utils/dateFormatters';
+import { formatCalendarDate } from '@/lib/utils/dateFormatters';
 import { CREDIT_SOURCE_LABEL_KEYS } from '@/lib/billing/creditSourceTypes';
 import { modelLabelFor, providerOptionLabels, useModelNameIndex, ProviderModelCell } from './modelLabels';
 import {
@@ -228,7 +228,7 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false, bala
 
   const formatDate = (dateStr: string) => {
     try {
-      return formatUtcDate(dateStr);
+      return formatCalendarDate(dateStr);
     } catch {
       return dateStr;
     }

@@ -266,7 +266,7 @@ class SharedLinkControllerTest {
                     "title", "My Chat",
                     "description", "Description");
 
-            ResponseEntity<?> response = controller.create(TENANT_ID, null, "PRO", body);
+            ResponseEntity<?> response = controller.create(TENANT_ID, null, null, "PRO", body);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).isInstanceOf(SharedLinkResponse.class);
@@ -283,7 +283,7 @@ class SharedLinkControllerTest {
                     "resourceType", "CHAT",
                     "resourceToken", "ch_1");
 
-            ResponseEntity<?> response = controller.create(TENANT_ID, null, "FREE", body);
+            ResponseEntity<?> response = controller.create(TENANT_ID, null, null, "FREE", body);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
             @SuppressWarnings("unchecked")
@@ -297,7 +297,7 @@ class SharedLinkControllerTest {
         void returns400WhenMissingResourceType() {
             Map<String, Object> body = Map.of("resourceToken", "ch_1");
 
-            ResponseEntity<?> response = controller.create(TENANT_ID, null, "PRO", body);
+            ResponseEntity<?> response = controller.create(TENANT_ID, null, null, "PRO", body);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             verify(sharedLinkService, never()).register(any(), any(), any(), any(), any(), any(), any(), any());
@@ -308,7 +308,7 @@ class SharedLinkControllerTest {
         void returns400WhenMissingResourceToken() {
             Map<String, Object> body = Map.of("resourceType", "CHAT");
 
-            ResponseEntity<?> response = controller.create(TENANT_ID, null, "PRO", body);
+            ResponseEntity<?> response = controller.create(TENANT_ID, null, null, "PRO", body);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             verify(sharedLinkService, never()).register(any(), any(), any(), any(), any(), any(), any(), any());
@@ -322,7 +322,7 @@ class SharedLinkControllerTest {
                     "resourceToken", "ch_1",
                     "title", "x".repeat(257));
 
-            ResponseEntity<?> response = controller.create(TENANT_ID, null, "PRO", body);
+            ResponseEntity<?> response = controller.create(TENANT_ID, null, null, "PRO", body);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             verify(sharedLinkService, never()).register(any(), any(), any(), any(), any(), any(), any(), any());
@@ -338,7 +338,7 @@ class SharedLinkControllerTest {
                     "resourceType", "CHAT",
                     "resourceToken", "ch_1");
 
-            ResponseEntity<?> response = controller.create(TENANT_ID, null, "PRO", body);
+            ResponseEntity<?> response = controller.create(TENANT_ID, null, null, "PRO", body);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
         }
@@ -364,7 +364,7 @@ class SharedLinkControllerTest {
                     "description", "New Desc",
                     "isActive", true);
 
-            ResponseEntity<?> response = controller.update(TENANT_ID, null, linkId, body);
+            ResponseEntity<?> response = controller.update(TENANT_ID, null, null, linkId, body);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).isInstanceOf(SharedLinkResponse.class);
@@ -377,7 +377,7 @@ class SharedLinkControllerTest {
             when(sharedLinkService.update(eq(TENANT_ID), eq((String) null), eq(linkId), any(), any(), any(), any()))
                     .thenThrow(new IllegalArgumentException("Not authorized"));
 
-            ResponseEntity<?> response = controller.update(TENANT_ID, null, linkId, Map.of("title", "x"));
+            ResponseEntity<?> response = controller.update(TENANT_ID, null, null, linkId, Map.of("title", "x"));
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
@@ -389,7 +389,7 @@ class SharedLinkControllerTest {
             when(sharedLinkService.update(eq(TENANT_ID), eq((String) null), eq(linkId), any(), any(), any(), any()))
                     .thenThrow(new RuntimeException("DB error"));
 
-            ResponseEntity<?> response = controller.update(TENANT_ID, null, linkId, Map.of("title", "x"));
+            ResponseEntity<?> response = controller.update(TENANT_ID, null, null, linkId, Map.of("title", "x"));
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
         }
@@ -407,7 +407,7 @@ class SharedLinkControllerTest {
             UUID linkId = UUID.randomUUID();
             doNothing().when(sharedLinkService).delete(TENANT_ID, null, linkId);
 
-            ResponseEntity<?> response = controller.delete(TENANT_ID, null, linkId);
+            ResponseEntity<?> response = controller.delete(TENANT_ID, null, null, linkId);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             verify(sharedLinkService).delete(TENANT_ID, null, linkId);
@@ -420,7 +420,7 @@ class SharedLinkControllerTest {
             doThrow(new IllegalArgumentException("Not authorized"))
                     .when(sharedLinkService).delete(TENANT_ID, null, linkId);
 
-            ResponseEntity<?> response = controller.delete(TENANT_ID, null, linkId);
+            ResponseEntity<?> response = controller.delete(TENANT_ID, null, null, linkId);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
@@ -432,7 +432,7 @@ class SharedLinkControllerTest {
             doThrow(new RuntimeException("DB error"))
                     .when(sharedLinkService).delete(TENANT_ID, null, linkId);
 
-            ResponseEntity<?> response = controller.delete(TENANT_ID, null, linkId);
+            ResponseEntity<?> response = controller.delete(TENANT_ID, null, null, linkId);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
         }
@@ -451,7 +451,7 @@ class SharedLinkControllerTest {
             SharedLinkEntity updated = buildEntity("ch_1", ResourceType.CHAT);
             when(sharedLinkService.regenerateToken(TENANT_ID, null, linkId)).thenReturn(updated);
 
-            ResponseEntity<?> response = controller.regenerateToken(TENANT_ID, null, linkId);
+            ResponseEntity<?> response = controller.regenerateToken(TENANT_ID, null, null, linkId);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).isInstanceOf(SharedLinkResponse.class);
@@ -464,7 +464,7 @@ class SharedLinkControllerTest {
             when(sharedLinkService.regenerateToken(TENANT_ID, null, linkId))
                     .thenThrow(new IllegalArgumentException("Not authorized"));
 
-            ResponseEntity<?> response = controller.regenerateToken(TENANT_ID, null, linkId);
+            ResponseEntity<?> response = controller.regenerateToken(TENANT_ID, null, null, linkId);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
@@ -476,7 +476,7 @@ class SharedLinkControllerTest {
             when(sharedLinkService.regenerateToken(TENANT_ID, null, linkId))
                     .thenThrow(new RuntimeException("DB error"));
 
-            ResponseEntity<?> response = controller.regenerateToken(TENANT_ID, null, linkId);
+            ResponseEntity<?> response = controller.regenerateToken(TENANT_ID, null, null, linkId);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
         }

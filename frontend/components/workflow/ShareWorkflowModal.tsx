@@ -23,7 +23,6 @@ import {
   Play, ArrowLeft, ArrowRight, FileText, Lock,
   Monitor, Workflow, Table2, StepForward, Clapperboard,
 } from 'lucide-react';
-import * as LucideIcons from 'lucide-react';
 import { orchestratorApi, WorkflowPublication, WorkflowRun } from '@/lib/api';
 import { track } from '@/lib/analytics/analytics';
 import type { WorkflowPlanVersion, WorkflowVersionsResponse } from '@/lib/api/orchestrator/types';
@@ -59,15 +58,6 @@ interface RunOption {
   planVersion?: number;
   totalNodes?: number;
   isStepByStep?: boolean;
-}
-
-function getCategoryIcon(iconSlug?: string) {
-  if (!iconSlug) return null;
-  const pascalCase = iconSlug
-    .split('-')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join('');
-  return (LucideIcons as any)[pascalCase] || null;
 }
 
 interface PublishWorkflowModalProps {

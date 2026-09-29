@@ -88,4 +88,48 @@ class OrganizationInvitationRepositoryIntegrationTest {
         assertThat(dto.getOrganizationName()).isEqualTo("CE Team");
         assertThat(loaded.getInvitedBy().getEmail()).isEqualTo("inviter@example.com");
     }
+
+    @Test
+    @DisplayName("F3: re-inviting a removed member can be ACCEPTED again (a 2nd ACCEPTED row for the same email is allowed)")
+    void reInviteAfterRemovalCanBeAcceptedAgain() {
+        // First invitation accepted: the member joined, then was removed.
+        OrganizationInvitation first = invitationRepository.findById(invitationId).orElseThrow();
+        first.setStatus(InvitationStatus.ACCEPTED);
+        entityManager.persistAndFlush(first);
+
+        // The admin re-invites the same address; the invitee accepts again.
+        Organization org = entityManager.find(Organization.class, organization.getId());
+        User by = entityManager.find(User.class, inviter.getId());
+        OrganizationInvitation second = entityManager.persistAndFlush(
+                new OrganizationInvitation(org, "invitee@example.com", OrganizationRole.MEMBER, by));
+        second.setStatus(InvitationStatus.ACCEPTED);
+        entityManager.persistAndFlush(second);
+        entityManager.clear();
+
+        assertThat(invitationRepository.findAll())
+                .filteredOn(inv -> inv.getEmail().equals("invitee@example.com"))
+                .extracting(OrganizationInvitation::getStatus)
+                .containsExactly(InvitationStatus.ACCEPTED, InvitationStatus.ACCEPTED);
+    }
+
+    @Test
+    @DisplayName("F3: a second decline / cancel for the same email is allowed (a 2nd CANCELLED row)")
+    void secondCancellationForSameEmailIsAllowed() {
+        OrganizationInvitation first = invitationRepository.findById(invitationId).orElseThrow();
+        first.setStatus(InvitationStatus.CANCELLED);
+        entityManager.persistAndFlush(first);
+
+        Organization org = entityManager.find(Organization.class, organization.getId());
+        User by = entityManager.find(User.class, inviter.getId());
+        OrganizationInvitation second = entityManager.persistAndFlush(
+                new OrganizationInvitation(org, "invitee@example.com", OrganizationRole.MEMBER, by));
+        second.setStatus(InvitationStatus.CANCELLED);
+        entityManager.persistAndFlush(second);
+        entityManager.clear();
+
+        assertThat(invitationRepository.findAll())
+                .filteredOn(inv -> inv.getEmail().equals("invitee@example.com"))
+                .extracting(OrganizationInvitation::getStatus)
+                .containsExactly(InvitationStatus.CANCELLED, InvitationStatus.CANCELLED);
+    }
 }

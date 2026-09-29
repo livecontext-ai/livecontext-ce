@@ -82,6 +82,13 @@ public class OrganizationService {
     @Autowired(required = false)
     private PlanStorageQuotaSyncer planStorageQuotaSyncer;
 
+    /**
+     * Workspace SAML IdP state follows the owner's plan (see reconcileWorkspacePauseState).
+     * A provider, resolved lazily, so this bean never needs the SAML graph at construction.
+     */
+    @Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<OrganizationSamlService> organizationSamlServiceProvider;
+
     /** ORG_AVATAR storage source type - one active avatar per organization. */
     private static final String ORG_AVATAR_SOURCE = "ORG_AVATAR";
     private static final int MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5MB
@@ -289,6 +296,17 @@ public class OrganizationService {
         if (paused > 0 || unpaused > 0) {
             log.info("🔄 Workspace pause reconcile (owner {}, cap {}): paused {}, un-paused {}",
                     ownerId, cap, paused, unpaused);
+        }
+
+        // Same plan-change hook for workspace SAML: an owner below Team gets every workspace IdP
+        // disabled in Keycloak (an existing member would otherwise keep signing in through it),
+        // and an upgrade turns it back on. A no-op for a workspace without a SAML connection.
+        OrganizationSamlService samlService = organizationSamlServiceProvider != null
+                ? organizationSamlServiceProvider.getIfAvailable() : null;
+        if (samlService != null) {
+            for (Organization org : owned) {
+                samlService.syncIdentityProviderEnabled(org.getId());
+            }
         }
     }
 

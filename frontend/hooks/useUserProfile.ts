@@ -20,6 +20,13 @@ export interface UserProfile {
   profileVisibility?: 'PUBLIC' | 'UNLISTED' | 'PRIVATE';
   createdAt: string;
   updatedAt: string;
+  // Display preferences (auth.users, V527/V540). Read-only here: they are written through
+  // PUT /users/profile/context, never through the profile PUT. `explicit` is true when the
+  // person picked the value themselves, false when the browser merely reported it.
+  locale?: string | null;
+  localeExplicit?: boolean;
+  timeZone?: string | null;
+  timeZoneExplicit?: boolean;
 }
 
 export function useUserProfile() {

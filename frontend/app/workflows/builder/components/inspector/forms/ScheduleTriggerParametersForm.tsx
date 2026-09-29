@@ -15,7 +15,8 @@ import { Button } from '@/components/ui/button';
 import type { BuilderNodeData } from '../../../types';
 import { useTranslations } from 'next-intl';
 import { OptionalSection } from '../OptionalSection';
-import { TIMEZONE_PRESETS, localTimezone, timezoneOptionsFor } from '@/lib/schedule/timezoneOptions';
+import { TIMEZONE_PRESETS, timezoneOptionsFor, localTimezone as browserTimezone } from '@/lib/schedule/timezoneOptions';
+import { getClientTimeZone } from '@/lib/utils/timezone';
 import { usePathname } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api';
@@ -138,7 +139,10 @@ export function ScheduleTriggerParametersForm({
     const existing = (data as any).scheduleTriggerData as Partial<ScheduleTriggerData> | undefined;
     return {
       cronExpression: existing?.cronExpression || '0 * * * *',
-      timezone: existing?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      // A NEW trigger starts in the account's display zone, so "9:00" here means the same 9:00
+      // the person reads everywhere else in the product. Only the default: an EXISTING trigger
+      // keeps the zone it was saved with, because changing that would move a live fire time.
+      timezone: existing?.timezone || getClientTimeZone(),
       maxExecutions: existing?.maxExecutions ?? null,
       scheduleKind: existing?.scheduleKind,
     };
@@ -423,9 +427,20 @@ export function ScheduleTriggerParametersForm({
     }
   }, [workflowId, triggerId, queryClient]);
 
+  /**
+   * A fire time, shown in the zone the TRIGGER fires in, not the reader's.
+   *
+   * <p>This panel names that zone in the selector right above; rendering "next run" in the
+   * reader's zone underneath it invites exactly the wrong arithmetic. A schedule set to 09:00 in
+   * Asia/Tokyo has to read 09:00 here, whoever is looking.
+   */
   const formatDate = (isoDate: string | null): string => {
     if (!isoDate) return '-';
-    try { return formatUtcDateTime(isoDate); } catch { return isoDate; }
+    try {
+      return formatUtcDateTime(isoDate, { timeZone: scheduleData.timezone });
+    } catch {
+      return isoDate;
+    }
   };
 
   // Group frequency options by GROUP_ORDER for the SelectContent rendering.
@@ -601,7 +616,12 @@ export function ScheduleTriggerParametersForm({
                   the calendar's display zone, and a Select whose value matches no item
                   renders an empty trigger over a schedule that has one. */}
               {(() => {
-                const local = localTimezone();
+                // THIS DEVICE is what "Local" means, so that is what carries the marker. The
+                // list offers the display zone as well (a schedule can reasonably be set in
+                // either), and labelling the display zone "Local" put the marker back on the
+                // wrong row for anyone who pinned a zone in Settings - the same mistake as
+                // before, in the other direction.
+                const local = browserTimezone();
                 return timezoneOptionsFor(scheduleData.timezone).map((zone) => (
                   <SelectItem key={zone} value={zone}>
                     {zone === local && !TIMEZONE_PRESETS.includes(zone)

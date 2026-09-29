@@ -1,5 +1,6 @@
 package com.apimarketplace.trigger.controller;
 
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.trigger.client.dto.EndpointConfigDto;
 import com.apimarketplace.trigger.client.dto.FormSubmissionLogDto;
 import com.apimarketplace.trigger.client.dto.StandaloneFormEndpointDto;
@@ -22,6 +23,11 @@ public class StandaloneFormEndpointController {
 
     private final StandaloneFormEndpointService formEndpointService;
 
+    /*
+     * Org VIEWERs are read-only: every create / update / delete / regenerate-token /
+     * relink below is refused for them with 403, reads stay open. The endpoint URL runs a
+     * workspace workflow, so rewiring or re-keying it is a write on the workspace.
+     */
     public StandaloneFormEndpointController(StandaloneFormEndpointService formEndpointService) {
         this.formEndpointService = formEndpointService;
     }
@@ -38,8 +44,12 @@ public class StandaloneFormEndpointController {
     public ResponseEntity<StandaloneFormEndpointDto> create(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
             @Valid @RequestBody StandaloneFormEndpointRequest request) {
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         try {
             StandaloneFormEndpointDto response = formEndpointService.create(tenantId, organizationId, userPlan, request);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
@@ -64,8 +74,12 @@ public class StandaloneFormEndpointController {
     public ResponseEntity<StandaloneFormEndpointDto> update(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @PathVariable UUID id,
             @Valid @RequestBody StandaloneFormEndpointRequest request) {
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         try {
             return ResponseEntity.ok(formEndpointService.update(tenantId, organizationId, id, request));
         } catch (WorkflowReferenceImmutableException e) {
@@ -79,7 +93,11 @@ public class StandaloneFormEndpointController {
     public ResponseEntity<Void> delete(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @PathVariable UUID id) {
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         try {
             formEndpointService.delete(tenantId, organizationId, id);
             return ResponseEntity.noContent().build();
@@ -92,7 +110,11 @@ public class StandaloneFormEndpointController {
     public ResponseEntity<StandaloneFormEndpointDto> regenerateToken(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @PathVariable UUID id) {
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         try {
             return ResponseEntity.ok(formEndpointService.regenerateToken(tenantId, organizationId, id));
         } catch (IllegalArgumentException e) {
@@ -118,8 +140,12 @@ public class StandaloneFormEndpointController {
     public ResponseEntity<StandaloneFormEndpointDto> updateWorkflowReference(
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @PathVariable UUID id,
             @RequestBody WorkflowReferenceRequest request) {
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, organizationRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
         try {
             UUID workflowId = request.workflowId() != null ? UUID.fromString(request.workflowId()) : null;
             return ResponseEntity.ok(formEndpointService.updateWorkflowReference(tenantId, organizationId, id, workflowId, request.workflowName()));

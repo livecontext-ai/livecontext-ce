@@ -126,6 +126,11 @@ gateway:
       # check downstream - both ends must allowlist it.
       - /api/files/proxy-signed
 
+services:
+  # Share-link scope checks (which files belong to a shared application) are answered by
+  # orchestrator-service, which owns the application's runs and workflows.
+  orchestrator-url: ${ORCHESTRATOR_SERVICE_URL:http://localhost:8099}
+
 logging:
   level:
     # INFO, not DEBUG. Over a 24h sample on 2026-09-17 the only DEBUG line that

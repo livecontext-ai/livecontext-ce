@@ -169,7 +169,10 @@ describe('the comparison table renders every tooltip it offers', () => {
     // The sentence that makes the figures readable as measurements rather than
     // allowances. It is the voice every credit tooltip now uses, here and in the
     // model pickers, so a tooltip that drifted back to abstract copy fails here.
-    expect(text).toContain('An estimate from real usage');
+    // Case-insensitive: the sentence now follows the flat per-node price it does not qualify.
+    expect(text).toMatch(/an estimate from real usage/i);
+    // The flat node price, which applies on every plan and not only on Free.
+    expect(text).toContain('credit per node');
     // And the model they were priced on, which is the half that keeps the estimate
     // honest now that the basis is the lightweight end rather than the top of the range.
     expect(text).toContain(PRICING_BASIS_MODEL);

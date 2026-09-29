@@ -85,6 +85,23 @@ export interface InvitationInfo {
   role?: OrganizationRole;
   /** Whether a local account already exists for the invitation email. */
   hasAccount?: boolean;
+  /** Display name of the member who sent the invitation. */
+  inviterName?: string | null;
+}
+
+/**
+ * Error code the backend returns (HTTP 403) when the signed-in account tries to
+ * accept or decline an invitation before verifying its email address.
+ */
+export const INVITATION_EMAIL_NOT_VERIFIED = 'EMAIL_NOT_VERIFIED';
+
+/** True when an invitation accept/decline failed because the email is not verified yet. */
+export function isInvitationEmailNotVerifiedError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === INVITATION_EMAIL_NOT_VERIFIED
+  );
 }
 
 export interface OrganizationSamlConnection {
@@ -95,7 +112,6 @@ export interface OrganizationSamlConnection {
   idpEntityId: string;
   ssoUrl: string;
   status: 'NOT_CONFIGURED' | 'DRAFT' | 'ACTIVE' | 'ERROR' | 'DISABLED';
-  hideOnLoginPage: boolean;
   ssoStartPath: string;
   serviceProviderEntityId: string;
   assertionConsumerServiceUrl: string;
@@ -125,7 +141,6 @@ export interface OrganizationSamlUpsert {
   idpEntityId: string;
   ssoUrl: string;
   x509Certificate: string;
-  hideOnLoginPage: boolean;
 }
 
 class OrganizationApiService {
@@ -199,6 +214,13 @@ class OrganizationApiService {
     });
     invalidateWorkspaceMembers(org?.id);
     return org;
+  }
+
+  /** Decline an invitation from its email link (the accept page's Decline button). */
+  async declineInvitation(token: string): Promise<Invitation> {
+    return await apiClient.post<Invitation>(`/organizations/invitations/decline`, null, {
+      params: { token }
+    });
   }
 
   /**

@@ -897,9 +897,18 @@ public class WorkflowPublicationController {
     @GetMapping("/{publicationId}/reviews/mine")
     public ResponseEntity<?> getMyReview(
             @RequestHeader("X-User-ID") String userId,
-            @PathVariable String publicationId) {
+            @PathVariable String publicationId,
+            @RequestHeader(value = HEADER_SHARE_CONTEXT, required = false) String shareContext,
+            @RequestHeader(value = HEADER_SHARE_RESOURCE_TYPE, required = false) String shareResourceType,
+            @RequestHeader(value = HEADER_SHARE_RESOURCE_TOKEN, required = false) String shareResourceToken) {
         try {
             UUID pubId = UUID.fromString(publicationId);
+            // A share-link holder is authenticated AS THE OWNER: without this, the link would read
+            // the owner's review of ANY publication. Only the shared publication is answered.
+            if ("true".equalsIgnoreCase(shareContext)
+                    && !isShareTokenForPublication(pubId, shareContext, shareResourceType, shareResourceToken)) {
+                return ResponseEntity.notFound().build();
+            }
             Optional<PublicationReviewEntity> review = reviewService.getMyReview(pubId, userId);
 
             if (review.isEmpty()) {

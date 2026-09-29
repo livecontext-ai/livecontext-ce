@@ -37,6 +37,20 @@ describe('proxy /pricing redirect', () => {
     expect(redirectLocation(response)).toBe('https://livecontext.ai/#pricing');
   });
 
+  it.each([
+    ['cloud', false, '/pricing'],
+    ['cloud', false, '/fr/pricing'],
+    ['CE', true, '/pricing'],
+    ['CE', true, '/fr/pricing'],
+  ])('%s: %s is a permanent redirect that browsers keep for a day only', (_edition, isCe, path) => {
+    // Permanent, because a 307 told search engines to keep the dead URL indexed.
+    // Bounded, because a bare 308 is cached by browsers forever.
+    editionMock.IS_CE = isCe;
+    const response = proxy(request(path)) as Response;
+    expect(response.status).toBe(308);
+    expect(response.headers.get('cache-control')).toBe('public, max-age=86400');
+  });
+
   it('cloud: localized /fr/pricing keeps the locale on the landing redirect', () => {
     const response = proxy(request('/fr/pricing')) as Response;
     expect(redirectLocation(response)).toBe('https://livecontext.ai/fr#pricing');

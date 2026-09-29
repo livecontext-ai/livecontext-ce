@@ -195,7 +195,8 @@ class WorkflowVersionControllerEditorsTest {
         // allow-list. It is refused the workflow's OWNER id elsewhere in the same change, so
         // handing it an author id per version would have withheld nothing - a strictly larger
         // set of user ids about the same workflow.
-        givenWorkflowIn(null);
+        UUID sharedPublication = UUID.randomUUID();
+        givenWorkflowIn(null).setSourcePublicationId(sharedPublication);
         WorkflowPlanVersionEntity version = new WorkflowPlanVersionEntity();
         version.setVersion(1);
         version.setCreatedBy("42");
@@ -205,6 +206,8 @@ class WorkflowVersionControllerEditorsTest {
 
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-Share-Context", "true");
+        request.addHeader("X-Share-Resource-Type", "APPLICATION");
+        request.addHeader("X-Share-Resource-Token", sharedPublication.toString());
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         try {
             ResponseEntity<?> response = controller.listVersions(WORKFLOW_ID_STR, TENANT_ID, null, null);
@@ -349,12 +352,34 @@ class WorkflowVersionControllerEditorsTest {
                 .andExpect(jsonPath("$.editors[0].editedAt").exists());
     }
 
-    private void givenWorkflowIn(String organizationId) {
+    private WorkflowEntity givenWorkflowIn(String organizationId) {
         WorkflowEntity workflow = new WorkflowEntity();
         ReflectionTestUtils.setField(workflow, "id", WORKFLOW_ID);
         workflow.setTenantId(TENANT_ID);
         workflow.setOrganizationId(organizationId);
         when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow));
+        return workflow;
+    }
+
+    @Test
+    @DisplayName("a share holder asking for the versions of ANOTHER owner workflow gets 404")
+    void shareViewerCannotListVersionsOfAnotherOwnerWorkflow() {
+        // Same owner, so the strict scope passes; the workflow is not a clone of the shared
+        // publication, so the share binding must refuse it before any version is read.
+        givenWorkflowIn(null);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Share-Context", "true");
+        request.addHeader("X-Share-Resource-Type", "APPLICATION");
+        request.addHeader("X-Share-Resource-Token", UUID.randomUUID().toString());
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        try {
+            ResponseEntity<?> response = controller.listVersions(WORKFLOW_ID_STR, TENANT_ID, null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            verify(versionService, never()).listVersions(any());
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
     }
 
     private void givenNotRestricted() {

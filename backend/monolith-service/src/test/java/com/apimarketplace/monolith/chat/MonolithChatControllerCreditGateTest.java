@@ -40,7 +40,7 @@ import static org.mockito.Mockito.when;
  * total-balance check let a FREE user's monthly workflow-only credits admit
  * chat turns):
  * <pre>{@code
- *   if (!creditClient.checkCredits(userId, "CHAT_CONVERSATION")) {
+ *   if (!creditClient.checkCredits(userId, "CHAT_CONVERSATION", provider, model)) {
  *       return ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED)
  *               .body(Map.of("error", "Insufficient credits"));
  *   }
@@ -59,13 +59,20 @@ class MonolithChatControllerCreditGateTest {
     private final CreditConsumptionClient creditClient = mock(CreditConsumptionClient.class);
     private final LLMProviderFactory llmProviderFactory = mock(LLMProviderFactory.class);
     private final StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+    private final com.apimarketplace.conversation.service.ConversationQueryService conversationQueryService =
+            mock(com.apimarketplace.conversation.service.ConversationQueryService.class);
+    {
+        // Default: the caller may write the conversation it names; ownership tests override it.
+        when(conversationQueryService.isConversationInStrictScope(any(), any(), any())).thenReturn(true);
+    }
     private final MonolithChatController controller = new MonolithChatController(
             conversationHistoryService,
             chatStreamingService,
             creditClient,
             llmProviderFactory,
             redisTemplate,
-            new ObjectMapper());
+            new ObjectMapper(),
+            conversationQueryService);
 
     private ChatRequest newChatRequest() {
         ChatRequest request = new ChatRequest();
@@ -84,7 +91,7 @@ class MonolithChatControllerCreditGateTest {
         when(llmProviderFactory.getAllModelsInfo()).thenReturn(Map.of(
                 "defaultProvider", "deepseek",
                 "defaultModel", "deepseek-chat"));
-        when(creditClient.checkCredits("user-broke", "CHAT_CONVERSATION")).thenReturn(false);
+        when(creditClient.checkCredits("user-broke", "CHAT_CONVERSATION", "deepseek", "deepseek-chat")).thenReturn(false);
 
         // Act
         var response = controller.chat(request, "user-broke", "org-7", "OWNER", null);
@@ -95,7 +102,7 @@ class MonolithChatControllerCreditGateTest {
 
         // The gate was actually consulted for this user.
         // Pinned sourceType: the chat gate MUST be scoped to CHAT_CONVERSATION.
-        verify(creditClient).checkCredits("user-broke", "CHAT_CONVERSATION");
+        verify(creditClient).checkCredits("user-broke", "CHAT_CONVERSATION", "deepseek", "deepseek-chat");
 
         // No conversation is created and no skill selection is persisted.
         verifyNoInteractions(conversationHistoryService);
@@ -112,7 +119,7 @@ class MonolithChatControllerCreditGateTest {
         when(llmProviderFactory.getAllModelsInfo()).thenReturn(Map.of(
                 "defaultProvider", "deepseek",
                 "defaultModel", "deepseek-chat"));
-        when(creditClient.checkCredits("user-ok", "CHAT_CONVERSATION")).thenReturn(true);
+        when(creditClient.checkCredits("user-ok", "CHAT_CONVERSATION", "deepseek", "deepseek-chat")).thenReturn(true);
         when(conversationHistoryService.createConversation(
                 anyString(), any(), anyString(), anyString(), anyString(), any(), any()))
                 .thenReturn("conv-ok");
@@ -125,7 +132,7 @@ class MonolithChatControllerCreditGateTest {
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(response.getBody()).containsEntry("conversationId", "conv-ok");
 
-        verify(creditClient).checkCredits("user-ok", "CHAT_CONVERSATION");
+        verify(creditClient).checkCredits("user-ok", "CHAT_CONVERSATION", "deepseek", "deepseek-chat");
         // Reached the downstream collaborators that the gate would have blocked.
         verify(conversationHistoryService).createConversation(
                 anyString(), any(), anyString(), anyString(), anyString(), any(), any());
@@ -145,7 +152,7 @@ class MonolithChatControllerCreditGateTest {
         when(llmProviderFactory.getAllModelsInfo()).thenReturn(Map.of(
                 "defaultProvider", "deepseek",
                 "defaultModel", "deepseek-chat"));
-        when(creditClient.checkCredits("user-broke", "CHAT_CONVERSATION")).thenReturn(false);
+        when(creditClient.checkCredits("user-broke", "CHAT_CONVERSATION", "deepseek", "deepseek-chat")).thenReturn(false);
 
         // Act
         var response = controller.chat(request, "user-broke", "org-7", "MEMBER", null);
@@ -154,7 +161,7 @@ class MonolithChatControllerCreditGateTest {
         assertThat(response.getStatusCode().value()).isEqualTo(402);
         assertThat(response.getBody()).containsEntry("error", "Insufficient credits");
         // Pinned sourceType: the chat gate MUST be scoped to CHAT_CONVERSATION.
-        verify(creditClient).checkCredits("user-broke", "CHAT_CONVERSATION");
+        verify(creditClient).checkCredits("user-broke", "CHAT_CONVERSATION", "deepseek", "deepseek-chat");
         verify(conversationHistoryService, never()).persistDefaultSkillIds(any(), any(), any(), any());
         verifyNoInteractions(conversationHistoryService);
         verifyNoInteractions(chatStreamingService);

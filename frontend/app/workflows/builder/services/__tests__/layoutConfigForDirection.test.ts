@@ -10,8 +10,8 @@ import { getNodeDimensions, layoutConfigForDirection } from '../LayoutService';
  * within-rank gap has to grow and the along-flow gap has to shrink.
  */
 describe('layoutConfigForDirection', () => {
-  it('leaves the horizontal config untouched, so nothing changes for existing canvases', () => {
-    // An empty override means applyDagreLayout keeps every LAYOUT_CONFIG default.
+  it('keeps the horizontal defaults', () => {
+    // No override: applyDagreLayout keeps the LR-tuned LAYOUT_CONFIG values.
     expect(layoutConfigForDirection('horizontal')).toEqual({});
   });
 

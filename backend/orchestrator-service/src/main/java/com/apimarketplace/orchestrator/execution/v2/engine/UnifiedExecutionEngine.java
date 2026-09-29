@@ -181,14 +181,57 @@ public class UnifiedExecutionEngine {
      * <p>The substitute CASCADES: a merge no branch reached leaves its whole downstream
      * chain unreachable too, and those nodes must carry a SKIPPED row rather than no row
      * at all (see {@code shouldCascadeSkipFromResult}).
+     *
+     * <p>The verdict is per ITEM, so it is only trusted when the dispatch below runs the node for
+     * the single item {@code context.itemIndex()} names. When the dispatch instead spans every item
+     * of an enclosing split, that index is the WORKFLOW item and the guard has read the rows of an
+     * unrelated split item: prod run {@code run_<id>} epoch 5 skipped a
+     * branch-rejoin merge for all 8 items because split item 0 had no live branch, and the three
+     * labelled items never reached the aggregate. The split dispatch already applies the same rule
+     * per item (only items some predecessor completed are executed, the rest persist SKIPPED), so
+     * the gate stands aside and lets it.
      */
-    private NodeExecutionResult unreachableMergeSkipOrNull(ExecutionNode node, ExecutionContext context) {
+    private NodeExecutionResult unreachableMergeSkipOrNull(ExecutionNode node, ExecutionContext context,
+                                                           Map<String, ExecutionNode> nodeMap, boolean stepByStep) {
         if (mergeReachabilityGuard == null || !mergeReachabilityGuard.isUnreachableForItem(node, context)) {
+            return null;
+        }
+        if (dispatchSpansEverySplitItem(node, context, nodeMap, stepByStep)) {
+            logger.info("[MergeReachability] Merge {} runs for every split item (context item {} is the workflow item), per-item routing decides instead of the node-level gate",
+                node.getNodeId(), context.itemIndex());
             return null;
         }
         return NodeExecutionResult.skippedWithCascade(
             node.getNodeId(),
             com.apimarketplace.orchestrator.execution.v2.services.MergeReachabilityGuard.SKIP_REASON);
+    }
+
+    /**
+     * Whether the dispatch that follows the gate runs {@code node} over ALL items of an enclosing
+     * split rather than for the one item in {@code context}. Mirrors the dispatch order of both
+     * paths: split merge and split aggregate (N to 1), then the split-aware executor (which answers
+     * for its own fan-out). AUTO sends a non-split aggregate straight to its body, once.
+     */
+    private boolean dispatchSpansEverySplitItem(ExecutionNode node, ExecutionContext context,
+                                                Map<String, ExecutionNode> nodeMap, boolean stepByStep) {
+        if (node.isSplitNode()) {
+            return false;
+        }
+        String runId = context.runId();
+        String nodeId = node.getNodeId();
+        int workflowItemIndex = context.itemIndex();
+        if (node.isMergeNode() && splitMergeHandler.isSplitMerge(runId, nodeId, workflowItemIndex, nodeMap)) {
+            return true;
+        }
+        if (node.isAggregateNode()) {
+            if (splitAggregateHandler.isSplitAggregate(runId, nodeId, workflowItemIndex, nodeMap)) {
+                return true;
+            }
+            if (!stepByStep) {
+                return false;
+            }
+        }
+        return splitAwareExecutor.executesForEverySplitItem(node, runId, workflowItemIndex, nodeMap, stepByStep);
     }
 
     /**
@@ -548,7 +591,8 @@ public class UnifiedExecutionEngine {
             // running the body. Substituted HERE rather than returned early so the result
             // still flows through step 4/7 - context, row, event, cascade - exactly like a
             // node that ran and skipped itself.
-            NodeExecutionResult unreachableMerge = unreachableMergeSkipOrNull(node, contextWithStart);
+            NodeExecutionResult unreachableMerge = unreachableMergeSkipOrNull(node, contextWithStart,
+                Map.of(nodeId, node), false);
             result = unreachableMerge != null ? unreachableMerge : nodePolicyRunner.run(policy, nodeId,
                 () -> executeNodeWithSplitAwareness(node, contextWithStart, runId, execution, eventService, item, itemIndex),
                 (annotatedFailure, attempt, maxAttempts) -> {
@@ -1272,7 +1316,7 @@ public class UnifiedExecutionEngine {
         // observed and keeps the change out of the approval-continuation machinery.
         NodeExecutionResult unreachableMerge = perItemContinuationWalk
             ? null
-            : unreachableMergeSkipOrNull(node, contextWithStart);
+            : unreachableMergeSkipOrNull(node, contextWithStart, nodeMap, true);
 
         // === NEW SIMPLIFIED SPLIT HANDLING ===
         if (unreachableMerge != null) {

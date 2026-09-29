@@ -382,6 +382,43 @@ public class S3FileStorageService implements FileStorageService {
     }
 
     @Override
+    public Optional<RangedDownload> openStreamRange(String key, String rangeSpec) {
+        if (rangeSpec == null || rangeSpec.isBlank()) {
+            return Optional.empty();
+        }
+        software.amazon.awssdk.core.ResponseInputStream<GetObjectResponse> stream = null;
+        try {
+            stream = s3Client.getObject(GetObjectRequest.builder()
+                .bucket(bucket)
+                .key(key)
+                .range(rangeSpec)
+                .build());
+            GetObjectResponse meta = stream.response();
+            String contentRange = meta.contentRange();
+            if (contentRange == null || contentRange.isBlank()) {
+                // The store ignored the range and is sending the whole object: not a range answer.
+                stream.close();
+                return Optional.empty();
+            }
+            long contentLength = meta.contentLength() != null ? meta.contentLength() : -1L;
+            RangedDownload ranged = new RangedDownload(
+                new DownloadStream(stream, contentLength, meta.contentType()), contentRange);
+            stream = null;
+            return Optional.of(ranged);
+        } catch (Exception e) {
+            // Unsatisfiable range (416), missing key, transient store error: the caller serves the
+            // whole object instead, so a range request never fails where a plain one would work.
+            if (stream != null) {
+                try { stream.close(); } catch (Exception closeErr) {
+                    logger.warn("Failed to close S3 range stream: key={}", key, closeErr);
+                }
+            }
+            logger.debug("Range {} not served for key={}: {}", rangeSpec, key, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    @Override
     public Optional<DownloadStream> openStream(String key) {
         software.amazon.awssdk.core.ResponseInputStream<GetObjectResponse> stream = null;
         try {

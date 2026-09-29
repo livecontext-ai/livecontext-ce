@@ -165,4 +165,78 @@ class WorkspaceDataPurgerTest {
         verify(conn).rollback(savepoint);
         assertThat(sql.get(sql.size() - 1)).contains("INSERT INTO auth.purge_log");
     }
+
+    // -- SAML connection + Keycloak IdP --
+
+    @Test
+    @DisplayName("purge deletes the workspace SAML connection row, org-scoped")
+    void purgeDeletesSamlConnection() throws Exception {
+        List<String> sql = captureSql(() -> purger.purgeOperationalData(ORG_ID, WorkspaceDataPurger.SOURCE_WORKSPACE));
+
+        assertThat(sql).contains("DELETE FROM auth.organization_saml_connection WHERE organization_id::text = ?");
+    }
+
+    @Test
+    @DisplayName("a purge that removed a SAML connection also deletes the workspace IdP in Keycloak")
+    void purgeDeletesKeycloakIdentityProviderWhenAConnectionExisted() throws Exception {
+        KeycloakSamlIdentityProviderClient kc = org.mockito.Mockito.mock(KeycloakSamlIdentityProviderClient.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(purger, "samlIdentityProviderClient", kc);
+        when(conn.prepareStatement(anyString())).thenAnswer(inv -> {
+            String s = inv.getArgument(0);
+            PreparedStatement statement = org.mockito.Mockito.mock(PreparedStatement.class);
+            when(statement.executeUpdate()).thenReturn(s.contains("organization_saml_connection") ? 1 : 0);
+            return statement;
+        });
+
+        purger.purgeOperationalData(ORG_ID, WorkspaceDataPurger.SOURCE_WORKSPACE);
+
+        verify(kc).delete(OrganizationSamlService.aliasFor(java.util.UUID.fromString(ORG_ID)));
+    }
+
+    @Test
+    @DisplayName("no SAML connection removed: Keycloak is never called")
+    void purgeWithoutSamlConnectionLeavesKeycloakAlone() throws Exception {
+        KeycloakSamlIdentityProviderClient kc = org.mockito.Mockito.mock(KeycloakSamlIdentityProviderClient.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(purger, "samlIdentityProviderClient", kc);
+
+        purger.purgeOperationalData(ORG_ID, WorkspaceDataPurger.SOURCE_WORKSPACE);
+
+        org.mockito.Mockito.verifyNoInteractions(kc);
+    }
+
+    @Test
+    @DisplayName("inside a transaction the Keycloak IdP is deleted only after commit, never on rollback")
+    void keycloakDeleteWaitsForCommit() throws Exception {
+        KeycloakSamlIdentityProviderClient kc = org.mockito.Mockito.mock(KeycloakSamlIdentityProviderClient.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(purger, "samlIdentityProviderClient", kc);
+        when(ps.executeUpdate()).thenReturn(1);
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        try {
+            purger.purgeOperationalData(ORG_ID, WorkspaceDataPurger.SOURCE_WORKSPACE);
+            org.mockito.Mockito.verifyNoInteractions(kc);
+
+            var syncs = org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations();
+            assertThat(syncs).hasSize(1);
+            syncs.get(0).afterCompletion(org.springframework.transaction.support.TransactionSynchronization.STATUS_ROLLED_BACK);
+            org.mockito.Mockito.verifyNoInteractions(kc);
+
+            syncs.get(0).afterCommit();
+            verify(kc).delete(OrganizationSamlService.aliasFor(java.util.UUID.fromString(ORG_ID)));
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    @DisplayName("a Keycloak failure never fails the purge")
+    void keycloakFailureIsSwallowed() throws Exception {
+        KeycloakSamlIdentityProviderClient kc = org.mockito.Mockito.mock(KeycloakSamlIdentityProviderClient.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(purger, "samlIdentityProviderClient", kc);
+        when(ps.executeUpdate()).thenReturn(1);
+        org.mockito.Mockito.doThrow(new IllegalStateException("KC down")).when(kc).delete(anyString());
+
+        purger.purgeOperationalData(ORG_ID, WorkspaceDataPurger.SOURCE_WORKSPACE);
+
+        verify(kc).delete(anyString());
+    }
 }

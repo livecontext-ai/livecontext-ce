@@ -4,6 +4,7 @@ import com.apimarketplace.common.credit.ChatCreditRefusal;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
 import com.apimarketplace.conversation.dto.ChatRequest;
 import com.apimarketplace.conversation.dto.MessageDto;
+import com.apimarketplace.conversation.service.ConversationQueryService;
 import com.apimarketplace.conversation.service.MessageService;
 import com.apimarketplace.conversation.service.ai.AgentObservabilityClient;
 import com.apimarketplace.conversation.service.ai.ConversationAgentService;
@@ -39,15 +40,31 @@ public class MonolithInternalChatController {
     private final ConversationAgentService agentService;
     private final CreditConsumptionClient creditClient;
     private final AgentObservabilityClient observabilityClient;
+    private final ConversationQueryService conversationQueryService;
 
+    /**
+     * Reachable only in-process: MonolithSecurityFilter 404s any non-loopback caller on this path,
+     * so every header below was set by a service caller (ConversationClient#sendChatSync), not by
+     * an end user. That caller always sets X-User-ID, and X-Organization-ID when it has the
+     * resource's workspace. The two role headers are only present when it passed no workspace and
+     * OrgContextHeaderForwarder copied them from the inbound request it is serving (the org role
+     * also from the async org context): most scheduled, webhook and task turns pass a workspace
+     * and therefore run with no org role and no platform roles. They are read here so a body can never supply them.
+     */
     @PostMapping(path = "/api/internal/chat/sync", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Map<String, Object>> chatSync(
             @RequestBody ChatRequest request,
             @RequestHeader(value = "X-User-ID") String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
+            @RequestHeader(value = "X-User-Roles", required = false) String userRoles) {
 
+        // Authorization context comes from the headers only (MonolithChatController parity);
+        // ChatRequest no longer binds orgId / orgRole / userRoles from the JSON body.
         request.setUserId(userId);
         request.setOrgId(organizationId);
+        request.setOrgRole(orgRole);
+        request.setUserRoles(userRoles);
         String conversationId = request.getConversationId();
 
         log.info("[CE] Internal sync chat - user: {} (org: {}), conversation: {}, source: {}",
@@ -63,6 +80,15 @@ public class MonolithInternalChatController {
         if (conversationId == null || conversationId.isBlank()) {
             return ResponseEntity.badRequest()
                 .body(Map.of("success", false, "error", "conversationId is required"));
+        }
+
+        // Every branch below writes into the conversation (the 402 audit trail included), so the
+        // caller must own it or share its workspace. 404, not 403: no existence disclosure.
+        if (!conversationQueryService.isConversationInStrictScope(conversationId, userId, organizationId)) {
+            log.warn("[CE] Internal sync chat refused - user {} (org: {}) may not write conversation {}",
+                userId, organizationId, conversationId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Map.of("success", false, "error", "Conversation not found"));
         }
 
         // Source-type-scoped gate (cloud parity): FREE monthly workflow credits

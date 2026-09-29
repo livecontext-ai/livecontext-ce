@@ -51,7 +51,8 @@ class WorkflowSignalControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new WorkflowSignalController(signalService, signalResumeService, runRepository);
+        controller = new WorkflowSignalController(signalService, signalResumeService, runRepository,
+                com.apimarketplace.orchestrator.testsupport.OrgAccessGuardStubs.allowAll());
         // Audit 2026-05-16 round-3: signal endpoints now scope-guard via the
         // run-repository. Stub a tenant-matching run for the happy path; the
         // dedicated cross-tenant tests override this stub.

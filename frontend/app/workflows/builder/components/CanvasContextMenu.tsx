@@ -267,7 +267,7 @@ export function NodeContextMenu({
   // AND everything downstream, so it must not be offered on a read-only surface, outside run
   // mode, on an interface node, or on a trigger (where "restart from here" is the whole DAG).
   // canRerun alone stopped being sufficient once it was no longer gated on step-by-step mode.
-  const showRerun = exec.canRerun && isRunMode && !isPreviewOnly
+  const showRerun = exec.canRerun && isRunMode && !isPreviewOnly && canMutate
     && !flags.isTriggerNode && !flags.isInterfaceNode;
   const hasRunActions = exec.canExecute || showRerun || exec.pendingSignalCount > 0;
   const showLauncher = editable && flags.isTriggerNode && canMutate;
@@ -289,7 +289,9 @@ export function NodeContextMenu({
           icon={<RotateCcw className="h-3.5 w-3.5" />}
           // isSteppedRun, not isStepByStepMode: the latter is false on a FINISHED stepped run,
           // which would promise unattended re-execution on the one run where nothing runs.
-          label={t(exec.isSteppedRun ? 'rerunStep' : 'rerunStepAuto')}
+          // The automatic wording is the node play button's (workflowBuilder.canvas), shared
+          // rather than copied: this key used to be missing and printed its raw path.
+          label={exec.isSteppedRun ? t('rerunStep') : tCanvas('rerunStepAuto')}
           onClick={run(() => exec.rerunStep())}
         />
       )}

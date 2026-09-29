@@ -4,6 +4,7 @@ import * as React from 'react';
 import { createPortal } from 'react-dom';
 import { clampMenuLeft } from '@/lib/utils/menuPlacement';
 import clsx from 'clsx';
+import { stripEditorHighlightSpans } from '@/lib/utils/editorHighlightSpans';
 
 /** Width of the suggestions popover, shared by its clamp and its box. */
 const SUGGESTIONS_WIDTH = 480;
@@ -722,15 +723,7 @@ export function ExpressionEditor({
 
   // Readonly mode - simple div display
   if (readOnly) {
-    // Only strip <span> tags added by the expression editor (syntax highlighting)
-    // Keep all other HTML tags intact (user's template HTML)
-    let cleanValue = value;
-    if (value && (value.includes('<span') || value.includes('</span>'))) {
-      cleanValue = value
-        .replace(/<span[^>]*class="[^"]*token[^"]*"[^>]*>/gi, '')
-        .replace(/<\/span>/gi, '')
-        .trim();
-    }
+    const cleanValue = stripEditorHighlightSpans(value);
 
     const segments = parseExpressions(cleanValue);
 

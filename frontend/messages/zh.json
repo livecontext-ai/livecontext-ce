@@ -121,6 +121,11 @@
       "cloudHint": "奖励将发放到你的云账户（{username}）。",
       "loading": "正在加载你的推荐信息..."
     },
+    "inline": {
+      "toggle": "有代码吗？",
+      "pending": "代码 {code} 待使用：立即应用",
+      "apply": "应用"
+    },
     "redeem": {
       "title": "兑换代码",
       "subtitle": "有推荐码或促销码？在此输入。",
@@ -129,6 +134,15 @@
       "redeeming": "正在兑换...",
       "successGranted": "代码已兑换，你的权益现已生效。",
       "successPending": "代码已应用。订阅确认后将解锁你的奖励。",
+      "successCredits": "兑换成功：已向您的余额添加 {credits} 积分。",
+      "successPlan": "兑换成功：您的账户在 {until} 之前使用 {plan} 套餐。",
+      "successCreditsAndPlan": "兑换成功：已添加 {credits} 积分，您的账户在 {until} 之前使用 {plan} 套餐。",
+      "pendingTitle": "代码 {code}",
+      "dismiss": "关闭",
+      "signedOutTitle": "领取您的代码",
+      "signedOutBody": "登录或创建免费账户。登录后您的代码将自动生效。",
+      "signedOutBodyWithCode": "登录或创建免费账户。登录后代码 {code} 将自动生效。",
+      "signedOutCta": "登录或创建账户",
       "errors": {
         "invalidCode": "该代码不存在。",
         "notRedeemable": "该代码当前不可用。",
@@ -136,6 +150,11 @@
         "exhausted": "该代码已达到兑换上限。",
         "selfReferral": "你不能兑换自己的推荐码。",
         "alreadyPaid": "该代码仅适用于新订阅。",
+        "alreadyAttributed": "您的账户已使用合作伙伴代码。",
+        "emailNotVerified": "请先验证您的邮箱再使用此代码。",
+        "notNewAccount": "此代码仅适用于新账户。",
+        "nothingToGrant": "您的账户已拥有此套餐或更高的套餐。",
+        "retry": "暂时无法兑换此代码，请重试。",
         "cloudLinkRequired": "连接你的云账户以兑换代码。",
         "generic": "无法兑换该代码。"
       }
@@ -229,6 +248,7 @@
     "subtitle": "邀请您加入的组织。接受即可成为成员。",
     "loadError": "加载邀请失败。",
     "acceptError": "无法接受邀请。链接可能已过期或已被使用。",
+    "emailNotVerified": "请先验证您的邮箱地址，再接受或拒绝邀请。",
     "declineError": "无法拒绝邀请。它可能已过期或已被使用。",
     "signInRequired": "请登录以查看您的待处理邀请。",
     "emptyState": "您没有待处理的邀请。",
@@ -273,13 +293,32 @@
     "passwordTooShort": "密码至少需要 8 个字符",
     "passwordMismatch": "两次输入的密码不一致",
     "invalidTitle": "邀请不可用",
-    "invalidBody": "此邀请链接无效、已过期或已被使用。"
+    "invalidBody": "此邀请链接无效、已过期或已被使用。",
+    "confirmTitle": "加入 {org}？",
+    "confirmTitleGeneric": "加入此工作区？",
+    "confirmBody": "您已被邀请加入此工作区。请查看邀请，然后选择接受或拒绝。",
+    "workspaceLabel": "工作区",
+    "roleLabel": "角色",
+    "invitedByLabel": "邀请人",
+    "acceptCta": "接受邀请",
+    "declineCta": "拒绝",
+    "decliningTitle": "正在拒绝邀请...",
+    "declinedTitle": "已拒绝邀请",
+    "declinedBody": "您没有加入此工作区。可以关闭此页面。",
+    "declineErrorTitle": "无法拒绝此邀请",
+    "declineFallbackError": "拒绝邀请失败。链接可能已过期或已被使用。",
+    "emailNotVerifiedTitle": "请先验证您的邮箱",
+    "emailNotVerifiedBody": "您的邮箱地址尚未验证。请先完成验证，然后重新打开此邀请链接以接受或拒绝邀请。",
+    "errorWrongAccount": "此邀请发送到了另一个邮箱地址。请使用受邀地址登录后再进行回应。",
+    "errorGeneric": "无法接受此邀请。邀请可能已过期或已被使用，或者工作区已满。请向邀请您的人索取新的链接。"
   },
   "metadata": {
     "title": "LiveContext - MCP工具中心",
     "description": "发现并使用强大的MCP（模型上下文协议）工具，用于您的开发和自动化项目。"
   },
   "common": {
+    "viewerReadOnlyTitle": "只读访问",
+    "viewerReadOnly": "您在此工作区的角色是查看者，仅有只读权限。如需进行更改，请联系工作区所有者或管理员。",
     "infoAbout": "关于{label}的说明",
     "addToFavorites": "添加到收藏",
     "removeFromFavorites": "从收藏中移除",
@@ -940,6 +979,7 @@
     "placeholder": "输入消息...",
     "placeholderOrbi": "给 Orbi 发消息...",
     "orbiPoke": "戳一下 Orbi",
+    "scrollToBottom": "回到最新消息",
     "send": "发送",
     "stop": "停止",
     "stopGenerating": "停止生成",
@@ -1231,7 +1271,7 @@
       "epochTooltip": {
         "duration": "持续时间",
         "ended": "已结束",
-        "epoch": "Epoch #{epoch}",
+        "epoch": "周期 #{epoch}",
         "started": "已开始",
         "stillRunning": "仍在运行"
       },
@@ -1330,6 +1370,14 @@
     "sharedInReview": "已分享 · 等待管理员批准",
     "sharedRejected": "已分享 · 审核拒绝",
     "runInfo": {
+      "epochNav": {
+        "browse": "浏览周期",
+        "previous": "上一个周期",
+        "next": "下一个周期",
+        "nextFailure": "下一个失败的周期",
+        "timeline": "周期时间线",
+        "summary": "{ok} 个成功 · {failed} 个失败{running, plural, =0 {} other { · # 个运行中}}{stopped, plural, =0 {} other { · # 个已停止}}"
+      },
       "costOfThisRun": "本次运行的成本",
       "costTooltip": "本次运行在所有轮次中的总成本",
       "budgetReached": "已达预算，不会启动新的运行",
@@ -1349,7 +1397,6 @@
       "window": "显示的周期",
       "windowOption": "最近 {count} 个",
       "windowOf": "最近 {shown} 个周期,共 {total} 个",
-      "refresh": "刷新",
       "loading": "正在加载分析",
       "error": "无法加载分析。",
       "retry": "重试",
@@ -1401,15 +1448,22 @@
       },
       "compare": {
         "title": "比较两个周期",
-        "hint": "点击柱形或单元格以选择要比较的周期。",
+        "hint": "点击柱形或单元格以选择要比较的周期，或在表头中选择两个周期。",
         "reference": "参考",
+        "chooseReference": "参考周期",
+        "chooseTarget": "被比较的周期",
         "node": "节点",
         "epoch": "周期 #{epoch}",
-        "showOnCanvas": "在画布上显示周期 {epoch}",
         "total": "总计",
         "notRun": "未执行",
         "needTwo": "至少需要两个周期才能比较。"
       }
+    },
+    "runViews": {
+      "title": "查看本次运行",
+      "choose": "选择要显示的本次运行内容",
+      "analysisHint": "周期的趋势、失败和对比",
+      "logsHint": "每个节点的输入和输出"
     }
   },
   "workflowRelations": {
@@ -5392,7 +5446,17 @@
         "nodesAll": "全部节点与集成，无任何限制",
         "nodesPublishingTooltip": "可直接从工作流发布到目录中的社交与视频平台，包括 YouTube、Instagram、TikTok、X 和 LinkedIn，并会持续增加。",
         "ownLlmKey": "使用您自己的 LLM API 密钥运行",
-        "ownLlmKeyTooltip": "保存您的 OpenAI、Anthropic、Google、Mistral 或 DeepSeek 密钥，您的智能体就会使用它运行：提供商向您收取 token 费用，LiveContext 按智能体回合收取固定费用。云端从 Pro 起提供。"
+        "ownLlmKeyTooltip": "保存您的 OpenAI、Anthropic、Google、Mistral 或 DeepSeek 密钥，您的智能体就会使用它运行：提供商向您收取 token 费用，LiveContext 按智能体回合收取固定费用。云端从 Pro 起提供。",
+        "agentToolkit": "具备记忆、额度上限和审批的智能体",
+        "agentToolkitTooltip": "每个智能体都能跨运行保留记忆，可以设定一个无法超出的硬性额度预算，也可以暂停等待人工审批。子工作流、涵盖所有计划任务和智能体运行的日程，以及图像和视频工作室（按积分计费）同样包含在所有方案中。",
+        "chatChannels": "在聊天应用中使用智能体和审批",
+        "chatChannelsTooltip": "连接 Telegram、Slack、Discord、WhatsApp 或 Microsoft Teams：智能体在那里提问，您一键批准或拒绝敏感操作，即使没有人在看应用。",
+        "channelAlerts": "应用内和聊天中的提醒",
+        "channelAlertsTooltip": "工作流失败、分配的任务或积分余额不足，都会出现在应用内的铃铛和您连接的聊天频道中，所有方案均适用。通过邮件发送这些提醒，见“邮件提醒”一项。",
+        "mcpServer": "内置 MCP 服务器",
+        "mcpServerTooltip": "使用个人 API 密钥，从 Claude Code、Claude Desktop、Cursor 或任何支持 Streamable HTTP 的 MCP 客户端调用您的工作流、智能体和集成。云端和自托管均可使用。",
+        "twoFactor": "双重身份验证（2FA）",
+        "twoFactorTooltip": "使用身份验证器应用保护您的云账户，丢失手机时可使用一次性恢复码。修改密码时可以退出所有其他设备。"
       }
     },
     "compare": {
@@ -5424,7 +5488,7 @@
         "workspaces": "工作区",
         "analytics": "分析",
         "support": "支持",
-        "creditsTooltip": "与已配置的智能体进行一次简短交流（含其全部上下文），在 {basisModel} 这类轻量模型上约需 **{exchangeCredits} 积分**。这是基于真实用量的估算，不是上限；顶级模型的花费更高。"
+        "creditsTooltip": "所有方案下，工作流运行每执行一个节点消耗 **{nodeCredits} 积分**；与已配置的智能体进行一次简短交流（含其全部上下文），在 {basisModel} 这类轻量模型上约需 **{exchangeCredits} 积分**。智能体的数字是基于真实用量的估算，不是上限；顶级模型的花费更高。"
       },
       "values": {
         "creditsFree": "1,000 / 月",
@@ -5514,7 +5578,7 @@
       },
       "conversationCost": {
         "question": "我的积分能支持多少场对话？",
-        "answer": "计费依据是模型读取和生成的 token，而非消息条数，因此取决于你要求的工作量。不调用任何工具的一问一答约需 {simpleCredits} 积分。由智能体为你搭建工作流的一场对话（约 5 轮交互、45 次工具调用）约需 {agentCredits} 积分，搭建更久则按比例增加。运行中的工作流里的单次分类步骤约需 {classifyCredits} 积分。以上按 {basisModel} 这类轻量模型计价；顶级模型的花费更高。",
+        "answer": "计费依据是模型读取和生成的 token，而非消息条数，因此取决于你要求的工作量。不调用任何工具的一问一答约需 {simpleCredits} 积分。由智能体为你搭建工作流的一场对话（约 5 轮交互、45 次工具调用）约需 {agentCredits} 积分，搭建更久则按比例增加。运行中的工作流里的单次分类步骤约需 {classifyCredits} 积分。以上按 {basisModel} 这类轻量模型计价；顶级模型的花费更高。此外，所有方案下，工作流运行每执行一个节点固定消耗 {nodeCredits} 积分。",
         "examplesCaption": "每个付费方案自带的 {credits} 积分可以买到：",
         "examples": {
           "simpleChat": {
@@ -5907,6 +5971,7 @@
       "marketplacePurchase": "市场购买",
       "paygTopup": "积分充值",
       "rewardReferral": "推荐奖励",
+      "rewardCode": "代码积分",
       "rewardClawback": "奖励撤回",
       "manualAdjustment": "手动调整",
       "planGrant": "计划授予",
@@ -6312,8 +6377,11 @@
       "sidePanelBottomModeFull": "全宽（延伸到侧边栏下方）",
       "sidePanelBottomModeContent": "内容宽度",
       "timezone": "时区",
-      "timezoneDescription": "设置您的本地时区",
+      "timezoneDescription": "用于应用中显示的所有日期，以及发送给您的邮件。",
       "selectTimezone": "选择时区",
+      "timezoneDevice": "跟随此设备（{zone}）",
+      "timezoneNow": "当前时间 {time}。",
+      "timezoneSaveError": "时区保存失败，请重试。",
       "creditLimit": "默认积分限制",
       "creditLimitDescription": "无需确认即可使用的积分数量",
       "chatDefaultsTitle": "聊天默认设置",
@@ -6506,8 +6574,6 @@
         "certificate": "X.509 签名证书",
         "certificatePlaceholder": "粘贴来自您身份提供商的 PEM 证书",
         "certificateHelp": "编辑时留空以保留当前证书。",
-        "hideOnLoginPage": "在全局登录页面中隐藏",
-        "hideOnLoginPageHelp": "Users sign in through this workspace SSO URL instead of seeing a tenant-specific button on the shared login page.",
         "serviceProviderTitle": "服务提供商详情",
         "serviceProviderEntityId": "SP 实体 ID",
         "assertionConsumerServiceUrl": "ACS URL",
@@ -11065,9 +11131,9 @@
     "dismiss": "知道了",
     "learnMore": "查看全部更新",
     "latest": {
-      "title": "智能体可以在你的聊天应用中联系你",
-      "body": "智能体、审批步骤和无人值守的运行不再停在一张没人看到的卡片上。在设置中的 Channels 页面连接 Telegram、Slack、Discord、WhatsApp 或 Microsoft Teams，问题或审批请求就会出现在你平时阅读的聊天中：你从那里作答，运行随即继续。通知也可以离开应用，通过渠道或电子邮件发送，并使用你的语言（在云端，电子邮件通知从 Starter 套餐开始提供）。渠道也可以手动连接，无需助手，也不消耗积分。",
-      "mediaAlt": "并排的两个图标：一个聊天气泡，说明为支持 Telegram、Slack、Discord、WhatsApp 和 Teams 的聊天渠道；一个铃铛，说明为通过电子邮件或渠道发送的通知"
+      "title": "逐个周期浏览一次运行，并使用你自己的时区",
+      "body": "在画布上，运行胶囊现在可以展开一条包含所有周期的时间线：逐个切换，跳到下一个失败，画布、分析标签页和日志都会跟随你选择的周期。分析可以并排比较任意两个周期。账户设置中的时区和语言现在决定应用中的每一个日期以及你收到的每一封邮件，登录页面也不例外。布局魔杖现在会让分叉两侧的分支保持平衡。",
+      "mediaAlt": "两个并排的图标：一排高低不同的竖条，说明文字为在画布、分析和日志中逐个周期浏览一次运行；以及一个时钟，说明文字为你的时区和语言全面生效"
     }
   },
   "optionalComponents": {
@@ -12309,7 +12375,7 @@
         },
         "pricing": {
           "question": "价格是怎么算的？",
-          "answer": "有免费档，不需要信用卡。付费方案按额度计费：你选一个额度档位，并可以给每个智能体设一个它不能超过的预算上限。自托管的社区版免费。"
+          "answer": "有免费档，不需要信用卡。所有方案（包括免费档）都按额度计费：工作流运行每执行一个节点消耗 1 积分，智能体按其使用的 token 计费。付费方案让你选一个额度档位，并可以给每个智能体设一个它不能超过的预算上限。自托管的社区版免费。"
         },
         "models": {
           "question": "可以用哪些 AI 模型？",
@@ -12385,7 +12451,7 @@
       },
       "meta": {
         "title": "LiveContext：AI 自动化平台。对话、工作流、智能体、应用。",
-        "description": "在对话里说清楚要做的事，LiveContext 就会当着你的面搭好自动化和它的应用，按日程运行，并把结果以链接、PDF 或导出文件的形式分享出去。每一步都看得见，每个智能体都有预算，云端或自托管。"
+        "description": "在对话里说清楚要做的事，LiveContext 就会搭好自动化和它的应用，按日程运行并分享结果。每一步都看得见，云端或自托管。"
       },
       "hero": {
         "eyebrow": "AI 自动化平台",
@@ -15649,6 +15715,94 @@
       "description": "此安装关联的 LiveContext Cloud 账户没有付费套餐。云端模型、网页搜索和云端集成需要付费套餐。在 LiveContext Cloud 选择套餐后即可立即使用：安装仍保持关联。",
       "cta": "查看云端套餐",
       "close": "关闭"
+    }
+  },
+  "partnerProgram": {
+    "title": "合作伙伴计划",
+    "subtitle": "创作者代码让创作者试用产品，合作伙伴代码为其受众提供福利并与合作伙伴分成。",
+    "selfHosted": {
+      "title": "自托管安装不可用",
+      "body": "合作伙伴计划运行在云版本上。"
+    },
+    "creator": {
+      "title": "创作者代码",
+      "subtitle": "给创作者本人：免费套餐和积分，默认只能使用一次。",
+      "submit": "创建创作者代码"
+    },
+    "partner": {
+      "title": "合作伙伴代码",
+      "subtitle": "给其受众：每位新用户获得积分，这些用户的付款按比例分给合作伙伴。",
+      "submit": "创建合作伙伴代码"
+    },
+    "fields": {
+      "code": "代码",
+      "codeAuto": "留空则自动生成",
+      "label": "内部备注",
+      "plan": "免费套餐",
+      "planNone": "无（仅积分）",
+      "planDays": "套餐时长（天）",
+      "credits": "积分",
+      "creditsHint": "一次性加入按量付费余额，不会每月重置。",
+      "maxUses": "最多使用次数",
+      "validDays": "有效期（天）",
+      "validDaysHint": "0 = 不设结束日期。",
+      "partnerEmail": "合作伙伴账户邮箱",
+      "partnerEmailHint": "合作伙伴需要有 LiveContext 账户。每个账户一个合作伙伴代码。",
+      "audienceCredits": "每位新用户的积分",
+      "commissionPercent": "佣金（%）",
+      "commissionMonths": "佣金时长（月）",
+      "holdDays": "可支付前的等待期（天）",
+      "holdDaysHint": "覆盖退款期：退款的付款会取消对应的佣金。",
+      "partnerMaxUses": "最多注册人数（可选）",
+      "partnerMaxUsesHint": "留空 = 不限制。限制公开链接可发放的数量。"
+    },
+    "list": {
+      "title": "代码",
+      "loading": "加载中...",
+      "empty": "还没有创作者代码或合作伙伴代码。",
+      "code": "代码",
+      "benefit": "福利",
+      "redemptions": "使用次数",
+      "commissions": "佣金",
+      "actions": "操作",
+      "kindPartner": "合作伙伴",
+      "kindCreator": "创作者",
+      "inactive": "已停用",
+      "validUntil": "有效期至 {date}",
+      "partnerBenefit": "每位新用户 {credits} 积分，{months} 个月内分成 {percent}%",
+      "creatorBenefitPlan": "{plan} {days} 天 + {credits} 积分",
+      "creatorBenefitCredits": "{credits} 积分",
+      "usesOf": "{used} / {max}",
+      "payingCustomers": "{count, plural, other {# 位付费客户}}",
+      "payable": "待支付",
+      "onHold": "等待中",
+      "paid": "已支付",
+      "copyLink": "复制链接",
+      "activate": "启用",
+      "deactivate": "停用",
+      "markPaid": "标记为已支付"
+    },
+    "toasts": {
+      "createdTitle": "代码已创建",
+      "failureTitle": "操作失败",
+      "copied": "链接已复制",
+      "paidTitle": "佣金已结算",
+      "paidMessage": "已将 {lines} 条记录标记为已支付（{amount}）。"
+    },
+    "errors": {
+      "adminOnly": "只有平台管理员可以管理合作伙伴计划。",
+      "generic": "出了点问题，请重试。",
+      "code_taken": "该代码已被使用。",
+      "invalid_code_format": "代码由 3 到 32 个字母、数字、连字符或下划线组成。",
+      "user_not_found": "没有使用该邮箱的账户。",
+      "partner_already_has_code": "该合作伙伴已有合作伙伴代码。",
+      "invalid_values": "某个数值超出范围。",
+      "unsupported_plan": "该套餐不能通过代码赠送。",
+      "empty_benefit": "代码必须赠送套餐或积分。",
+      "missing_partner": "请输入合作伙伴账户邮箱。",
+      "not_available_in_ce": "自托管安装不提供合作伙伴计划。",
+      "code_generation_failed": "无法生成可用代码，请重试。",
+      "missing_body": "请求为空。"
     }
   }
 }

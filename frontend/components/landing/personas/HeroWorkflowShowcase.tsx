@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
+import { preload } from 'react-dom';
 import { useTranslations } from 'next-intl';
 import { Check, Clock, LoaderCircle, Paperclip, ArrowUp } from 'lucide-react';
 import ReactFlow, { Handle, Position, useNodes, useReactFlow, type NodeProps } from 'reactflow';
@@ -21,6 +22,7 @@ import { BrandMark } from '@/components/integrations/BrandMark';
 import LandingSidebarRail from '@/app/[locale]/_landing/LandingSidebarRail';
 import { getSourceHandleGeometry, getTargetHandleGeometry } from '@/app/workflows/builder/components/nodes/handleGeometry';
 import { buildPersonaInterfaceHtml } from './personaInterfaceHtml';
+import { HeroEdge } from './HeroEdge';
 import { buildPersonaWorkflowEdges, buildPersonaWorkflowNodes, type PersonaDestination } from './personaWorkflowGraph';
 import TelegramApprovalPhone from './TelegramApprovalPhone';
 import WorkflowRecapPanel from './WorkflowRecapPanel';
@@ -28,8 +30,8 @@ import { BUSINESS_DESTINATIONS, BUSINESS_PREVIEW_VIEWPORT, CREATOR_DESTINATION_S
 
 const FlowNode = dynamic(() => import('@/app/workflows/builder/components/nodes/FlowNode').then((module) => module.FlowNode), { ssr: false });
 const UserApprovalNode = dynamic(() => import('@/app/workflows/builder/components/nodes/UserApprovalNode').then((module) => module.UserApprovalNode), { ssr: false });
-const BuilderEdge = dynamic(() => import('@/app/workflows/builder/components/BuilderEdge').then((module) => module.BuilderEdge), { ssr: false });
-const edgeTypes = { builderEdge: BuilderEdge };
+// The product's edge, with endpoints corrected for the hero's CSS scale (see HeroEdge).
+const edgeTypes = { builderEdge: HeroEdge };
 
 // The real product nodes are editable; these inert ports keep them wired in a
 // preview that executes nothing.
@@ -251,6 +253,9 @@ function RunDuration({ started }: { started: boolean }) {
   return <span className="hero-run-duration">{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</span>;
 }
 
+/** Set as the `.landing-demo-panel::before` background in landingStyles.ts. */
+export const HERO_PANEL_TEXTURE = '/landing/hero-panel-texture.webp';
+
 /**
  * The hero demo: a request typed in chat, the workflow drawn node by node from it,
  * then run top to bottom with the approval taken on a phone and the result landing
@@ -263,6 +268,10 @@ function RunDuration({ started }: { started: boolean }) {
 // The homepage mounts this with no persona: operations is what it opens on, the broadest
 // buyer and the first pill of the nav. There is no persona-less "cover" state any more.
 export default function HeroWorkflowShowcase({ persona = 'ops' }: { persona?: PersonaKey }) {
+  // The panel's background texture is the page's Largest Contentful Paint on a phone,
+  // and the browser only finds it once it has parsed the inline stylesheet that names
+  // it, behind every script. Hinting it from the head fetches it with the HTML.
+  preload(HERO_PANEL_TEXTURE, { as: 'image', fetchPriority: 'high' });
   const t = useTranslations(`PersonaLanding.personas.${persona}.workflowShowcase`);
   const chrome = useTranslations('PersonaLanding.heroDemo');
   const { theme } = useLandingTheme();

@@ -82,6 +82,8 @@ export function WorkflowModeProvider({ children, workflowId, initialRunId, readO
   const pathname = usePathname();
   const router = useRouter();
   const [mode, setMode] = useState<WorkflowMode>(initialRunId ? 'run' : 'edit');
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
   const [runId, setRunIdState] = useState<string | null>(initialRunId || null);
   const [viewingEpoch, setViewingEpochRaw] = useState<number | null>(null);
   // Guard to prevent re-dispatch loops when multiple providers listen
@@ -191,17 +193,34 @@ export function WorkflowModeProvider({ children, workflowId, initialRunId, readO
         // Silent: stale state will self-correct on the next pin/save.
       }
     };
+    // An agent wrote a new version (auto-saved edit or explicit save): HEAD moved without any
+    // canvas save event. The canvas then shows that version whenever it is editing (it re-imports
+    // HEAD on the plan-modified event, and the page switches to editing for its own agent), so
+    // activeVersion follows HEAD there. Read after the fetch, once the mode has settled.
+    const onAgentPlanChanged = async (e: Event) => {
+      const detail = (e as CustomEvent<{ type?: string; id?: string; planChanged?: boolean }>).detail;
+      if (readOnly || !workflowId || detail?.type !== 'workflow' || !detail.planChanged || detail.id !== workflowId) return;
+      try {
+        const data = await orchestratorApi.listVersions(workflowId);
+        setCurrentVersion(data.currentVersion ?? null);
+        if (modeRef.current === 'edit') setActiveVersion(data.currentVersion ?? null);
+      } catch {
+        // Silent: stale state will self-correct on the next pin/save.
+      }
+    };
+    window.addEventListener('sidePanelAutoOpen', onAgentPlanChanged);
     window.addEventListener('workflowPinnedVersionChange', onPin);
     window.addEventListener('workflowActiveVersionChange', onActive);
     window.addEventListener('workflowDirtyChange', onDirty);
     window.addEventListener('workflowViewSaveComplete', onSaveComplete);
     return () => {
+      window.removeEventListener('sidePanelAutoOpen', onAgentPlanChanged);
       window.removeEventListener('workflowPinnedVersionChange', onPin);
       window.removeEventListener('workflowActiveVersionChange', onActive);
       window.removeEventListener('workflowDirtyChange', onDirty);
       window.removeEventListener('workflowViewSaveComplete', onSaveComplete);
     };
-  }, [workflowId]);
+  }, [workflowId, readOnly]);
   // Track if runId was set programmatically (via initialRunId or setRunId) to avoid URL-based override
   const isProgrammaticRef = useRef(!!initialRunId);
   // Track previous runId to detect run-to-run switches

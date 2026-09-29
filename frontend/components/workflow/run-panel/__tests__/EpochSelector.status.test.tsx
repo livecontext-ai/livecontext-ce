@@ -198,3 +198,39 @@ describe('EpochSelector - per-epoch status badge', () => {
     }
   });
 });
+
+/**
+ * The reported bug, at the level it was seen.
+ *
+ * <p>Each row prints "start -> end" in two slots of a FIXED 88px, sized for `HH:mm:ss` and
+ * marked `whitespace-nowrap`. The shared time formatter used to append the display zone's label,
+ * so a slot received `15:30:07 GMT+2` and the overflow rendered on top of the arrow between the
+ * two times. Nothing failed and no test noticed: the layout simply lied.
+ *
+ * <p>Asserted on the group's whole text rather than on a width, because a width is a fact about
+ * the stylesheet while this is a fact about the content: whatever else changes, only a clock
+ * goes in there.
+ */
+describe('EpochSelector - the two time slots hold a clock and nothing else', () => {
+  afterEach(cleanup);
+
+  it('renders start and end as bare clocks around the arrow', () => {
+    renderSelector('completed');
+
+    const groups = [1, 2, 3].map((epoch) => {
+      const row = document.querySelector(`[data-epoch-option="${epoch}"]`);
+      expect(row).not.toBeNull();
+      // Document order, so the flex wrapper is found before the slots it contains.
+      const group = Array.from(row!.querySelectorAll('span'))
+        .find((el) => el.textContent?.includes('\u2192'));
+      expect(group, `epoch ${epoch} shows no start-to-end group`).toBeDefined();
+      return group!.textContent ?? '';
+    });
+
+    // 1 and 2 are settled; 3 is still open and its end slot holds the ellipsis that keeps the
+    // width stable while the run advances.
+    expect(groups[0]).toMatch(/^\d{2}:\d{2}:\d{2}\u2192\d{2}:\d{2}:\d{2}$/);
+    expect(groups[1]).toMatch(/^\d{2}:\d{2}:\d{2}\u2192\d{2}:\d{2}:\d{2}$/);
+    expect(groups[2]).toMatch(/^\d{2}:\d{2}:\d{2}\u2192\.\.\.$/);
+  });
+});

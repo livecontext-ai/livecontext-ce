@@ -60,6 +60,7 @@ import {
 } from "lucide-react";
 import { InfoPopover } from "@/components/ui/info-popover";
 import { AvatarGallery } from "@/components/settings/AvatarGallery";
+import { TimeZonePreferenceRow } from "@/components/settings/TimeZonePreferenceRow";
 import { unifiedApiService } from "@/lib/api/unified-api-service";
 import { IS_CE, IS_CLOUD } from "@/lib/edition";
 import { reportExplicitLocaleChoice } from "@/lib/lifecycle/localeChoice";
@@ -835,6 +836,12 @@ export default function SettingsOverviewPage() {
                     </SelectContent>
                   </Select>
                 </div>
+
+                {/* Display time zone - stored on the ACCOUNT (auth.users.time_zone), unlike the
+                    theme below: it decides how every date in the product reads AND how the
+                    emails the backend sends are timed, so it has to follow the person to their
+                    other devices and be readable by a service hours later. */}
+                <TimeZonePreferenceRow />
 
                 {/* Theme - persisted by ThemeProvider (localStorage), 'auto' follows the OS. */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">

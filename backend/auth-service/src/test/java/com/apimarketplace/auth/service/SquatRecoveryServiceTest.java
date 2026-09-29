@@ -40,8 +40,15 @@ class SquatRecoveryServiceTest {
         service = new SquatRecoveryService(tokenService, mailer, userRepository, 5);
     }
 
+    /**
+     * The victim, with a language on the row. It is not English on purpose: the mailer falls back to
+     * English when it is handed nothing, so an English victim cannot tell "the language was passed"
+     * from "the language was dropped".
+     */
     private User victim() {
-        return new User("victim", "victim@test.io", AuthProvider.KEYCLOAK, "kc-uuid");
+        User victim = new User("victim", "victim@test.io", AuthProvider.KEYCLOAK, "kc-uuid");
+        victim.setLocale("de");
+        return victim;
     }
 
     @Test
@@ -52,7 +59,10 @@ class SquatRecoveryServiceTest {
 
         service.onSquatDetected(new CeLinkSquatDetectedEvent(VICTIM_ID, ATTACKER_ID, INSTALL));
 
-        verify(mailer).sendRecoveryEmail("victim@test.io", "the-token");
+        // eq("de"), not any(): this is where the language reaches the mail. With any() here, deleting
+        // the getLocale() argument and passing null left every test in this file green, and the
+        // victim of an address takeover received a SECURITY alert in a language they may not read.
+        verify(mailer).sendRecoveryEmail(eq("victim@test.io"), eq("the-token"), eq("de"));
     }
 
     @Test
@@ -78,7 +88,7 @@ class SquatRecoveryServiceTest {
         // 6th must be dropped - rate limit hit.
         service.onSquatDetected(new CeLinkSquatDetectedEvent(VICTIM_ID, ATTACKER_ID, INSTALL));
 
-        verify(mailer, org.mockito.Mockito.times(5)).sendRecoveryEmail(eq("victim@test.io"), any());
+        verify(mailer, org.mockito.Mockito.times(5)).sendRecoveryEmail(eq("victim@test.io"), any(), any());
     }
 
     @Test
@@ -100,6 +110,6 @@ class SquatRecoveryServiceTest {
 
         // Must not throw.
         service.onSquatDetected(new CeLinkSquatDetectedEvent(VICTIM_ID, ATTACKER_ID, INSTALL));
-        verify(mailer, never()).sendRecoveryEmail(any(), any());
+        verify(mailer, never()).sendRecoveryEmail(any(), any(), any());
     }
 }

@@ -4,6 +4,7 @@ import com.apimarketplace.conversation.controller.v3.chat.ChatStreamInitializer;
 import com.apimarketplace.conversation.dto.ChatRequest;
 import com.apimarketplace.conversation.dto.MessageDto;
 import com.apimarketplace.conversation.service.ConversationExecutionLockService;
+import com.apimarketplace.conversation.service.ConversationQueryService;
 import com.apimarketplace.conversation.service.MessageService;
 import com.apimarketplace.conversation.service.ai.AgentObservabilityClient;
 import com.apimarketplace.conversation.service.ai.ConversationAgentService;
@@ -36,6 +37,7 @@ public class InternalChatController {
     private final CreditConsumptionClient creditClient;
     private final AgentObservabilityClient observabilityClient;
     private final ConversationExecutionLockService executionLockService;
+    private final ConversationQueryService conversationQueryService;
 
     /**
      * Async chat - fires agent execution, returns immediately.
@@ -49,10 +51,16 @@ public class InternalChatController {
             // upstream service calls (webhook trigger, agent fire). Without this
             // read, conversations created via /api/internal/chat would land with
             // organization_id = NULL even when the caller IS in an org workspace.
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
+            @RequestHeader(value = "X-User-Roles", required = false) String userRoles) {
 
+        // Authorization context from the headers only (ChatControllerV3 parity); ChatRequest
+        // no longer binds orgId / orgRole / userRoles from the JSON body.
         request.setUserId(userId);
         request.setOrgId(organizationId);
+        request.setOrgRole(orgRole);
+        request.setUserRoles(userRoles);
         log.info("Internal chat (async) - User: {} (org: {}), Conversation: {}, Source: {}",
                 userId, organizationId, request.getConversationId(), request.getSource());
 
@@ -90,10 +98,14 @@ public class InternalChatController {
     public ResponseEntity<Map<String, Object>> chatSync(
             @RequestBody ChatRequest request,
             @RequestHeader(value = "X-User-ID") String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
+            @RequestHeader(value = "X-User-Roles", required = false) String userRoles) {
 
         request.setUserId(userId);
         request.setOrgId(organizationId);
+        request.setOrgRole(orgRole);
+        request.setUserRoles(userRoles);
         String conversationId = request.getConversationId();
 
         log.info("Internal chat (sync) - User: {} (org: {}), Conversation: {}, Source: {}",
@@ -106,6 +118,15 @@ public class InternalChatController {
         if (conversationId == null || conversationId.isBlank()) {
             return ResponseEntity.badRequest()
                     .body(Map.of("success", false, "error", "conversationId is required"));
+        }
+
+        // Every branch below writes into the conversation (the 402 audit trail included), so the
+        // caller must own it or share its workspace. 404, not 403: no existence disclosure.
+        if (!conversationQueryService.isConversationInStrictScope(conversationId, userId, organizationId)) {
+            log.warn("Internal chat (sync) refused - user {} (org: {}) may not write conversation {}",
+                    userId, organizationId, conversationId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("success", false, "error", "Conversation not found"));
         }
 
         try {

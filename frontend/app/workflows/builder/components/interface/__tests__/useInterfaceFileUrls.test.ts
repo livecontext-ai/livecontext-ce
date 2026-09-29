@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
-import { useInterfaceFileUrls } from '../useInterfaceFileUrls';
+import { useInterfaceFileUrls, INLINE_BUDGET_BYTES, resetSigningAvailabilityForTests } from '../useInterfaceFileUrls';
 
 vi.mock('@/lib/api/api-client', () => ({
   // getTokenProvider is mocked as "not installed yet" on purpose: that is the real state during
   // the async auth bootstrap, and it is what the pre-fix code read. Any call site that reaches
   // for it instead of getAuthToken therefore reproduces the prod 401 in these tests.
-  apiClient: { getAuthToken: vi.fn(), getTokenProvider: vi.fn(() => undefined) },
+  apiClient: { getAuthToken: vi.fn(), getTokenProvider: vi.fn(() => undefined), get: vi.fn() },
 }));
 vi.mock('@/lib/stores/current-org-store', () => ({
   getActiveOrgHeaderForRequest: vi.fn(() => ({ 'X-Active-Organization-ID': 'org-7' })),
@@ -15,6 +15,7 @@ vi.mock('@/lib/stores/current-org-store', () => ({
 
 import { apiClient } from '@/lib/api/api-client';
 const mockGetAuthToken = vi.mocked(apiClient.getAuthToken);
+const mockApiGet = vi.mocked(apiClient.get);
 
 const ID = '9a443915-a594-48a1-9760-e7a1b4b2eaf7';
 const RAW = `/api/proxy/files/by-id/${ID}/raw?disposition=inline`;
@@ -25,6 +26,7 @@ function fileRef() {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  resetSigningAvailabilityForTests();
   mockGetAuthToken.mockResolvedValue('jwt-abc');
 });
 afterEach(() => vi.restoreAllMocks());
@@ -163,5 +165,218 @@ describe('useInterfaceFileUrls', () => {
 
     await waitFor(() => expect(result.current.resolveFileUrl(RAW)).toMatch(/^data:/));
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toContain(RAW);
+  });
+
+  // -- Media and large files stream from a signed link ---------------------
+  //
+  // Regression - run page of a Caption Factory application, 2026-09-28. The interface received six
+  // 18-20 MB videos; every one was downloaded and inlined as a base64 data: URI, then copied into
+  // the iframe HTML and into __RESOLVED_DATA__. Several hundred MB of string: the whole page died
+  // on `RangeError: Invalid string length`. The decision now comes from the file reference itself
+  // (the Next proxy strips Content-Length, so these mocks deliberately send no headers at all).
+
+  const SIGNED = '/api/files/proxy-signed?key=1%2Fgeneral%2Fep01.mp4&exp=9999999999&disposition=inline&sig=abc';
+  const MB = 1024 * 1024;
+
+  function idOf(n: number) {
+    return `9a443915-a594-48a1-9760-e7a1b4b2ea${String(n).padStart(2, '0')}`;
+  }
+  function rawOf(id: string) {
+    return `/api/proxy/files/by-id/${id}/raw?disposition=inline`;
+  }
+  function ref(id: string, mimeType: string, size: number) {
+    return { _type: 'file' as const, path: `tenant1/general/${id}.bin`, name: `${id}.bin`, mimeType, size, id };
+  }
+  /** A fetch that answers every by-id URL with `bytes` of body and NO headers, as behind the proxy. */
+  function mockBodies(bytes: number, type = 'application/octet-stream') {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve({
+      ok: true,
+      blob: () => Promise.resolve(new Blob([new Uint8Array(bytes)], { type })),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('streams a large video from a signed link without downloading it here', async () => {
+    const fetchMock = mockBodies(10);
+    mockApiGet.mockResolvedValue({ url: SIGNED, expires_at: 9999999999 });
+
+    const { result } = renderHook(() => useInterfaceFileUrls({ clip: ref(ID, 'video/mp4', 18_370_402) }, true));
+
+    await waitFor(() => expect(result.current.resolveFileUrl(RAW)).toBe(SIGNED));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockApiGet).toHaveBeenCalledWith(`/files/by-id/${ID}/signed-url`, { params: { disposition: 'inline' }, retries: 0 });
+    // The signed link carries no session token - that property is what data: URIs were protecting.
+    expect(result.current.resolveFileUrl(RAW)).not.toMatch(/token=/);
+  });
+
+  it('keeps a 5 MB document inline as before, so interface JS can still fetch() it (no CORS on the signed proxy)', async () => {
+    mockBodies(5 * MB, 'application/pdf');
+    mockApiGet.mockResolvedValue({ url: SIGNED });
+
+    const { result } = renderHook(() => useInterfaceFileUrls({ doc: ref(ID, 'application/pdf', 5 * MB) }, true));
+
+    await waitFor(() => expect(result.current.resolveFileUrl(RAW)).toMatch(/^data:application\/pdf;base64,/));
+    expect(mockApiGet).not.toHaveBeenCalled();
+  });
+
+  it('gives a link to a document the budget cannot hold, without downloading it', async () => {
+    const fetchMock = mockBodies(10);
+    mockApiGet.mockResolvedValue({ url: SIGNED });
+
+    const { result } = renderHook(() => useInterfaceFileUrls({ doc: ref(ID, 'application/pdf', INLINE_BUDGET_BYTES + 1) }, true));
+
+    await waitFor(() => expect(result.current.resolveFileUrl(RAW)).toBe(SIGNED));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('trusts the bytes over a wrong declared size: a "20 KB" file that is 60 MB is never inlined', async () => {
+    mockBodies(60 * MB, 'application/octet-stream');
+    mockApiGet.mockResolvedValue({ url: SIGNED });
+
+    const { result } = renderHook(() => useInterfaceFileUrls({ doc: ref(ID, 'application/octet-stream', 20_000) }, true));
+
+    await waitFor(() => expect(result.current.resolveFileUrl(RAW)).toBe(SIGNED), { timeout: 5000 });
+  });
+
+  it('asks an install that cannot sign only once, then inlines media as before', async () => {
+    mockBodies(120_000, 'audio/mpeg');
+    mockApiGet.mockRejectedValue(Object.assign(new Error('Service Unavailable'), { status: 503 }));
+
+    const first = renderHook(() => useInterfaceFileUrls({ a: ref(idOf(1), 'audio/mpeg', 120_000) }, true));
+    await waitFor(() => expect(first.result.current.resolveFileUrl(rawOf(idOf(1)))).toMatch(/^data:audio/));
+    const second = renderHook(() => useInterfaceFileUrls({ b: ref(idOf(2), 'audio/mpeg', 120_000) }, true));
+    await waitFor(() => expect(second.result.current.resolveFileUrl(rawOf(idOf(2)))).toMatch(/^data:audio/));
+
+    expect(mockApiGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('streams a small audio clip when a link is available', async () => {
+    const fetchMock = mockBodies(10);
+    mockApiGet.mockResolvedValue({ url: SIGNED });
+
+    const { result } = renderHook(() => useInterfaceFileUrls({ sound: ref(ID, 'audio/mpeg', 120_000) }, true));
+
+    await waitFor(() => expect(result.current.resolveFileUrl(RAW)).toBe(SIGNED));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('inlines a small audio clip exactly as before when the install cannot mint links (no signing secret)', async () => {
+    mockBodies(120_000, 'audio/mpeg');
+    mockApiGet.mockRejectedValue(new Error('503'));
+
+    const { result } = renderHook(() => useInterfaceFileUrls({ sound: ref(ID, 'audio/mpeg', 120_000) }, true));
+
+    await waitFor(() => expect(result.current.resolveFileUrl(RAW)).toMatch(/^data:audio\/mpeg;base64,/));
+  });
+
+  it('without links, still inlines one large video as before (within the budget)', async () => {
+    mockBodies(18 * MB, 'video/mp4');
+    mockApiGet.mockRejectedValue(new Error('503'));
+
+    const { result } = renderHook(() => useInterfaceFileUrls({ clip: ref(ID, 'video/mp4', 18 * MB) }, true));
+
+    await waitFor(() => expect(result.current.resolveFileUrl(RAW)).toMatch(/^data:video\/mp4;base64,/), { timeout: 5000 });
+  });
+
+  it('without links, never inlines past the budget: six 18 MB videos cannot kill the page', async () => {
+    const fetchMock = mockBodies(18 * MB, 'video/mp4');
+    mockApiGet.mockRejectedValue(new Error('503'));
+    const ids = [0, 1, 2, 3, 4, 5].map(idOf);
+    const data = { clips: ids.map((id) => ref(id, 'video/mp4', 18 * MB)) };
+
+    const { result } = renderHook(() => useInterfaceFileUrls(data, true));
+
+    await waitFor(() => expect(mockApiGet).toHaveBeenCalledTimes(6));
+    await waitFor(() => expect(ids.some((id) => result.current.resolveFileUrl(rawOf(id)).startsWith('data:'))).toBe(true), { timeout: 5000 });
+    const inlined = ids.filter((id) => result.current.resolveFileUrl(rawOf(id)).startsWith('data:'));
+    expect(inlined.length * 18 * MB).toBeLessThanOrEqual(INLINE_BUDGET_BYTES);
+    // A size the reference already says overflows the budget is not even downloaded.
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(Math.floor(INLINE_BUDGET_BYTES / (18 * MB)));
+  });
+
+  it('keeps inlining a small image as a data: URI and never asks for a link', async () => {
+    mockBodies(40_000, 'image/png');
+
+    const { result } = renderHook(() => useInterfaceFileUrls({ photo: ref(ID, 'image/png', 40_000) }, true));
+
+    await waitFor(() => expect(result.current.resolveFileUrl(RAW)).toMatch(/^data:image\/png;base64,/));
+    expect(mockApiGet).not.toHaveBeenCalled();
+  });
+
+  it('streams a table media cell from its own mimeType, without downloading it first', async () => {
+    const fetchMock = mockBodies(10);
+    mockApiGet.mockResolvedValue({ url: SIGNED });
+    const asset = { _type: 'file' as const, id: ID, url: RAW, name: 'clip.mp4', mimeType: 'video/mp4' };
+
+    const { result } = renderHook(() => useInterfaceFileUrls({ clip: asset }, true));
+
+    await waitFor(() => expect(result.current.resolveFileUrl(RAW)).toBe(SIGNED));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('streams a table cell that carries no type once its bytes show it is a video', async () => {
+    mockBodies(3 * MB, 'video/mp4');
+    mockApiGet.mockResolvedValue({ url: SIGNED });
+    const asset = { _type: 'file' as const, id: ID, url: RAW, name: 'clip' };
+
+    const { result } = renderHook(() => useInterfaceFileUrls({ clip: asset }, true));
+
+    await waitFor(() => expect(result.current.resolveFileUrl(RAW)).toBe(SIGNED));
+  });
+
+  it('refuses a minted value that is not our own relative signed route (it is written into the iframe)', async () => {
+    mockBodies(10, 'video/mp4');
+    mockApiGet.mockResolvedValue({ url: 'https://attacker.example/x.mp4' });
+
+    const { result } = renderHook(() => useInterfaceFileUrls({ clip: ref(ID, 'video/mp4', 18_370_402) }, true));
+
+    await waitFor(() => expect(mockApiGet).toHaveBeenCalled());
+    await waitFor(() => expect(result.current.resolveFileUrl(RAW)).toMatch(/^data:/));
+    expect(result.current.resolveFileUrl(RAW)).not.toContain('attacker.example');
+  });
+
+  it('gives the budget back when a download fails, so the next file can still be inlined', async () => {
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => {
+      call += 1;
+      return call === 1
+        ? Promise.reject(new Error('network'))
+        : Promise.resolve({ ok: true, blob: () => Promise.resolve(new Blob([new Uint8Array(10)], { type: 'image/png' })) });
+    }));
+    // The failing file reserves almost the whole budget before its download fails. Only if that
+    // reservation is released can the small file that comes after it be inlined.
+    const { result } = renderHook(() => useInterfaceFileUrls({
+      a: ref(idOf(1), 'image/png', INLINE_BUDGET_BYTES - 5),
+    }, true));
+    await waitFor(() => expect(call).toBe(1));
+
+    const next = renderHook(() => useInterfaceFileUrls({ b: ref(idOf(2), 'image/png', 10) }, true));
+    await waitFor(() => expect(next.result.current.resolveFileUrl(rawOf(idOf(2)))).toMatch(/^data:image\/png/));
+    expect(result.current.resolveFileUrl(rawOf(idOf(1)))).toBe(rawOf(idOf(1)));
+  });
+
+  it('a refusal that is not a 503 does not stop the next file from asking for a link', async () => {
+    mockBodies(10, 'video/mp4');
+    mockApiGet.mockRejectedValueOnce(Object.assign(new Error('Not Found'), { status: 404 }))
+      .mockResolvedValue({ url: SIGNED });
+
+    renderHook(() => useInterfaceFileUrls({ a: ref(idOf(1), 'video/mp4', 18 * 1024 * 1024) }, true));
+    await waitFor(() => expect(mockApiGet).toHaveBeenCalledTimes(1));
+    const second = renderHook(() => useInterfaceFileUrls({ b: ref(idOf(2), 'video/mp4', 18 * 1024 * 1024) }, true));
+
+    await waitFor(() => expect(second.result.current.resolveFileUrl(rawOf(idOf(2)))).toBe(SIGNED));
+  });
+
+  it('passes an already-signed marketplace link through untouched: never downloaded with the token', async () => {
+    const fetchMock = mockBodies(10, 'video/mp4');
+    const signedAsset = { _type: 'file' as const, url: SIGNED, name: 'clip.mp4', mimeType: 'video/mp4' };
+
+    const { result } = renderHook(() => useInterfaceFileUrls({ clip: signedAsset }, true));
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockApiGet).not.toHaveBeenCalled();
+    expect(result.current.resolveFileUrl(SIGNED)).toBe(SIGNED);
   });
 });

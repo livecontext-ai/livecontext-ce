@@ -7,6 +7,7 @@ import type { DerivedNodeStatus } from '../types';
 import { normalizeLabel, extractLabelFromKey } from '../utils/labelNormalizer';
 import { getPrefixForKind } from '../registry/nodeRegistry';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
+import { useCanDriveRuns } from '@/lib/hooks/useCanDriveRuns';
 import { RerunConfirmModal } from '../components/RerunConfirmModal';
 
 /**
@@ -484,6 +485,8 @@ export function useNodeExecutionStatus(
 ) {
   const ctx = useStepByStep();
   const { viewingEpoch, isPreviewOnly } = useWorkflowMode();
+  // Executing or re-running a node drives the run: never offered to a read-only VIEWER.
+  const canMutate = useCanDriveRuns();
 
   // Interactive in the "All epochs" view (viewingEpoch == null) AND while reading
   // the run's NEWEST epoch - only a HISTORICAL epoch is read-only.
@@ -685,7 +688,7 @@ export function useNodeExecutionStatus(
      * would advance an epoch the user is not looking at).
      */
     isInteractive,
-    canExecute: isInteractive && (isControl ? ctx.canExecuteCore(normalizedId) : ctx.canExecuteStep(normalizedId)),
+    canExecute: canMutate && isInteractive && (isControl ? ctx.canExecuteCore(normalizedId) : ctx.canExecuteStep(normalizedId)),
     isReady: isInteractive && isReady,
     /**
      * Executability ignoring the focus-epoch interactive gate - but NOT the run's
@@ -731,7 +734,7 @@ export function useNodeExecutionStatus(
     // `readOnly`, so `isPreviewOnly` is false there and the control still renders (the gateway
     // then 403s the non-GET). Pre-existing and not narrowed to this feature - every run action
     // on that page has it - so it is named here rather than papered over from this flag.
-    canRerun: !isPreviewOnly && (isInteractive || canRerunFocusedEpoch) && ctx.canRerunStep(normalizedId),
+    canRerun: canMutate && !isPreviewOnly && (isInteractive || canRerunFocusedEpoch) && ctx.canRerunStep(normalizedId),
     isRerunning: ctx.isRerunning,
     // The focused epoch is named ONLY when the view is not the one the run is living in. The
     // all-epochs view always stays epoch-less; a single epoch usually does not, including the

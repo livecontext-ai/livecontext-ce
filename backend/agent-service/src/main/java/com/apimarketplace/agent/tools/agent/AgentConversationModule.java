@@ -99,6 +99,13 @@ public class AgentConversationModule implements ToolModule {
         if (accessDenied.isPresent()) {
             return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get()));
         }
+        // Workspace role (VIEWER is read-only): the READ actions stay, every write is refused.
+        var roleDenied = ToolAccessControl.checkRoleWriteAccess(
+                context != null ? context.orgId() : null,
+                context != null ? context.orgRole() : null, "agent", action);
+        if (roleDenied.isPresent()) {
+            return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, roleDenied.get()));
+        }
 
         return Optional.of(switch (action) {
             case "get_history" -> executeGetHistory(parameters, tenantId, context);

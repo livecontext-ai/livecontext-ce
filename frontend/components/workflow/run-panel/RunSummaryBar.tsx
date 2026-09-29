@@ -51,6 +51,15 @@ export interface RunSummaryBarProps {
    * bar is a shortcut into the list of every run of this workflow.
    */
   onVersionClick?: () => void;
+  /**
+   * Makes the epoch chip a control (the canvas pill unfolds its epoch navigator
+   * with it). Omit to keep the chip a plain label, as in the side-panel header.
+   */
+  onEpochChipClick?: () => void;
+  /** Whether what the epoch chip unfolds is currently open. */
+  epochChipExpanded?: boolean;
+  /** Id of what the epoch chip unfolds, for aria-controls. */
+  epochChipControls?: string;
   /** Rendered at the far left, before the chips (e.g. a back arrow). */
   leading?: ReactNode;
   /** Rendered after the identity chips, before run lifecycle actions. */
@@ -94,6 +103,9 @@ export function RunSummaryBar({
   onCancel,
   onReactivate,
   onVersionClick,
+  onEpochChipClick,
+  epochChipExpanded = false,
+  epochChipControls,
   leading,
   trailing,
   size = 'compact',
@@ -121,6 +133,32 @@ export function RunSummaryBar({
   const arrowIconCls = isPanel ? 'w-3.5 h-3.5' : 'w-3 h-3';
 
   const { scrollRef, hint, onScroll, nudge } = useHorizontalScrollHint<HTMLDivElement>();
+
+  /**
+   * The epoch chip keeps ONE width whichever epoch it shows: "[cal] All epochs (12)" and
+   * "[cal] 7" are stacked in the same grid cell, the one not shown kept invisible, so the cell is
+   * as wide as the widest. Switching epoch used to resize the whole bar (and the canvas pill
+   * around it). Each layer carries its own calendar icon, and the shown one is centred in the
+   * cell, so a short "7" sits right next to its icon instead of leaving a gap after it.
+   */
+  const allEpochsLabel = t('workflow.runSteps.allEpochsCount', { count: epochCount });
+  const epochChipLabel = (
+    <span className="inline-grid justify-items-center" data-run-epoch-chip-label>
+      <span
+        aria-hidden={selectedEpoch != null || undefined}
+        className={`col-start-1 row-start-1 inline-flex items-center gap-1 ${selectedEpoch != null ? 'invisible' : ''}`}
+      >
+        <Calendar className={iconCls} />
+        {allEpochsLabel}
+      </span>
+      {selectedEpoch != null && (
+        <span className="col-start-1 row-start-1 inline-flex items-center gap-1 tabular-nums">
+          <Calendar className={iconCls} />
+          {selectedEpoch}
+        </span>
+      )}
+    </span>
+  );
 
   // Fade the edge the arrow sits on, so the chevron reads over the chips instead
   // of covering them opaquely. A mask (not a gradient overlay) because this bar
@@ -228,16 +266,32 @@ export function RunSummaryBar({
             {epochCount > 0 && (
               <span className="flex items-center gap-0.5 flex-shrink-0">
                 <span className={`${textCls} text-gray-400 dark:text-gray-500`}>·</span>
-                <span
-                  data-run-epoch-chip
-                  data-all-epochs={selectedEpoch == null || undefined}
-                  className={`flex items-center gap-1 ${textCls} font-medium text-gray-600 dark:text-gray-300 ${selectedEpoch != null ? 'tabular-nums' : ''} whitespace-nowrap`}
-                >
-                  <Calendar className={iconCls} />
-                  {selectedEpoch != null
-                    ? selectedEpoch
-                    : t('workflow.runSteps.allEpochsCount', { count: epochCount })}
-                </span>
+                {onEpochChipClick ? (
+                  // Same content and footprint as the static chip: making it a control
+                  // must not widen the bar.
+                  <button
+                    type="button"
+                    data-run-epoch-chip
+                    data-all-epochs={selectedEpoch == null || undefined}
+                    data-epoch-shown={selectedEpoch ?? 'all'}
+                    aria-expanded={epochChipExpanded}
+                    aria-controls={epochChipExpanded ? epochChipControls : undefined}
+                    onClick={(e) => { e.stopPropagation(); onEpochChipClick(); }}
+                    title={t('workflow.runInfo.epochNav.browse')}
+                    className={`flex items-center ${textCls} font-medium text-gray-600 dark:text-gray-300 ${selectedEpoch != null ? 'tabular-nums' : ''} whitespace-nowrap ${canvasChromeChipRadiusClass} px-1 -mx-1 transition-colors ${epochChipExpanded ? 'bg-gray-100 dark:bg-gray-700/60' : 'hover:bg-gray-100 dark:hover:bg-gray-700/60'}`}
+                  >
+                    {epochChipLabel}
+                  </button>
+                ) : (
+                  <span
+                    data-run-epoch-chip
+                    data-all-epochs={selectedEpoch == null || undefined}
+                    data-epoch-shown={selectedEpoch ?? 'all'}
+                    className={`flex items-center ${textCls} font-medium text-gray-600 dark:text-gray-300 ${selectedEpoch != null ? 'tabular-nums' : ''} whitespace-nowrap`}
+                  >
+                    {epochChipLabel}
+                  </span>
+                )}
               </span>
             )}
 

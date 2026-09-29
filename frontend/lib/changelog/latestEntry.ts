@@ -60,11 +60,11 @@ export interface ChangelogEntry {
 }
 
 export const LATEST_CHANGELOG_ENTRY: ChangelogEntry | null = {
-  key: '2026-09-chat-channels',
-  publishedAt: '2026-09-25',
+  key: '2026-09-run-epochs-time-zone',
+  publishedAt: '2026-09-29',
   media: {
     type: 'image',
-    src: '/changelog/2026-09-chat-channels.svg',
+    src: '/changelog/2026-09-run-epochs-time-zone.svg',
     width: 720,
     height: 260,
   },

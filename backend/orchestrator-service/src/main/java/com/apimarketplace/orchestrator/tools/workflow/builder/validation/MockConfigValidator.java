@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.tools.workflow.builder.validation;
 
+import com.apimarketplace.orchestrator.tools.workflow.builder.session.SessionPlanBuilder;
 import com.apimarketplace.orchestrator.domain.workflow.NodeMock;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlanParser;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderSession;
@@ -61,7 +62,8 @@ public class MockConfigValidator implements WorkflowValidator {
             return;
         }
         Map<String, Object> miniPlan = new LinkedHashMap<>();
-        miniPlan.put(section, List.of(node));
+        // The parser reads the stored plan's spelling (classify ports come from classifyCategories).
+        miniPlan.put(section, List.of(SessionPlanBuilder.toPlanSpelling(node)));
         try {
             WorkflowPlanParser.parse(miniPlan, session.getTenantId());
         } catch (IllegalArgumentException e) {

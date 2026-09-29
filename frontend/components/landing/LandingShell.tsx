@@ -241,7 +241,11 @@ export function LandingHeader({ extra, siteBaseUrl, labels = DEFAULT_SHELL_LABEL
           bound above it: a device between the two gets 8px it does not need, which is cheaper
           than picking the exact number and being wrong about it on another font. */}
       <div className="max-w-6xl mx-auto px-6 max-[374px]:px-4 h-20 flex items-center justify-between gap-2 sm:gap-3">
-        <Link href={withBase(siteBaseUrl, '/')} className="flex items-center md:mr-1 shrink-0 group/logo relative cursor-pointer">
+        {/* No prefetch: this link is in the first viewport of every public page, and
+            prefetching `/` downloads the whole landing payload (185 KB measured, and the
+            locale detection turns it into `/fr` for a French browser) on pages whose
+            visitor never clicks the logo. */}
+        <Link href={withBase(siteBaseUrl, '/')} prefetch={false} className="flex items-center md:mr-1 shrink-0 group/logo relative cursor-pointer">
           <div className="relative flex items-center justify-center transition-opacity duration-300">
             {/* Decorative: the brand name is right beside it as real text, so announcing the
                 mark as well made the link read "Logo LiveContext" in every language, with the

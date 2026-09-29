@@ -46,8 +46,17 @@ class ChatControllerV3Test {
     @Mock
     private ChatBudgetEstimator budgetEstimator;
 
+    @Mock
+    private com.apimarketplace.conversation.service.ConversationQueryService conversationQueryService;
+
     @InjectMocks
     private ChatControllerV3 chatControllerV3;
+
+    @org.junit.jupiter.api.BeforeEach
+    void allowWritesByDefault() {
+        // Default: the caller may write the conversation it names; the scope tests override it.
+        lenient().when(conversationQueryService.isConversationInStrictScope(any(), any(), any())).thenReturn(true);
+    }
 
     private ChatBudgetEstimator.Estimate anEstimate(String provider, String model) {
         return new ChatBudgetEstimator.Estimate(provider, model, 4100, 8192);
@@ -250,6 +259,70 @@ class ChatControllerV3Test {
             );
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    @Nested
+    @DisplayName("conversation scope")
+    class ConversationScopeTests {
+
+        @Test
+        @DisplayName("regression: /stop on a conversation outside the caller's workspace is 404, nothing is stopped, written or cascaded")
+        void stopOnForeignConversationRefused() {
+            when(conversationQueryService.isConversationInStrictScope("victim-conv", "user-1", "org-1"))
+                    .thenReturn(false);
+            // The stop handler answers normally, so a missing guard shows up as a 200 (a stop run
+            // on the victim's conversation) rather than as a mock NPE.
+            StreamStopHandler.StopResult stopped = new StreamStopHandler.StopResult(
+                    true, "Stopped", "victim-conv", "stream-victim", 1, 0);
+            lenient().when(stopHandler.stopStream(any(), any(), any())).thenReturn(stopped);
+            lenient().when(stopHandler.toResponseMap(stopped)).thenReturn(Map.of("success", true));
+
+            ResponseEntity<Map<String, Object>> response = chatControllerV3.stopStream(
+                    "user-1", "org-1", Map.of("conversationId", "victim-conv"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            verifyNoInteractions(stopHandler);
+        }
+
+        @Test
+        @DisplayName("the chat turn threads the X-Organization-ID header into the initializer's scope check")
+        void chatTurnChecksScopeAgainstHeaderWorkspace() {
+            // A REAL initializer with a mocked scope gate: proves the controller sets the header
+            // workspace on the request before the strict check reads it (a body orgId is ignored).
+            com.apimarketplace.conversation.streaming.StreamStateService stateService =
+                    mock(com.apimarketplace.conversation.streaming.StreamStateService.class);
+            com.apimarketplace.conversation.streaming.StreamPubSubService pubSub =
+                    mock(com.apimarketplace.conversation.streaming.StreamPubSubService.class);
+            // Streaming answers normally, so a missing guard shows up as a 200 on the victim's
+            // conversation rather than as a mock NPE.
+            lenient().when(stateService.createStream(any(), any(), any(), any())).thenReturn(Mono.just(
+                    com.apimarketplace.conversation.streaming.StreamMetadata.create("s-x", "user-1", "victim-conv", "gpt-4", null)));
+            lenient().when(pubSub.publish(any(), any())).thenReturn(Mono.just(1L));
+            com.apimarketplace.conversation.controller.v3.chat.ChatStreamInitializer realInitializer =
+                    new com.apimarketplace.conversation.controller.v3.chat.ChatStreamInitializer(
+                            mock(com.apimarketplace.conversation.service.ai.ChatStreamingService.class),
+                            mock(com.apimarketplace.conversation.service.ConversationHistoryService.class),
+                            stateService, pubSub, conversationQueryService);
+            ChatControllerV3 controller = new ChatControllerV3(
+                    realInitializer, stopHandler, agentClient, creditClient, budgetEstimator, conversationQueryService);
+            ChatRequest request = new ChatRequest();
+            request.setMessage("Hello");
+            request.setModel("gpt-4");
+            request.setProvider("openai");
+            request.setConversationId("victim-conv");
+            when(budgetEstimator.estimate(any(ChatRequest.class))).thenReturn(anEstimate("openai", "gpt-4"));
+            when(creditClient.checkChatBudget(anyString(), anyString(), anyString(), anyInt(), anyInt()))
+                    .thenReturn(true);
+            when(conversationQueryService.isConversationInStrictScope("victim-conv", "user-1", "org-header"))
+                    .thenReturn(false);
+
+            ResponseEntity<Map<String, String>> response =
+                    controller.chatJson(request, "user-1", "org-header", "MEMBER", null).block();
+
+            assertThat(response).isNotNull();
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            verify(conversationQueryService).isConversationInStrictScope("victim-conv", "user-1", "org-header");
         }
     }
 

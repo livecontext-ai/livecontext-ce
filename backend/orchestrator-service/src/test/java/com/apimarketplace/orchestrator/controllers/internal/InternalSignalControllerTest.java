@@ -45,7 +45,8 @@ class InternalSignalControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new InternalSignalController(signalService, signalWaitRepository, runRepository);
+        controller = new InternalSignalController(signalService, signalWaitRepository, runRepository,
+                com.apimarketplace.orchestrator.testsupport.OrgAccessGuardStubs.allowAll());
 
         // Default: signal 7 belongs to run-1, which lives in org-1 owned by user-1.
         lenient().when(signalWaitRepository.findEpochInfoById(7L)).thenReturn(Optional.of(

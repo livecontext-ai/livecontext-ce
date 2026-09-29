@@ -276,27 +276,133 @@ class MonolithSecurityFilterInternalPathTest {
     // ── Allowlist boundary: trailing-slash precision + header-strip defence on a wide prefix ──
 
     @Test
-    @DisplayName("allowlisted /api/internal/chat/sync reaches the chain but a forged X-User-ID is stripped")
-    void allowlistedChatSyncStripsForgedIdentity() throws Exception {
-        // /api/internal/chat/ is allowlisted for the public token-based PublicChatController, but it
-        // also covers InternalChatController's /chat/sync (header identity). That is safe because a
-        // non-loopback request gets its trusted identity headers stripped - so a forged X-User-ID
-        // never reaches the controller (it would then 400 on the required header, or only ever act
-        // as the JWT-validated caller).
+    @DisplayName("regression: external POST /api/internal/chat/sync is 404-blocked (was allowlisted, let a VIEWER run the agent as OWNER/admin)")
+    void externalInternalChatSyncBlocked() throws Exception {
+        // /api/internal/chat/ used to be allowlisted wholesale for the token-based public chat, which
+        // also exposed the service-to-service agent turn. Stripping the forged X-User-ID was not
+        // enough: a JWT-authenticated VIEWER reached it as themselves and put orgRole=OWNER /
+        // userRoles=admin in the JSON body.
+        assertBlocked("POST", "/api/internal/chat/sync");
+    }
+
+    @Test
+    @DisplayName("regression: the public /chat/sync rewrite and encoded / padded forms of chat/sync are all 404-blocked")
+    void internalChatSyncBypassVariantsBlocked() throws Exception {
+        for (String p : List.of(
+                "/api/internal/chat/sync/",
+                "/api/internal/chat//sync",
+                "/api/internal/chat/./sync",
+                "/api/internal/chat/x/../sync",
+                "/api/internal/chat/%73ync",
+                "/api/internal/chat/%2573ync",
+                "/api/internal/chat/SYNC",
+                "/api/internal/chat/sync;jsessionid=1",
+                "/api/internal/chat/")) {
+            assertBlocked("POST", p);
+        }
+        // The public gateway form /chat/sync is rewritten to /api/internal/chat/sync first.
+        ServicePrefixRewriteFilter rewrite = new ServicePrefixRewriteFilter();
+        MonolithSecurityFilter security = new MonolithSecurityFilter(() -> null, List.of());
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/chat/sync");
+        request.setRemoteAddr(EXTERNAL_IP);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicBoolean servletReached = new AtomicBoolean(false);
+        jakarta.servlet.Servlet servlet = new jakarta.servlet.http.HttpServlet() {
+            @Override
+            public void service(ServletRequest req, jakarta.servlet.ServletResponse res) {
+                servletReached.set(true);
+            }
+        };
+        new MockFilterChain(servlet, rewrite, security).doFilter(request, response);
+        assertThat(response.getStatus()).isEqualTo(404);
+        assertThat(servletReached.get()).isFalse();
+    }
+
+    @Test
+    @DisplayName("regression: a percent-encoded /api/internal prefix cannot slip past the internal block")
+    void encodedInternalPrefixBlocked() throws Exception {
+        assertBlocked("GET", "/api/%69nternal/credentials/access-token?userId=victim&name=stripe");
+        assertBlocked("GET", "/api//internal/credentials/all?userId=victim");
+    }
+
+    @Test
+    @DisplayName("the token-scoped public chat routes stay reachable externally")
+    void publicChatTokenRoutesStillAllowed() throws Exception {
+        assertReachesChain("POST", "/api/internal/chat/tok123/session");
+        assertReachesChain("POST", "/api/internal/chat/tok123/message");
+        assertReachesChain("GET", "/api/internal/chat/tok123/history");
+        assertReachesChain("GET", "/api/internal/chat/syncx/config");
+    }
+
+    @Test
+    @DisplayName("loopback in-process POST /api/internal/chat/sync (ConversationClient) still reaches the chain with its headers")
+    void loopbackInternalChatSyncStillWorks() throws Exception {
         MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> null, List.of());
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/internal/chat/sync");
-        request.setRemoteAddr(EXTERNAL_IP);
-        request.addHeader("X-User-ID", "999"); // forged
+        request.setRemoteAddr("127.0.0.1");
+        request.addHeader("X-User-ID", "u1");
+        request.addHeader("X-Organization-Role", "MEMBER");
         MockHttpServletResponse response = new MockHttpServletResponse();
         AtomicReference<ServletRequest> captured = new AtomicReference<>();
 
         filter.doFilter(request, response, capturingChain(captured));
 
-        assertThat(response.getStatus()).isNotEqualTo(404);
         assertThat(captured.get()).isNotNull();
-        assertThat(((jakarta.servlet.http.HttpServletRequest) captured.get()).getHeader("X-User-ID"))
-                .as("forged X-User-ID must be stripped on a non-loopback allowlisted internal path")
-                .isNull();
+        jakarta.servlet.http.HttpServletRequest passed = (jakarta.servlet.http.HttpServletRequest) captured.get();
+        assertThat(passed.getHeader("X-User-ID")).isEqualTo("u1");
+        assertThat(passed.getHeader("X-Organization-Role")).isEqualTo("MEMBER");
+    }
+
+    @Test
+    @DisplayName("external POST /api/internal/tool-results (the unchecked service save) is 404-blocked; loopback still reaches it")
+    void externalInternalToolResultSaveBlocked() throws Exception {
+        assertBlocked("POST", "/api/internal/tool-results");
+        assertBlocked("POST", "/api/internal/tool-results/");
+        assertBlocked("POST", "/api/internal/%74ool-results");
+        assertLoopbackReachesChain("127.0.0.1", "/api/internal/tool-results");
+    }
+
+    @Test
+    @DisplayName("regression: an encoded separator or dot-dot hidden inside a chat token segment is 404-blocked")
+    void encodedSeparatorInTokenSegmentBlocked() throws Exception {
+        for (String p : List.of(
+                "/api/internal/chat/tok%2F..%2Fsync",
+                "/api/internal/chat/tok%5C..%5Csync",
+                "/api/internal/chat/tok%252F..%252Fsync",
+                "/api/internal/chat/tok%2Fsession",
+                "/api/internal/chat/%2E%2E/chat/sync",
+                "/api/internal/webhook/abc%2F..%2F..%2Fcredentials%2Fall")) {
+            assertBlocked("POST", p);
+        }
+        assertThat(MonolithSecurityFilter.hasEncodedSeparator("/api/internal/chat/tok%5Cx")).isTrue();
+        assertThat(MonolithSecurityFilter.hasEncodedSeparator("/api/internal/chat/tok/session")).isFalse();
+    }
+
+    @Test
+    @DisplayName("regression: a public-looking raw path whose canonical form is not public rejects an invalid token (public paths let it through)")
+    void publicPrefixDotDotIsNotPublic() throws Exception {
+        // A public path tolerates an invalid bearer token (it only drops the identity); any other
+        // path answers 401. The raw form below starts with /api/public/ but resolves elsewhere.
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> null, List.of());
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/public/../workflows");
+        request.setRemoteAddr(EXTERNAL_IP);
+        request.addHeader("Authorization", "Bearer not-a-valid-jwt");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).as("no bearer token on a non-public canonical path").isEqualTo(401);
+        assertThat(captured.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("canonicalPath decodes, strips path parameters and resolves dot segments")
+    void canonicalPathNormalizes() {
+        assertThat(MonolithSecurityFilter.canonicalPath("/api/%69nternal/chat/%2573ync;a=b/")).isEqualTo("/api/internal/chat/sync");
+        assertThat(MonolithSecurityFilter.canonicalPath("/a/./b/../c//d?x=1")).isEqualTo("/a/c/d");
+        assertThat(MonolithSecurityFilter.canonicalPath("/a/b%zz+c")).isEqualTo("/a/b%zz+c");
+        assertThat(MonolithSecurityFilter.canonicalPath(null)).isNull();
     }
 
     @Test

@@ -302,12 +302,15 @@ export function getNodeIconComponent(
 // NodeIcon - Centralized icon component
 // ============================================
 
-export type NodeIconSize = 'xs' | 'sm' | 'md' | 'lg';
+export type NodeIconSize = '2xs' | 'xs' | 'sm' | 'md' | 'lg';
 
 // `box` is the rendered side of `container`, in pixels. It is what the radius is
 // derived from, so the corner keeps the same weight at every size: a single
 // radius reads as a circle on the 24px tile and as a hard corner on the 44px one.
 const SIZE_CONFIG: Record<NodeIconSize, { container: string; icon: string; image: number; box: number }> = {
+  // Dense rows (the Analysis grid's 16px lines), where the 24px tile overflowed its row and was
+  // cut off by the scrolling container around it.
+  '2xs': { container: 'h-4 w-4', icon: 'h-3 w-3', image: 12, box: 16 },
   xs: { container: 'h-6 w-6', icon: 'h-3.5 w-3.5', image: 16, box: 24 },
   sm: { container: 'h-8 w-8', icon: 'h-5 w-5', image: 20, box: 32 },
   md: { container: 'h-9 w-9', icon: 'h-6 w-6', image: 24, box: 36 },

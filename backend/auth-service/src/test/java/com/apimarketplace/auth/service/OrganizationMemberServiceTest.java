@@ -1,5 +1,8 @@
 package com.apimarketplace.auth.service;
 
+import com.apimarketplace.auth.util.EmailNormalizer;
+import org.springframework.beans.factory.ObjectProvider;
+
 import com.apimarketplace.common.security.token.TokenAtRest;
 import com.apimarketplace.common.security.CredentialEncryptionService;
 
@@ -146,6 +149,54 @@ class OrganizationMemberServiceTest {
     @DisplayName("inviteMember")
     class InviteMember {
 
+        /** Stubs a fully successful invite path for the given inviter membership. */
+        private void stubInvitableBy(User who, OrganizationRole whoRole) {
+            when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
+            when(userRepository.findById(who.getId())).thenReturn(Optional.of(who));
+            when(memberRepository.findByOrganization_IdAndUser_Id(orgId, who.getId()))
+                    .thenReturn(Optional.of(createMembership(org, who, whoRole)));
+            lenient().when(subscriptionRepository.findActiveByUserId(owner.getId()))
+                    .thenReturn(Optional.of(createSubscription(teamPlan)));
+            lenient().when(memberRepository.countByOrganization_Id(orgId)).thenReturn(2L);
+            lenient().when(userRepository.findByEmail(anyString())).thenReturn(Optional.empty());
+            lenient().when(invitationRepository.save(any(OrganizationInvitation.class))).thenAnswer(a -> a.getArgument(0));
+        }
+
+        @Test
+        @DisplayName("an ADMIN cannot invite someone as ADMIN (OWNER-only, like changeRole): 403 code, nothing persisted or sent")
+        void adminCannotInviteAdmin() {
+            stubInvitableBy(inviter, OrganizationRole.ADMIN);
+
+            assertThatThrownBy(() -> service.inviteMember(orgId, "new@test.com", OrganizationRole.ADMIN, inviter.getId()))
+                    .isInstanceOf(AdminInviteRequiresOwnerException.class)
+                    .hasMessageContaining("Only the OWNER");
+
+            verify(invitationRepository, never()).save(any(OrganizationInvitation.class));
+            verifyNoInteractions(invitationMailer);
+        }
+
+        @Test
+        @DisplayName("an ADMIN can invite MEMBER and VIEWER")
+        void adminCanInviteMemberAndViewer() {
+            stubInvitableBy(inviter, OrganizationRole.ADMIN);
+
+            assertThat(service.inviteMember(orgId, "m@test.com", OrganizationRole.MEMBER, inviter.getId()).getRole())
+                    .isEqualTo(OrganizationRole.MEMBER);
+            assertThat(service.inviteMember(orgId, "v@test.com", OrganizationRole.VIEWER, inviter.getId()).getRole())
+                    .isEqualTo(OrganizationRole.VIEWER);
+        }
+
+        @Test
+        @DisplayName("the OWNER can invite someone as ADMIN")
+        void ownerCanInviteAdmin() {
+            stubInvitableBy(owner, OrganizationRole.OWNER);
+
+            OrganizationInvitation inv = service.inviteMember(orgId, "a@test.com", OrganizationRole.ADMIN, owner.getId());
+
+            assertThat(inv.getRole()).isEqualTo(OrganizationRole.ADMIN);
+            assertThat(inv.getStatus()).isEqualTo(InvitationStatus.PENDING);
+        }
+
         @Test
         @DisplayName("should invite member successfully for TEAM plan owner")
         void shouldInviteSuccessfully() {
@@ -244,7 +295,12 @@ class OrganizationMemberServiceTest {
                     eq(org.getName()),
                     anyString(),               // inviter display name
                     anyString(),               // token
-                    eq("MEMBER"));
+                    eq("MEMBER"),
+                    // No account owns this address yet, so there is no row to read a language off
+                    // and the mailer still looks it up. Asserted as null rather than any(): passing
+                    // something here for an invitee who does not exist would mean the service had
+                    // found a row it should not have.
+                    isNull());
         }
 
         @Test
@@ -258,6 +314,9 @@ class OrganizationMemberServiceTest {
             setupTeamPlanForOwner();
             when(memberRepository.countByOrganization_Id(orgId)).thenReturn(2L);
             when(invitationRepository.countByOrganization_IdAndStatus(orgId, InvitationStatus.PENDING)).thenReturn(0L);
+            // A language on the row, and not English: the mailer falls back to English when it is
+            // handed nothing, so an English invitee cannot tell "passed" from "dropped".
+            targetUser.setLocale("de");
             when(userRepository.findByEmail("target@test.com")).thenReturn(Optional.of(targetUser));
             when(memberRepository.existsByOrganization_IdAndUser_Id(orgId, targetUser.getId())).thenReturn(false);
             when(invitationRepository.existsByOrganization_IdAndEmailAndStatus(orgId, "target@test.com", InvitationStatus.PENDING)).thenReturn(false);
@@ -273,8 +332,12 @@ class OrganizationMemberServiceTest {
             // users were previously silently auto-added, which was a consent
             // violation. Pre-fix, this assertion would FAIL (mailer never
             // fired for existing users).
+            // An EXISTING user, so the service holds their row and passes the language off it rather
+            // than making the mailer query for it again. This is the case the parameter was added
+            // for, and the last of the five mailers to get it.
             verify(invitationMailer).sendInvitationEmail(
-                    eq("target@test.com"), eq(org.getName()), anyString(), anyString(), eq("MEMBER"));
+                    eq("target@test.com"), eq(org.getName()), anyString(), anyString(), eq("MEMBER"),
+                    eq("de"));
         }
 
         @Test
@@ -308,7 +371,8 @@ class OrganizationMemberServiceTest {
             OrganizationInvitation result = service.inviteMember(orgId, "target@test.com", OrganizationRole.MEMBER, inviter.getId());
 
             assertThat(result.getStatus()).isEqualTo(InvitationStatus.PENDING);
-            verify(invitationMailer, never()).sendInvitationEmail(any(), any(), any(), any(), any());
+            verify(invitationMailer, never()).sendInvitationEmail(
+                    any(), any(), any(), any(), any(), any());
             ArgumentCaptor<NotificationEmitRequest> notificationCaptor =
                     ArgumentCaptor.forClass(NotificationEmitRequest.class);
             verify(notificationClient).emit(notificationCaptor.capture());
@@ -356,7 +420,8 @@ class OrganizationMemberServiceTest {
             assertThat(result.getEmail()).isEqualTo("newcomer@test.com");
             assertThat(result.getToken()).isNotBlank();
             verify(invitationRepository).save(any(OrganizationInvitation.class));
-            verify(invitationMailer, never()).sendInvitationEmail(any(), any(), any(), any(), any());
+            verify(invitationMailer, never()).sendInvitationEmail(
+                    any(), any(), any(), any(), any(), any());
             verify(notificationClient, never()).emit(any());
             verify(memberRepository, never()).save(any(OrganizationMember.class));
         }
@@ -731,18 +796,505 @@ class OrganizationMemberServiceTest {
     @DisplayName("getPendingInvitations")
     class GetPendingInvitations {
 
-        @Test
-        @DisplayName("should return pending invitations for member")
-        void shouldReturnPendingInvitations() {
-            when(memberRepository.existsByOrganization_IdAndUser_Id(orgId, owner.getId())).thenReturn(true);
+        private void stubPendingList() {
             OrganizationInvitation inv1 = new OrganizationInvitation(org, "a@test.com", OrganizationRole.MEMBER, owner);
             OrganizationInvitation inv2 = new OrganizationInvitation(org, "b@test.com", OrganizationRole.ADMIN, owner);
             when(invitationRepository.findByOrganization_IdAndStatus(orgId, InvitationStatus.PENDING))
                     .thenReturn(List.of(inv1, inv2));
+        }
+
+        @Test
+        @DisplayName("OWNER lists the organization's pending invitations")
+        void shouldReturnPendingInvitations() {
+            when(memberRepository.findByOrganization_IdAndUser_Id(orgId, owner.getId()))
+                    .thenReturn(Optional.of(createMembership(org, owner, OrganizationRole.OWNER)));
+            stubPendingList();
 
             List<OrganizationInvitation> result = service.getPendingInvitations(orgId, owner.getId());
 
             assertThat(result).hasSize(2);
+        }
+
+        @Test
+        @DisplayName("ADMIN lists the organization's pending invitations")
+        void adminCanListPendingInvitations() {
+            when(memberRepository.findByOrganization_IdAndUser_Id(orgId, inviter.getId()))
+                    .thenReturn(Optional.of(createMembership(org, inviter, OrganizationRole.ADMIN)));
+            stubPendingList();
+
+            assertThat(service.getPendingInvitations(orgId, inviter.getId())).hasSize(2);
+        }
+
+        @Test
+        @DisplayName("F2: a MEMBER cannot list pending invitations (invitee emails and CE accept tokens)")
+        void memberCannotListPendingInvitations() {
+            // Both membership lookups answer "member" so the pre-fix code (membership-only
+            // check) returns the list and this test fails on it.
+            lenient().when(memberRepository.findByOrganization_IdAndUser_Id(orgId, targetUser.getId()))
+                    .thenReturn(Optional.of(createMembership(org, targetUser, OrganizationRole.MEMBER)));
+            lenient().when(memberRepository.existsByOrganization_IdAndUser_Id(orgId, targetUser.getId())).thenReturn(true);
+
+            assertThatThrownBy(() -> service.getPendingInvitations(orgId, targetUser.getId()))
+                    .isInstanceOf(SecurityException.class)
+                    .hasMessageContaining("OWNER or ADMIN");
+            verify(invitationRepository, never()).findByOrganization_IdAndStatus(any(), any());
+        }
+
+        @Test
+        @DisplayName("F2: a VIEWER cannot list pending invitations (invitee emails and CE accept tokens)")
+        void viewerCannotListPendingInvitations() {
+            lenient().when(memberRepository.findByOrganization_IdAndUser_Id(orgId, targetUser.getId()))
+                    .thenReturn(Optional.of(createMembership(org, targetUser, OrganizationRole.VIEWER)));
+            lenient().when(memberRepository.existsByOrganization_IdAndUser_Id(orgId, targetUser.getId())).thenReturn(true);
+
+            assertThatThrownBy(() -> service.getPendingInvitations(orgId, targetUser.getId()))
+                    .isInstanceOf(SecurityException.class)
+                    .hasMessageContaining("OWNER or ADMIN");
+            verify(invitationRepository, never()).findByOrganization_IdAndStatus(any(), any());
+        }
+
+        @Test
+        @DisplayName("a non-member is refused")
+        void nonMemberIsRefused() {
+            lenient().when(memberRepository.findByOrganization_IdAndUser_Id(orgId, 99L)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.getPendingInvitations(orgId, 99L))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    // ===== F1: verified email required on every invitee path =====
+
+    @Nested
+    @DisplayName("F1: invitee must own a VERIFIED matching email")
+    class InviteeVerifiedEmailRegressions {
+
+        private OrganizationInvitation pendingFor(String email, String token) {
+            OrganizationInvitation inv = new OrganizationInvitation(org, email, OrganizationRole.ADMIN, owner);
+            inv.setId(UUID.randomUUID());
+            if (token != null) {
+                lenient().when(invitationRepository.findByTokenHash(TokenAtRest.hash(token))).thenReturn(Optional.of(inv));
+            }
+            lenient().when(invitationRepository.findById(inv.getId())).thenReturn(Optional.of(inv));
+            return inv;
+        }
+
+        private void stubSuccessfulJoin() {
+            lenient().when(memberRepository.existsByOrganization_IdAndUser_Id(orgId, targetUser.getId())).thenReturn(false);
+            lenient().when(subscriptionRepository.findActiveByUserId(owner.getId()))
+                    .thenReturn(Optional.of(createSubscription(teamPlan)));
+            lenient().when(memberRepository.countByOrganization_Id(orgId)).thenReturn(1L);
+            lenient().when(invitationRepository.save(any(OrganizationInvitation.class))).thenAnswer(a -> a.getArgument(0));
+        }
+
+        @Test
+        @DisplayName("S-1 regression: an UNVERIFIED account with the invitee email cannot accept by token")
+        void unverifiedCannotAcceptByToken() {
+            targetUser.setEmailVerified(false);
+            OrganizationInvitation inv = pendingFor("target@test.com", "tok-unverified");
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            stubSuccessfulJoin();
+
+            assertThatThrownBy(() -> service.acceptInvitation("tok-unverified", targetUser.getId()))
+                    .isInstanceOf(InvitationEmailNotVerifiedException.class);
+
+            verify(memberRepository, never()).save(any(OrganizationMember.class));
+            assertThat(inv.getStatus()).isEqualTo(InvitationStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("S-1 regression: an UNVERIFIED account with the invitee email cannot accept by id")
+        void unverifiedCannotAcceptById() {
+            targetUser.setEmailVerified(false);
+            OrganizationInvitation inv = pendingFor("target@test.com", null);
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            stubSuccessfulJoin();
+
+            assertThatThrownBy(() -> service.acceptInvitationById(inv.getId(), targetUser.getId()))
+                    .isInstanceOf(InvitationEmailNotVerifiedException.class);
+
+            verify(memberRepository, never()).save(any(OrganizationMember.class));
+            assertThat(inv.getStatus()).isEqualTo(InvitationStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("S-1 regression: an UNVERIFIED account with the invitee email cannot decline by id")
+        void unverifiedCannotDeclineById() {
+            targetUser.setEmailVerified(false);
+            OrganizationInvitation inv = pendingFor("target@test.com", null);
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            lenient().when(invitationRepository.save(any(OrganizationInvitation.class))).thenAnswer(a -> a.getArgument(0));
+
+            assertThatThrownBy(() -> service.declineInvitationById(inv.getId(), targetUser.getId()))
+                    .isInstanceOf(InvitationEmailNotVerifiedException.class);
+
+            assertThat(inv.getStatus()).isEqualTo(InvitationStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("S-1 regression: an UNVERIFIED account with the invitee email cannot decline by token")
+        void unverifiedCannotDeclineByToken() {
+            targetUser.setEmailVerified(false);
+            OrganizationInvitation inv = pendingFor("target@test.com", "tok-decline-unverified");
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            lenient().when(invitationRepository.save(any(OrganizationInvitation.class))).thenAnswer(a -> a.getArgument(0));
+
+            assertThatThrownBy(() -> service.declineInvitation("tok-decline-unverified", targetUser.getId()))
+                    .isInstanceOf(InvitationEmailNotVerifiedException.class);
+
+            assertThat(inv.getStatus()).isEqualTo(InvitationStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("the inbox of a VERIFIED account lists its invitations, looked up by the normalized email")
+        void verifiedInboxUsesNormalizedEmail() {
+            targetUser.setEmail("  Target@Test.COM ");
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            OrganizationInvitation inv = new OrganizationInvitation(org, "target@test.com", OrganizationRole.MEMBER, owner);
+            when(invitationRepository.findByEmailAndStatus("target@test.com", InvitationStatus.PENDING))
+                    .thenReturn(List.of(inv));
+
+            assertThat(service.getPendingInvitationsForUser(targetUser.getId())).containsExactly(inv);
+        }
+
+        @Test
+        @DisplayName("a VERIFIED invitee whose stored email differs only in ASCII case can accept by token")
+        void verifiedInviteeWithDifferentAsciiCaseCanAccept() {
+            targetUser.setEmail("Target@Test.com");
+            pendingFor("target@test.com", "tok-ok");
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            stubSuccessfulJoin();
+
+            OrganizationInvitation result = service.acceptInvitation("tok-ok", targetUser.getId());
+
+            assertThat(result.getStatus()).isEqualTo(InvitationStatus.ACCEPTED);
+            verify(memberRepository).save(memberCaptor.capture());
+            assertThat(memberCaptor.getValue().getRole()).isEqualTo(OrganizationRole.ADMIN);
+        }
+
+        @Test
+        @DisplayName("a VERIFIED invitee can decline by token (accept page Decline button)")
+        void verifiedInviteeCanDeclineByToken() {
+            pendingFor("target@test.com", "tok-decline");
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            when(invitationRepository.save(any(OrganizationInvitation.class))).thenAnswer(a -> a.getArgument(0));
+
+            OrganizationInvitation result = service.declineInvitation("tok-decline", targetUser.getId());
+
+            assertThat(result.getStatus()).isEqualTo(InvitationStatus.CANCELLED);
+            verify(memberRepository, never()).save(any(OrganizationMember.class));
+        }
+
+        @Test
+        @DisplayName("Unicode look-alike U+017F (long s) no longer matches an ASCII 's' invitation email")
+        void longSLookalikeDoesNotMatch() {
+            targetUser.setEmail("admin\u017F@test.com");
+            OrganizationInvitation inv = pendingFor("admins@test.com", "tok-long-s");
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            stubSuccessfulJoin();
+
+            assertThatThrownBy(() -> service.acceptInvitation("tok-long-s", targetUser.getId()))
+                    .isInstanceOf(SecurityException.class)
+                    .hasMessageContaining("email does not match");
+            verify(memberRepository, never()).save(any(OrganizationMember.class));
+            assertThat(inv.getStatus()).isEqualTo(InvitationStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("Unicode look-alike U+212A (Kelvin sign) no longer matches an ASCII 'k' invitation email")
+        void kelvinLookalikeDoesNotMatch() {
+            targetUser.setEmail("\u212Aate@test.com");
+            OrganizationInvitation inv = pendingFor("kate@test.com", null);
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            stubSuccessfulJoin();
+
+            assertThatThrownBy(() -> service.acceptInvitationById(inv.getId(), targetUser.getId()))
+                    .isInstanceOf(SecurityException.class)
+                    .hasMessageContaining("email does not match");
+            verify(memberRepository, never()).save(any(OrganizationMember.class));
+        }
+
+        @Test
+        @DisplayName("normalizeInvitationEmail trims and lowercases ASCII only")
+        void normalizeLowercasesAsciiOnly() {
+            assertThat(EmailNormalizer.normalize("  Ada@Example.COM ")).isEqualTo("ada@example.com");
+            assertThat(EmailNormalizer.normalize("\u212Aate@x.io")).isEqualTo("\u212Aate@x.io");
+            assertThat(EmailNormalizer.normalize(null)).isNull();
+            assertThat(EmailNormalizer.matches(null, null)).isFalse();
+            assertThat(EmailNormalizer.matches("", "")).isFalse();
+        }
+    }
+
+    // ===== Audit round 2 =====
+
+    @Nested
+    @DisplayName("audit round 2: decline by token, CE by-id narrowing, expired re-invite, public inviter name")
+    class AuditRoundTwo {
+
+        private OrganizationInvitation pendingWithToken(String email, String token) {
+            OrganizationInvitation inv = new OrganizationInvitation(org, email, OrganizationRole.MEMBER, owner);
+            inv.setId(UUID.randomUUID());
+            lenient().when(invitationRepository.findByTokenHash(TokenAtRest.hash(token))).thenReturn(Optional.of(inv));
+            lenient().when(invitationRepository.findById(inv.getId())).thenReturn(Optional.of(inv));
+            return inv;
+        }
+
+        // --- decline by token: error paths
+
+        @Test
+        @DisplayName("decline by token: a verified account with ANOTHER email is refused and the invitation stays PENDING")
+        void declineByTokenEmailMismatch() {
+            OrganizationInvitation inv = pendingWithToken("someone-else@test.com", "tok-mismatch");
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+
+            assertThatThrownBy(() -> service.declineInvitation("tok-mismatch", targetUser.getId()))
+                    .isInstanceOf(SecurityException.class)
+                    .isNotInstanceOf(InvitationEmailNotVerifiedException.class)
+                    .hasMessageContaining("email does not match");
+            assertThat(inv.getStatus()).isEqualTo(InvitationStatus.PENDING);
+            verify(invitationRepository, never()).save(any(OrganizationInvitation.class));
+        }
+
+        @Test
+        @DisplayName("decline by token: an expired invitation is flipped to EXPIRED and refused")
+        void declineByTokenExpired() {
+            OrganizationInvitation inv = pendingWithToken("target@test.com", "tok-expired");
+            inv.setExpiresAt(java.time.LocalDateTime.now().minusDays(1));
+            when(invitationRepository.save(any(OrganizationInvitation.class))).thenAnswer(a -> a.getArgument(0));
+
+            assertThatThrownBy(() -> service.declineInvitation("tok-expired", targetUser.getId()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("expired");
+            assertThat(inv.getStatus()).isEqualTo(InvitationStatus.EXPIRED);
+        }
+
+        @Test
+        @DisplayName("decline by token: an invitation that is no longer PENDING is refused unchanged")
+        void declineByTokenNotPending() {
+            OrganizationInvitation inv = pendingWithToken("target@test.com", "tok-accepted");
+            inv.setStatus(InvitationStatus.ACCEPTED);
+
+            assertThatThrownBy(() -> service.declineInvitation("tok-accepted", targetUser.getId()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("no longer pending");
+            assertThat(inv.getStatus()).isEqualTo(InvitationStatus.ACCEPTED);
+            verify(invitationRepository, never()).save(any(OrganizationInvitation.class));
+        }
+
+        @Test
+        @DisplayName("decline by token: an unknown token is refused")
+        void declineByTokenUnknown() {
+            when(invitationRepository.findByTokenHash(TokenAtRest.hash("nope"))).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.declineInvitation("nope", targetUser.getId()))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        // --- inbox of an unverified account
+
+        @Test
+        @DisplayName("the inbox of an UNVERIFIED account is refused with EMAIL_NOT_VERIFIED (UI tells the user to verify)")
+        void unverifiedInboxIsRefused() {
+            targetUser.setEmailVerified(false);
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+
+            assertThatThrownBy(() -> service.getPendingInvitationsForUser(targetUser.getId()))
+                    .isInstanceOf(InvitationEmailNotVerifiedException.class);
+            verify(invitationRepository, never()).findByEmailAndStatus(any(), any());
+        }
+
+        // --- CE (embedded auth): by-id paths only for accounts older than the invitation
+
+        @Test
+        @DisplayName("CE: an account registered AFTER the invitation cannot accept it by id (open-registration squatting)")
+        void ceAccountCreatedAfterInvitationCannotAcceptById() {
+            enableCeEmbeddedMode();
+            OrganizationInvitation inv = pendingWithToken("target@test.com", "tok-ce-1");
+            inv.setCreatedAt(java.time.LocalDateTime.now().minusHours(2));
+            targetUser.setCreatedAt(java.time.LocalDateTime.now().minusHours(1));
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            lenient().when(subscriptionRepository.findActiveByUserId(owner.getId()))
+                    .thenReturn(Optional.of(createSubscription(teamPlan)));
+            lenient().when(memberRepository.countByOrganization_Id(orgId)).thenReturn(1L);
+
+            assertThatThrownBy(() -> service.acceptInvitationById(inv.getId(), targetUser.getId()))
+                    .isInstanceOf(SecurityException.class)
+                    .hasMessageContaining("invitation link");
+            verify(memberRepository, never()).save(any(OrganizationMember.class));
+            assertThat(inv.getStatus()).isEqualTo(InvitationStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("CE: an account registered AFTER the invitation cannot decline it by id either")
+        void ceAccountCreatedAfterInvitationCannotDeclineById() {
+            enableCeEmbeddedMode();
+            OrganizationInvitation inv = pendingWithToken("target@test.com", "tok-ce-2");
+            inv.setCreatedAt(java.time.LocalDateTime.now().minusHours(2));
+            targetUser.setCreatedAt(java.time.LocalDateTime.now().minusHours(1));
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+
+            assertThatThrownBy(() -> service.declineInvitationById(inv.getId(), targetUser.getId()))
+                    .isInstanceOf(SecurityException.class)
+                    .hasMessageContaining("invitation link");
+            assertThat(inv.getStatus()).isEqualTo(InvitationStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("CE: the inbox hides invitations older than the account, lists those sent to an existing account")
+        void ceInboxOnlyListsInvitationsSentToAnExistingAccount() {
+            enableCeEmbeddedMode();
+            targetUser.setCreatedAt(java.time.LocalDateTime.now().minusHours(1));
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            OrganizationInvitation before = new OrganizationInvitation(org, "target@test.com", OrganizationRole.ADMIN, owner);
+            before.setCreatedAt(java.time.LocalDateTime.now().minusHours(2));
+            OrganizationInvitation after = new OrganizationInvitation(org, "target@test.com", OrganizationRole.MEMBER, owner);
+            after.setCreatedAt(java.time.LocalDateTime.now().minusMinutes(5));
+            when(invitationRepository.findByEmailAndStatus("target@test.com", InvitationStatus.PENDING))
+                    .thenReturn(List.of(before, after));
+
+            assertThat(service.getPendingInvitationsForUser(targetUser.getId())).containsExactly(after);
+        }
+
+        @Test
+        @DisplayName("CE: the TOKEN path still works for an account registered after the invitation")
+        void ceTokenPathStillWorksForNewAccount() {
+            enableCeEmbeddedMode();
+            OrganizationInvitation inv = pendingWithToken("target@test.com", "tok-ce-3");
+            inv.setCreatedAt(java.time.LocalDateTime.now().minusHours(2));
+            targetUser.setCreatedAt(java.time.LocalDateTime.now().minusHours(1));
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            when(memberRepository.existsByOrganization_IdAndUser_Id(orgId, targetUser.getId())).thenReturn(false);
+            setupTeamPlanForOwner();
+            when(memberRepository.countByOrganization_Id(orgId)).thenReturn(1L);
+            when(invitationRepository.save(any(OrganizationInvitation.class))).thenAnswer(a -> a.getArgument(0));
+
+            assertThat(service.acceptInvitation("tok-ce-3", targetUser.getId()).getStatus())
+                    .isEqualTo(InvitationStatus.ACCEPTED);
+        }
+
+        @Test
+        @DisplayName("CE: an account or invitation with NO creation time cannot prove the account predates the invite: token required")
+        void ceMissingCreatedAtRequiresToken() {
+            enableCeEmbeddedMode();
+            OrganizationInvitation inv = pendingWithToken("target@test.com", "tok-ce-null");
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+
+            targetUser.setCreatedAt(null);
+            inv.setCreatedAt(java.time.LocalDateTime.now().minusHours(2));
+            assertThatThrownBy(() -> service.acceptInvitationById(inv.getId(), targetUser.getId()))
+                    .isInstanceOf(SecurityException.class)
+                    .hasMessageContaining("invitation link");
+
+            targetUser.setCreatedAt(java.time.LocalDateTime.now().minusDays(30));
+            inv.setCreatedAt(null);
+            assertThatThrownBy(() -> service.declineInvitationById(inv.getId(), targetUser.getId()))
+                    .isInstanceOf(SecurityException.class)
+                    .hasMessageContaining("invitation link");
+
+            when(invitationRepository.findByEmailAndStatus("target@test.com", InvitationStatus.PENDING))
+                    .thenReturn(List.of(inv));
+            assertThat(service.getPendingInvitationsForUser(targetUser.getId())).isEmpty();
+
+            verify(memberRepository, never()).save(any(OrganizationMember.class));
+            assertThat(inv.getStatus()).isEqualTo(InvitationStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("cloud: the by-id path does not depend on account age (a verified email is the proof)")
+        void cloudByIdIgnoresAccountAge() {
+            OrganizationInvitation inv = pendingWithToken("target@test.com", "tok-cloud");
+            inv.setCreatedAt(java.time.LocalDateTime.now().minusHours(2));
+            targetUser.setCreatedAt(java.time.LocalDateTime.now().minusHours(1));
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            when(invitationRepository.save(any(OrganizationInvitation.class))).thenAnswer(a -> a.getArgument(0));
+
+            assertThat(service.declineInvitationById(inv.getId(), targetUser.getId()).getStatus())
+                    .isEqualTo(InvitationStatus.CANCELLED);
+        }
+
+        // --- F6: expired PENDING must not block a re-invite
+
+        @Test
+        @DisplayName("an EXPIRED pending invitation is expired first and no longer blocks a re-invite")
+        void expiredPendingDoesNotBlockReInvite() {
+            OrganizationInvitation stale = new OrganizationInvitation(org, "new@test.com", OrganizationRole.MEMBER, owner);
+            stale.setExpiresAt(java.time.LocalDateTime.now().minusDays(1));
+            when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
+            when(userRepository.findById(inviter.getId())).thenReturn(Optional.of(inviter));
+            when(memberRepository.findByOrganization_IdAndUser_Id(orgId, inviter.getId()))
+                    .thenReturn(Optional.of(createMembership(org, inviter, OrganizationRole.ADMIN)));
+            setupTeamPlanForOwner();
+            when(memberRepository.countByOrganization_Id(orgId)).thenReturn(2L);
+            when(invitationRepository.findByOrganization_IdAndStatus(orgId, InvitationStatus.PENDING))
+                    .thenReturn(List.of(stale));
+            // The repository answers from the row's CURRENT status, like the database would.
+            lenient().when(invitationRepository.countByOrganization_IdAndStatus(orgId, InvitationStatus.PENDING))
+                    .thenAnswer(a -> stale.getStatus() == InvitationStatus.PENDING ? 1L : 0L);
+            when(invitationRepository.existsByOrganization_IdAndEmailAndStatus(orgId, "new@test.com", InvitationStatus.PENDING))
+                    .thenAnswer(a -> stale.getStatus() == InvitationStatus.PENDING);
+            when(userRepository.findByEmail("new@test.com")).thenReturn(Optional.empty());
+            when(invitationRepository.save(any(OrganizationInvitation.class))).thenAnswer(a -> a.getArgument(0));
+
+            OrganizationInvitation fresh = service.inviteMember(orgId, "new@test.com", OrganizationRole.MEMBER, inviter.getId());
+
+            assertThat(stale.getStatus()).isEqualTo(InvitationStatus.EXPIRED);
+            assertThat(fresh.getStatus()).isEqualTo(InvitationStatus.PENDING);
+            assertThat(fresh).isNotSameAs(stale);
+        }
+
+        // --- public inviter name
+
+        @Test
+        @DisplayName("/invitations/info never falls back to the inviter's EMAIL (public endpoint)")
+        void publicInfoOmitsInviterEmail() {
+            OrganizationInvitation inv = pendingWithToken("newcomer@test.com", "tok-info-email");
+            when(userRepository.findByEmail("newcomer@test.com")).thenReturn(Optional.empty());
+            when(onboardingService.resolveDisplayName(owner.getId())).thenReturn("owner@test.com");
+
+            OrganizationMemberService.InvitationInfo info = service.getInvitationInfo("tok-info-email");
+
+            assertThat(info.valid()).isTrue();
+            assertThat(info.inviterName()).isNull();
+        }
+
+        @Test
+        @DisplayName("/invitations/info drops any email-shaped name, keeps a real display name")
+        void publicInfoKeepsDisplayNameOnly() {
+            pendingWithToken("newcomer@test.com", "tok-info-name");
+            when(userRepository.findByEmail("newcomer@test.com")).thenReturn(Optional.empty());
+            when(onboardingService.resolveDisplayName(owner.getId())).thenReturn("other@elsewhere.io", "Olivia Owner");
+
+            assertThat(service.getInvitationInfo("tok-info-name").inviterName()).isNull();
+            assertThat(service.getInvitationInfo("tok-info-name").inviterName()).isEqualTo("Olivia Owner");
+        }
+    }
+
+    // ===== F5: soft-deleted organization =====
+
+    @Nested
+    @DisplayName("F5: inviteMember on a soft-deleted organization")
+    class InviteIntoDeletedOrganization {
+
+        @Test
+        @DisplayName("refuses to invite into a soft-deleted organization and persists nothing")
+        void refusesDeletedOrganization() {
+            org.setDeletedAt(java.time.LocalDateTime.now());
+            when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
+            // Everything else would let the invite through, so the pre-fix code saves it.
+            lenient().when(userRepository.findById(inviter.getId())).thenReturn(Optional.of(inviter));
+            lenient().when(memberRepository.findByOrganization_IdAndUser_Id(orgId, inviter.getId()))
+                    .thenReturn(Optional.of(createMembership(org, inviter, OrganizationRole.ADMIN)));
+            lenient().when(subscriptionRepository.findActiveByUserId(owner.getId()))
+                    .thenReturn(Optional.of(createSubscription(teamPlan)));
+            lenient().when(userRepository.findByEmail(anyString())).thenReturn(Optional.empty());
+            lenient().when(invitationRepository.save(any(OrganizationInvitation.class))).thenAnswer(a -> a.getArgument(0));
+
+            assertThatThrownBy(() -> service.inviteMember(orgId, "new@test.com", OrganizationRole.MEMBER, inviter.getId()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("deleted organization");
+
+            verify(invitationRepository, never()).save(any(OrganizationInvitation.class));
+            verifyNoInteractions(invitationMailer);
         }
     }
 
@@ -941,8 +1493,17 @@ class OrganizationMemberServiceTest {
             when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
             when(memberRepository.save(any(OrganizationMember.class))).thenAnswer(inv -> inv.getArgument(0));
             when(organizationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            @SuppressWarnings("unchecked")
+            ObjectProvider<OrganizationSamlService> provider =
+                    mock(ObjectProvider.class);
+            OrganizationSamlService saml = mock(OrganizationSamlService.class);
+            when(provider.getIfAvailable()).thenReturn(saml);
+            ReflectionTestUtils.setField(service, "organizationSamlServiceProvider", provider);
 
             service.transferOwnership(orgId, owner.getId(), targetUser.getId());
+
+            // The workspace plan is now the new owner's: its SAML IdP state is re-applied.
+            verify(saml).syncIdentityProviderEnabled(orgId);
 
             assertThat(currentOwner.getRole()).isEqualTo(OrganizationRole.ADMIN);
             assertThat(targetMember.getRole()).isEqualTo(OrganizationRole.OWNER);
@@ -1269,6 +1830,7 @@ class OrganizationMemberServiceTest {
             OrganizationInvitation inv = new OrganizationInvitation(org, "newcomer@test.com", OrganizationRole.ADMIN, owner);
             when(invitationRepository.findByTokenHash(TokenAtRest.hash("tok-1"))).thenReturn(Optional.of(inv));
             when(userRepository.findByEmail("newcomer@test.com")).thenReturn(Optional.empty());
+            when(onboardingService.resolveDisplayName(owner.getId())).thenReturn("Olivia Owner");
 
             OrganizationMemberService.InvitationInfo info = service.getInvitationInfo("tok-1");
 
@@ -1277,6 +1839,8 @@ class OrganizationMemberServiceTest {
             assertThat(info.organizationName()).isEqualTo(org.getName());
             assertThat(info.role()).isEqualTo(OrganizationRole.ADMIN);
             assertThat(info.hasAccount()).isFalse();
+            // F4: the accept page shows who invited the user before asking for consent.
+            assertThat(info.inviterName()).isEqualTo("Olivia Owner");
         }
 
         @Test

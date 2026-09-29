@@ -64,6 +64,9 @@ public class OAuth2Controller {
             @RequestParam(value = "locale", required = false) String locale,
             @RequestBody OAuth2InitiateRequest request) {
 
+        if (isViewerWriteBlocked(httpRequest)) {
+            return ResponseEntity.status(403).build();
+        }
         String userId = tenantResolver.resolve(httpRequest);
         // PR19 - capture the active workspace at initiate-time so the
         // credential lands in the correct scope on callback (state survives
@@ -93,6 +96,9 @@ public class OAuth2Controller {
             @RequestParam(value = "locale", required = false) String locale,
             @RequestBody OAuth2SimpleInitiateRequest request) {
 
+        if (isViewerWriteBlocked(httpRequest)) {
+            return ResponseEntity.status(403).build();
+        }
         String userId = tenantResolver.resolve(httpRequest);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
         String uiLocale = resolveUiLocale(locale);
@@ -106,6 +112,17 @@ public class OAuth2Controller {
         OAuth2InitiateResponse response =
                 oAuth2Service.initiateSimple(request, userId, organizationId, uiLocale);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Org VIEWERs are read-only. An OAuth flow started inside a workspace lands a new
+     * credential in that workspace (and can become its default), which is a write, so it is
+     * refused up front, before any provider round-trip. Same rule as
+     * {@code CredentialController} and {@code OrgAccessGuard.isRoleWriteBlocked}.
+     */
+    private boolean isViewerWriteBlocked(HttpServletRequest request) {
+        return CredentialController.isViewerWriteBlocked(
+                tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request));
     }
 
     /**

@@ -36,12 +36,14 @@ class CategoryControllerIntegrationTest {
 
     private MockMvc mockMvc;
 
+    private static final String ADMIN_TOKEN = "catalog-admin-secret";
     private static final UUID CATEGORY_ID = UUID.randomUUID();
     private static final UUID SUBCATEGORY_ID = UUID.randomUUID();
 
     @BeforeEach
     void setUp() {
-        CategoryController controller = new CategoryController(categoryService, catalogV1Service);
+        CategoryController controller = new CategoryController(
+                categoryService, catalogV1Service, new CatalogAdminAccess(ADMIN_TOKEN));
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
@@ -221,7 +223,8 @@ class CategoryControllerIntegrationTest {
         void shouldReturn200OnSuccess() throws Exception {
             doNothing().when(categoryService).initializeDefaultCategories();
 
-            mockMvc.perform(post("/api/catalog/categories/initialize"))
+            mockMvc.perform(post("/api/catalog/categories/initialize")
+                            .header("X-User-Roles", "USER,ADMIN"))
                     .andExpect(status().isOk());
 
             verify(categoryService).initializeDefaultCategories();
@@ -232,7 +235,8 @@ class CategoryControllerIntegrationTest {
         void shouldReturn500OnFailure() throws Exception {
             doThrow(new RuntimeException("Initialization failed")).when(categoryService).initializeDefaultCategories();
 
-            mockMvc.perform(post("/api/catalog/categories/initialize"))
+            mockMvc.perform(post("/api/catalog/categories/initialize")
+                            .header("X-User-Roles", "ADMIN"))
                     .andExpect(status().isInternalServerError());
         }
 
@@ -243,8 +247,43 @@ class CategoryControllerIntegrationTest {
 
             mockMvc.perform(post("/api/catalog/categories/initialize")
                             .header("X-User-ID", "admin")
-                            .header("X-Organization-ID", "org-123"))
+                            .header("X-Organization-ID", "org-123")
+                            .header("X-User-Roles", "ADMIN"))
                     .andExpect(status().isOk());
+        }
+
+        // Regression: the gateway lists /api/catalog/categories as a PUBLIC prefix, so this
+        // POST reached catalog-service with no JWT at all and seeded global categories.
+        @Test
+        @DisplayName("should refuse an anonymous caller with 403 and seed nothing")
+        void shouldRefuseAnonymousCaller() throws Exception {
+            mockMvc.perform(post("/api/catalog/categories/initialize"))
+                    .andExpect(status().isForbidden());
+
+            verify(categoryService, never()).initializeDefaultCategories();
+        }
+
+        @Test
+        @DisplayName("should refuse a signed-in non-admin user with 403")
+        void shouldRefuseNonAdminUser() throws Exception {
+            mockMvc.perform(post("/api/catalog/categories/initialize")
+                            .header("X-User-ID", "42")
+                            .header("X-User-Roles", "USER"))
+                    .andExpect(status().isForbidden());
+
+            verify(categoryService, never()).initializeDefaultCategories();
+        }
+
+        @Test
+        @DisplayName("should accept the catalog admin token")
+        void shouldAcceptAdminToken() throws Exception {
+            doNothing().when(categoryService).initializeDefaultCategories();
+
+            mockMvc.perform(post("/api/catalog/categories/initialize")
+                            .header("X-Internal-Admin-Token", ADMIN_TOKEN))
+                    .andExpect(status().isOk());
+
+            verify(categoryService).initializeDefaultCategories();
         }
     }
 }

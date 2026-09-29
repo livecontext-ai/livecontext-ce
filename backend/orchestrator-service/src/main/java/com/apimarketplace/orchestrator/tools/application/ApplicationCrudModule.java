@@ -124,6 +124,11 @@ public class ApplicationCrudModule implements ToolModule {
         var accessDenied = com.apimarketplace.agent.config.ToolAccessControl.checkWriteAccess(
                 context != null ? context.credentials() : null, "application", action);
         if (accessDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get()));
+        // Workspace role (VIEWER is read-only): the READ actions stay, every write is refused.
+        var roleDenied = com.apimarketplace.agent.config.ToolAccessControl.checkRoleWriteAccess(
+                context != null ? context.orgId() : null,
+                context != null ? context.orgRole() : null, "application", action);
+        if (roleDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, roleDenied.get()));
 
         return Optional.of(switch (action) {
             case "search" -> executeSearch(parameters, context);
@@ -789,7 +794,8 @@ public class ApplicationCrudModule implements ToolModule {
 
         try {
             UUID cloneId = clone.getId();
-            boolean deleted = workflowManagementService.deleteWorkflow(cloneId, tenantId);
+            boolean deleted = workflowManagementService.deleteWorkflow(cloneId, tenantId,
+                    context != null ? context.orgRole() : null);
             if (!deleted) {
                 return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
                     "Could not uninstall the application - it is not in your current workspace.");

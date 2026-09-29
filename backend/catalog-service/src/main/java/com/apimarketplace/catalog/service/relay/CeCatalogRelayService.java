@@ -23,10 +23,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -84,6 +86,8 @@ public class CeCatalogRelayService {
     private final ObjectMapper objectMapper;
     private final int reserveTtlMinutes;
     private final int rateLimitPerMinute;
+    /** Drives the rate-limit window; tests pin it so a window never rolls over mid-test. */
+    private final Clock clock;
 
     /** Fixed-window counters keyed by {@code installId:epochMinute}; entries
      * outlive their window slightly and expire on their own. */
@@ -92,6 +96,7 @@ public class CeCatalogRelayService {
             .maximumSize(10_000)
             .build();
 
+    @Autowired
     public CeCatalogRelayService(ApiRepository apiRepository,
                                  ApiToolRepository apiToolRepository,
                                  CredentialClient credentialClient,
@@ -100,6 +105,15 @@ public class CeCatalogRelayService {
                                  ObjectMapper objectMapper,
                                  @Value("${ce-catalog-relay.reserve-ttl-minutes:10}") int reserveTtlMinutes,
                                  @Value("${ce-catalog-relay.rate-limit-per-minute:120}") int rateLimitPerMinute) {
+        this(apiRepository, apiToolRepository, credentialClient, creditClient, catalogV1Service, objectMapper,
+                reserveTtlMinutes, rateLimitPerMinute, Clock.systemUTC());
+    }
+
+    CeCatalogRelayService(ApiRepository apiRepository, ApiToolRepository apiToolRepository,
+                          CredentialClient credentialClient, CreditConsumptionClient creditClient,
+                          CatalogV1Service catalogV1Service, ObjectMapper objectMapper,
+                          int reserveTtlMinutes, int rateLimitPerMinute, Clock clock) {
+        this.clock = clock;
         this.apiRepository = apiRepository;
         this.apiToolRepository = apiToolRepository;
         this.credentialClient = credentialClient;
@@ -118,7 +132,7 @@ public class CeCatalogRelayService {
         if (rateLimitPerMinute <= 0) {
             return true;
         }
-        long windowMinute = System.currentTimeMillis() / 60_000L;
+        long windowMinute = clock.millis() / 60_000L;
         String key = installId + ":" + windowMinute;
         AtomicInteger counter = rateWindows.get(key, k -> new AtomicInteger());
         return counter.incrementAndGet() <= rateLimitPerMinute;

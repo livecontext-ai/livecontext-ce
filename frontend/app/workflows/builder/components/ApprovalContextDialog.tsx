@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
+import { useCanDriveRuns } from '@/lib/hooks/useCanDriveRuns';
 import { MessageSquareQuote, ChevronLeft, ChevronRight, CheckCircle, XCircle } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import {
@@ -62,6 +63,9 @@ export function ApprovalContextDialog({
   onOpenChange,
 }: ApprovalContextDialogProps) {
   const tRun = useTranslations('runMode');
+  const tCommon = useTranslations('common');
+  // Resolving an approval drives the run: a read-only VIEWER reads the context only.
+  const canMutate = useCanDriveRuns();
   const [internalOpen, setInternalOpen] = React.useState(false);
   const isControlled = controlledOpen !== undefined;
   const open = isControlled ? controlledOpen : internalOpen;
@@ -220,6 +224,11 @@ export function ApprovalContextDialog({
             )}
           </div>
 
+          {!canMutate ? (
+            <p data-testid="approval-modal-read-only" className="pt-1 text-sm text-slate-500 dark:text-slate-400">
+              {tCommon('viewerReadOnly')}
+            </p>
+          ) : (
           <div className="flex items-center justify-end gap-2 pt-1">
             <button
               type="button"
@@ -242,6 +251,7 @@ export function ApprovalContextDialog({
               {tRun('approvalBar.reject')}
             </button>
           </div>
+          )}
         </DialogContent>
       </Dialog>
     </>

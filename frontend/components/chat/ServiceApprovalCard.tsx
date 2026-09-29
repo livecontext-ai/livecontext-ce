@@ -17,6 +17,7 @@ import { normalizeIconSlug } from '@/lib/credentials/iconSlug';
 import { MissingScopesBanner } from '@/components/credentials/MissingScopesBanner';
 import { useByokCapability } from '@/lib/credentials/useByokCapability';
 import { ServiceLogo } from '@/components/ui/service-logo';
+import { useCanDriveRuns } from '@/lib/hooks/useCanDriveRuns';
 
 /**
  * One connected account that was not granted what the failing call needed.
@@ -79,6 +80,12 @@ export function ServiceApprovalCard({
   className = '',
 }: ServiceApprovalCardProps) {
   const t = useTranslations('serviceApproval');
+  const tCommon = useTranslations('common');
+  // Connecting a service and releasing the held call as approved both act with the
+  // workspace credentials, which the backend refuses to a read-only VIEWER: the card offers
+  // them Deny only (no Connect, no Retry, no auto-approve), and says why. Inside a public
+  // share page the share link decides, not the visitor persisted workspace role.
+  const canMutate = useCanDriveRuns();
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -158,6 +165,7 @@ export function ServiceApprovalCard({
   // Don't auto-approve when needsAttention (credentials may be expired/invalid)
   useEffect(() => {
     if (
+      canMutate &&
       !credentialsLoading &&
       servicesNeedingCredentials.length === 0 &&
       allServicesHaveCredentials &&
@@ -167,7 +175,7 @@ export function ServiceApprovalCard({
       console.log('[ServiceApprovalCard] ✅ All credentials present - auto-approving');
       approveServices();
     }
-  }, [credentialsLoading, servicesNeedingCredentials.length, allServicesHaveCredentials, isApproved, approveServices, pendingApproval.needsAttention]);
+  }, [canMutate, credentialsLoading, servicesNeedingCredentials.length, allServicesHaveCredentials, isApproved, approveServices, pendingApproval.needsAttention]);
 
   // Auto-open wizard if returning from OAuth callback
   useEffect(() => {
@@ -452,8 +460,17 @@ export function ServiceApprovalCard({
         )}
 
         {/* Action buttons - different based on mode */}
+        {!canMutate && (
+          <p className="mt-3 text-xs text-theme-muted" data-testid="service-approval-viewer-read-only">
+            {tCommon('viewerReadOnly')}
+          </p>
+        )}
         <div className="flex justify-end gap-2 mt-3">
-          {needsAttentionMode ? (
+          {!canMutate ? (
+            <Button variant="ghost" size="sm" onClick={handleDeny}>
+              {t('deny')}
+            </Button>
+          ) : needsAttentionMode ? (
             <>
               {/* Needs Attention mode: Deny + Manage Credentials + Retry */}
               <Button

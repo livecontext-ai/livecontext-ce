@@ -16,7 +16,6 @@ import {
   type WorkflowLayoutDirection,
 } from '@/contexts/WorkflowLayoutDirectionContext';
 
-/** The reading direction a dagre rankdir corresponds to. */
 /**
  * An edge that closes a loop: a While node's dedicated loop-back handle, or any edge the
  * builder classified as a back-edge. Layout must ignore both.
@@ -25,6 +24,7 @@ function isLoopBackEdge(edge: Edge): boolean {
   return edge.targetHandle?.endsWith('-loop-back') === true || edge.data?.isBackEdge === true;
 }
 
+/** The reading direction a dagre rankdir corresponds to. */
 function directionOf(rankdir: string): WorkflowLayoutDirection {
   return rankdir === 'TB' || rankdir === 'BT' ? 'vertical' : 'horizontal';
 }
@@ -34,7 +34,7 @@ function directionOf(rankdir: string): WorkflowLayoutDirection {
  */
 const LAYOUT_CONFIG = {
   // Dagre graph direction. Overridden per call from the user's reading direction
-  // (see `layoutConfigForDirection`); this stays the horizontal default.
+  // (see `layoutConfigForDirection`); left to right when nothing is passed.
   rankdir: 'LR' as 'TB' | 'BT' | 'LR' | 'RL', // Left to Right (horizontal layout)
 
   // Node spacing - kept tight for a compact graph (size-aware dims already
@@ -53,8 +53,10 @@ const LAYOUT_CONFIG = {
   nodeWidth: 200,
   nodeHeight: 80,
 
-  // Alignment (undefined = dagre centers nodes naturally)
-  align: 'UL' as 'UL' | 'UR' | 'DL' | 'DR' | undefined,
+  // Alignment. Undefined = dagre balances its four Brandes-Koepf alignments, i.e. centres.
+  // 'UL' used to be the left-to-right default and packed every rank toward one side: a
+  // node with five children had them all hanging BELOW it instead of spread around it.
+  align: undefined as 'UL' | 'UR' | 'DL' | 'DR' | undefined,
 
   // Use deterministic LABEL ESTIMATES, never ReactFlow-measured dims. Both the
   // builder and the fleet lay out from estimates on the path that matters: plan
@@ -109,13 +111,10 @@ export function applyDagreLayout(
   const config = { ...LAYOUT_CONFIG, ...options };
   if (nodes.length === 0) return nodes;
 
-  // The cross-axis centering pass is VERTICAL-ONLY. Horizontal keeps the historical
-  // algorithm (plain Dagre placement, no post-centering) so existing left-to-right
-  // canvases lay out exactly as they always did. Vertical (top-to-bottom) opted into
-  // the extra centering because Dagre leaves wide nodes off-centre over their children
-  // on the TB axis; horizontal never needed it and re-introducing it visibly shifted
-  // long-standing layouts, so it is gated here.
-  const vertical = config.rankdir === 'TB' || config.rankdir === 'BT';
+  // Both directions get the cross-axis centring pass (a parent over the middle of its
+  // children, a lone child straight under its parent). Horizontal used to skip it and
+  // run Dagre with `align: 'UL'`, which is why a node with five children had all five
+  // hanging below it: the layout was lopsided by construction, not by accident.
 
   // Independent sub-graphs (e.g. several trigger chains in one workflow) otherwise
   // share Dagre's GLOBAL rank grid: a wide node in one chain pushes that column for
@@ -125,27 +124,11 @@ export function applyDagreLayout(
   // the fast path and is unchanged.
   const components = connectedComponents(nodes, edges);
   if (components.length <= 1) {
-    const laid = layoutConnectedGraph(nodes, edges, config);
-    return vertical ? centerOnCrossAxis(laid, edges, config) : laid;
+    return centerOnCrossAxis(layoutConnectedGraph(nodes, edges, config), edges, config);
   }
 
-  // Preserve the author's lane order: order components by the smallest existing
-  // coordinate (perpendicular to flow) among their nodes. NaN positions (LLM build,
-  // no positions yet) sort after positioned ones, keeping a stable discovery order.
-  const discoveryIndex = new Map(nodes.map((n, i) => [n.id, i]));
   const perpAxis: 'x' | 'y' = (config.rankdir === 'TB' || config.rankdir === 'BT') ? 'x' : 'y';
-  const componentSortKey = (comp: Set<string>): number => {
-    let bestCoord = Infinity;
-    let firstSeen = Infinity;
-    for (const node of nodes) {
-      if (!comp.has(node.id)) continue;
-      firstSeen = Math.min(firstSeen, discoveryIndex.get(node.id)!);
-      const coord = node.position?.[perpAxis];
-      if (typeof coord === 'number' && isFinite(coord)) bestCoord = Math.min(bestCoord, coord);
-    }
-    return bestCoord !== Infinity ? bestCoord : 1e9 + firstSeen;
-  };
-  const ordered = [...components].sort((a, b) => componentSortKey(a) - componentSortKey(b));
+  const ordered = orderByAuthorLane(components, nodes, perpAxis);
 
   const STACK_GAP = config.nodesep; // gap between stacked independent components
   const result: Node<BuilderNodeData>[] = [];
@@ -153,20 +136,18 @@ export function applyDagreLayout(
   for (const comp of ordered) {
     const compNodes = nodes.filter((n) => comp.has(n.id));
     const compEdges = edges.filter((e) => comp.has(e.source) && comp.has(e.target));
-    const laidComp = layoutConnectedGraph(compNodes, compEdges, config);
-    const laid = vertical ? centerOnCrossAxis(laidComp, compEdges, config) : laidComp;
+    const laid = centerOnCrossAxis(layoutConnectedGraph(compNodes, compEdges, config), compEdges, config);
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const n of laid) {
-      // Vertical prefers measured dims to match how `centerOnCrossAxis` just placed
-      // these nodes (mixing an estimated extent with measured positions would offset
-      // the next component's stack by the estimate/measure gap). Horizontal keeps the
-      // historical estimate-only extent so multi-component stacking is unchanged.
+      // Measured dims first, to match how `centerOnCrossAxis` just placed these nodes
+      // (mixing an estimated extent with measured positions would offset the next
+      // component's stack by the estimate/measure gap).
       const measuredW = typeof n.width === 'number' && n.width > 0 ? n.width : undefined;
       const measuredH = typeof n.height === 'number' && n.height > 0 ? n.height : undefined;
       const est = getNodeDimensions(n, config.ignoreMeasured, directionOf(config.rankdir));
-      const width = vertical ? (measuredW ?? est.width) : est.width;
-      const height = vertical ? (measuredH ?? est.height) : est.height;
+      const width = measuredW ?? est.width;
+      const height = measuredH ?? est.height;
       minX = Math.min(minX, n.position.x);
       minY = Math.min(minY, n.position.y);
       maxX = Math.max(maxX, n.position.x + width);
@@ -226,6 +207,31 @@ function connectedComponents(
 }
 
 /**
+ * Preserve the author's lane order: order components by the smallest existing
+ * coordinate (perpendicular to flow) among their nodes. NaN positions (LLM build,
+ * no positions yet) sort after positioned ones, keeping a stable discovery order.
+ */
+function orderByAuthorLane(
+  components: Set<string>[],
+  nodes: Node<BuilderNodeData>[],
+  perpAxis: 'x' | 'y',
+): Set<string>[] {
+  const discoveryIndex = new Map(nodes.map((n, i) => [n.id, i]));
+  const componentSortKey = (comp: Set<string>): number => {
+    let bestCoord = Infinity;
+    let firstSeen = Infinity;
+    for (const node of nodes) {
+      if (!comp.has(node.id)) continue;
+      firstSeen = Math.min(firstSeen, discoveryIndex.get(node.id)!);
+      const coord = node.position?.[perpAxis];
+      if (typeof coord === 'number' && isFinite(coord)) bestCoord = Math.min(bestCoord, coord);
+    }
+    return bestCoord !== Infinity ? bestCoord : 1e9 + firstSeen;
+  };
+  return [...components].sort((a, b) => componentSortKey(a) - componentSortKey(b));
+}
+
+/**
  * Center connected nodes on the CROSS axis (perpendicular to the flow) so a parent
  * sits over the middle of its children and a single child lines up under its parent,
  * making the main edge run straight instead of bending.
@@ -240,9 +246,7 @@ function connectedComponents(
  * overlap back to a non-overlapping spread centred on the same midpoint. So it can
  * only straighten alignment, never introduce a collision dagre had avoided.
  *
- * Direction-agnostic in itself, but only the VERTICAL path calls it: horizontal keeps
- * the historical plain-Dagre placement so long-standing left-to-right canvases lay out
- * exactly as they always did (see the gate in applyDagreLayout).
+ * Direction-agnostic: the balanced layout runs it in both reading directions.
  */
 export function centerOnCrossAxis(
   laid: Node<BuilderNodeData>[],
@@ -281,6 +285,14 @@ export function centerOnCrossAxis(
   }
 
   const crossCenter = (n: Node<BuilderNodeData>) => n.position[cross] + crossSize(n) / 2;
+  // The centre a group of siblings is balanced on: the MIDDLE one (or the midpoint of the
+  // middle two). Not the mean: with siblings of different widths the mean lands beside
+  // the middle child, so a five-way fan hung three on one side and two on the other.
+  const medianCenter = (centers: number[]) => {
+    const sorted = [...centers].sort((a, b) => a - b);
+    const m = sorted.length >> 1;
+    return sorted.length % 2 === 1 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
+  };
   const setCrossCenter = (n: Node<BuilderNodeData>, c: number) => {
     const p = { ...n.position, [cross]: c - crossSize(n) / 2 };
     n.position = p;
@@ -288,19 +300,29 @@ export function centerOnCrossAxis(
   };
 
   // Group nodes into ranks by their flow coordinate (dagre put a rank on one line).
-  const rankKey = (n: Node<BuilderNodeData>) => Math.round(n.position[flow]);
+  // Keyed by the flow-axis CENTRE, the coordinate dagre actually shares across a rank, and
+  // measured with the same size dagre was given. Keying by the node's start edge split a
+  // rank of nodes with different sizes into one "rank" per size, so pass 3 never saw them
+  // as neighbours: left to right, a wide label and a short one landed on the same row.
+  const flowSize = (n: Node<BuilderNodeData>) =>
+    getNodeDimensions(n, config.ignoreMeasured, directionOf(config.rankdir))[vertical ? 'height' : 'width'];
+  const rankKey = (n: Node<BuilderNodeData>) => Math.round(n.position[flow] + flowSize(n) / 2);
   const ranks = new Map<number, Node<BuilderNodeData>[]>();
   for (const n of laid) (ranks.get(rankKey(n)) ?? ranks.set(rankKey(n), []).get(rankKey(n))!).push(n);
   // Ranks in flow order (top-to-bottom / left-to-right).
   const orderedRankKeys = [...ranks.keys()].sort((a, b) => a - b);
 
-  // Pass 1, leaf-ward first (reverse rank order): a parent centres over its children.
+  // Pass 1, leaf-ward first (reverse rank order): a parent centres over the children it
+  // alone feeds. A merge is left out: centring every branch over the merge they share
+  // would pull all of them onto one line.
   for (const k of [...orderedRankKeys].reverse()) {
     for (const n of ranks.get(k)!) {
-      const kids = (children.get(n.id) ?? []).map((id) => byId.get(id)!).filter(Boolean);
+      const kids = (children.get(n.id) ?? [])
+        .filter((id) => (parents.get(id)?.length ?? 0) === 1)
+        .map((id) => byId.get(id)!)
+        .filter(Boolean);
       if (kids.length === 0) continue;
-      const mid = kids.reduce((s, c) => s + crossCenter(c), 0) / kids.length;
-      setCrossCenter(n, mid);
+      setCrossCenter(n, medianCenter(kids.map(crossCenter)));
     }
   }
   // Pass 2, root-ward (forward): a node with a SINGLE parent lines up under it, so a
@@ -328,15 +350,16 @@ export function centerOnCrossAxis(
       if (crossCenter(row[i]) - crossCenter(row[i - 1]) < need - 0.5) { overlap = true; break; }
     }
     if (!overlap) continue;
-    // Lay them edge-to-edge with the gap, then recentre the whole row on its old mid.
-    const oldMid = row.reduce((s, n) => s + crossCenter(n), 0) / row.length;
+    // Lay them edge-to-edge with the gap, then recentre the whole row on its old middle,
+    // which is where pass 1 put the parent.
+    const oldMid = medianCenter(row.map(crossCenter));
     let cursor = 0;
     const centers: number[] = [];
     for (let i = 0; i < row.length; i++) {
       if (i > 0) cursor += crossSize(row[i - 1]) / 2 + gap + crossSize(row[i]) / 2;
       centers.push(cursor);
     }
-    const newMid = centers.reduce((s, c) => s + c, 0) / centers.length;
+    const newMid = medianCenter(centers);
     row.forEach((n, i) => setCrossCenter(n, centers[i] - newMid + oldMid));
   }
 
@@ -432,26 +455,7 @@ function layoutConnectedGraph(
     dagreGraph.setNode(node.id, { width, height });
   });
 
-  const loopBackEdges = edges.filter((e) => isLoopBackEdge(e));
-
-  edges.forEach((edge) => {
-    // Loop-backs never reach dagre: it would reverse them to break the cycle and rank the
-    // loop's target AFTER its own successors, visibly re-ordering the graph on Auto-layout.
-    if (isLoopBackEdge(edge)) return;
-
-    if (edge.sourceHandle?.endsWith('-exit')) {
-      const whileNode = nodes.find((n) => n.id === edge.source && nodeRegistry.isWhileGroupNode(n));
-      if (whileNode) {
-        const lastBodyId = loopBackEdges.find((lb) => lb.target === whileNode.id)?.source;
-        if (lastBodyId) {
-          dagreGraph.setEdge(lastBodyId, edge.target);
-          return;
-        }
-      }
-    }
-
-    dagreGraph.setEdge(edge.source, edge.target);
-  });
+  for (const [source, target] of layoutEdgePairs(nodes, edges)) dagreGraph.setEdge(source, target);
 
   dagre.layout(dagreGraph);
 
@@ -466,6 +470,34 @@ function layoutConnectedGraph(
     const y = nodeWithPosition.y - nodeWithPosition.height / 2;
     return { ...node, position: { x, y }, positionAbsolute: { x, y } };
   });
+}
+
+/**
+ * The forward `[source, target]` pairs a layout ranks by, in edge order.
+ *
+ * Loop-backs never take part: ranking by one would reverse it to break the cycle and
+ * place the loop's target AFTER its own successors, visibly re-ordering the graph on
+ * Auto-layout. A While node's exit edge is re-anchored on the LAST body node, so the
+ * node after the loop lands after the body chain instead of beside its first node.
+ */
+function layoutEdgePairs(nodes: Node<BuilderNodeData>[], edges: Edge[]): Array<[string, string]> {
+  const loopBackEdges = edges.filter((e) => isLoopBackEdge(e));
+  const pairs: Array<[string, string]> = [];
+  for (const edge of edges) {
+    if (isLoopBackEdge(edge)) continue;
+    if (edge.sourceHandle?.endsWith('-exit')) {
+      const whileNode = nodes.find((n) => n.id === edge.source && nodeRegistry.isWhileGroupNode(n));
+      const lastBodyId = whileNode
+        ? loopBackEdges.find((lb) => lb.target === whileNode.id)?.source
+        : undefined;
+      if (lastBodyId) {
+        pairs.push([lastBodyId, edge.target]);
+        continue;
+      }
+    }
+    pairs.push([edge.source, edge.target]);
+  }
+  return pairs;
 }
 
 // ─── Label-based width estimation ───

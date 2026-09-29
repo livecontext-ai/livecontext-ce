@@ -83,6 +83,138 @@ class FileControllerTest {
         lenient().when(orgAccessGuard.canAccess(any(), any(), eq("file"), any(), any())).thenReturn(true);
     }
 
+    /**
+     * An interface iframe cannot send the session header, so the frontend inlined every file as a
+     * base64 data: URI - six 20 MB videos killed the page (RangeError: Invalid string length).
+     * Media now streams from a short-lived signed link minted here, which must be handed out to
+     * exactly the callers {@code /raw} would serve, and to nobody else.
+     */
+    @Nested
+    @DisplayName("Signed link for streaming (/by-id/{id}/signed-url)")
+    class SignedUrlById {
+
+        private final com.apimarketplace.common.storage.signing.ShowcaseUrlSigner signer =
+                new com.apimarketplace.common.storage.signing.ShowcaseUrlSigner("test-secret");
+        private FileController signing;
+
+        @BeforeEach
+        void signingController() {
+            signing = new FileController(fileStorageService, mimeTypeRegistry, tenantResolver,
+                    streamingMetrics, signer, urlBuilder,
+                    new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+            signing.storageIndex = storageIndex;
+            signing.orgAccessGuard = orgAccessGuard;
+        }
+
+        private StorageEntity video(UUID id) {
+            StorageEntity e = new StorageEntity();
+            e.setId(id);
+            e.setStorageType("S3_FILE");
+            e.setS3Key(OTHER_TENANT + "/general/general/6894721f_ep01.mp4");
+            e.setFileName("ep01.mp4");
+            e.setMimeType("video/mp4");
+            return e;
+        }
+
+        @Test
+        @DisplayName("a readable file gets a proxy-signed link the verifier accepts, for that key only, expiring in 4 hours, the showcase default")
+        void readableFileGetsVerifiableLink() {
+            UUID id = UUID.randomUUID();
+            StorageEntity e = video(id);
+            when(tenantResolver.resolveOrgId(request)).thenReturn("org-7");
+            when(storageIndex.getEntityByIdForScope(id, OWN_TENANT, "org-7")).thenReturn(Optional.of(e));
+            long before = java.time.Instant.now().getEpochSecond();
+
+            ResponseEntity<Map<String, Object>> r = signing.signedUrlById(id, "inline", request);
+
+            assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(r.getHeaders().getFirst("Cache-Control")).isEqualTo("no-store");
+            String url = (String) r.getBody().get("url");
+            assertThat(url).startsWith("/api/files/proxy-signed?");
+            com.apimarketplace.common.storage.url.FileProxyUrls.ProxyUrl parsed =
+                    com.apimarketplace.common.storage.url.FileProxyUrls.parse(url);
+            assertThat(parsed.key()).isEqualTo(e.getS3Key());
+            assertThat(parsed.disposition()).isEqualTo("inline");
+            assertThat(parsed.exp()).isEqualTo(((Number) r.getBody().get("expires_at")).longValue())
+                    .isBetween(before + 14300, before + 14500);
+            // The link is exactly what proxySignedDownload will accept - and nothing broader.
+            long now = java.time.Instant.now().getEpochSecond();
+            assertThat(signer.verify(parsed.key(), parsed.exp(), "inline", parsed.sig(), now)).isTrue();
+            assertThat(signer.verify(OTHER_TENANT + "/general/general/other.mp4", parsed.exp(), "inline", parsed.sig(), now)).isFalse();
+            assertThat(signer.verify(parsed.key(), parsed.exp(), "attachment", parsed.sig(), now)).isFalse();
+        }
+
+        @Test
+        @DisplayName("disposition=attachment is signed as attachment")
+        void attachmentDispositionIsSigned() {
+            UUID id = UUID.randomUUID();
+            when(storageIndex.getEntityById(id, OWN_TENANT)).thenReturn(Optional.of(video(id)));
+
+            ResponseEntity<Map<String, Object>> r = signing.signedUrlById(id, "attachment", request);
+
+            com.apimarketplace.common.storage.url.FileProxyUrls.ProxyUrl parsed =
+                    com.apimarketplace.common.storage.url.FileProxyUrls.parse((String) r.getBody().get("url"));
+            assertThat(parsed.disposition()).isEqualTo("attachment");
+            assertThat(signer.verify(parsed.key(), parsed.exp(), "attachment", parsed.sig(),
+                    java.time.Instant.now().getEpochSecond())).isTrue();
+        }
+
+        @Test
+        @DisplayName("404, and nothing signed, when the file is not in the caller's org and is not theirs")
+        void unreadableFileIs404() {
+            UUID id = UUID.randomUUID();
+            when(tenantResolver.resolveOrgId(request)).thenReturn("org-7");
+            when(storageIndex.getEntityByIdForScope(id, OWN_TENANT, "org-7")).thenReturn(Optional.empty());
+            when(storageIndex.getEntityById(id, OWN_TENANT)).thenReturn(Optional.empty());
+
+            ResponseEntity<Map<String, Object>> r = signing.signedUrlById(id, "inline", request);
+
+            assertThat(r.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(r.getBody()).isNull();
+        }
+
+        @Test
+        @DisplayName("404 when the file is restricted for this org member, exactly as /raw refuses it")
+        void restrictedFileIs404() {
+            UUID id = UUID.randomUUID();
+            StorageEntity e = video(id);
+            e.setOrganizationId("org-7");
+            when(tenantResolver.resolveOrgId(request)).thenReturn("org-7");
+            when(tenantResolver.resolveOrgRole(request)).thenReturn("MEMBER");
+            when(storageIndex.getEntityByIdForScope(id, OWN_TENANT, "org-7")).thenReturn(Optional.of(e));
+            when(orgAccessGuard.canAccess("org-7", OWN_TENANT, "file", id.toString(), "MEMBER")).thenReturn(false);
+
+            assertThat(signing.signedUrlById(id, "inline", request).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(signing.rawById(id, "inline", request).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        }
+
+        @Test
+        @DisplayName("404 for an inline row: there is no stored object for a signed link to stream")
+        void inlineRowIs404() {
+            UUID id = UUID.randomUUID();
+            StorageEntity e = new StorageEntity();
+            e.setId(id);
+            e.setStorageType("TEXT");
+            e.setFileName("note.txt");
+            e.setMimeType("text/plain");
+            e.setDataText("hello");
+            when(storageIndex.getEntityById(id, OWN_TENANT)).thenReturn(Optional.of(e));
+
+            assertThat(signing.signedUrlById(id, "inline", request).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        }
+
+        @Test
+        @DisplayName("503 when this installation has no signing secret (the frontend falls back on it)")
+        void noSecretIs503() {
+            UUID id = UUID.randomUUID();
+            when(storageIndex.getEntityById(id, OWN_TENANT)).thenReturn(Optional.of(video(id)));
+
+            // `controller` is built with a blank secret in setUp.
+            assertThat(controller.signedUrlById(id, "inline", request).getStatusCode())
+                    .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        }
+    }
+
     @Nested
     @DisplayName("Anonymous avatar serve (/avatar/{id})")
     class AnonymousAvatarServe {

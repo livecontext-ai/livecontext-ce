@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState, useEffect } from "react";
 import { SelectedModel, AIModel } from "@/hooks/useModels";
-import { PanelLeft, PanelRight, PanelBottom, ChevronLeft, ChevronRight, Home, Sparkles, Minimize2, FileText, Pencil, Globe, ArrowLeft, Download, List, SlidersHorizontal } from "lucide-react";
+import { PanelLeft, PanelRight, PanelBottom, ChevronLeft, ChevronRight, Home, Sparkles, Minimize2, Pencil, Globe, ArrowLeft, Download, List, SlidersHorizontal } from "lucide-react";
 import { useSidePanelLayoutSafe } from "@/contexts/SidePanelLayoutContext";
 import { useWorkflowLogsSidePanel } from "@/components/workflow/useWorkflowLogsSidePanel";
 import { useConversationActivity } from "@/contexts/ConversationActivityContext";
@@ -23,6 +23,7 @@ import { useTranslations } from "next-intl";
 import { PublishWorkflowModal } from "@/components/workflow/ShareWorkflowModal";
 import { useWorkflowSaveState } from "@/hooks/useWorkflowSaveState";
 import { WorkflowRunSplitButton } from "@/components/workflow/WorkflowRunSplitButton";
+import { WorkflowRunViewsSplitButton } from "@/components/workflow/WorkflowRunViewsSplitButton";
 import { WorkflowSaveWithVersions } from "@/components/workflow/WorkflowVersionHistory";
 import { MarketplaceHeaderActions } from "@/components/marketplace/MarketplaceHeaderActions";
 import { NotificationBell } from "@/components/chat/NotificationBell";
@@ -834,17 +835,12 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             <>
               {/* Application mode: Activation toggle + Logs button (Desktop) */}
               <ApplicationActivationButton workflowId={effectiveAppWorkflowId} />
-              <Button
-                variant="default"
-                size="sm"
-                onClick={() => handleOpenWorkflowLogs(effectiveAppWorkflowId)}
+              <WorkflowRunViewsSplitButton
+                workflowId={effectiveAppWorkflowId}
+                desktop={true}
                 disabled={!currentRunId || !canOpenWorkflowLogs}
-                title={t('actions.logs')}
-                className="h-8 px-2 lg:px-3"
-              >
-                <FileText className="w-4 h-4 lg:mr-1" />
-                <span className="hidden lg:inline">{t('actions.logs')}</span>
-              </Button>
+                onOpenLogs={() => handleOpenWorkflowLogs(effectiveAppWorkflowId)}
+              />
             </>
           )}
           {isWorkflowPage && workflowId && !isApplicationPage && (
@@ -873,17 +869,14 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               {isRunMode ? (
                 <>
                   {/* Edit button removed - use WorkflowModeToggle instead */}
-                  <Button
-                    variant="default"
-                    size="sm"
-                    onClick={() => handleOpenWorkflowLogs(workflowId)}
+                  {/* Run views (Run / Analysis / Logs) of the bound run: the run-mode
+                      counterpart of the Run split button below. */}
+                  <WorkflowRunViewsSplitButton
+                    workflowId={workflowId}
+                    desktop={true}
                     disabled={!currentRunId || !canOpenWorkflowLogs}
-                    title={t('actions.logs')}
-                    className="h-8 px-2 lg:px-3"
-                  >
-                    <FileText className="w-4 h-4 lg:mr-1" />
-                    <span className="hidden lg:inline">{t('actions.logs')}</span>
-                  </Button>
+                    onOpenLogs={() => handleOpenWorkflowLogs(workflowId)}
+                  />
                 </>
               ) : (
                 <>
@@ -1089,16 +1082,12 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             <>
               {/* Application mode: Activation toggle + Logs button (Mobile) */}
               <ApplicationActivationButton workflowId={effectiveAppWorkflowId} />
-              <Button
-                variant="default"
-                size="sm"
-                onClick={() => handleOpenWorkflowLogs(effectiveAppWorkflowId)}
+              <WorkflowRunViewsSplitButton
+                workflowId={effectiveAppWorkflowId}
+                desktop={false}
                 disabled={!currentRunId || !canOpenWorkflowLogs}
-                title={t('actions.logs')}
-                className="h-8 px-2"
-              >
-                <FileText className="w-4 h-4" />
-              </Button>
+                onOpenLogs={() => handleOpenWorkflowLogs(effectiveAppWorkflowId)}
+              />
             </>
           )}
           {isWorkflowPage && workflowId && !isApplicationPage && (
@@ -1126,16 +1115,12 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               {isRunMode ? (
                 <>
                   {/* Edit button removed (mobile) - use WorkflowModeToggle instead */}
-                  <Button
-                    variant="default"
-                    size="sm"
-                    onClick={() => handleOpenWorkflowLogs(workflowId)}
+                  <WorkflowRunViewsSplitButton
+                    workflowId={workflowId}
+                    desktop={false}
                     disabled={!currentRunId || !canOpenWorkflowLogs}
-                    title={t('actions.logs')}
-                    className="h-8 px-2"
-                  >
-                    <FileText className="w-4 h-4" />
-                  </Button>
+                    onOpenLogs={() => handleOpenWorkflowLogs(workflowId)}
+                  />
                 </>
               ) : (
                 <>

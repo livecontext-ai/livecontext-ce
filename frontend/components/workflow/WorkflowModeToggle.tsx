@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback, useId } from 'react';
 import { Edit3, History, Play, Eye } from 'lucide-react';
 import { formatCost } from '@/lib/format-cost';
 import { useTranslations } from 'next-intl';
@@ -17,6 +17,10 @@ import { computeRunInfoPanelWidths } from '@/components/workflow/runInfoPanelWid
 import { RunSummaryBar } from '@/components/workflow/run-panel/RunSummaryBar';
 import type { RunPanelAction } from '@/components/workflow/run-panel/runPanelBus';
 import { openRunPanel } from '@/components/workflow/run-panel/runPanelBus';
+import { markUserModeToggle } from '@/lib/workflow/workflowPanelChat';
+import { EPOCH_NAV_AUTO_OPEN_FROM, RunEpochNavigator } from '@/components/workflow/run-panel/RunEpochNavigator';
+import { markEpochPickedByUser } from '@/components/workflow/run-panel/useDefaultEpochSelection';
+import type { EpochTimestamp } from '@/components/workflow/run-panel/runFormatting';
 
 interface WorkflowModeToggleProps {
   mode: 'edit' | 'run';
@@ -46,6 +50,8 @@ interface WorkflowModeToggleProps {
   actionFailed?: boolean;
   /** How many epochs the run has, i.e. how many rows its epoch selector lists. */
   epochCount?: number;
+  /** The run's epochs, for the navigator the epoch chip unfolds. Omit to keep the chip a label. */
+  epochTimestamps?: EpochTimestamp[];
   /** Pinned (production) version of the workflow, null if unpinned */
   pinnedVersion?: number | null;
   /** When the settings panel is open, hide the run bar & history button */
@@ -79,6 +85,7 @@ export function WorkflowModeToggle({
   actionPending = null,
   actionFailed = false,
   epochCount = 0,
+  epochTimestamps,
   pinnedVersion,
   isSettingsOpen = false,
 }: WorkflowModeToggleProps) {
@@ -148,6 +155,36 @@ export function WorkflowModeToggle({
     return () => window.removeEventListener(VIEWING_EPOCH_EVENT, handler);
   }, [canvasRunId]);
 
+  /**
+   * Whether the pill's epoch navigator is unfolded. By default it is unfolded on a run
+   * with enough epochs to be worth browsing (EPOCH_NAV_AUTO_OPEN_FROM), folded below.
+   * A click on the chip is an explicit choice that wins, for the run and mode it was
+   * made on: moving to another run or mode drops it in that same render (no effect, no
+   * frame showing the old choice), so the next run opens on ITS default again.
+   */
+  const epochNavKey = `${canvasRunId ?? ''}|${mode}`;
+  const [epochNavChoice, setEpochNavChoice] = useState<{ key: string; open: boolean } | null>(null);
+  if (epochNavChoice !== null && epochNavChoice.key !== epochNavKey) setEpochNavChoice(null);
+  const epochNavDefaultOpen = (epochTimestamps?.length ?? 0) >= EPOCH_NAV_AUTO_OPEN_FROM;
+  const epochNavOpen = epochNavChoice?.key === epochNavKey ? epochNavChoice.open : epochNavDefaultOpen;
+  const epochNavId = useId();
+  const runPillRef = useRef<HTMLDivElement>(null);
+  const toggleEpochNav = useCallback(
+    () => setEpochNavChoice({ key: epochNavKey, open: !epochNavOpen }),
+    [epochNavKey, epochNavOpen],
+  );
+  /** Folding from inside the navigator hands focus back to the chip that unfolded it. */
+  const closeEpochNav = useCallback(() => {
+    setEpochNavChoice({ key: epochNavKey, open: false });
+    runPillRef.current?.querySelector<HTMLElement>('[data-run-epoch-chip]')?.focus();
+  }, [epochNavKey]);
+
+  /** A pick in the pill is a user choice, recorded like one made in the Run panel. */
+  const handleNavigatorSelectEpoch = useCallback((epoch: number | null) => {
+    markEpochPickedByUser(canvasRunId, epoch);
+    setViewingEpoch(epoch);
+  }, [canvasRunId, setViewingEpoch]);
+
   /** Invisible probe element to measure the real available container width
    *  (accounts for SidePanel, sidebar, etc. - not just window.innerWidth). */
   const probeRef = useRef<HTMLDivElement>(null);
@@ -207,6 +244,8 @@ export function WorkflowModeToggle({
         const latestRun = await orchestratorApi.getLatestWorkflowRun(workflowId);
         if (latestRun) {
           const actualRunId = latestRun.runId || (latestRun as any).id;
+          // Re-clicking Run on the run already shown changes nothing: no mark to leave behind.
+          if (actualRunId !== canvasRunId) markUserModeToggle(workflowId, actualRunId);
           if (isEmbedded) {
             setRunId(actualRunId);
           } else {
@@ -224,6 +263,7 @@ export function WorkflowModeToggle({
         console.error('[WorkflowModeToggle] Failed to load run:', error);
       }
     } else {
+      markUserModeToggle(workflowId, null);
       if (isEmbedded) {
         setRunId(null);
       } else {
@@ -330,11 +370,21 @@ export function WorkflowModeToggle({
               The WHOLE bar is the way into the run panel: a dedicated icon for
               that was one more glyph competing with the chips for room in a pill
               that already overflows on a narrow canvas. Its inner controls
-              (version chip -> history, stop/cancel/reactivate, scroll arrows)
-              stop the click, so they keep their own behaviour. */}
+              (version chip -> history, epoch chip -> navigator, stop/cancel/
+              reactivate, scroll arrows) stop the click, so they keep their own
+              behaviour.
+              The surface is a plain wrapper and the button is the row inside it:
+              the epoch navigator unfolds UNDER the row as its sibling, so it is
+              not a child of a role=button (whose content assistive tech flattens)
+              and hovering it does not light up the "open the panel" target. */}
           {showRunInfo && (
             <div
+              ref={runPillRef}
               data-run-info-panel
+              className={`pointer-events-auto w-fit max-w-full min-w-0 ${canvasChromeSurfaceClass}`}
+            >
+            <div
+              data-run-pill-row
               data-run-open-panel
               role="button"
               tabIndex={0}
@@ -351,10 +401,10 @@ export function WorkflowModeToggle({
                 e.preventDefault();
                 openPanel('run');
               }}
-              // The shared chrome surface, plus the affordances of a control:
-              // the whole bar is clickable. Hover and ring go through the theme
-              // tokens the rest of the chrome uses rather than a fixed gray.
-              className={`pointer-events-auto w-fit max-w-full min-w-0 cursor-pointer transition-colors hover:bg-[var(--bg-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] ${canvasChromeSurfaceClass}`}
+              // The affordances of a control: the whole row is clickable. Hover and
+              // ring go through the theme tokens the rest of the chrome uses rather
+              // than a fixed gray, rounded like the surface so neither bleeds past it.
+              className={`cursor-pointer transition-colors hover:bg-[var(--bg-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] ${epochNavOpen ? 'rounded-t-2xl' : 'rounded-2xl'}`}
             >
               <RunSummaryBar
                 currentRunInfo={currentRunInfo!}
@@ -368,7 +418,23 @@ export function WorkflowModeToggle({
                 actionPending={actionPending}
                 actionFailed={actionFailed}
                 onVersionClick={() => openPanel('history')}
+                onEpochChipClick={epochTimestamps && epochTimestamps.length > 0 ? toggleEpochNav : undefined}
+                epochChipExpanded={epochNavOpen}
+                epochChipControls={epochNavId}
               />
+            </div>
+              {/* Unfolds DOWNWARD only: the navigator takes the width the identity
+                  row already has and never widens the pill. */}
+              {epochNavOpen && epochTimestamps && epochTimestamps.length > 0 && (
+                <RunEpochNavigator
+                  id={epochNavId}
+                  epochTimestamps={epochTimestamps}
+                  selectedEpoch={selectedEpoch}
+                  runStatus={currentRunInfo?.status}
+                  onSelectEpoch={handleNavigatorSelectEpoch}
+                  onClose={closeEpochNav}
+                />
+              )}
             </div>
           )}
         </div>

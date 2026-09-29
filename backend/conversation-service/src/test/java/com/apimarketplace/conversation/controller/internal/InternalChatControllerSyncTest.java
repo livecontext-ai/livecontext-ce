@@ -48,6 +48,7 @@ class InternalChatControllerSyncTest {
     @Mock private CreditConsumptionClient creditClient;
     @Mock private AgentObservabilityClient observabilityClient;
     @Mock private ConversationExecutionLockService executionLockService;
+    @Mock private com.apimarketplace.conversation.service.ConversationQueryService conversationQueryService;
 
     private InternalChatController controller;
 
@@ -59,8 +60,10 @@ class InternalChatControllerSyncTest {
                     Supplier<ResponseEntity<Map<String, Object>>> action = invocation.getArgument(1);
                     return action.get();
                 });
+        // Default: the caller may write the conversation. The ownership tests below override it.
+        lenient().when(conversationQueryService.isConversationInStrictScope(any(), any(), any())).thenReturn(true);
         controller = new InternalChatController(streamInitializer, agentService, messageService,
-                creditClient, observabilityClient, executionLockService);
+                creditClient, observabilityClient, executionLockService, conversationQueryService);
     }
 
     @Nested
@@ -77,7 +80,7 @@ class InternalChatControllerSyncTest {
 
             when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION", null, null)).thenReturn(false);
 
-            ResponseEntity<Map<String, Object>> response = controller.chatSync(request, "user-1", "org-1");
+            ResponseEntity<Map<String, Object>> response = controller.chatSync(request, "user-1", "org-1", null, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(402);
             assertThat(response.getBody()).containsEntry("success", false)
@@ -120,7 +123,7 @@ class InternalChatControllerSyncTest {
 
             when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION", "claude-code", "claude-opus-4-7")).thenReturn(false);
 
-            controller.chatSync(request, "user-1", "org-1");
+            controller.chatSync(request, "user-1", "org-1", null, null);
 
             ArgumentCaptor<String> assistantCaptor = ArgumentCaptor.forClass(String.class);
             verify(observabilityClient).recordFailureAsync(
@@ -138,7 +141,7 @@ class InternalChatControllerSyncTest {
             request.setConversationId("");
             request.setMessage("hello");
 
-            ResponseEntity<Map<String, Object>> response = controller.chatSync(request, "user-1", null);
+            ResponseEntity<Map<String, Object>> response = controller.chatSync(request, "user-1", null, null, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(400);
             verifyNoInteractions(creditClient);
@@ -153,7 +156,7 @@ class InternalChatControllerSyncTest {
             request.setConversationId(null);
             request.setMessage("hello");
 
-            ResponseEntity<Map<String, Object>> response = controller.chatSync(request, "user-1", null);
+            ResponseEntity<Map<String, Object>> response = controller.chatSync(request, "user-1", null, null, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(400);
             verifyNoInteractions(creditClient);
@@ -184,7 +187,7 @@ class InternalChatControllerSyncTest {
             when(agentService.executeSync(any(), eq("conv-1")))
                     .thenReturn(Map.of("success", true, "content", "ok", "conversationId", "conv-1"));
 
-            ResponseEntity<Map<String, Object>> response = controller.chatSync(request, "user-1", "org-1");
+            ResponseEntity<Map<String, Object>> response = controller.chatSync(request, "user-1", "org-1", null, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
             assertThat(response.getBody()).containsEntry("success", true);
@@ -194,6 +197,95 @@ class InternalChatControllerSyncTest {
             assertThat(captor.getValue().getRole()).isEqualTo("user");
             verify(agentService).executeSync(any(), eq("conv-1"));
             verify(executionLockService).withConversationLock(eq("conv-1"), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("Security: role headers and conversation ownership")
+    class SecurityTests {
+
+        @Test
+        @DisplayName("regression: orgRole / userRoles reach the agent from the headers, not from the request body")
+        void rolesComeFromHeadersNotBody() throws Exception {
+            // The body carries forged roles; Jackson must not bind them and the controller must
+            // set the header values the trusted caller forwarded.
+            ChatRequest request = new com.fasterxml.jackson.databind.ObjectMapper().readValue(
+                    "{\"conversationId\":\"conv-1\",\"message\":\"hi\",\"orgRole\":\"OWNER\",\"userRoles\":\"admin\"}",
+                    ChatRequest.class);
+            when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION", null, null)).thenReturn(true);
+            when(agentService.executeSync(any(), eq("conv-1"))).thenReturn(Map.of("success", true));
+
+            controller.chatSync(request, "user-1", "org-1", "VIEWER", "user");
+
+            ArgumentCaptor<ChatRequest> captor = ArgumentCaptor.forClass(ChatRequest.class);
+            verify(agentService).executeSync(captor.capture(), eq("conv-1"));
+            assertThat(captor.getValue().getOrgRole()).isEqualTo("VIEWER");
+            assertThat(captor.getValue().getUserRoles()).isEqualTo("user");
+        }
+
+        @Test
+        @DisplayName("regression: a caller that may not write the conversation gets 404 and nothing is written or executed")
+        void foreignConversationRefused() {
+            ChatRequest request = new ChatRequest();
+            request.setConversationId("victim-conv");
+            request.setMessage("inject");
+            when(conversationQueryService.isConversationInStrictScope("victim-conv", "user-1", "org-1")).thenReturn(false);
+
+            ResponseEntity<Map<String, Object>> response = controller.chatSync(request, "user-1", "org-1", null, null);
+
+            assertThat(response.getStatusCode().value()).isEqualTo(404);
+            assertThat(response.getBody()).containsEntry("success", false);
+            verifyNoInteractions(messageService);
+            verifyNoInteractions(agentService);
+            verifyNoInteractions(creditClient);
+            verifyNoInteractions(executionLockService);
+        }
+
+        @Test
+        @DisplayName("regression: async internal chat on a conversation outside the header workspace is 404 (strict check through the real initializer)")
+        void asyncForeignConversationRefused() {
+            com.apimarketplace.conversation.streaming.StreamStateService stateService =
+                    org.mockito.Mockito.mock(com.apimarketplace.conversation.streaming.StreamStateService.class);
+            com.apimarketplace.conversation.streaming.StreamPubSubService pubSub =
+                    org.mockito.Mockito.mock(com.apimarketplace.conversation.streaming.StreamPubSubService.class);
+            // Streaming answers normally, so a missing guard shows up as a 200 on the victim's
+            // conversation rather than as a mock NPE.
+            org.mockito.Mockito.lenient().when(stateService.createStream(any(), any(), any(), any())).thenReturn(reactor.core.publisher.Mono.just(
+                    com.apimarketplace.conversation.streaming.StreamMetadata.create("s-x", "user-1", "victim-conv", "gpt-4", null)));
+            org.mockito.Mockito.lenient().when(pubSub.publish(any(), any())).thenReturn(reactor.core.publisher.Mono.just(1L));
+            ChatStreamInitializer realInitializer = new ChatStreamInitializer(
+                    org.mockito.Mockito.mock(com.apimarketplace.conversation.service.ai.ChatStreamingService.class),
+                    org.mockito.Mockito.mock(com.apimarketplace.conversation.service.ConversationHistoryService.class),
+                    stateService, pubSub, conversationQueryService);
+            InternalChatController asyncController = new InternalChatController(realInitializer, agentService,
+                    messageService, creditClient, observabilityClient, executionLockService, conversationQueryService);
+            ChatRequest request = new ChatRequest();
+            request.setMessage("hi");
+            request.setModel("gpt-4");
+            request.setConversationId("victim-conv");
+            when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION", null, "gpt-4")).thenReturn(true);
+            when(conversationQueryService.isConversationInStrictScope("victim-conv", "user-1", "org-1"))
+                    .thenReturn(false);
+
+            ResponseEntity<Map<String, String>> response =
+                    asyncController.chat(request, "user-1", "org-1", null, null).block();
+
+            assertThat(response).isNotNull();
+            assertThat(response.getStatusCode().value()).isEqualTo(404);
+            verifyNoInteractions(messageService);
+        }
+
+        @Test
+        @DisplayName("async internal chat also takes orgRole / userRoles from the headers")
+        void asyncRolesComeFromHeaders() {
+            ChatRequest request = new ChatRequest();
+            request.setMessage("hi");
+            when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION", null, null)).thenReturn(false);
+
+            controller.chat(request, "user-1", "org-1", "MEMBER", "user").block();
+
+            assertThat(request.getOrgRole()).isEqualTo("MEMBER");
+            assertThat(request.getUserRoles()).isEqualTo("user");
         }
     }
 }

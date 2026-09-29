@@ -1,5 +1,8 @@
 package com.apimarketplace.auth.service;
 
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.test.util.ReflectionTestUtils;
+
 import com.apimarketplace.auth.domain.*;
 import com.apimarketplace.auth.repository.*;
 import com.apimarketplace.common.web.AppEditionProvider;
@@ -118,6 +121,7 @@ class OrganizationMemberServiceWorkspaceDeleteTest {
     @Test
     @DisplayName("soft-delete: stamps deleted_at/by, cancels PENDING invitations, audits DELETED")
     void happyPath() {
+        OrganizationSamlService saml = wireSamlService(service);
         when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
         when(memberRepository.findByOrganization_IdAndUser_Id(orgId, 1L))
                 .thenReturn(Optional.of(membership(owner, OrganizationRole.OWNER, false)));
@@ -135,6 +139,18 @@ class OrganizationMemberServiceWorkspaceDeleteTest {
         assertThat(pending.getStatus()).isEqualTo(InvitationStatus.CANCELLED);
         verify(organizationRepository).save(org);
         verify(auditService).record(eq(orgId), eq(1L), eq(OrganizationAuditEvent.Type.DELETED), any());
+        // A deleted workspace must not keep its SAML IdP enabled during the grace window.
+        verify(saml).syncIdentityProviderEnabled(orgId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private OrganizationSamlService wireSamlService(Object target) {
+        OrganizationSamlService saml = mock(OrganizationSamlService.class);
+        ObjectProvider<OrganizationSamlService> provider =
+                mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(saml);
+        ReflectionTestUtils.setField(target, "organizationSamlServiceProvider", provider);
+        return saml;
     }
 
     @Test
@@ -204,6 +220,7 @@ class OrganizationMemberServiceWorkspaceDeleteTest {
     @Test
     @DisplayName("restore: clears deleted_at and audits RESTORED")
     void restoreHappyPath() {
+        OrganizationSamlService saml = wireSamlService(service);
         org.setDeletedAt(LocalDateTime.now());
         org.setDeletedBy(1L);
         when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
@@ -218,5 +235,6 @@ class OrganizationMemberServiceWorkspaceDeleteTest {
         assertThat(org.getDeletedBy()).isNull();
         verify(organizationRepository).save(org);
         verify(auditService).record(eq(orgId), eq(1L), eq(OrganizationAuditEvent.Type.RESTORED), any());
+        verify(saml).syncIdentityProviderEnabled(orgId);
     }
 }

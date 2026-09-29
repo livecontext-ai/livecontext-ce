@@ -43,6 +43,8 @@ public class RewardService {
     /** Ledger source types that route to the PAYG bucket (see CreditService). */
     static final String SOURCE_TYPE_REWARD = "REWARD_REFERRAL";
     static final String SOURCE_TYPE_CLAWBACK = "REWARD_CLAWBACK";
+    /** V549: a redeem-time credit grant (creator / partner audience code), PAYG bucket. */
+    static final String SOURCE_TYPE_CODE = "REWARD_CODE";
 
     private final RewardCodeRepository codeRepository;
     private final RewardRedemptionRepository redemptionRepository;
@@ -57,6 +59,37 @@ public class RewardService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private PartnerPayoutSpi partnerPayoutSpi;
+
+    /**
+     * Grants the complimentary plan of a creator code (V549). Setter-injected and lazy for
+     * the same cycle reason as CreditService; a hand-built test instance that never sets it
+     * grants no plan (the credits still land).
+     */
+    private AdminPlanService adminPlanService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setAdminPlanService(@org.springframework.context.annotation.Lazy AdminPlanService adminPlanService) {
+        this.adminPlanService = adminPlanService;
+    }
+
+    /**
+     * Reads the redeemer's email verification and signup date (V549). Setter-injected like the
+     * plan service; a hand-built test instance without it skips both account checks.
+     */
+    private com.apimarketplace.auth.repository.UserRepository userRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setUserRepository(com.apimarketplace.auth.repository.UserRepository userRepository) {
+        this.userRepository = userRepository;
+    }
+
+    /** A partner code attributes accounts created at most this many days before the redeem. */
+    @org.springframework.beans.factory.annotation.Value("${reward.partner.new-account-days:30}")
+    private int partnerNewAccountDays = 30;
+
+    void setPartnerNewAccountDays(int days) {
+        this.partnerNewAccountDays = days;
+    }
 
     /** Referral reward, in PAYG credits, granted to BOTH parties on conversion. */
     private final int referralRewardCredits;
@@ -95,14 +128,26 @@ public class RewardService {
         NOT_REDEEMABLE,     // inactive or outside [valid_from, valid_until]
         ALREADY_REDEEMED,   // this user already redeemed this code (or this referral)
         EXHAUSTED,          // global cap reached
-        SELF_REFERRAL,      // a user cannot redeem their own referral code
-        ALREADY_PAID        // existing paid subscriber: a first conversion can never fire
+        SELF_REFERRAL,      // a user cannot redeem their own referral (or partner) code
+        ALREADY_PAID,       // existing paid subscriber: a first conversion can never fire
+        ALREADY_ATTRIBUTED, // the user is already attributed to a partner (first code wins)
+        EMAIL_NOT_VERIFIED, // a code that grants credits or a plan waits for a verified email
+        NOT_NEW_ACCOUNT,    // a partner code is for accounts created recently (new users it brought)
+        NOTHING_TO_GRANT    // a plan-only code this account cannot receive: refused, the use is kept
     }
 
-    /** Outcome of a redeem attempt; {@code redemption} is non-null on the success states. */
-    public record RedeemResult(RedeemStatus status, RewardRedemption redemption) {
-        static RedeemResult of(RedeemStatus status) { return new RedeemResult(status, null); }
-        static RedeemResult of(RedeemStatus status, RewardRedemption r) { return new RedeemResult(status, r); }
+    /**
+     * Outcome of a redeem attempt; {@code redemption} is non-null on the success states.
+     * {@code grantedCredits} / {@code grantedPlanCode} / {@code planEndsAt} describe what a
+     * redeem-time credit/plan code actually gave (0 / null otherwise), so the UI says it.
+     */
+    public record RedeemResult(RedeemStatus status, RewardRedemption redemption, int grantedCredits,
+                               String grantedPlanCode, java.time.LocalDateTime planEndsAt) {
+        public RedeemResult(RedeemStatus status, RewardRedemption redemption) {
+            this(status, redemption, 0, null, null);
+        }
+        static RedeemResult of(RedeemStatus status) { return new RedeemResult(status, null, 0, null, null); }
+        static RedeemResult of(RedeemStatus status, RewardRedemption r) { return new RedeemResult(status, r, 0, null, null); }
         public boolean isSuccess() {
             return status == RedeemStatus.SUCCESS
                     || status == RedeemStatus.PENDING_CONVERSION
@@ -193,8 +238,8 @@ public class RewardService {
         if (!rc.isRedeemableAt(now)) return RedeemResult.of(RedeemStatus.NOT_REDEEMABLE);
         if (rc.isExhausted()) return RedeemResult.of(RedeemStatus.EXHAUSTED);
 
-        if (rc.getProgram() == RewardProgram.REFERRAL
-                && redeemerUserId.equals(rc.getOwnerUserId())) {
+        boolean ownedProgram = rc.getProgram() == RewardProgram.REFERRAL || rc.getProgram() == RewardProgram.PARTNER;
+        if (ownedProgram && redeemerUserId.equals(rc.getOwnerUserId())) {
             return RedeemResult.of(RedeemStatus.SELF_REFERRAL);
         }
         if (redemptionRepository.findByRedeemerUserIdAndRewardCodeId(redeemerUserId, rc.getId()).isPresent()) {
@@ -204,9 +249,38 @@ public class RewardService {
                 && redemptionRepository.findByRedeemerUserIdAndProgram(redeemerUserId, RewardProgram.REFERRAL).isPresent()) {
             return RedeemResult.of(RedeemStatus.ALREADY_REDEEMED);
         }
-        if (rc.getBenefitTrigger() == BenefitTrigger.PAID_CONVERSION
-                && hasActivePaidSubscription(redeemerUserId)) {
+        if (rc.getProgram() == RewardProgram.PARTNER
+                && redemptionRepository.findByRedeemerUserIdAndProgram(redeemerUserId, RewardProgram.PARTNER).isPresent()) {
+            return RedeemResult.of(RedeemStatus.ALREADY_ATTRIBUTED);
+        }
+        boolean paying = hasActivePaidSubscription(redeemerUserId);
+        // A partner earns on customers they BRING: an existing paid subscriber is never
+        // attributed, whatever the code's trigger.
+        if (paying && (rc.getBenefitTrigger() == BenefitTrigger.PAID_CONVERSION
+                || rc.getProgram() == RewardProgram.PARTNER)) {
             return RedeemResult.of(RedeemStatus.ALREADY_PAID);
+        }
+        boolean grantsNow = rc.getBenefitTrigger() == BenefitTrigger.REDEEM_TIME
+                && rc.getBenefitKind() == BenefitKind.CREDIT_GRANT;
+        boolean grantsPlan = grantsNow && rc.getBenefitPlanCode() != null && rc.getBenefitPlanDays() > 0;
+        User redeemer = userRepository == null ? null : userRepository.findById(redeemerUserId).orElse(null);
+        // Credits or a plan handed out on the spot follow the same rule as the FREE allowance:
+        // nothing before the email is verified (a scripted sign-up farm gets nothing).
+        if (grantsNow && redeemer != null && !redeemer.isEmailVerified()) {
+            return RedeemResult.of(RedeemStatus.EMAIL_NOT_VERIFIED);
+        }
+        // A partner earns on the people their link BRINGS: an account that existed long before
+        // it is not a new user, whatever code it types.
+        if (rc.getProgram() == RewardProgram.PARTNER && redeemer != null && redeemer.getCreatedAt() != null
+                && redeemer.getCreatedAt().isBefore(java.time.LocalDateTime.now().minusDays(partnerNewAccountDays))) {
+            return RedeemResult.of(RedeemStatus.NOT_NEW_ACCOUNT);
+        }
+        // A plan-only code this account cannot receive would burn its single use for nothing.
+        if (grantsPlan && rc.getBenefitAmount() <= 0
+                && (paying || adminPlanService == null
+                    || adminPlanService.timedCompRefusal(redeemerUserId, rc.getBenefitPlanCode(),
+                            java.time.LocalDateTime.now().plusDays(rc.getBenefitPlanDays())) != null)) {
+            return RedeemResult.of(RedeemStatus.NOTHING_TO_GRANT);
         }
 
         // Race-safe reserve: re-checks active + window + GLOBAL cap atomically in-DB.
@@ -225,7 +299,14 @@ public class RewardService {
         r.setActive(true);
 
         RedeemStatus outcome;
-        if (rc.getBenefitTrigger() == BenefitTrigger.REDEEM_TIME
+        boolean immediateGrant = rc.getBenefitTrigger() == BenefitTrigger.REDEEM_TIME
+                && rc.getBenefitKind() == BenefitKind.CREDIT_GRANT;
+        if (immediateGrant) {
+            // V549: credits (PAYG bucket) and an optional timed comp plan, granted now.
+            r.setStatus(RewardStatus.GRANTED);
+            r.setRedeemerRewardAmount(rc.getBenefitAmount());
+            outcome = RedeemStatus.SUCCESS;
+        } else if (rc.getBenefitTrigger() == BenefitTrigger.REDEEM_TIME
                 && rc.getBenefitKind() == BenefitKind.FREE_NODE_COUNTER) {
             // Immediate, time-boxed free-node benefit (the legacy promo shape).
             r.setStatus(RewardStatus.GRANTED);
@@ -244,7 +325,37 @@ public class RewardService {
         redemptionRepository.save(r);
         log.info("Reward redeemed: redeemer={} code={} program={} status={}",
                 redeemerUserId, rc.getCode(), rc.getProgram(), r.getStatus());
-        return RedeemResult.of(outcome, r);
+        if (!immediateGrant) {
+            return RedeemResult.of(outcome, r);
+        }
+
+        int credits = 0;
+        if (rc.getBenefitAmount() > 0) {
+            String sid = SOURCE_TYPE_CODE + "_" + r.getId();
+            grantOnce(redeemerUserId, rc.getBenefitAmount(), SOURCE_TYPE_CODE, sid,
+                    "Code " + rc.getCode().toUpperCase());
+            r.setRewardSourceId(sid);
+            credits = rc.getBenefitAmount();
+        }
+        String grantedPlan = null;
+        java.time.LocalDateTime planEndsAt = null;
+        // A paying customer keeps their Stripe plan untouched: the code gives credits only.
+        if (rc.getBenefitPlanCode() != null && rc.getBenefitPlanDays() > 0 && adminPlanService != null && !paying) {
+            java.time.LocalDateTime endsAt = java.time.LocalDateTime.now().plusDays(rc.getBenefitPlanDays());
+            AdminPlanService.AssignPlanResult planResult =
+                    adminPlanService.grantTimedComp(redeemerUserId, rc.getBenefitPlanCode(), endsAt);
+            if (planResult.success()) {
+                grantedPlan = planResult.newPlanCode();
+                // The EFFECTIVE end: an existing later end is kept, never shortened.
+                planEndsAt = subscriptionRepository.findActiveByUserId(redeemerUserId)
+                        .map(Subscription::getCompEndsAt).orElse(endsAt);
+            } else {
+                log.info("Code {} plan grant skipped for user {}: {}",
+                        rc.getCode(), redeemerUserId, planResult.error());
+            }
+        }
+        redemptionRepository.save(r);
+        return new RedeemResult(outcome, r, credits, grantedPlan, planEndsAt);
     }
 
     /** A PER_OWNER_SOFT code whose just-reserved counter is past its limit overflows to TRACK_ONLY. */
@@ -290,7 +401,10 @@ public class RewardService {
     @Transactional
     public InviteStats getInviteStats(Long ownerUserId) {
         RewardCode rc = getOrMintReferralCode(ownerUserId);
-        List<RewardRedemption> rows = redemptionRepository.findByOwnerUserId(ownerUserId);
+        // Referral progress only: a partner's audience redemptions are reported on the admin side.
+        List<RewardRedemption> rows = redemptionRepository.findByOwnerUserId(ownerUserId).stream()
+                .filter(r -> r.getProgram() == RewardProgram.REFERRAL)
+                .toList();
         long pending = rows.stream().filter(r -> r.getStatus() == RewardStatus.PENDING).count();
         long inHold = rows.stream().filter(r -> r.getStatus() == RewardStatus.QUALIFIED).count();
         long rewarded = rows.stream().filter(r -> r.getStatus() == RewardStatus.RELEASED).count();
@@ -358,7 +472,7 @@ public class RewardService {
         if (r == null || r.getStatus() != RewardStatus.QUALIFIED) return false;
         if (r.getRedeemerRewardAmount() != null && r.getRedeemerRewardAmount() > 0) {
             String sid = SOURCE_TYPE_REWARD + "_" + r.getId() + "_REDEEMER";
-            grantOnce(r.getRedeemerUserId(), r.getRedeemerRewardAmount(), sid, "Referral reward (redeemer)");
+            grantOnce(r.getRedeemerUserId(), r.getRedeemerRewardAmount(), SOURCE_TYPE_REWARD, sid, "Referral reward (redeemer)");
             r.setRewardSourceId(sid);
         }
         if (r.getOwnerUserId() != null && r.getOwnerRewardAmount() != null && r.getOwnerRewardAmount() > 0) {
@@ -372,7 +486,7 @@ public class RewardService {
                 }
             } else {
                 String sid = SOURCE_TYPE_REWARD + "_" + r.getId() + "_OWNER";
-                grantOnce(r.getOwnerUserId(), r.getOwnerRewardAmount(), sid, "Referral reward (referrer)");
+                grantOnce(r.getOwnerUserId(), r.getOwnerRewardAmount(), SOURCE_TYPE_REWARD, sid, "Referral reward (referrer)");
                 r.setOwnerRewardSourceId(sid);
             }
         }
@@ -438,10 +552,10 @@ public class RewardService {
         }
     }
 
-    private void grantOnce(Long userId, int amount, String sourceId, String desc) {
+    private void grantOnce(Long userId, int amount, String sourceType, String sourceId, String desc) {
         if (userId == null || amount <= 0) return;
         if (ledgerRepository.existsBySourceId(sourceId)) return;
-        creditService.grantCredits(userId, BigDecimal.valueOf(amount), SOURCE_TYPE_REWARD, sourceId, desc);
+        creditService.grantCredits(userId, BigDecimal.valueOf(amount), sourceType, sourceId, desc);
     }
 
     private void clawbackGrant(Long userId, Integer amount, String sourceId, String reason) {

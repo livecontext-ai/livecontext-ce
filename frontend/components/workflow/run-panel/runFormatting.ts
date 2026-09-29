@@ -303,6 +303,30 @@ export function resolveEpochBadgeStatus(
   return outcome;
 }
 
+/**
+ * The colour family of an epoch, from its badge status (`resolveEpochBadgeStatus`):
+ * running (blue), failed (red), stopped by a user or a timeout (gray), completed
+ * (emerald), or `none` when the epoch carries no outcome yet.
+ */
+export type EpochTone = 'running' | 'failed' | 'stopped' | 'ok' | 'none';
+
+export function epochTone(badgeStatus: string | null | undefined): EpochTone {
+  switch (badgeStatus) {
+    case 'RUNNING':
+      return 'running';
+    case 'FAILED':
+      return 'failed';
+    case 'CANCELLED':
+    case 'STOPPED':
+    case 'TIMEOUT':
+      return 'stopped';
+    case 'COMPLETED':
+      return 'ok';
+    default:
+      return 'none';
+  }
+}
+
 /** Whether an epoch row is genuinely executing (drives the ticking duration + live styling). */
 export function isEpochLive(
   entry: Pick<EpochTimestamp, 'endedAt' | 'status'>,

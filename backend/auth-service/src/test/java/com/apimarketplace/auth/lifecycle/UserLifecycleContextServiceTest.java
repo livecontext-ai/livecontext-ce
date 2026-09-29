@@ -5,6 +5,7 @@ import com.apimarketplace.auth.dto.MarketingConsentResponse;
 import com.apimarketplace.auth.dto.ProfileContextRequest;
 import com.apimarketplace.auth.repository.UserAcquisitionRepository;
 import com.apimarketplace.auth.repository.UserRepository;
+import com.apimarketplace.auth.service.KeycloakAdminEmailVerifier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -61,7 +63,7 @@ class UserLifecycleContextServiceTest {
     }
 
     private static ProfileContextRequest locale(String locale, Boolean explicit) {
-        return new ProfileContextRequest(locale, explicit, null, null);
+        return new ProfileContextRequest(locale, explicit, null, null, null, null);
     }
 
     @Test
@@ -101,20 +103,275 @@ class UserLifecycleContextServiceTest {
     @Test
     @DisplayName("an unsupported locale and an invalid time zone are ignored without any write")
     void invalidLocaleAndZoneIgnored() {
-        service.updateContext(USER_ID, new ProfileContextRequest("it", true, "Mars/Base", null), null, null);
+        service.updateContext(USER_ID, new ProfileContextRequest("it", true, "Mars/Base", null, null, null), null, null);
 
         verify(userRepository, never()).updateLocaleExplicit(anyLong(), anyString());
         verify(userRepository, never()).updateLocaleImplicit(anyLong(), anyString());
-        verify(userRepository, never()).updateTimeZone(anyLong(), anyString());
+        verify(userRepository, never()).updateTimeZoneImplicit(anyLong(), anyString());
+        verify(userRepository, never()).updateTimeZoneExplicit(anyLong(), anyString());
+        verifyNoInteractions(lifecycleEmails);
+    }
+
+    @Test
+    @DisplayName("an explicit language pick is carried to Keycloak, so its own pages follow it")
+    void explicitLocaleReachesKeycloak() {
+        KeycloakAdminEmailVerifier keycloak = org.mockito.Mockito.mock(KeycloakAdminEmailVerifier.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "keycloakAdmin", keycloak);
+        when(userRepository.updateLocaleExplicit(USER_ID, "fr")).thenReturn(1);
+        User user = new User();
+        user.setId(USER_ID);
+        user.setProviderId("kc-uuid-7");
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+        service.updateContext(USER_ID, locale("fr", true), null, null);
+
+        verify(keycloak).setUserLocale("kc-uuid-7", "fr");
+    }
+
+    @Test
+    @DisplayName("the Keycloak call waits for the COMMIT, never runs inside the transaction")
+    void keycloakSyncRunsAfterCommit() {
+        KeycloakAdminEmailVerifier keycloak = org.mockito.Mockito.mock(KeycloakAdminEmailVerifier.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "keycloakAdmin", keycloak);
+        when(userRepository.updateLocaleExplicit(USER_ID, "fr")).thenReturn(1);
+        User user = new User();
+        user.setId(USER_ID);
+        user.setProviderId("kc-uuid-7");
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+        // Two blocking HTTP calls against 5 s + 15 s timeouts would otherwise hold a database
+        // connection for up to ~40 s, on an endpoint anybody signed in can drive in a loop by
+        // alternating their language. It also has to be after commit to be truthful: a rollback
+        // would otherwise leave Keycloak holding a language the database never stored.
+        // Run the handoff inline so the assertion does not chase another thread; what is asserted
+        // is that the work is HANDED OFF after commit, not which pool runs it.
+        java.util.List<Runnable> scheduled = new java.util.ArrayList<>();
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                service, "keycloakSyncExecutor", (java.util.concurrent.Executor) scheduled::add);
+
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.updateContext(USER_ID, locale("fr", true), null, null);
+
+            verify(keycloak, never()).setUserLocale(anyString(), anyString());
+            assertThat(org.springframework.transaction.support.TransactionSynchronizationManager
+                    .getSynchronizations()).hasSize(1);
+
+            org.springframework.transaction.support.TransactionSynchronizationManager
+                    .getSynchronizations().forEach(
+                            org.springframework.transaction.support.TransactionSynchronization::afterCommit);
+
+            // afterCommit runs on the CALLER's thread, so doing the HTTP there would free the
+            // database connection and keep holding the request. It must only schedule.
+            verify(keycloak, never()).setUserLocale(anyString(), anyString());
+            assertThat(scheduled).hasSize(1);
+
+            scheduled.forEach(Runnable::run);
+            verify(keycloak).setUserLocale("kc-uuid-7", "fr");
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    @DisplayName("an account with no Keycloak identity is skipped, not attempted")
+    void noProviderIdMeansNoSync() {
+        // A CE-era row, or one whose provider id was never written: there is no Keycloak user to
+        // address, so the sync is a no-op. It has to stay a SILENT one, because this runs behind a
+        // profile report nobody is waiting on - but silent and untested is how it would rot.
+        KeycloakAdminEmailVerifier keycloak = org.mockito.Mockito.mock(KeycloakAdminEmailVerifier.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "keycloakAdmin", keycloak);
+        when(userRepository.updateLocaleExplicit(USER_ID, "fr")).thenReturn(1);
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+
+        assertThatCode(() -> service.updateContext(USER_ID, locale("fr", true), null, null))
+                .doesNotThrowAnyException();
+
+        org.mockito.Mockito.verifyNoInteractions(keycloak);
+    }
+
+    @Test
+    @DisplayName("a database failure while resolving the identity does not fail the profile report")
+    void lookupFailureIsSwallowed() {
+        // The language IS stored by then; this lookup only finds who to mirror it to. Letting it
+        // escape would turn a mirroring problem into a failed request for the person who just
+        // changed their language, and the change they made would look rejected.
+        KeycloakAdminEmailVerifier keycloak = org.mockito.Mockito.mock(KeycloakAdminEmailVerifier.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "keycloakAdmin", keycloak);
+        when(userRepository.updateLocaleExplicit(USER_ID, "fr")).thenReturn(1);
+        when(userRepository.findById(USER_ID))
+                .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("down"));
+
+        assertThatCode(() -> service.updateContext(USER_ID, locale("fr", true), null, null))
+                .doesNotThrowAnyException();
+
+        org.mockito.Mockito.verifyNoInteractions(keycloak);
+    }
+
+    @Test
+    @DisplayName("a saturated sync queue drops the language update rather than failing the request")
+    void keycloakSyncRejectionIsSwallowed() {
+        KeycloakAdminEmailVerifier keycloak = org.mockito.Mockito.mock(KeycloakAdminEmailVerifier.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "keycloakAdmin", keycloak);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                service, "keycloakSyncExecutor", (java.util.concurrent.Executor) task -> {
+                    throw new java.util.concurrent.RejectedExecutionException("queue full");
+                });
+        when(userRepository.updateLocaleExplicit(USER_ID, "fr")).thenReturn(1);
+        User user = new User();
+        user.setId(USER_ID);
+        user.setProviderId("kc-uuid-7");
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        try {
+            boolean changed = service.updateContext(USER_ID, locale("fr", true), null, null);
+
+            // The request itself succeeded: the language IS stored, and that is the part the
+            // person can see. Only the mirror into Keycloak is lost.
+            assertThat(changed).isTrue();
+
+            assertThatCode(() ->
+                    org.springframework.transaction.support.TransactionSynchronizationManager
+                            .getSynchronizations().forEach(
+                                    org.springframework.transaction.support.TransactionSynchronization::afterCommit))
+                    .doesNotThrowAnyException();
+
+            // DROPPED, not run inline as a consolation: doing the two HTTP calls on this thread
+            // to salvage the sync is exactly the stall that handing them to a pool avoids, and
+            // it would arrive on the caller's thread under load, which is when it hurts most.
+            verify(keycloak, never()).setUserLocale(anyString(), anyString());
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    @DisplayName("an IMPLICIT locale report never touches Keycloak: only a deliberate pick is worth the call")
+    void implicitLocaleDoesNotReachKeycloak() {
+        KeycloakAdminEmailVerifier keycloak = org.mockito.Mockito.mock(KeycloakAdminEmailVerifier.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "keycloakAdmin", keycloak);
+        when(userRepository.updateLocaleImplicit(USER_ID, "fr")).thenReturn(1);
+
+        service.updateContext(USER_ID, locale("fr", false), null, null);
+
+        verifyNoInteractions(keycloak);
+    }
+
+    @Test
+    @DisplayName("an account ALREADY pinned to that language is still synced, or it never would be")
+    void unchangedExplicitLocaleStillSyncsKeycloak() {
+        // `updateLocaleExplicit` answers 0 when the value and the flag are already what we are
+        // writing - which is every account that picked a language before this shipped, since
+        // locale_explicit has existed since V527. Gating the sync on "the row changed" excluded
+        // exactly that population from the feature, with no backfill to rescue them. The write
+        // itself is idempotent: setUserLocale reads the user first and returns without a PUT when
+        // the attribute already matches.
+        KeycloakAdminEmailVerifier keycloak = org.mockito.Mockito.mock(KeycloakAdminEmailVerifier.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "keycloakAdmin", keycloak);
+        when(userRepository.updateLocaleExplicit(USER_ID, "fr")).thenReturn(0);
+        User user = new User();
+        user.setId(USER_ID);
+        user.setProviderId("kc-uuid-7");
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+        service.updateContext(USER_ID, locale("fr", true), null, null);
+
+        verify(keycloak).setUserLocale("kc-uuid-7", "fr");
+    }
+
+    @Test
+    @DisplayName("no Keycloak (CE) means no sync and no failure")
+    void noKeycloakIsNotAFailure() {
+        when(userRepository.updateLocaleExplicit(USER_ID, "fr")).thenReturn(1);
+
+        // keycloakAdmin is null here, as it is on a self-hosted install.
+        assertThat(service.updateContext(USER_ID, locale("fr", true), null, null)).isTrue();
+        verify(userRepository, never()).findById(anyLong());
+    }
+
+    @Test
+    @DisplayName("an explicit time zone pick uses the explicit write, which always wins")
+    void explicitTimeZoneWins() {
+        when(userRepository.updateTimeZoneExplicit(USER_ID, "Asia/Tokyo")).thenReturn(1);
+
+        boolean changed = service.updateContext(
+                USER_ID, new ProfileContextRequest(null, null, "Asia/Tokyo", true, null, null), null, null);
+
+        assertThat(changed).isTrue();
+        verify(userRepository).updateTimeZoneExplicit(USER_ID, "Asia/Tokyo");
+        verify(userRepository, never()).updateTimeZoneImplicit(anyLong(), anyString());
+        verify(lifecycleEmails).syncContact(USER_ID);
+    }
+
+    @Test
+    @DisplayName("a missing timeZoneExplicit flag is treated as implicit, so a browser report stays guarded")
+    void nullTimeZoneExplicitIsImplicit() {
+        when(userRepository.updateTimeZoneImplicit(USER_ID, "Europe/Paris")).thenReturn(0);
+
+        boolean changed = service.updateContext(
+                USER_ID, new ProfileContextRequest(null, null, "Europe/Paris", null, null, null), null, null);
+
+        assertThat(changed).isFalse();
+        verify(userRepository).updateTimeZoneImplicit(USER_ID, "Europe/Paris");
+        verify(userRepository, never()).updateTimeZoneExplicit(anyLong(), anyString());
+        verify(lifecycleEmails, never()).syncContact(anyLong());
+    }
+
+    @Test
+    @DisplayName("an explicit FALSE is a device report, not a pick - the same as sending nothing")
+    void explicitlyFalseTimeZoneExplicitIsImplicit() {
+        // The gap between the two halves that were covered. The controller test pins that the wire
+        // value `false` BINDS as `false` rather than null; this pins what the service then does with
+        // it. Nothing joined them, and the join is where a mistake would live: rewriting the guard
+        // from `Boolean.TRUE.equals(flag)` to `flag != null` keeps every other test in this class
+        // green and starts PINNING a zone the browser merely reported, which is the one thing the
+        // explicit/implicit split exists to prevent. A pinned zone survives moving continents.
+        when(userRepository.updateTimeZoneImplicit(USER_ID, "Europe/Paris")).thenReturn(1);
+
+        boolean changed = service.updateContext(
+                USER_ID, new ProfileContextRequest(null, null, "Europe/Paris", false, null, null),
+                null, null);
+
+        assertThat(changed).isTrue();
+        verify(userRepository).updateTimeZoneImplicit(USER_ID, "Europe/Paris");
+        verify(userRepository, never()).updateTimeZoneExplicit(anyLong(), anyString());
+        verify(userRepository, never()).releaseTimeZone(anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("following the device again releases the pick, and outranks timeZoneExplicit")
+    void followsDeviceReleasesThePick() {
+        when(userRepository.releaseTimeZone(USER_ID, "Europe/Paris")).thenReturn(1);
+
+        // Both flags set: the release wins, so a client that sends the pair cannot end up
+        // pinning the very zone it asked to stop pinning.
+        boolean changed = service.updateContext(
+                USER_ID, new ProfileContextRequest(null, null, "Europe/Paris", true, true, null), null, null);
+
+        assertThat(changed).isTrue();
+        verify(userRepository).releaseTimeZone(USER_ID, "Europe/Paris");
+        verify(userRepository, never()).updateTimeZoneExplicit(anyLong(), anyString());
+        verify(userRepository, never()).updateTimeZoneImplicit(anyLong(), anyString());
+        verify(lifecycleEmails).syncContact(USER_ID);
+    }
+
+    @Test
+    @DisplayName("followsDevice without a usable zone releases nothing")
+    void followsDeviceNeedsAZone() {
+        service.updateContext(
+                USER_ID, new ProfileContextRequest(null, null, "Mars/Base", null, true, null), null, null);
+
+        verify(userRepository, never()).releaseTimeZone(anyLong(), anyString());
         verifyNoInteractions(lifecycleEmails);
     }
 
     @Test
     @DisplayName("a changed time zone syncs the contact")
     void timeZoneChangeSyncs() {
-        when(userRepository.updateTimeZone(USER_ID, "Asia/Tokyo")).thenReturn(1);
+        when(userRepository.updateTimeZoneImplicit(USER_ID, "Asia/Tokyo")).thenReturn(1);
 
-        service.updateContext(USER_ID, new ProfileContextRequest(null, null, "Asia/Tokyo", null), null, null);
+        service.updateContext(USER_ID, new ProfileContextRequest(null, null, "Asia/Tokyo", null, null, null), null, null);
 
         verify(lifecycleEmails).syncContact(USER_ID);
     }
@@ -194,7 +451,7 @@ class UserLifecycleContextServiceTest {
                 "  google ", "cpc", "x".repeat(300), null, " ", "https://ref.example/" + "p".repeat(2000),
                 "/fr/pricing", "2026-09-20T08:00:00Z");
 
-        service.updateContext(USER_ID, new ProfileContextRequest(null, null, null, a), null, null);
+        service.updateContext(USER_ID, new ProfileContextRequest(null, null, null, null, null, a), null, null);
 
         verify(acquisitionRepository).insertIfAbsent(eq(USER_ID), eq("google"), eq("cpc"),
                 eq("x".repeat(255)), isNull(), isNull(),
@@ -209,13 +466,13 @@ class UserLifecycleContextServiceTest {
         ProfileContextRequest.Acquisition a = new ProfileContextRequest.Acquisition(
                 " ", null, null, null, null, null, "", "not a date");
 
-        service.updateContext(USER_ID, new ProfileContextRequest(null, null, null, a), null, null);
+        service.updateContext(USER_ID, new ProfileContextRequest(null, null, null, null, null, a), null, null);
 
         verifyNoInteractions(acquisitionRepository);
     }
 
     private static ProfileContextRequest landing(String path) {
-        return new ProfileContextRequest(null, null, null, new ProfileContextRequest.Acquisition(
+        return new ProfileContextRequest(null, null, null, null, null, new ProfileContextRequest.Acquisition(
                 null, null, null, null, null, null, path, null));
     }
 

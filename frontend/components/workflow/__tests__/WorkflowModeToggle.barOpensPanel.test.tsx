@@ -65,7 +65,8 @@ function renderToggle(run: unknown = RUN) {
   );
 }
 
-const bar = () => document.querySelector('[data-run-info-panel]') as HTMLElement;
+/** The clickable row of the pill (the surface around it also holds the epoch navigator). */
+const bar = () => document.querySelector('[data-run-pill-row]') as HTMLElement;
 
 beforeEach(() => {
   opened = [];

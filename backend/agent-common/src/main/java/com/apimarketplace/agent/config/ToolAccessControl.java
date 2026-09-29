@@ -189,6 +189,33 @@ public final class ToolAccessControl {
         return Optional.empty();
     }
 
+    /**
+     * Workspace-role write gate: the per-PERSON axis, next to the per-agent access mode
+     * checked by {@link #checkWriteAccess}. A VIEWER is read-only everywhere on the platform,
+     * so through a tool they get exactly what a read-mode agent gets: the READ actions of
+     * {@link #READ_ACTIONS}, nothing else. The REST controllers refuse the same writes; this
+     * keeps the tool path from being the way around them.
+     *
+     * <p>Same rule as {@code OrgAccessGuard.isRoleWriteBlocked} (auth-client, which this
+     * module does not depend on): blocked only inside a workspace ({@code orgId} present)
+     * with the VIEWER role. Returns empty when allowed, otherwise the message to show.
+     */
+    public static Optional<String> checkRoleWriteAccess(String orgId, String orgRole,
+                                                        String category, String action) {
+        if (isReadAction(category, action)) {
+            return Optional.empty();
+        }
+        boolean viewer = orgId != null && !orgId.isBlank()
+                && orgRole != null && "VIEWER".equalsIgnoreCase(orgRole.trim());
+        if (!viewer) {
+            return Optional.empty();
+        }
+        return Optional.of("Your workspace role is read-only (VIEWER), so '" + action
+                + "' is not allowed on " + category + ". Read actions still work: "
+                + READ_ACTIONS.getOrDefault(category, Set.of())
+                + ". Only the workspace owner can change your role, you cannot.");
+    }
+
     // ==================== Resource credential keys ====================
 
     private static final Map<String, String> CREDENTIAL_KEYS = Map.of(

@@ -11,6 +11,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -51,6 +53,33 @@ public class UserLifecycleContextService {
     /** Product analytics (PostHog). Optional: a null field emits nothing. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.apimarketplace.auth.analytics.AuthAnalyticsEmitter analytics;
+
+    /**
+     * Carries an explicit language pick to the person's Keycloak user, so the login and
+     * password-reset pages and the mails Keycloak sends are in it too. Absent in CE
+     * ({@code auth.mode=embedded}), where there is no Keycloak: a null field syncs nothing, which
+     * is correct rather than degraded.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.service.KeycloakAdminEmailVerifier keycloakAdmin;
+
+    /**
+     * Where the Keycloak write actually runs. One thread and a small queue: the work is rare (an
+     * explicit language pick), each unit is a few HTTP calls, and nothing waits on the result.
+     * A full queue drops the sync rather than blocking a request - the language then lags until
+     * the next pick, which is the same outcome as any other failure of a best-effort write.
+     *
+     * <p>Overridable in a test so the assertion does not have to chase another thread.
+     */
+    private java.util.concurrent.Executor keycloakSyncExecutor = new java.util.concurrent.ThreadPoolExecutor(
+            0, 1, 60L, java.util.concurrent.TimeUnit.SECONDS,
+            new java.util.concurrent.ArrayBlockingQueue<>(64),
+            runnable -> {
+                Thread thread = new Thread(runnable, "kc-locale-sync");
+                thread.setDaemon(true);
+                return thread;
+            },
+            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
 
     @org.springframework.beans.factory.annotation.Autowired
     public UserLifecycleContextService(UserRepository userRepository,
@@ -101,13 +130,40 @@ public class UserLifecycleContextService {
                         ? userRepository.updateLocaleExplicit(userId, locale)
                         : userRepository.updateLocaleImplicit(userId, locale);
                 contactChanged |= rows > 0;
+                // On every deliberate pick, NOT only when the database row changed.
+                //
+                // `updateLocaleExplicit` answers 0 when the locale is already that value with the
+                // flag already set - which is true for everyone who picked a language before this
+                // shipped, since `locale_explicit` has existed since V527. Gating on `rows > 0`
+                // therefore excluded exactly the population this feature is for: their Keycloak
+                // attribute would never be written, and no backfill exists.
+                //
+                // What dropping the gate costs, stated honestly rather than as "one GET": this
+                // runs once per tab session (the frontend reports context that often), and each
+                // run is a findById here plus, in `setUserLocale`, an admin token and a GET of
+                // the representation. It stops there when the attribute already holds this value,
+                // which is the usual case, so the PUT is rare. All of it is on a bounded
+                // background executor after commit, and a saturated pool is logged and dropped:
+                // a missed sync costs a Keycloak page in the wrong language, never a failed
+                // request.
+                if (Boolean.TRUE.equals(request.localeExplicit())) {
+                    syncKeycloakLocale(userId, locale);
+                }
             } else if (request.locale() != null) {
                 log.debug("[lifecycle] ignoring unsupported locale for user {}", userId);
             }
 
             String timeZone = LifecycleInputs.timeZone(request.timeZone());
             if (timeZone != null) {
-                contactChanged |= userRepository.updateTimeZone(userId, timeZone) > 0;
+                int rows;
+                if (Boolean.TRUE.equals(request.timeZoneFollowsDevice())) {
+                    rows = userRepository.releaseTimeZone(userId, timeZone);
+                } else if (Boolean.TRUE.equals(request.timeZoneExplicit())) {
+                    rows = userRepository.updateTimeZoneExplicit(userId, timeZone);
+                } else {
+                    rows = userRepository.updateTimeZoneImplicit(userId, timeZone);
+                }
+                contactChanged |= rows > 0;
             } else if (request.timeZone() != null) {
                 log.debug("[lifecycle] ignoring invalid time zone for user {}", userId);
             }
@@ -289,6 +345,69 @@ public class UserLifecycleContextService {
         } catch (NumberFormatException e) {
             return userRepository.findByProviderId(v).map(User::getId);
         }
+    }
+
+    /**
+     * Tells Keycloak the language this person picked, addressed by the provider id it knows them
+     * by. Silent when there is no Keycloak (CE), no user row, or no provider id: none of those is
+     * an error, and a language that lags must never fail the request that changed it.
+     *
+     * <p>The HTTP runs after commit, on a background thread, whenever a transaction is active.
+     * The identity lookup that resolves the Keycloak id stays INLINE, inside the transaction: it
+     * is one indexed read on a row this request already touched, and deferring it would mean
+     * holding a detached id past the commit that may have rolled back.
+     *
+     * <p>Stated that way rather than as an unconditional rule, because the first branch below is
+     * the exception: with no synchronization active (a direct call, a test) there is no commit to
+     * wait for, so it goes inline. Production reaches this only through a {@code @Transactional}
+     * {@code updateContext}, so the inline path is unreachable there, but a comment that promises
+     * "never inside the transaction" is a promise the code does not keep.
+     *
+     * <p>Three blocking HTTP calls (an admin token, the user GET, the user PUT) against timeouts
+     * of 5 s + 15 s would otherwise hold a database connection - and, on the transaction
+     * synchronization alone, the request thread - for up to a minute, on an endpoint any signed-in
+     * person can drive in a loop by alternating their language. After commit is also the only
+     * truthful moment: a rollback further down this method would otherwise leave Keycloak holding
+     * a language the database never stored.
+     *
+     * <p>The language may lag by the length of one HTTP call, which is the right trade: nothing
+     * the person is about to do depends on it, and the pages it affects are ones they reach later
+     * and from elsewhere.
+     */
+    private void syncKeycloakLocale(Long userId, String locale) {
+        if (keycloakAdmin == null) return;
+        String providerId;
+        try {
+            providerId = userRepository.findById(userId)
+                    .map(User::getProviderId)
+                    .filter(id -> !id.isBlank())
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            log.debug("[lifecycle] Keycloak locale sync skipped for user {}: {}", userId, e.getMessage());
+            return;
+        }
+        if (providerId == null) return;
+
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            // No transaction to wait for (a direct call, a test): do it now.
+            keycloakAdmin.setUserLocale(providerId, locale);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                // afterCommit still runs on the CALLER's thread, inside processCommit, so doing
+                // the three HTTP calls here would free the database connection and keep holding
+                // the request. Handed to the executor instead; a failure is already swallowed by
+                // setUserLocale, and this catch covers a saturated pool.
+                try {
+                    keycloakSyncExecutor.execute(() -> keycloakAdmin.setUserLocale(providerId, locale));
+                } catch (RuntimeException rejected) {
+                    log.debug("[lifecycle] Keycloak locale sync not scheduled for user {}: {}",
+                            userId, rejected.getMessage());
+                }
+            }
+        });
     }
 
     private void captureAcquisition(Long userId, ProfileContextRequest.Acquisition a, Instant now) {

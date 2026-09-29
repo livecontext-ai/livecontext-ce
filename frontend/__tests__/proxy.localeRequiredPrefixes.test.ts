@@ -55,7 +55,7 @@ function routeDirectoriesOnDisk(): string[] {
  *
  * This has to follow the hop, and the first version of this test did not, which
  * made it pass on the broken proxy. A missing prefix does not produce a rewrite
- * to `_not-found` directly: it produces a 307 that strips the locale, and only
+ * to `_not-found` directly: it produces a redirect that strips the locale, and only
  * the request for THAT path is rewritten to `_not-found`. Reading just the
  * first response therefore sees no rewrite at all and looks healthy.
  */
@@ -78,15 +78,21 @@ describe('the reset pages are reachable through the proxy', () => {
     ['/en/reset-password', 'the page the e-mailed link opens'],
     ['/en/reset-password?token=a-real-token', 'the e-mailed link, with its token'],
     ['/fr/forgot-password', 'a non-default locale'],
+    ['/fr/reset-password?token=a-real-token', 'the e-mailed link as the mailer now builds it'],
   ])('%s is not sent to _not-found (%s)', (pathname) => {
     expect(finalTarget(pathname)).not.toBe('https://livecontext.ai/_not-found');
   });
 
-  it('the e-mailed link carries NO locale, and the redirect that adds one keeps the token', () => {
-    // PasswordResetMailer builds `<frontendUrl>/reset-password?token=...` with no
-    // locale, so this exact shape is what lands in someone's inbox. It has to
-    // survive the hop that adds the locale: drop the query string there and every
-    // link in every reset e-mail opens a form with no token.
+  it('an UNPREFIXED link still reaches the form with its token, via the hop that adds a locale', () => {
+    // No longer the shape the mailer builds: it emits a locale prefix now, for every language but
+    // English, so that the page opens in the language the mail was written in. This comment used to
+    // say "PasswordResetMailer builds it with no locale, so this exact shape is what lands in
+    // someone's inbox", which stopped being true and kept passing, because the unprefixed shape
+    // still exists - in every link sent before the change, and in every English one.
+    //
+    // Which is why the case stays: those links must keep working. Drop the query string on the hop
+    // that adds the locale and every reset mail already in an inbox opens a form with no token. The
+    // prefixed shape is covered by the table above.
     const response = proxy(
       new NextRequest('https://livecontext.ai/reset-password?token=a-real-token'),
     ) as Response;

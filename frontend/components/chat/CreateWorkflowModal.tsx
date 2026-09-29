@@ -16,6 +16,7 @@ import {
     budgetInputToCredits,
 } from '@/components/budget/BudgetAdvancedSection';
 import { track } from '@/lib/analytics/analytics';
+import { useIsomorphicLayoutEffect } from '@/lib/hooks/useIsomorphicLayoutEffect';
 
 interface CreateWorkflowModalProps {
     onClose: () => void;
@@ -116,7 +117,13 @@ export const CreateWorkflowModal: React.FC<CreateWorkflowModalProps> = ({
     // without `defaultPrevented` an Escape already handled by something above
     // would close this too, and without `preventDefault` one Escape both
     // dismissed this modal and un-maximized the side panel behind it.
-    useEffect(() => {
+    //
+    // A LAYOUT effect, so the handler is swapped in the same commit that puts the new state on
+    // screen. As a passive effect it landed after the DOM already showed the post-create
+    // failure, and an Escape pressed in that gap (one scheduler task, a few ms in a browser)
+    // reached the mid-create handler, which declined it; a CI test failed whenever a loaded
+    // runner widened the gap.
+    useIsomorphicLayoutEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key !== 'Escape' || event.defaultPrevented) return;
             // Claim it only if we are actually going to act on it. Claiming

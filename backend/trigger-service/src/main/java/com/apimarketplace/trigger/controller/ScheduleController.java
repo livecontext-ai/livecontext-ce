@@ -42,6 +42,19 @@ public class ScheduleController {
     private final PlanLimitHelper planLimitHelper;
     private final TriggerLifecycleManager triggerLifecycleManager;
 
+    static final String VIEWER_REFUSAL = "VIEWER role cannot modify schedules";
+
+    /**
+     * Defence in depth: the orchestrator already refuses a VIEWER before it edits a
+     * workflow's schedule, but these endpoints are gateway-routed too, so a read-only
+     * VIEWER is refused here as well (same rule as the webhook / chat / form endpoints).
+     */
+    private static boolean isViewerWriteBlocked() {
+        return com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(
+                TenantResolver.currentRequestOrganizationId(),
+                TenantResolver.currentRequestOrganizationRole());
+    }
+
     public ScheduleController(ScheduledExecutionRepository scheduleRepository,
                               ScheduleCronParser cronParser,
                               TenantResolver tenantResolver,
@@ -94,6 +107,9 @@ public class ScheduleController {
             @PathVariable("triggerId") String triggerId,
             @RequestBody ScheduleCreateRequest body,
             HttpServletRequest request) {
+        if (isViewerWriteBlocked()) {
+            return ResponseEntity.status(403).body(Map.of("error", VIEWER_REFUSAL));
+        }
         String tenantId = tenantResolver.resolve(request);
         String organizationId = tenantResolver.resolveOrgId(request);
         if (organizationId == null || organizationId.isBlank()) {
@@ -189,6 +205,9 @@ public class ScheduleController {
             @PathVariable("workflowId") UUID workflowId,
             @PathVariable("triggerId") String triggerId,
             @RequestBody Map<String, Boolean> body) {
+        if (isViewerWriteBlocked()) {
+            return ResponseEntity.status(403).body(Map.of("error", VIEWER_REFUSAL));
+        }
         List<ScheduledExecutionEntity> results = scheduleRepository
                 .findAllByWorkflowIdAndTriggerId(workflowId, triggerId);
         if (results.isEmpty()) {
@@ -228,6 +247,9 @@ public class ScheduleController {
             @PathVariable("workflowId") UUID workflowId,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+        if (isViewerWriteBlocked()) {
+            return ResponseEntity.status(403).build();
+        }
         // Scope check - audit 2026-05-16: prior implementation archived
         // schedules by workflowId alone with NO tenant/org filter, allowing
         // cross-tenant epoch-state corruption.
@@ -260,6 +282,9 @@ public class ScheduleController {
             @PathVariable("triggerId") String triggerId,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+        if (isViewerWriteBlocked()) {
+            return ResponseEntity.status(403).build();
+        }
         if (tenantId == null || tenantId.isBlank()) {
             return ResponseEntity.status(401).build();
         }

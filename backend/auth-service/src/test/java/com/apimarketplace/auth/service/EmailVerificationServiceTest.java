@@ -558,4 +558,135 @@ class EmailVerificationServiceTest {
             current = null;
         }
     }
+
+    @org.junit.jupiter.api.Nested
+    @DisplayName("the language the verification mail is written in")
+    class VerificationMailLanguage {
+
+        private jakarta.mail.internet.MimeMessage realMessage() {
+            return new jakarta.mail.internet.MimeMessage(
+                    jakarta.mail.Session.getDefaultInstance(new java.util.Properties()));
+        }
+
+        /**
+         * The whole message as text, with quoted-printable encoding undone enough to assert on the
+         * sentences the catalog produces.
+         *
+         * <p>Soft line breaks first, for the same reason as the sibling mailer tests: JavaMail wraps
+         * the body around column 76, so a break can fall inside the exact string a test looks for.
+         *
+         * <p>Then the encoded bytes of the characters that actually appear in these six languages.
+         * Without that, any assertion on a translated sentence breaks the moment the sentence has an
+         * accent in it - which is not hypothetical: the Spanish expiry line reads "Este código
+         * caduca...", and the `ó` reaches the payload as `=C3=B3`. A test that can only assert
+         * ASCII prose cannot check five of the six locales it exists for.
+         */
+        private String payloadOfSentMail() throws Exception {
+            org.mockito.ArgumentCaptor<jakarta.mail.internet.MimeMessage> captor =
+                    org.mockito.ArgumentCaptor.forClass(jakarta.mail.internet.MimeMessage.class);
+            verify(mailSender).send(captor.capture());
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            captor.getValue().writeTo(out);
+            String raw = out.toString("UTF-8").replace("=\r\n", "").replace("=\n", "");
+            return decodeQuotedPrintable(raw);
+        }
+
+        /** {@code =C3=B3} and friends back to their characters; anything else is left alone. */
+        private static String decodeQuotedPrintable(String text) {
+            java.util.regex.Matcher matcher =
+                    java.util.regex.Pattern.compile("(?:=[0-9A-F]{2})+").matcher(text);
+            StringBuilder out = new StringBuilder();
+            int last = 0;
+            while (matcher.find()) {
+                out.append(text, last, matcher.start());
+                String run = matcher.group().replace("=", "");
+                byte[] bytes = new byte[run.length() / 2];
+                for (int i = 0; i < bytes.length; i++) {
+                    bytes[i] = (byte) Integer.parseInt(run.substring(i * 2, i * 2 + 2), 16);
+                }
+                out.append(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
+                last = matcher.end();
+            }
+            out.append(text.substring(last));
+            return out.toString();
+        }
+
+        @org.junit.jupiter.api.BeforeEach
+        void useRealMimeMessages() {
+            when(mailSender.createMimeMessage()).thenAnswer(inv -> realMessage());
+            when(codeRepository.save(any(EmailVerificationCode.class)))
+                    .thenAnswer(inv -> inv.getArgument(0));
+        }
+
+        @Test
+        @DisplayName("follows the account's language, read straight off the account")
+        void followsTheAccountLanguage() throws Exception {
+            // Off the ROW, with no collaborator in between. This used to inject a mock
+            // `MailLocaleResolver` by reflection and assert it had been called - which proved the
+            // wiring and nothing about the answer, because the mock supplied the answer. The service
+            // held a `User` the whole time and the resolver it consulted did nothing but read
+            // `user.getLocale()`, so the collaborator bought only one thing: a null branch that
+            // answered English for an account whose language was on the argument.
+            testUser.setLocale("fr");
+
+            emailVerificationService.sendCode(testUser);
+
+            org.mockito.ArgumentCaptor<jakarta.mail.internet.MimeMessage> captor =
+                    org.mockito.ArgumentCaptor.forClass(jakarta.mail.internet.MimeMessage.class);
+            verify(mailSender).send(captor.capture());
+            assertThat(captor.getValue().getSubject())
+                    .isEqualTo(EmailVerificationService.MAIL_CATALOG.text("fr", "verify.subject"));
+            // And never by looking the address up: at this point in a signup the row may not even be
+            // readable by e-mail yet, which is why the language has to come from the argument.
+            verify(userRepository, never()).findByEmail(anyString());
+        }
+
+        @Test
+        @DisplayName("declares that language on the document element, which is what a reader's "
+                + "client goes on when it decides how to render and whether to offer a translation")
+        void declaresTheLanguage() throws Exception {
+            testUser.setLocale("de");
+
+            emailVerificationService.sendCode(testUser);
+
+            assertThat(payloadOfSentMail()).containsAnyOf("lang=\"de\"", "lang=3D\"de\"");
+        }
+
+        @Test
+        @DisplayName("English when the account carries no language at all")
+        void englishWhenTheAccountHasNoLanguage() throws Exception {
+            // The real fallback, and the only one left. This test used to assert English for a
+            // MISSING RESOLVER - a condition that said nothing about any account and that answered
+            // English even for an account whose language was sitting on the argument.
+            testUser.setLocale(null);
+
+            emailVerificationService.sendCode(testUser);
+
+            org.mockito.ArgumentCaptor<jakarta.mail.internet.MimeMessage> captor =
+                    org.mockito.ArgumentCaptor.forClass(jakarta.mail.internet.MimeMessage.class);
+            verify(mailSender).send(captor.capture());
+            assertThat(captor.getValue().getSubject())
+                    .isEqualTo(EmailVerificationService.MAIL_CATALOG.text("en", "verify.subject"));
+        }
+
+        @Test
+        @DisplayName("carries the code and its expiry, in that language")
+        void carriesTheCodeAndExpiry() throws Exception {
+            testUser.setLocale("es");
+
+            EmailVerificationCode saved = emailVerificationService.sendCode(testUser);
+
+            String payload = payloadOfSentMail();
+            assertThat(payload).contains(saved.getCode());
+            assertThat(payload).contains(EmailVerificationService.MAIL_CATALOG.text("es", "verify.title"));
+
+            // The EXPIRY, which this name promised and the body did not check. The template it
+            // replaced substituted {{MINUTES}} from the same constant; drop the Map.of argument
+            // from the catalog call and every test here stayed green while the mail told people
+            // their code expires in "{minutes} minutes".
+            assertThat(payload).contains(EmailVerificationService.MAIL_CATALOG.text("es", "verify.expiry",
+                    java.util.Map.of("minutes", String.valueOf(EmailVerificationService.EXPIRY_MINUTES))));
+        }
+    }
+
 }

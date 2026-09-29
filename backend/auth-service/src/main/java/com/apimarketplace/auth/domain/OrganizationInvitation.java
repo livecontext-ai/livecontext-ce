@@ -18,8 +18,13 @@ import java.util.UUID;
  */
 @Entity
 @EntityListeners(HashedTokenListener.class)
-@Table(name = "organization_invitation",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"organization_id", "email", "status"}))
+// Uniqueness is "at most ONE PENDING invitation per (organization, email)", enforced by
+// the partial unique index uq_organization_invitation_pending (migration V547). It is
+// deliberately NOT a plain (organization_id, email, status) constraint: that one also
+// allowed only one ACCEPTED / CANCELLED row per email, so re-inviting a removed member
+// failed with a 500 on accept, and a second decline / cancel failed the same way.
+// JPA cannot express a partial index, hence no uniqueConstraints here.
+@Table(name = "organization_invitation")
 public class OrganizationInvitation implements HashedTokenEntity {
 
     @Id

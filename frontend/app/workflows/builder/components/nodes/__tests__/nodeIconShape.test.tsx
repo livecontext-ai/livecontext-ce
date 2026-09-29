@@ -51,7 +51,7 @@ function tile(ui: React.ReactElement): HTMLElement {
   return container.firstElementChild as HTMLElement;
 }
 
-const SIZES: NodeIconSize[] = ['xs', 'sm', 'md', 'lg'];
+const SIZES: NodeIconSize[] = ['2xs', 'xs', 'sm', 'md', 'lg'];
 
 describe('NodeIcon - the tile is square-rounded', () => {
   beforeEach(() => { cleanup(); });
@@ -117,5 +117,18 @@ describe('NodeIcon - the tile is square-rounded', () => {
 
   it('defaults to the largest tile, like the component itself', () => {
     expect(nodeIconRadiusClass()).toBe(nodeIconRadiusClass('lg'));
+  });
+});
+
+describe('NodeIcon - the 2xs tile fits a 16px row', () => {
+  beforeEach(() => { cleanup(); });
+
+  it('is a 16px box, so a dense row does not crop it', () => {
+    // The Analysis grid's rows are 16px: the 24px xs tile overflowed its slot and the
+    // scrolling container around the grid cut its left edge off.
+    const el = tile(<NodeIcon nodeId="core-decision" size="2xs" />);
+    expect(el.className).toContain('h-4');
+    expect(el.className).toContain('w-4');
+    expect(radiusOf(el)).toEqual(['rounded-md']);
   });
 });

@@ -450,6 +450,22 @@ describe('RunPanelContent - the way back to the workflow canvas', () => {
     expect(onOpenLogs).toHaveBeenCalledTimes(1);
   });
 
+  it('names where its header buttons lead, in the bordered look of the Logs and Analysis ones', () => {
+    render(<RunPanelContent workflowId="wf-1" allowHistory onOpenLogs={vi.fn()} />);
+
+    const toLogs = document.querySelector('[data-run-panel-to-logs]') as HTMLElement;
+    const toHistory = backButton() as HTMLElement;
+    for (const button of [toLogs, toHistory]) {
+      expect(button.className).toContain('border');
+      expect(button.className).toContain('h-6');
+    }
+    expect(toLogs.textContent).toContain('sidePanel.logs');
+    expect(toHistory.textContent).toContain('actions.history');
+    // The arrow sits on the side the button leads to.
+    expect(toLogs.lastElementChild?.getAttribute('class')).toContain('lucide-arrow-right');
+    expect(toHistory.firstElementChild?.getAttribute('class')).toContain('lucide-arrow-left');
+  });
+
   it('offers a labelled control in the run header when the host has a canvas tab', () => {
     const onBackToWorkflow = vi.fn();
     render(<RunPanelContent workflowId="wf-1" onBackToWorkflow={onBackToWorkflow} />);

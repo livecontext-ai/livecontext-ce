@@ -17,6 +17,16 @@ public interface RewardCodeRepository extends JpaRepository<RewardCode, Long> {
     /** The owner's single code for a program (unique on (owner_user_id, program)). */
     Optional<RewardCode> findByOwnerUserIdAndProgram(Long ownerUserId, RewardProgram program);
 
+    /** V549 admin report: partner codes and creator (credit-granting promo) codes, newest first. */
+    @Query("""
+           SELECT c FROM RewardCode c
+           WHERE c.program = com.apimarketplace.auth.domain.RewardProgram.PARTNER
+              OR (c.program = com.apimarketplace.auth.domain.RewardProgram.PROMO
+                  AND c.benefitKind = com.apimarketplace.auth.domain.BenefitKind.CREDIT_GRANT)
+           ORDER BY c.id DESC
+           """)
+    java.util.List<RewardCode> findPartnerProgramCodes();
+
     /**
      * Atomically reserve one redemption slot. Race-safe guard that the code is
      * active and inside its validity window, re-checked against DB {@code now()}

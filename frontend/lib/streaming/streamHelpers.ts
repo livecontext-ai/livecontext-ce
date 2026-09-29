@@ -63,6 +63,10 @@ export interface StreamEventData {
     id: string;
     title?: string;
     runId?: string;
+    /** type 'workflow' only: the action wrote the stored plan (see WorkflowBuilderResultEnricher). */
+    planChanged?: boolean;
+    /** type 'workflow_run' only: the plan version the run executes. */
+    planVersion?: number;
   };
   iconSlug?: string;
   displayToolName?: string;

@@ -412,13 +412,12 @@ describe('applyDagreLayout - vertical (rankdir TB)', () => {
 });
 
 // =============================================================================
-// centerOnCrossAxis is VERTICAL-ONLY (regression 2026-07-17)
-// The cross-axis centering pass was added with the vertical layout and, applied to
-// BOTH directions, visibly changed long-standing HORIZONTAL layouts. Horizontal must
-// use the historical algorithm (plain Dagre placement, no post-centering); vertical
-// keeps the centering.
+// centerOnCrossAxis runs in BOTH directions (2026-09-28)
+// It used to be vertical-only, and horizontal ran Dagre with align 'UL' and no
+// centering, which hung every fan-out on one side of its parent. Symmetric layouts
+// are now wanted in both reading directions, so both are centred.
 // =============================================================================
-describe('applyDagreLayout - centerOnCrossAxis gated to vertical', () => {
+describe('applyDagreLayout - centerOnCrossAxis runs in BOTH directions', () => {
   const edge = (source: string, target: string): Edge =>
     ({ id: `${source}->${target}`, source, target });
   const LR = { rankdir: 'LR', nodesep: 40, ranksep: 90, ignoreMeasured: true } as any;
@@ -442,14 +441,14 @@ describe('applyDagreLayout - centerOnCrossAxis gated to vertical', () => {
   // pre-centring cross positions first.
   const copy = (ns: Node<BuilderNodeData>[]) => ns.map((n) => ({ ...n, position: { ...n.position } }));
 
-  it('does NOT centre the HORIZONTAL layout: applying centering afterwards still changes it', () => {
+  // Regression: horizontal used to skip the pass and run dagre with align 'UL', which
+  // hung all five children BELOW the parent instead of around it.
+  it('DOES centre the HORIZONTAL layout: a second centring pass is a no-op (already centred)', () => {
     const { nodes, edges } = buildTree();
     const laid = applyDagreLayout(nodes, edges, LR);
     const before = cross(laid, false);
-    // If horizontal were still being centred, a fresh centring pass would be a no-op.
-    // Because the fix skips centring for horizontal, the pass has work left to do.
     const centred = centerOnCrossAxis(copy(laid), edges, LR);
-    expect(before).not.toEqual(cross(centred, false));
+    expect(before).toEqual(cross(centred, false));
   });
 
   it('DOES centre the VERTICAL layout: a second centring pass is a no-op (already centred)', () => {

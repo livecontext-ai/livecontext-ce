@@ -182,6 +182,22 @@ public interface SubscriptionRepository extends JpaRepository<Subscription, Long
     List<Subscription> findExpiredInternalSubscriptions(@Param("now") LocalDateTime now);
 
     /**
+     * V549: internal timed comps (partner creator codes) whose end date has passed, whatever
+     * their billing period, so a "PRO for 90 days" ends on day 90 rather than at the next
+     * monthly renewal after it.
+     */
+    @Query("""
+           SELECT s FROM Subscription s
+           JOIN FETCH s.billingCustomer bc
+           JOIN FETCH bc.user
+           WHERE s.provider = 'internal'
+             AND s.status IN ('active', 'trialing')
+             AND s.compEndsAt IS NOT NULL
+             AND s.compEndsAt <= :now
+           """)
+    List<Subscription> findEndedInternalComps(@Param("now") LocalDateTime now);
+
+    /**
      * Yearly Stripe subscriptions that may be due a MONTHLY credit cycle (V498).
      *
      * <p>Deliberately not filtered on "due": the due cycle is {@code currentPeriodStart + N

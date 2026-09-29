@@ -140,6 +140,15 @@ describe('run panel level requests', () => {
     expect(getRunPanelViewRequest('wf-1')!.seq).toBeGreaterThan(first);
   });
 
+  it('a request for the Analysis tab leaves the Run tab level as it was', () => {
+    openRunPanel({ workflowId: 'wf-1', view: 'history' });
+    const before = getRunPanelViewRequest('wf-1')!;
+
+    openRunPanel({ workflowId: 'wf-1', view: 'run', tab: 'analysis' });
+
+    expect(getRunPanelViewRequest('wf-1')).toEqual(before);
+  });
+
   it('defaults to the run detail and ignores a request aimed at another workflow', () => {
     openRunPanel({ workflowId: 'wf-1' });
     expect(getRunPanelViewRequest('wf-1')?.view).toBe('run');

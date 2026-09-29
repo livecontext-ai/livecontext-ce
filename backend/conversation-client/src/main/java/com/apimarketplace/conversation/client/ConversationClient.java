@@ -541,7 +541,9 @@ public class ConversationClient {
                                  String toolCallId, boolean success, Long durationMs,
                                  String content, String error, String executionId,
                                  String organizationId) {
-        String url = baseUrl + "/api/tool-results";
+        // Internal endpoint: the public POST /api/tool-results scope-checks the conversation
+        // against the caller's workspace header, which this async agent-loop call may not carry.
+        String url = baseUrl + TOOL_RESULTS_INTERNAL_PATH;
         try {
             Map<String, Object> body = new HashMap<>();
             body.put("conversationId", conversationId);
@@ -553,8 +555,22 @@ public class ConversationClient {
             if (error != null) body.put("error", error);
             if (executionId != null) body.put("executionId", executionId);
 
-            ResponseEntity<Map> resp = restTemplate.exchange(
-                    url, HttpMethod.POST, createEntity(body, tenantId, organizationId), Map.class);
+            ResponseEntity<Map> resp;
+            try {
+                resp = restTemplate.exchange(
+                        url, HttpMethod.POST, createEntity(body, tenantId, organizationId), Map.class);
+            } catch (HttpClientErrorException.NotFound notFound) {
+                // TODO(2026-09-27): remove this fallback one release after the internal route
+                // ships. It only covers a rollout where this caller is already new and
+                // conversation-service is still the previous version, which has no internal
+                // route but still serves the old public POST. Remove it together with nothing
+                // else: the public route stays, scope-checked, for the frontend.
+                log.warn("Tool-result save: {} answered 404 (conversation-service not yet upgraded), "
+                        + "falling back to the legacy {} for {} in conversation {}",
+                        TOOL_RESULTS_INTERNAL_PATH, TOOL_RESULTS_LEGACY_PATH, toolName, conversationId);
+                resp = restTemplate.exchange(baseUrl + TOOL_RESULTS_LEGACY_PATH, HttpMethod.POST,
+                        createEntity(body, tenantId, organizationId), Map.class);
+            }
             if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null) {
                 return (String) resp.getBody().get("id");
             }
@@ -563,6 +579,10 @@ public class ConversationClient {
         }
         return null;
     }
+
+    static final String TOOL_RESULTS_INTERNAL_PATH = "/api/internal/tool-results";
+    /** Pre-2026-09-27 route, only reached by the one-release 404 fallback above. */
+    static final String TOOL_RESULTS_LEGACY_PATH = "/api/tool-results";
 
     public String saveToolResult(String conversationId, String tenantId, String toolName,
                                  String toolCallId, boolean success, Long durationMs,

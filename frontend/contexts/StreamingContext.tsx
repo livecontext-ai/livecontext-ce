@@ -51,6 +51,7 @@ import {
 } from '@/lib/streaming/streamHelpers';
 import {
   AUTO_OPEN_TYPES,
+  autoOpenEventDetail,
   enqueueAutoOpen,
   flushAutoOpen,
   type AutoOpenVisualization,
@@ -162,15 +163,7 @@ function dispatchSidePanelAutoOpen(visualization: AutoOpenVisualization) {
   sidePanelAutoOpenDebounceTimer = setTimeout(() => {
     sidePanelAutoOpenDebounceTimer = null;
     flushAutoOpen(sidePanelAutoOpenPending, (v) => {
-      window.dispatchEvent(new CustomEvent('sidePanelAutoOpen', {
-        detail: {
-          type: v.type,
-          id: v.id,
-          title: v.title,
-          runId: v.runId,
-          liveCoords: v.liveCoords,
-        },
-      }));
+      window.dispatchEvent(new CustomEvent('sidePanelAutoOpen', { detail: autoOpenEventDetail(v) }));
     });
   }, 300);
 }
@@ -198,6 +191,10 @@ export interface ToolVisualization {
   runId?: string;
   /** For workflow_run: the run index */
   runIndex?: number;
+  /** For workflow_run: the plan version the run executes */
+  planVersion?: number;
+  /** For workflow: the action wrote the stored plan */
+  planChanged?: boolean;
   /** For credential: the service icon slug (e.g., 'gmail', 'slack') */
   iconSlug?: string;
   /** For credential: the service name for display */
@@ -1508,7 +1505,7 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
             // card already provides the entry-point if the user closed
             // the live tab and wants to re-open the post-completion view.
             if (mapped.visualization.type !== 'agent_browse') {
-              dispatchSidePanelAutoOpen(mapped.visualization);
+              dispatchSidePanelAutoOpen({ ...mapped.visualization, conversationId });
             }
           }
           break;
@@ -1569,6 +1566,8 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
             id: payload.visualizationId as string,
             title: (payload.visualizationTitle as string) || undefined,
             runId: (payload.runId as string) || undefined,
+            planVersion: typeof payload.planVersion === 'number' ? payload.planVersion : undefined,
+            conversationId,
           };
           dispatchSidePanelAutoOpen(viz);
           if (viz.type === 'web_search') {
@@ -2170,6 +2169,9 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
               }
               if ((mapped.success ?? true) && mapped.visualization
                   && mapped.visualization.type !== 'agent_browse') {
+                // A replay after a reconnect is history, not something the agent just did: no
+                // conversation stamp, so the workflow page never leaves the run a user just
+                // reopened because of an edit made before the reload.
                 dispatchSidePanelAutoOpen(mapped.visualization);
               }
             } else if (mapped.type === 'service_approval_required' && mapped.serviceApprovalRequired) {

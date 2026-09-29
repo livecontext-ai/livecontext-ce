@@ -10,6 +10,7 @@ import InsufficientCreditsModal from '@/components/billing/InsufficientCreditsMo
 import AccountRestoreModal from '@/components/auth/AccountRestoreModal';
 import { WorkflowLayoutDirectionProvider } from '@/contexts/WorkflowLayoutDirectionContext';
 import { InspectorOpenModeProvider } from '@/contexts/InspectorOpenModeContext';
+import DisplayPreferencesGate from '@/components/lifecycle/DisplayPreferencesGate';
 
 export default async function WorkflowsLayout({
   children,
@@ -35,6 +36,11 @@ export default async function WorkflowsLayout({
             the settings panel hides that control here - a provider for it would be a
             preference nothing on this route can read or show. */}
         <InspectorOpenModeProvider>
+        {/* The account display zone, for the same reason the two providers above are here:
+            this shell is outside /app, so without it the builder would read every timestamp
+            in whatever zone the browser happens to be in, ignoring the preference - on the
+            route that shows the most dates in the product. */}
+        <DisplayPreferencesGate>
         {children}
         {/* The standalone builder lives outside the /app layout, so the CE cloud-relay modals
             (no-op in Cloud, self-gated to CE) are mounted here too - otherwise a relay error
@@ -52,6 +58,7 @@ export default async function WorkflowsLayout({
             refused here too, and without this listener the restore interstitial never appears,
             leaving them in an app where nothing loads and no path leads anywhere. */}
         <AccountRestoreModal />
+        </DisplayPreferencesGate>
         </InspectorOpenModeProvider>
       </WorkflowLayoutDirectionProvider>
     </NextIntlClientProvider>

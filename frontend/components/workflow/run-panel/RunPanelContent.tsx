@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { ArrowLeft, ArrowRight, FileText, History, Loader2, Play, Workflow } from 'lucide-react';
+import { PANEL_NAV_BUTTON_CLASS } from './panelNavButton';
 import { Button } from '@/components/ui/button';
 import type { WorkflowRun } from '@/lib/api/orchestrator';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
@@ -333,17 +334,22 @@ export function RunPanelContent({ workflowId, allowHistory = false, viewRequest,
                 of relying on a glyph, and it comes first as the outermost step out. */}
             {backToWorkflowButton}
             {canBrowseHistory && (
-              /* Arrow + history icon: the arrow alone says "back", the icon says
-                 back TO WHAT - the list of runs this one was picked from. */
+              /* Same look as the "back to Run" button of the Logs and Analysis views:
+                 the arrow says "back", the icon and the name say back TO WHAT, the
+                 list of runs this one was picked from. The name gives up the room
+                 first on a narrow panel, never the run identity beside it. */
               <button
                 type="button"
                 data-run-panel-back
                 onClick={() => setView('history')}
+                // No aria-label: the visible name ("History") IS the accessible name, so a
+                // voice command naming what is on screen reaches it.
                 title={t('runs.title')}
-                className="flex items-center gap-0.5 h-5 pl-1 pr-1.5 rounded-lg text-theme-secondary hover:bg-theme-secondary hover:text-theme-primary transition-colors flex-shrink-0"
+                className={PANEL_NAV_BUTTON_CLASS}
               >
-                <ArrowLeft className="w-3 h-3" />
-                <History className="w-3.5 h-3.5" />
+                <ArrowLeft className="h-3.5 w-3.5 flex-shrink-0" />
+                <History className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="truncate">{t('actions.history')}</span>
               </button>
             )}
           </span>
@@ -351,13 +357,15 @@ export function RunPanelContent({ workflowId, allowHistory = false, viewRequest,
         trailing={onOpenLogs ? (
           <button
             type="button"
+            data-run-panel-to-logs
             onClick={onOpenLogs}
             title={t('workflow.logs.openLogs')}
             aria-label={t('workflow.logs.openLogs')}
-            className="flex h-7 flex-shrink-0 items-center gap-1 rounded-lg px-1.5 text-theme-secondary transition-colors hover:bg-theme-secondary hover:text-theme-primary"
+            className={PANEL_NAV_BUTTON_CLASS}
           >
-            <FileText className="h-3.5 w-3.5" />
-            <ArrowRight className="h-3.5 w-3.5" />
+            <FileText className="h-3.5 w-3.5 flex-shrink-0" />
+            <span className="truncate">{t('sidePanel.logs')}</span>
+            <ArrowRight className="h-3.5 w-3.5 flex-shrink-0" />
           </button>
         ) : undefined}
       />

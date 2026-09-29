@@ -1,11 +1,13 @@
 package com.apimarketplace.auth.web;
 
+import com.apimarketplace.auth.util.EmailNormalizer;
 import com.apimarketplace.auth.domain.*;
 import com.apimarketplace.auth.dto.InvitationDto;
 import com.apimarketplace.auth.dto.OrganizationDto;
 import com.apimarketplace.auth.repository.OrganizationMemberRepository;
 import com.apimarketplace.auth.repository.UserRepository;
 import com.apimarketplace.auth.service.OnboardingService;
+import com.apimarketplace.auth.service.InvitationEmailNotVerifiedException;
 import com.apimarketplace.auth.service.OrganizationMemberService;
 import com.apimarketplace.auth.service.OrganizationService;
 import org.slf4j.Logger;
@@ -858,7 +860,8 @@ public class OrganizationController {
         }
 
         try {
-            OrganizationInvitation invitation = memberService.inviteMember(orgId, email.trim().toLowerCase(), role, userId);
+            OrganizationInvitation invitation = memberService.inviteMember(
+                    orgId, EmailNormalizer.normalize(email), role, userId);
             // Resolve the inviter through the shared fallback chain (display_name →
             // full name → username → email) so a CE inviter without an onboarding
             // row shows their real name instead of "Unknown".
@@ -869,10 +872,20 @@ public class OrganizationController {
             return ResponseEntity.ok(InvitationDto.forInviteResponse(invitation, inviterName, isEmbeddedAuthMode()));
         } catch (com.apimarketplace.auth.service.InvitationRateLimitException e) {
             return ResponseEntity.status(429).body(Map.of("error", e.getMessage()));
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // Two concurrent invites for the same address both pass the "no pending
+            // invitation" check; the partial unique index on PENDING rows (V547) rejects
+            // the second at commit. Same answer as the sequential duplicate, not a 500.
+            log.info("Concurrent duplicate invitation refused for org {}: {}", orgId, e.getMostSpecificCause().getMessage());
+            return ResponseEntity.status(409).body(Map.of("error", "A pending invitation already exists for this email"));
         } catch (UnsupportedOperationException e) {
             return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
         } catch (IllegalStateException e) {
             return ResponseEntity.status(409).body(Map.of("error", e.getMessage()));
+        } catch (com.apimarketplace.auth.service.AdminInviteRequiresOwnerException e) {
+            return ResponseEntity.status(403).body(Map.of(
+                    "error", e.getMessage(),
+                    "code", com.apimarketplace.auth.service.AdminInviteRequiresOwnerException.CODE));
         } catch (SecurityException e) {
             return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
         } catch (IllegalArgumentException e) {
@@ -907,7 +920,8 @@ public class OrganizationController {
                             inv, inviterNames.get(inv.getInvitedBy().getId()), includeToken))
                     .toList();
             return ResponseEntity.ok(dtos);
-        } catch (IllegalArgumentException e) {
+        } catch (SecurityException | IllegalArgumentException e) {
+            // Non-member AND non-admin member (MEMBER / VIEWER) both get 403.
             return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
         }
     }
@@ -915,7 +929,7 @@ public class OrganizationController {
     /**
      * Public (no auth) lookup of an invitation by token, for the accept page to
      * prefill the email and choose register-vs-login. Returns
-     * {@code {valid, email, organizationName, role, hasAccount}} for a PENDING,
+     * {@code {valid, email, organizationName, role, hasAccount, inviterName}} for a PENDING,
      * non-expired token; {@code {valid:false}} for anything else (missing /
      * unknown / expired / cancelled / accepted) so a bogus token leaks nothing.
      */
@@ -929,6 +943,7 @@ public class OrganizationController {
             body.put("organizationName", info.organizationName());
             body.put("role", info.role());
             body.put("hasAccount", info.hasAccount());
+            body.put("inviterName", info.inviterName());
         }
         return ResponseEntity.ok(body);
     }
@@ -957,7 +972,7 @@ public class OrganizationController {
             OrganizationDto dto = OrganizationDto.fromEntity(org, membership.orElse(null), memberCount);
             return ResponseEntity.ok(dto);
         } catch (SecurityException e) {
-            return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
+            return invitationForbidden(e);
         } catch (IllegalStateException | IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -979,7 +994,7 @@ public class OrganizationController {
             String inviterName = onboardingService.resolveDisplayName(invitation.getInvitedBy().getId());
             return ResponseEntity.ok(new InvitationDto(invitation, inviterName));
         } catch (SecurityException e) {
-            return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
+            return invitationForbidden(e);
         } catch (IllegalStateException | IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -1002,14 +1017,15 @@ public class OrganizationController {
             return ResponseEntity.badRequest().build();
         }
 
-        // Resolve the caller's email - invitations are keyed on email, not userId,
-        // because they may be created before the recipient has an account.
-        User user = userRepository.findById(userId).orElse(null);
-        if (user == null || user.getEmail() == null || user.getEmail().isBlank()) {
-            return ResponseEntity.ok(List.of());
+        // Invitations are keyed on email, not userId (they may predate the account).
+        // The service resolves the caller's email and returns nothing for an
+        // unverified address, which does not prove mailbox ownership.
+        List<OrganizationInvitation> invitations;
+        try {
+            invitations = memberService.getPendingInvitationsForUser(userId);
+        } catch (InvitationEmailNotVerifiedException e) {
+            return invitationForbidden(e);
         }
-
-        List<OrganizationInvitation> invitations = memberService.getPendingInvitationsForEmail(user.getEmail());
         // Batch-resolve the inviter names through the shared fallback chain so a CE
         // inviter without an onboarding row reads as their real name, not "Unknown".
         Map<Long, String> inviterNames = onboardingService.resolveDisplayNames(
@@ -1063,10 +1079,48 @@ public class OrganizationController {
             OrganizationDto dto = OrganizationDto.fromEntity(org, membership.orElse(null), memberCount);
             return ResponseEntity.ok(dto);
         } catch (SecurityException e) {
-            return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
+            return invitationForbidden(e);
         } catch (IllegalStateException | IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+    }
+
+    /**
+     * Decline an invitation by token: the Decline button of the accept page,
+     * which the signed-in invitee reaches from the email link. Same guards as
+     * the inbox decline (email match + verified email).
+     */
+    @PostMapping("/invitations/decline")
+    public ResponseEntity<?> declineInvitation(
+            @RequestParam String token,
+            @RequestHeader(value = "X-User-ID", required = false) Long userId) {
+
+        if (userId == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        try {
+            OrganizationInvitation invitation = memberService.declineInvitation(token, userId);
+            String inviterName = onboardingService.resolveDisplayName(invitation.getInvitedBy().getId());
+            return ResponseEntity.ok(new InvitationDto(invitation, inviterName));
+        } catch (SecurityException e) {
+            return invitationForbidden(e);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 403 for an invitee-side refusal. An unverified email carries the
+     * {@code EMAIL_NOT_VERIFIED} code so the UI can ask the user to verify
+     * their address first instead of showing a generic error.
+     */
+    private static ResponseEntity<Map<String, String>> invitationForbidden(SecurityException e) {
+        if (e instanceof InvitationEmailNotVerifiedException) {
+            return ResponseEntity.status(403).body(Map.of(
+                    "error", e.getMessage(),
+                    "code", InvitationEmailNotVerifiedException.CODE));
+        }
+        return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
     }
 
     /**

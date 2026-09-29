@@ -215,7 +215,7 @@ describe('useDataFetching nested workflow rows - real id preservation', () => {
       await result.current.fetchData(1, 100);
     });
 
-    expect(result.current.columns.map(c => c.field)).toEqual([...CONTEXT, 'id', 'email']);
+    expect(result.current.columns.map(c => c.field)).toEqual(['id', 'email', ...CONTEXT]);
     mockFetch.mockImplementation((url: string) => {
       if (url.includes('/output/detailed')) return Promise.resolve(okJson({ rows: [{ id: 1, output: { title: 'a' } }], columns: [] }));
       throw new Error(`unexpected url ${url}`);
@@ -224,7 +224,7 @@ describe('useDataFetching nested workflow rows - real id preservation', () => {
     await act(async () => {
       await withLane.result.current.fetchData(1, 100);
     });
-    expect(withLane.result.current.columns.map(c => c.field)).toEqual([...CONTEXT, 'title']);
+    expect(withLane.result.current.columns.map(c => c.field)).toEqual(['title', ...CONTEXT]);
   });
 
   it('declares the injected id for a primitive nested value too', async () => {
@@ -299,7 +299,7 @@ describe('useDataFetching nested workflow rows - real id preservation', () => {
       await result.current.fetchData(1, 20, null, null, { epoch: 2 });
       await result.current.fetchColumns();
     });
-    expect(result.current.columns.map(c => c.field)).toEqual([...CONTEXT, 'id', 'email']);
+    expect(result.current.columns.map(c => c.field)).toEqual(['id', 'email', ...CONTEXT]);
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(result.current.rows[0].data.id).toBe(4711);
   });

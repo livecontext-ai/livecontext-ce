@@ -50,6 +50,12 @@ public final class AuditEventTypes {
     public static final String CREDIT_GRANTED = "credit.granted";
     /** Admin granted/changed a user's comp subscription plan tier (FREE/STARTER/PRO/TEAM). */
     public static final String PLAN_GRANTED = "plan.granted";
+    /** V549 partner program: a creator or partner code was created (it hands out a plan and credits). */
+    public static final String PARTNER_CODE_CREATED = "partner.code_created";
+    /** V549 partner program: a code was enabled or disabled (disabling stops its commissions). */
+    public static final String PARTNER_CODE_ACTIVE_CHANGED = "partner.code_active_changed";
+    /** V549 partner program: payable commission lines were marked paid (money left the platform). */
+    public static final String PARTNER_COMMISSIONS_PAID = "partner.commissions_paid";
     public static final String DATA_EXPORTED = "data.exported";
     /**
      * Admin granted or revoked a user's verified badge (the blue check next to a public

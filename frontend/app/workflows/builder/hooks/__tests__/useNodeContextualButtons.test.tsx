@@ -22,9 +22,11 @@ vi.mock('@/contexts/SidePanelContext', () => ({
 }));
 vi.mock('@/components/app/AgentPanelContent', () => ({
   AgentPanelContent: () => null,
-  AGENT_CONVERSATION_TAB: 'conversation',
-  AGENT_CONFIGURATION_TAB: 'configuration',
 }));
+// The hook preloads the panels where a side panel exists; that is covered in
+// preloadNodePanels.test.ts, and must not fire real dynamic imports here.
+vi.mock('@/lib/sidePanel/preloadNodePanels', () => ({ preloadNodePanels: vi.fn() }));
+import { preloadNodePanels } from '@/lib/sidePanel/preloadNodePanels';
 vi.mock('@/components/app/DataSourcePanelContent', () => ({
   DataSourcePanelContent: () => null,
 }));
@@ -145,6 +147,21 @@ describe('useNodeContextualButtons', () => {
       }),
     );
   };
+
+  // The panels are lazy so the landing hero (no side panel) does not ship them; where
+  // a side panel exists they are preloaded, so the first open is not blank.
+  it('preloads the panels a node can open when a side panel is available', () => {
+    vi.mocked(preloadNodePanels).mockClear();
+    render(nodeData({ id: 'ai-agent', agentConfigId: 'cfg-1', agentConfigName: 'Helper' }));
+    expect(preloadNodePanels).toHaveBeenCalled();
+  });
+
+  it('preloads nothing where no side panel can open (the landing hero)', () => {
+    vi.mocked(preloadNodePanels).mockClear();
+    mockSidePanel = null;
+    render(nodeData({ id: 'ai-agent', agentConfigId: 'cfg-1', agentConfigName: 'Helper' }));
+    expect(preloadNodePanels).not.toHaveBeenCalled();
+  });
 
   it('builds agent config + conversation buttons for an agent node', () => {
     const { result } = render(nodeData({ id: 'ai-agent', agentConfigId: 'cfg-1', agentConfigName: 'Helper' }));

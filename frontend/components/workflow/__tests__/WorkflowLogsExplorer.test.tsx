@@ -16,6 +16,11 @@ vi.mock('@/app/workflows/builder/services/canvasNodesStore', () => ({ getCanvasN
 vi.mock('@/app/workflows/builder/components/nodes/shared', () => ({ getIconSlug: () => '', NodeIcon: () => null }));
 vi.mock('@/app/workflows/builder/nodes/nodeClasses', () => ({ findNodeClassById: () => null }));
 vi.mock('@/contexts/PublicationSnapshotContext', () => ({ getActivePublicPreview: () => null }));
+// The mode provider. By default the no-provider stub (workflowId undefined): Logs keep their own
+// epoch, which is what every test below the "shared epoch" block pins.
+const NO_PROVIDER = { workflowId: undefined, runId: null, viewingEpoch: null, setViewingEpoch: () => {}, setRunId: () => {} };
+const mode = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+vi.mock('@/contexts/WorkflowModeContext', () => ({ useWorkflowMode: () => mode.value }));
 
 import { WorkflowLogsExplorer } from '../WorkflowLogsExplorer';
 import { ToggleGroup } from '@/components/ui/toggle-group';
@@ -53,6 +58,7 @@ function mount(props: Partial<React.ComponentProps<typeof WorkflowLogsExplorer>>
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  mode.value = NO_PROVIDER;
   resetEpochSelectionState();
   auth.isReady = true;
   api.getRun.mockResolvedValue({ id: 'uuid' });
@@ -376,5 +382,113 @@ describe('run logs shared presentation', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Loading logs');
     expect(api.getRunState).not.toHaveBeenCalled();
     expect(api.getRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('run logs follow the run\'s shared epoch', () => {
+  const setViewingEpoch = vi.fn();
+  const setRunId = vi.fn();
+  const bindTo = (runId: string | null, viewingEpoch: number | null) => {
+    mode.value = { workflowId: 'wf', runId, viewingEpoch, setViewingEpoch, setRunId };
+  };
+
+  it('opens on the epoch the canvas shows, not on the latest one', async () => {
+    bindTo('run', 1);
+    mount();
+    await screen.findByText('"output-12"');
+
+    expect(screen.getByLabelText('Epoch')).toHaveValue('1');
+    expect(api.getEpochAggregatedSteps).toHaveBeenCalledWith('run', 1);
+    expect(api.getEpochAggregatedSteps).not.toHaveBeenCalledWith('run', 2);
+  });
+
+  it('opens on all epochs when the canvas shows all of them', async () => {
+    bindTo('run', null);
+    mount();
+    await screen.findByText('"output-12"');
+
+    expect(screen.getByLabelText('Epoch')).toHaveValue('all');
+    expect(api.getEpochAggregatedSteps).toHaveBeenCalledWith('run', undefined);
+  });
+
+  it('moves every view when an epoch is chosen here, recorded as a user choice', async () => {
+    bindTo('run', 1);
+    mount();
+    await screen.findByText('"output-12"');
+
+    fireEvent.change(screen.getByLabelText('Epoch'), { target: { value: '2' } });
+
+    expect(setViewingEpoch).toHaveBeenCalledWith(2);
+    expect(getPickedEpoch('run')).toBe(2);
+  });
+
+  it('goes back to all epochs through the recording helper', async () => {
+    bindTo('run', 1);
+    mount();
+    await screen.findByText('"output-12"');
+
+    fireEvent.change(screen.getByLabelText('Epoch'), { target: { value: 'all' } });
+
+    expect(setViewingEpoch).toHaveBeenCalledWith(null);
+    // Recorded as a choice, so a surface that mounts empty does not restore the epoch just left.
+    expect(getPickedEpoch('run')).toBeNull();
+  });
+
+  it('shows the shared epoch in the table view too', async () => {
+    bindTo('run', 1);
+    mount();
+    await screen.findByText('"output-12"');
+
+    await openTable();
+
+    expect(screen.getByTestId('navigable-table')).toHaveAttribute('data-epoch', '1');
+    expect(screen.getByLabelText('Epoch')).toHaveValue('1');
+  });
+
+  it('restores the epoch remembered for the run, which a fresh panel does not show yet', async () => {
+    // Picked on the canvas: the side panel's own provider starts on all epochs.
+    markEpochPickedByUser('run', 2);
+    bindTo('run', null);
+    mount();
+    await screen.findByText('"output-12"');
+
+    expect(setViewingEpoch).toHaveBeenCalledWith(2);
+  });
+
+  it('binds a panel opened straight on Logs to its run, and stays local until it is bound', async () => {
+    bindTo(null, null);
+    mount();
+    await screen.findByText('"output-12"');
+
+    expect(setRunId).toHaveBeenCalledWith('run');
+    // Not bound yet: the local default (the latest epoch), and nothing broadcast.
+    expect(screen.getByLabelText('Epoch')).toHaveValue('2');
+    fireEvent.change(screen.getByLabelText('Epoch'), { target: { value: '1' } });
+    expect(setViewingEpoch).not.toHaveBeenCalled();
+  });
+
+  it('drops the passage picked in the old epoch when the epoch changes from elsewhere', async () => {
+    bindTo('run', 1);
+    const view = mount();
+    await screen.findByText('"output-12"');
+    fireEvent.change(screen.getByLabelText('Passage'), { target: { value: '11' } });
+    await screen.findByText('"output-11"');
+
+    // The canvas moves to epoch 2: the passages list is epoch 2's, starting on its first.
+    bindTo('run', 2);
+    view.rerender(<NextIntlClientProvider locale="en" messages={messages}><QueryClientProvider client={client}><ExplorerWithBreadcrumb /></QueryClientProvider></NextIntlClientProvider>);
+
+    await waitFor(() => expect(screen.getByLabelText('Passage')).toHaveValue('12'));
+  });
+
+  it('keeps its own epoch for logs of a run the panel is not bound to', async () => {
+    bindTo('another-run', 1);
+    mount();
+    await screen.findByText('"output-12"');
+
+    // The local default: the latest epoch, untouched by the other run's epoch 1.
+    expect(screen.getByLabelText('Epoch')).toHaveValue('2');
+    fireEvent.change(screen.getByLabelText('Epoch'), { target: { value: '1' } });
+    expect(setViewingEpoch).not.toHaveBeenCalled();
   });
 });

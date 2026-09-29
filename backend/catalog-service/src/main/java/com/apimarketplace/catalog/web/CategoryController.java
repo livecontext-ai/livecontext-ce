@@ -29,7 +29,8 @@ public class CategoryController {
 
     private final CategoryService categoryService;
     private final CatalogV1Service catalogV1Service;
-    
+    private final CatalogAdminAccess adminAccess;
+
     // ===== CATEGORY ENDPOINTS =====
     
     /**
@@ -86,12 +87,22 @@ public class CategoryController {
     }
     
     /**
-     * Initialize default categories (for development/testing)
+     * Admin only: seeds the default GLOBAL categories when the table is empty.
+     * The gateway treats the whole /api/catalog/categories prefix as a public
+     * (anonymous) read path, so this write is reachable without a JWT and the
+     * admin check has to live here.
      */
     @PostMapping("/categories/initialize")
-    public ResponseEntity<Void> initializeDefaultCategories(
+    public ResponseEntity<?> initializeDefaultCategories(
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles,
+            @RequestHeader(value = CatalogAdminAccess.ADMIN_TOKEN_HEADER, required = false) String adminToken) {
+        var denied = adminAccess.denyIfNotAdmin(roles, adminToken);
+        if (denied != null) {
+            log.warn("Refused default category initialization for non-admin caller userId={}", userId);
+            return denied;
+        }
         try {
             log.info("Initialisation des categories par defaut - userId={}, orgId={}", userId, orgId);
             categoryService.initializeDefaultCategories();

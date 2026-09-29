@@ -48,6 +48,12 @@ public class RemoteMarketplaceController {
             @RequestHeader("X-User-ID") String tenantId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
 
+        // Acquiring clones a publication INTO the workspace (and may spend credits):
+        // a write, refused to the read-only VIEWER.
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(organizationId, com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot acquire publications"));
+        }
         try {
             Map<String, Object> result = remoteMarketplaceService.acquirePublication(publicationId, tenantId, organizationId);
             return ResponseEntity.ok(result);

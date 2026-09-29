@@ -389,15 +389,7 @@ public class SplitAwareNodeExecutor {
         // - Fork: dispatch branches independently per item
         boolean forcePerItem = false;
         if (shouldSkipSplitHandling(node)) {
-            boolean isRoutingNode = node.isDecisionNode() || node.isSwitchNode();
-            // A merge node reaching here means SplitMergeHandler.isSplitMerge() returned false
-            // (branch-rejoin, not split-aggregation). It should execute per-item.
-            boolean isBranchRejoinMerge = node.isMergeNode();
-            // Loop nodes must execute per-item: each item has its own iteration cycle
-            boolean isLoopInSplit = node.isLoopNode();
-            // Fork nodes must execute per-item: each item dispatches to all branches
-            boolean isForkInSplit = node.isForkNode();
-            if (!isRoutingNode && !isBranchRejoinMerge && !isLoopInSplit && !isForkInSplit) {
+            if (!isForcedPerItemInSplit(node)) {
                 logger.debug("[SplitAware] Skipping split handling for node type: nodeId={}, type={}",
                     nodeId, node.getType());
                 return executeNodeBody(node, context);
@@ -424,9 +416,11 @@ public class SplitAwareNodeExecutor {
 
             // Node identified as needing per-item execution - bypass isDirectSuccessor check below
             forcePerItem = true;
-            String reason = isRoutingNode ? "routing node"
-                : isBranchRejoinMerge ? "branch-rejoin merge"
-                : isLoopInSplit ? "loop in split"
+            // A merge reaching here means SplitMergeHandler.isSplitMerge() returned false
+            // (branch-rejoin, not split-aggregation).
+            String reason = (node.isDecisionNode() || node.isSwitchNode()) ? "routing node"
+                : node.isMergeNode() ? "branch-rejoin merge"
+                : node.isLoopNode() ? "loop in split"
                 : "fork in split";
             logger.info("[SplitAware] {} in split scope, will execute per-item: nodeId={}, type={}",
                 reason, nodeId, node.getType());
@@ -460,7 +454,7 @@ public class SplitAwareNodeExecutor {
         // Exception: nodes with forcePerItem (routing, merge, loop, fork) always execute per-item
         boolean isStepByStepMode = (successorTraverser == null);
 
-        if (!isDirectSuccessor && !isStepByStepMode && !forcePerItem) {
+        if (!fansOutOverAllItems(forcePerItem, isStepByStepMode, isDirectSuccessor)) {
             // Auto mode + not direct successor + not forced: already in a split traversal, execute once
             //
             // executeOnce policy on a CHAINED node inside per-item split traversals:
@@ -497,6 +491,63 @@ public class SplitAwareNodeExecutor {
         return executeForAllItemsAndTraverse(
             node, context, splitContext, runId,
             execution, triggerItem, workflowItemIndex, successorTraverser, options, nodeMap);
+    }
+
+    /**
+     * Whether {@link #execute} will run {@code node} once for EVERY item of an enclosing split
+     * (and apply per-item routing itself), rather than once for the single item carried by the
+     * caller's context.
+     *
+     * <p>The two cases give {@code context.itemIndex()} different meanings. In a fan-out it is the
+     * WORKFLOW item the split belongs to, and the per-item rows of the split body are keyed by the
+     * SPLIT item index, so a caller that reads those rows with it reads an unrelated item. The
+     * engine's unreachable-merge gate asks this before trusting its per-item verdict (prod run
+     * {@code run_<id>}: it read split item 0 for a merge about to run over 8
+     * items, and skipped all of them).
+     *
+     * <p>Same decision {@link #execute} makes, from the same helpers, so the two cannot drift.
+     *
+     * @param stepByStep true on the step-by-step dispatch (no successor traverser), where every
+     *                   node in split scope fans out
+     */
+    public boolean executesForEverySplitItem(
+            ExecutionNode node,
+            String runId,
+            int workflowItemIndex,
+            Map<String, ExecutionNode> nodeMap,
+            boolean stepByStep) {
+        if (node == null || runId == null) {
+            return false;
+        }
+        boolean forcePerItem = false;
+        if (shouldSkipSplitHandling(node)) {
+            if (!isForcedPerItemInSplit(node)) {
+                return false;
+            }
+            forcePerItem = true;
+        }
+        Optional<SplitContext> splitContext = findSplitContextWithFallback(
+            runId, node.getNodeId(), workflowItemIndex, nodeMap, node);
+        if (splitContext.isEmpty()) {
+            return false;
+        }
+        return fansOutOverAllItems(forcePerItem, stepByStep,
+            isDirectSplitSuccessor(node, splitContext.get(), nodeMap));
+    }
+
+    /**
+     * Control-flow nodes that normally skip split handling but must run per item inside a split:
+     * decision/switch (per-item condition), branch-rejoin merge (not caught by
+     * SplitMergeHandler), loop (own iteration cycle per item), fork (dispatch per item).
+     */
+    private static boolean isForcedPerItemInSplit(ExecutionNode node) {
+        return node.isDecisionNode() || node.isSwitchNode() || node.isMergeNode()
+            || node.isLoopNode() || node.isForkNode();
+    }
+
+    /** In split scope: the node runs for all items unless it is a chained node on an AUTO per-item traversal. */
+    private static boolean fansOutOverAllItems(boolean forcePerItem, boolean stepByStep, boolean directSuccessor) {
+        return forcePerItem || stepByStep || directSuccessor;
     }
 
     /**

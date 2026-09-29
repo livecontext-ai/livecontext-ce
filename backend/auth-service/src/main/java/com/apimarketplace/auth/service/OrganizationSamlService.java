@@ -10,6 +10,9 @@ import com.apimarketplace.auth.dto.UpsertOrganizationSamlConnectionRequest;
 import com.apimarketplace.auth.repository.OrganizationMemberRepository;
 import com.apimarketplace.auth.repository.OrganizationRepository;
 import com.apimarketplace.auth.repository.OrganizationSamlConnectionRepository;
+import com.apimarketplace.auth.repository.OrganizationSsoDomainRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -28,6 +31,8 @@ import java.util.UUID;
 @Service
 public class OrganizationSamlService {
 
+    private static final Logger log = LoggerFactory.getLogger(OrganizationSamlService.class);
+
     private static final int MAX_ERROR_LENGTH = 2000;
 
     private final OrganizationSamlConnectionRepository samlRepository;
@@ -35,6 +40,7 @@ public class OrganizationSamlService {
     private final OrganizationMemberRepository memberRepository;
     private final OrganizationMemberService memberService;
     private final OrganizationAuditService auditService;
+    private final OrganizationSsoDomainRepository domainRepository;
     private final KeycloakSamlIdentityProviderClient keycloakClient;
     private final String keycloakIssuerUri;
 
@@ -44,6 +50,7 @@ public class OrganizationSamlService {
             OrganizationMemberRepository memberRepository,
             OrganizationMemberService memberService,
             OrganizationAuditService auditService,
+            OrganizationSsoDomainRepository domainRepository,
             ObjectProvider<KeycloakSamlIdentityProviderClient> keycloakClientProvider,
             @Value("${keycloak.issuer-uri:http://localhost:8180/realms/livecontext}") String keycloakIssuerUri
     ) {
@@ -52,6 +59,7 @@ public class OrganizationSamlService {
         this.memberRepository = memberRepository;
         this.memberService = memberService;
         this.auditService = auditService;
+        this.domainRepository = domainRepository;
         this.keycloakClient = keycloakClientProvider.getIfAvailable();
         this.keycloakIssuerUri = trimTrailingSlash(keycloakIssuerUri);
     }
@@ -91,20 +99,82 @@ public class OrganizationSamlService {
         } else if (!existingConnection) {
             throw new IllegalArgumentException("x509Certificate is required");
         }
-        connection.setHideOnLoginPage(request.hideOnLoginPage() == null || request.hideOnLoginPage());
+        // Not a workspace choice any more: a workspace IdP is never listed on the platform login
+        // page (see KeycloakSamlIdentityProviderClient). The column is kept, pinned to true.
+        connection.setHideOnLoginPage(true);
         connection.setStatus(OrganizationSamlConnection.Status.DRAFT);
         connection.setLastError(null);
 
-        provisionKeycloak(connection);
+        provisionKeycloak(connection, hasVerifiedDomain(orgId));
 
         auditService.record(orgId, actorUserId, OrganizationAuditEvent.Type.SAML_SSO_CONFIGURED,
                 Map.of(
                         "idpAlias", connection.getIdpAlias(),
                         "displayName", connection.getDisplayName(),
-                        "status", connection.getStatus().name(),
-                        "hideOnLoginPage", connection.isHideOnLoginPage()));
+                        "status", connection.getStatus().name()));
 
         return toDto(connection);
+    }
+
+    /**
+     * Re-applies whether the workspace's Keycloak IdP may broker logins: only when its connection
+     * is ACTIVE, the workspace is live and still on a Team plan, and it has proven at least one
+     * domain. Called when a domain is verified or removed, when the owner's plan changes, and on
+     * ownership transfer, soft delete and restore.
+     *
+     * <p>The decision is taken now, inside the caller's transaction (it reads that transaction's
+     * own writes); the Keycloak call runs only AFTER COMMIT, so a rolled-back caller cannot leave
+     * Keycloak enabled (or disabled) for a state that never happened. Outside a transaction it
+     * runs at once. Best effort: a Keycloak failure is logged, never thrown (the SAML admission
+     * re-checks the plan and the domain on every login anyway).
+     */
+    public void syncIdentityProviderEnabled(UUID orgId) {
+        if (keycloakClient == null || orgId == null) {
+            return;
+        }
+        samlRepository.findByOrganization_Id(orgId).ifPresent(connection -> {
+            String alias = connection.getIdpAlias();
+            boolean enabled;
+            try {
+                enabled = shouldBrokerLogins(connection, orgId);
+            } catch (RuntimeException e) {
+                log.error("[saml] could not decide IdP {} state for org {}: {}", alias, orgId, e.toString());
+                return;
+            }
+            Runnable apply = () -> {
+                try {
+                    keycloakClient.setEnabled(alias, enabled);
+                } catch (RuntimeException e) {
+                    log.error("[saml] could not set IdP {} enabled={} for org {}: {}", alias, enabled, orgId, e.toString());
+                }
+            };
+            if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+                org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                        new org.springframework.transaction.support.TransactionSynchronization() {
+                            @Override
+                            public void afterCommit() {
+                                apply.run();
+                            }
+                        });
+            } else {
+                apply.run();
+            }
+        });
+    }
+
+    private boolean shouldBrokerLogins(OrganizationSamlConnection connection, UUID orgId) {
+        if (connection.getStatus() != OrganizationSamlConnection.Status.ACTIVE) {
+            return false;
+        }
+        Organization organization = connection.getOrganization();
+        if (organization == null || organization.isDeleted()) {
+            return false;
+        }
+        return memberService.getTeamStatus(orgId).supportsTeam() && hasVerifiedDomain(orgId);
+    }
+
+    private boolean hasVerifiedDomain(UUID orgId) {
+        return domainRepository.existsByOrganization_IdAndVerifiedAtIsNotNull(orgId);
     }
 
     @Transactional
@@ -120,7 +190,7 @@ public class OrganizationSamlService {
         });
     }
 
-    private void provisionKeycloak(OrganizationSamlConnection connection) {
+    private void provisionKeycloak(OrganizationSamlConnection connection, boolean enabled) {
         if (keycloakClient == null) {
             connection.setStatus(OrganizationSamlConnection.Status.ERROR);
             connection.setLastError("SAML SSO requires auth.mode=keycloak.");
@@ -129,7 +199,7 @@ public class OrganizationSamlService {
         }
 
         try {
-            keycloakClient.upsert(connection);
+            keycloakClient.upsert(connection, enabled);
             connection.setStatus(OrganizationSamlConnection.Status.ACTIVE);
             connection.setLastSyncedAt(Instant.now());
             connection.setLastError(null);

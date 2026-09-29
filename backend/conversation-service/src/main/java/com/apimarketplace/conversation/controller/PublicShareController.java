@@ -5,6 +5,7 @@ import com.apimarketplace.conversation.dto.MessageDto;
 import com.apimarketplace.conversation.dto.PublicMessageDto;
 import com.apimarketplace.conversation.dto.PublicMessagePageDto;
 import com.apimarketplace.conversation.entity.Conversation;
+import com.apimarketplace.conversation.entity.Message;
 import com.apimarketplace.conversation.exception.ConversationInactiveException;
 import com.apimarketplace.conversation.exception.InvalidMessageException;
 import com.apimarketplace.conversation.mapper.ConversationMapper;
@@ -152,8 +153,8 @@ public class PublicShareController {
                         .body(Map.of("error", "This conversation is read-only"));
             }
 
-            messageDto.setConversationId(conversation.getId());
-            MessageDto saved = messageService.addMessage(conversation.getId(), messageDto);
+            MessageDto saved = messageService.addMessage(
+                    conversation.getId(), toAnonymousUserMessage(messageDto, conversation.getId()));
             return ResponseEntity.status(HttpStatus.CREATED).body(saved);
         } catch (ConversationInactiveException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
@@ -165,5 +166,21 @@ public class PublicShareController {
             logger.error("Error adding message to shared conversation: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
+    }
+
+    /**
+     * The only message an anonymous link holder may write: a USER turn with text. Everything
+     * else the client sent is dropped, whatever it claims. A client-chosen role let the holder
+     * forge SYSTEM or ASSISTANT turns (and toolCalls / tool results) that the owner's agent then
+     * reads back as its own history: a prompt injection through the owner's conversation. The
+     * id, timestamps, model/agent attribution, feedback and attachments are server-side facts
+     * too, so none of them is taken from the request.
+     */
+    static MessageDto toAnonymousUserMessage(MessageDto requested, String conversationId) {
+        MessageDto message = new MessageDto();
+        message.setRoleEnum(Message.MessageRole.USER);
+        message.setContent(requested != null ? requested.getContent() : null);
+        message.setConversationId(conversationId);
+        return message;
     }
 }

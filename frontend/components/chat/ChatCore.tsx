@@ -186,6 +186,8 @@ export function ChatCore({
   const previousConversationIdRef = useRef<string | null>(null);
   const previousLastUserPendingIdRef = useRef<string | null>(null);
   const userScrolledUpRef = useRef(false);
+  // Mirrors userScrolledUpRef as state, for the "back to the latest message" arrow.
+  const [isScrolledUp, setIsScrolledUp] = useState(false);
 
   // Initial anchor - pin to the bottom on conversation switch with stabilization
   // against async-loading images / markdown / code blocks. Self-cancels on user input.
@@ -426,6 +428,7 @@ export function ChatCore({
       const threshold = Math.min(200, Math.max(80, clientHeight * 0.1));
       const isAtBottom = scrollTop + clientHeight >= scrollHeight - threshold;
       userScrolledUpRef.current = !isAtBottom;
+      setIsScrolledUp(!isAtBottom);
     };
 
     container.addEventListener('scroll', handleScroll);
@@ -433,6 +436,13 @@ export function ChatCore({
 
     return () => container.removeEventListener('scroll', handleScroll);
   }, [conversationId, messages.length]);
+
+  const handleScrollToBottom = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    userScrolledUpRef.current = false;
+    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+  }, []);
 
   // Streaming + user-send auto-scroll. The initial anchor is handled by
   // useAnchorScrollToBottom above; this effect is only for new chunks/messages.
@@ -1135,6 +1145,8 @@ export function ChatCore({
       leadingControl={leadingControl}
       linkedAgentId={linkedAgentId ?? conversation?.agentId ?? null}
       showOrbi={showOrbi}
+      showScrollToBottom={isScrolledUp && messages.length > 0}
+      onScrollToBottom={handleScrollToBottom}
     />
   );
 

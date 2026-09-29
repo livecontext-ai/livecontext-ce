@@ -100,11 +100,67 @@ class UserRepositoryLifecycleContextTest {
     void unchangedValuesReportZero() {
         Long id = persistUser();
         repository.updateLocaleImplicit(id, "fr");
-        repository.updateTimeZone(id, "Europe/Paris");
+        repository.updateTimeZoneImplicit(id, "Europe/Paris");
 
         assertThat(repository.updateLocaleImplicit(id, "fr")).isZero();
-        assertThat(repository.updateTimeZone(id, "Europe/Paris")).isZero();
-        assertThat(repository.updateTimeZone(id, "Asia/Tokyo")).isEqualTo(1);
+        assertThat(repository.updateTimeZoneImplicit(id, "Europe/Paris")).isZero();
+        assertThat(repository.updateTimeZoneImplicit(id, "Asia/Tokyo")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a zone picked in Settings is never overwritten by a later browser report")
+    void explicitTimeZoneSurvivesBrowserReports() {
+        Long id = persistUser();
+        repository.updateTimeZoneImplicit(id, "Europe/Paris");
+
+        assertThat(repository.updateTimeZoneExplicit(id, "Asia/Tokyo")).isEqualTo(1);
+
+        // What the next session's context report does: the browser is in Paris, the person
+        // picked Tokyo. Before V540 this UPDATE had no guard and silently undid the pick.
+        assertThat(repository.updateTimeZoneImplicit(id, "Europe/Paris")).isZero();
+        assertThat(reload(id).getTimeZone()).isEqualTo("Asia/Tokyo");
+        assertThat(reload(id).isTimeZoneExplicit()).isTrue();
+    }
+
+    @Test
+    @DisplayName("releasing a pinned zone lets browser reports drive it again")
+    void releaseTimeZoneUnpins() {
+        Long id = persistUser();
+        repository.updateTimeZoneExplicit(id, "Asia/Tokyo");
+
+        // The person asked to follow this device, which is in Paris.
+        assertThat(repository.releaseTimeZone(id, "Europe/Paris")).isEqualTo(1);
+        assertThat(reload(id).getTimeZone()).isEqualTo("Europe/Paris");
+        assertThat(reload(id).isTimeZoneExplicit()).isFalse();
+
+        // And the guarded write works again, which is the whole point of releasing.
+        assertThat(repository.updateTimeZoneImplicit(id, "Asia/Seoul")).isEqualTo(1);
+        assertThat(reload(id).getTimeZone()).isEqualTo("Asia/Seoul");
+    }
+
+    @Test
+    @DisplayName("releasing reports a change even when the zone itself is unchanged")
+    void releaseReportsTheFlagChange() {
+        Long id = persistUser();
+        repository.updateTimeZoneExplicit(id, "Europe/Paris");
+
+        // Same zone, pinned -> not pinned: nothing about the value moved, but the rule did, so
+        // the caller must still learn about it (the mail contact is addressed from it).
+        assertThat(repository.releaseTimeZone(id, "Europe/Paris")).isEqualTo(1);
+        assertThat(reload(id).isTimeZoneExplicit()).isFalse();
+        // Already released and unchanged: nothing left to report.
+        assertThat(repository.releaseTimeZone(id, "Europe/Paris")).isZero();
+    }
+
+    @Test
+    @DisplayName("an explicit pick of the SAME zone still pins it, and repeating it changes nothing")
+    void explicitSameTimeZonePins() {
+        Long id = persistUser();
+        repository.updateTimeZoneImplicit(id, "Europe/Paris");
+
+        assertThat(repository.updateTimeZoneExplicit(id, "Europe/Paris")).isEqualTo(1);
+        assertThat(repository.updateTimeZoneExplicit(id, "Europe/Paris")).isZero();
+        assertThat(reload(id).isTimeZoneExplicit()).isTrue();
     }
 
     @Test
@@ -234,20 +290,31 @@ class UserRepositoryLifecycleContextTest {
         entityManager.detach(stale);
 
         repository.updateLocaleExplicit(id, "fr");
-        repository.updateTimeZone(id, "Europe/Paris");
+        repository.updateTimeZoneExplicit(id, "Asia/Tokyo");
         repository.captureSignupCountry(id, "FR");
         repository.captureSignupIp(id, "203.0.113.7", NOW);
         repository.markActivatedIfFirst(id, NOW);
 
         // Even a stale copy whose in-memory lifecycle fields were set is never written.
+        //
+        // `timeZoneExplicit` is the one that matters most here: the entity exposes a public
+        // setter for it, so an unrelated save of a stale User is exactly how somebody's pinned
+        // zone would silently go back to following whatever browser they last opened. Nothing
+        // but `insertable = false, updatable = false` prevents it, and the parity test asserts
+        // those ANNOTATIONS rather than their effect.
         stale.setLocale("de");
+        stale.setTimeZone("America/Los_Angeles");
+        stale.setTimeZoneExplicit(false);
         stale.setMarketingConsent(true);
         repository.saveAndFlush(stale);
 
         User after = reload(id);
         assertThat(after.getLocale()).isEqualTo("fr");
         assertThat(after.isLocaleExplicit()).isTrue();
-        assertThat(after.getTimeZone()).isEqualTo("Europe/Paris");
+        assertThat(after.getTimeZone()).isEqualTo("Asia/Tokyo");
+        assertThat(after.isTimeZoneExplicit())
+                .as("a stale save must not un-pin a zone the person chose")
+                .isTrue();
         assertThat(after.getSignupCountry()).isEqualTo("FR");
         assertThat(after.getSignupIp()).isEqualTo("203.0.113.7");
         assertThat(after.getActivatedAt()).isEqualTo(NOW);
@@ -270,6 +337,10 @@ class UserRepositoryLifecycleContextTest {
         User created = reload(id);
         assertThat(created.getLocale()).isNull();
         assertThat(created.isLocaleExplicit()).isFalse();
+        // The generated default behind @ColumnDefault: the column is NOT NULL and never
+        // inserted, so without it this save fails outright rather than reading false.
+        assertThat(created.isTimeZoneExplicit()).isFalse();
+        assertThat(created.getTimeZone()).isNull();
         assertThat(created.isMarketingConsent()).isFalse();
         assertThat(created.getActivatedAt()).isNull();
     }

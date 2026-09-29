@@ -114,6 +114,12 @@ public class PublicationScreeningController {
         if (userId == null || userId.isBlank()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Authentication required"));
         }
+        // First step of publishing (it also renders a run's interface data): refused to the
+        // read-only VIEWER like its two siblings, screening-decisions and the replacement.
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(organizationId, com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot modify publications"));
+        }
 
         UUID interfaceId;
         try {
@@ -170,6 +176,10 @@ public class PublicationScreeningController {
             @RequestHeader(value = "User-Agent", required = false) String userAgent) {
         if (userId == null || userId.isBlank()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Authentication required"));
+        }
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(organizationId, com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot modify publications"));
         }
         if (request == null || request.publicationId == null || request.publicationId.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "publicationId is required"));
@@ -275,6 +285,10 @@ public class PublicationScreeningController {
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
         if (userId == null || userId.isBlank()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Authentication required"));
+        }
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(organizationId, com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot modify publications"));
         }
         if (request == null || request.prompt == null || request.prompt.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "prompt is required"));

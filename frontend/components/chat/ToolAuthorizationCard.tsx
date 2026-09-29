@@ -11,6 +11,7 @@ import { workflowService } from '@/lib/api/orchestrator/workflow.service';
 import { agentService } from '@/lib/api/orchestrator/agent.service';
 import type { WorkflowPublication } from '@/lib/api/orchestrator/types';
 import type { PendingToolAuthorization } from '@/contexts/StreamingContext';
+import { useCanDriveRuns } from '@/lib/hooks/useCanDriveRuns';
 
 /**
  * How long the card waits for a name before becoming answerable anyway. Short on purpose:
@@ -52,6 +53,11 @@ export function ToolAuthorizationCard({
   className = '',
 }: ToolAuthorizationCardProps) {
   const t = useTranslations('toolAuthorization');
+  const tCommon = useTranslations('common');
+  // Approving runs the held action with the workspace credentials, which the backend refuses
+  // to a read-only VIEWER: the card offers them Deny only, and says why. The chat tab can
+  // also open inside a public share page, where the share link decides, not the visitor role.
+  const canMutate = useCanDriveRuns();
   const [isApproved, setIsApproved] = useState(false);
   const [isDenied, setIsDenied] = useState(false);
   const [pending, setPending] = useState(false);
@@ -277,6 +283,11 @@ export function ToolAuthorizationCard({
 
         {/* Footer: "don't ask again" checkbox + actions */}
         <div className="mt-3 flex items-center justify-between gap-3">
+          {!canMutate ? (
+            <p className="text-xs text-theme-muted" data-testid="tool-authorization-viewer-read-only">
+              {tCommon('viewerReadOnly')}
+            </p>
+          ) : (
           <label className="flex items-center gap-2 text-xs text-theme-secondary cursor-pointer select-none">
             <input
               type="checkbox"
@@ -288,12 +299,14 @@ export function ToolAuthorizationCard({
             />
             {t('dontAskAgain')}
           </label>
+          )}
           <div className="flex gap-2">
             <Button variant="ghost" size="sm" onClick={deny} disabled={pending}>
               {t('deny')}
             </Button>
             {/* Declining stays available while the name resolves - refusing needs no
                 identification. Approving does, so it waits. */}
+            {canMutate && (
             <Button variant="default" size="sm" onClick={approve} disabled={pending || nameLoading} className="gap-2">
               {pending || nameLoading ? (
                 <>
@@ -304,6 +317,7 @@ export function ToolAuthorizationCard({
                 <>{isInstall ? t('install') : t('approve')}</>
               )}
             </Button>
+            )}
           </div>
         </div>
       </div>

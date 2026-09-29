@@ -221,6 +221,9 @@ app:
   mail:
     from: ${MAIL_FROM:noreply@livecontext.local}
     from-name: LiveContext
+    # A self-hosted install has to be able to point its own users at its own address: these mails
+    # are about THIS server, and the default sends them to the cloud vendor.
+    support: ${MAIL_SUPPORT:support@livecontext.ai}
     console-fallback-enabled: ${MAIL_CONSOLE_FALLBACK_ENABLED:true}
   base-url: ${APP_BASE_URL:http://localhost:8080}
   # Public FRONTEND origin for opaque file URLs (PublicFileUrlBuilder). Distinct from base-url, which
@@ -714,8 +717,9 @@ management:
       enabled: false
 
 # ============================================================
-# JVM tuning for CE (target: 800MB RAM)
-# Set via JAVA_OPTS: -Xms256m -Xmx512m -XX:+UseZGC
+# JVM tuning for CE: JAVA_OPTS in backend/monolith-service/Dockerfile (-Xms512m -Xmx1024m, ZGC).
+# The process needs ~1.6 GB (measured 2026-09-28), hence the 2048M container limit in the
+# CE compose files; lowering the limit without lowering -Xmx makes the kernel kill it at boot.
 # ============================================================
 
 # ============================================================

@@ -93,8 +93,8 @@ class DetailedStepDataRowIdentityTest {
     }
 
     @Test
-    @DisplayName("Columns lead with id + coordinates, id is text, and the hidden row key is no column")
-    void columnsLeadWithCoordinatesAndHideTheRowKey() {
+    @DisplayName("Columns start with id then what happened, the coordinates follow, id is text, and the hidden row key is no column")
+    void columnsPutCoordinatesAfterTheDataAndHideTheRowKey() {
         when(repository.findDetailedByRunIdAndStepAliasAndTenantId(
                 eq(RUN_ID), eq(STEP_ALIAS), eq(TENANT_ID), nullable(Integer.class), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(row(1L, 3, 0, 0, 0))));
@@ -103,7 +103,8 @@ class DetailedStepDataRowIdentityTest {
                 RUN_ID, STEP_ALIAS, TENANT_ID, 1, 20, null, null).columns();
 
         assertThat(columns).extracting(ColumnDefinition::field)
-                .startsWith("id", "epoch", "spawn", "iteration")
+                .startsWith("id", "status")
+                .containsSubsequence("id", "status", "epoch", "spawn", "iteration")
                 .doesNotContain(StepDataRowMapper.ROW_KEY_FIELD);
         // "20.0.2" is not a number: a NUMBER column would sort and format it as one.
         assertThat(columns.get(0).type()).isEqualTo(ColumnType.STRING);

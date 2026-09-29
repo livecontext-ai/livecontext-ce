@@ -92,6 +92,11 @@ export interface OpenRunPanelDetail {
   workflowId?: string;
   /** Which level of the Run tab to land on. Defaults to the run detail. */
   view?: 'history' | 'run';
+  /**
+   * Which sub-tab of the bound run to show: the Run tab (default) or its Analysis sibling.
+   * `view` only applies to the Run tab.
+   */
+  tab?: 'run' | 'analysis';
 }
 
 export interface RunPanelViewRequest {
@@ -198,11 +203,14 @@ let viewRequestSeq = 0;
 /** Open (and focus) the Run tab of the workflow / application panel. */
 export function openRunPanel(detail: OpenRunPanelDetail = {}): void {
   if (typeof window === 'undefined') return;
-  lastViewRequest = {
-    workflowId: detail.workflowId,
-    view: detail.view ?? 'run',
-    seq: ++viewRequestSeq,
-  };
+  // The level is the RUN tab's: a request for the Analysis tab leaves it as it was.
+  if (detail.tab !== 'analysis') {
+    lastViewRequest = {
+      workflowId: detail.workflowId,
+      view: detail.view ?? 'run',
+      seq: ++viewRequestSeq,
+    };
+  }
   window.dispatchEvent(new CustomEvent<OpenRunPanelDetail>(OPEN_RUN_PANEL_EVENT, { detail }));
 }
 

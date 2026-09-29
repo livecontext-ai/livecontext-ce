@@ -113,6 +113,125 @@ public class AdminPlanService {
      */
     @Transactional
     public AssignPlanResult assignPlan(Long targetUserId, String rawPlanCode, Long adminUserId) {
+        // An admin grant is permanent: it clears any end date a creator code had set.
+        return assign(targetUserId, rawPlanCode, adminUserId, null, "admin");
+    }
+
+    /**
+     * Grant a complimentary plan that ENDS at {@code endsAt} (a partner creator code).
+     * The hourly internal renewal scheduler reverts the account to FREE on that date
+     * ({@link #revertExpiredComp}).
+     *
+     * <p>Never a downgrade and never shortens a gift: a PERMANENT internal plan above FREE
+     * (an admin grant, any tier) is left alone ({@code already_on_permanent_plan}), because
+     * the timed plan would revert to FREE and take the permanent one with it; a timed plan
+     * on a HIGHER tier too ({@code already_on_higher_plan}); a timed plan on the same tier
+     * ending earlier is extended to {@code endsAt} without re-anchoring its cycle. An active
+     * paid Stripe subscription is refused exactly as {@link #assignPlan} refuses it.
+     */
+    @Transactional
+    public AssignPlanResult grantTimedComp(Long targetUserId, String rawPlanCode, LocalDateTime endsAt) {
+        if (targetUserId == null) {
+            return AssignPlanResult.fail("missing_target");
+        }
+        if (endsAt == null) {
+            return AssignPlanResult.fail("missing_end");
+        }
+        String planCode = rawPlanCode == null ? "" : rawPlanCode.trim().toUpperCase();
+        Optional<Subscription> activeOpt = subscriptionRepository.findActiveByUserIdForUpdate(targetUserId);
+        String refusal = activeOpt.map(s -> timedCompRefusal(s, planCode)).orElse(null);
+        if (refusal != null && !"has_paid_subscription".equals(refusal)) {
+            // (a paid subscription is refused by assign() below, with the same token)
+            return AssignPlanResult.fail(refusal);
+        }
+        if (activeOpt.isPresent() && INTERNAL_PROVIDER.equalsIgnoreCase(activeOpt.get().getProvider())) {
+            Subscription current = activeOpt.get();
+            String currentCode = current.getPlan() != null ? current.getPlan().getCode() : null;
+            int currentRank = com.apimarketplace.common.plan.PlanTier.userRank(currentCode);
+            int targetRank = com.apimarketplace.common.plan.PlanTier.userRank(planCode);
+            boolean aboveFree = currentCode != null && !"FREE".equalsIgnoreCase(currentCode);
+            if (currentRank == targetRank && aboveFree) {
+                if (endsAt.isAfter(current.getCompEndsAt())) {
+                    current.setCompEndsAt(endsAt);
+                    current.setUpdatedAt(LocalDateTime.now());
+                    subscriptionRepository.save(current);
+                }
+                log.info("Timed comp {} extended for user {} until {}", planCode, targetUserId, current.getCompEndsAt());
+                return AssignPlanResult.ok(currentCode, currentCode);
+            }
+        }
+        return assign(targetUserId, planCode, null, endsAt, "creator_code");
+    }
+
+    /**
+     * Read-only probe of {@link #grantTimedComp}: the refusal token it would answer for this
+     * account right now, or null when it would grant (or extend). Lets a caller refuse BEFORE
+     * consuming anything, e.g. a single-use creator code whose only benefit is the plan.
+     */
+    @Transactional(readOnly = true)
+    public String timedCompRefusal(Long targetUserId, String rawPlanCode, LocalDateTime endsAt) {
+        String planCode = rawPlanCode == null ? "" : rawPlanCode.trim().toUpperCase();
+        return subscriptionRepository.findActiveByUserId(targetUserId)
+                .map(s -> {
+                    String refusal = timedCompRefusal(s, planCode);
+                    if (refusal != null) return refusal;
+                    // Same tier, already timed until at least that date: granting changes nothing.
+                    String currentCode = s.getPlan() != null ? s.getPlan().getCode() : null;
+                    boolean sameTier = com.apimarketplace.common.plan.PlanTier.userRank(currentCode)
+                            == com.apimarketplace.common.plan.PlanTier.userRank(planCode);
+                    if (sameTier && s.getCompEndsAt() != null && endsAt != null && !endsAt.isAfter(s.getCompEndsAt())) {
+                        return "already_on_plan_until_later";
+                    }
+                    return null;
+                })
+                .orElse(null);
+    }
+
+    /** The one rule both the probe and the grant apply. */
+    private static String timedCompRefusal(Subscription current, String planCode) {
+        if (!INTERNAL_PROVIDER.equalsIgnoreCase(current.getProvider())) {
+            return "has_paid_subscription";
+        }
+        String currentCode = current.getPlan() != null ? current.getPlan().getCode() : null;
+        boolean aboveFree = currentCode != null && !"FREE".equalsIgnoreCase(currentCode);
+        if (aboveFree && current.getCompEndsAt() == null) {
+            return "already_on_permanent_plan";
+        }
+        if (com.apimarketplace.common.plan.PlanTier.userRank(currentCode)
+                > com.apimarketplace.common.plan.PlanTier.userRank(planCode)) {
+            return "already_on_higher_plan";
+        }
+        return null;
+    }
+
+    /**
+     * Revert an expired timed comp to FREE. Re-checks under the row lock that the
+     * subscription is still internal and its end date has passed, so a paid upgrade or an
+     * admin grant that landed in between wins. Returns true when the revert happened.
+     */
+    @Transactional
+    public boolean revertExpiredComp(Long targetUserId, LocalDateTime now) {
+        Optional<Subscription> activeOpt = subscriptionRepository.findActiveByUserIdForUpdate(targetUserId);
+        if (activeOpt.isEmpty()) return false;
+        Subscription sub = activeOpt.get();
+        if (!INTERNAL_PROVIDER.equalsIgnoreCase(sub.getProvider())
+                || sub.getCompEndsAt() == null || sub.getCompEndsAt().isAfter(now)) {
+            return false;
+        }
+        AssignPlanResult result = assign(targetUserId, "FREE", null, null, "comp_expired");
+        if (result.success()) {
+            log.info("Timed comp expired for user {}: {} -> FREE", targetUserId, result.previousPlanCode());
+        }
+        return result.success();
+    }
+
+    /**
+     * @param origin who changed the plan: {@code admin}, {@code creator_code} or
+     *               {@code comp_expired}. An expiry is not a grant, so it emits no
+     *               {@code planGranted} analytics event (the email contact still follows the plan).
+     */
+    private AssignPlanResult assign(Long targetUserId, String rawPlanCode, Long adminUserId,
+                                    LocalDateTime compEndsAt, String origin) {
         if (targetUserId == null) {
             return AssignPlanResult.fail("missing_target");
         }
@@ -173,6 +292,7 @@ public class AdminPlanService {
         sub.setCurrentPeriodStart(now);
         sub.setCurrentPeriodEnd(now.plusMonths(1));
         sub.setCancelAtPeriodEnd(false);
+        sub.setCompEndsAt(compEndsAt);
         sub.setUpdatedAt(now);
         if (sub.getCreatedAt() == null) {
             sub.setCreatedAt(now);
@@ -186,6 +306,10 @@ public class AdminPlanService {
         // V311: reconcile owned workspaces to the new plan's workspace cap (same as the
         // Stripe plan-change path). Downgrade pauses the most-recent excess workspaces;
         // upgrade un-pauses up to the new cap. Idempotent; never fail the grant on a glitch.
+        // It stays INSIDE the transaction on purpose: the pause state it writes must commit or
+        // roll back with the plan. Its one outside effect (the SAML IdP sync) is idempotent and
+        // re-derived from the committed plan on the next reconcile, so a rolled-back redeem
+        // leaves nothing that the next plan change does not correct.
         try {
             organizationService.reconcileWorkspacePauseState(targetUserId);
         } catch (Exception e) {
@@ -209,13 +333,41 @@ public class AdminPlanService {
         // next request instead of after the 5-min TTL. Same fan-out pipe as the Stripe flow -
         // busts the grantee AND every member of every org they own, so a TEAM grant unlocks
         // the workspace for the whole team immediately. The plan tier itself is resolved live.
-        subscriptionCacheBuster.fanOutForOwner(targetUserId, "admin.plan.grant");
+        //
+        // After COMMIT (V549): a creator code grants the plan inside the redeem transaction, which
+        // can still roll back (a lost race on a unique index). The cache, the analytics event and
+        // the email contact must never announce a plan the database did not keep. Outside a
+        // transaction (a direct call) they run at once, exactly as before.
+        String newPlanCode = plan.getCode();
+        afterCommit(() -> {
+            subscriptionCacheBuster.fanOutForOwner(targetUserId, "admin.plan.grant");
+            if (analytics != null && !"comp_expired".equals(origin)) {
+                analytics.planGranted(targetUserId, previousPlanCode, newPlanCode);
+            }
+            if (lifecycleEmails != null) lifecycleEmails.syncContact(targetUserId);
+        });
 
-        log.info("Admin {} assigned comp plan {} -> {} to user {} (subId={})",
-                adminUserId, previousPlanCode, plan.getCode(), targetUserId, saved.getId());
-        if (analytics != null) analytics.planGranted(targetUserId, previousPlanCode, plan.getCode());
-        if (lifecycleEmails != null) lifecycleEmails.syncContact(targetUserId);
+        log.info("Comp plan {} -> {} for user {} (subId={}, origin={}, admin={})",
+                previousPlanCode, plan.getCode(), targetUserId, saved.getId(), origin, adminUserId);
         return AssignPlanResult.ok(previousPlanCode, plan.getCode());
+    }
+
+    private static void afterCommit(Runnable action) {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            try {
+                                action.run();
+                            } catch (RuntimeException e) {
+                                log.warn("Post-commit plan-change side effect failed: {}", e.getMessage());
+                            }
+                        }
+                    });
+        } else {
+            action.run();
+        }
     }
 
     /**

@@ -22,6 +22,7 @@ import * as React from 'react';
 import clsx from 'clsx';
 import { CheckCircle, XCircle, ChevronLeft, ChevronRight, Maximize2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { useCanDriveRuns } from '@/lib/hooks/useCanDriveRuns';
 import type { Node } from 'reactflow';
 import { sortPendingSignals } from '@/lib/workflow/pendingSignals';
 import LoadingSpinner from '@/components/LoadingSpinner';
@@ -84,6 +85,8 @@ export function ApprovalReviewBar({
   allNodes,
 }: ApprovalReviewBarProps) {
   const tRun = useTranslations('runMode');
+  const tCommon = useTranslations('common');
+  const canMutate = useCanDriveRuns();
   const [resolving, setResolving] = React.useState<'APPROVED' | 'REJECTED' | null>(null);
   const target = useApprovalReviewTarget();
   const targetForNode = target?.rfNodeId === rfNodeId ? target : null;
@@ -254,6 +257,11 @@ export function ApprovalReviewBar({
       ) : (
         <div className="flex-1" />
       )}
+      {!canMutate ? (
+        <span data-testid="approval-review-read-only" className="text-sm text-slate-500 dark:text-slate-400">
+          {tCommon('viewerReadOnly')}
+        </span>
+      ) : (<>
       <button
         type="button"
         data-testid="approval-review-approve"
@@ -290,6 +298,7 @@ export function ApprovalReviewBar({
         )}
         {tRun('approvalBar.reject')}
       </button>
+      </>)}
     </div>
   );
 }

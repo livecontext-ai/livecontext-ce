@@ -209,4 +209,68 @@ class WorkflowCrudControllerOrgAccessWebMvcTest {
                 .andExpect(jsonPath("$.errorCode").value("ORG_ACCESS_DENIED"))
                 .andExpect(jsonPath("$.resourceType").value("workflow"));
     }
+
+    private WorkflowEntity ownerWorkflow(UUID id, UUID sourcePublicationId) {
+        WorkflowEntity workflow = new WorkflowEntity();
+        workflow.setId(id);
+        workflow.setTenantId(CALLER_TENANT);
+        workflow.setOrganizationId(CALLER_ORG);
+        workflow.setName("Owner Workflow");
+        workflow.setStatus(WorkflowEntity.WorkflowStatus.ACTIVE);
+        workflow.setIsActive(true);
+        workflow.setSourcePublicationId(sourcePublicationId);
+        return workflow;
+    }
+
+    @Test
+    @DisplayName("Share token: another workflow of the owner (not the shared app) returns 404")
+    void shareContextForeignWorkflowReturns404() throws Exception {
+        UUID sharedPub = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        // Same owner, so the strict scope passes: only the share binding can refuse it.
+        when(workflowManagementService.getWorkflow(id)).thenReturn(Optional.of(ownerWorkflow(id, null)));
+
+        mockMvc.perform(get("/api/v2/workflows/dag/" + id)
+                        .header("X-User-ID", CALLER_TENANT)
+                        .header("X-Organization-ID", CALLER_ORG)
+                        .header("X-Share-Context", "true")
+                        .header("X-Share-Resource-Type", "APPLICATION")
+                        .header("X-Share-Resource-Token", sharedPub.toString()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("Share token: a clone of ANOTHER publication of the owner returns 404")
+    void shareContextOtherPublicationWorkflowReturns404() throws Exception {
+        UUID sharedPub = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(workflowManagementService.getWorkflow(id))
+                .thenReturn(Optional.of(ownerWorkflow(id, UUID.randomUUID())));
+
+        mockMvc.perform(get("/api/v2/workflows/dag/" + id)
+                        .header("X-User-ID", CALLER_TENANT)
+                        .header("X-Organization-ID", CALLER_ORG)
+                        .header("X-Share-Context", "true")
+                        .header("X-Share-Resource-Type", "APPLICATION")
+                        .header("X-Share-Resource-Token", sharedPub.toString()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("Share token: the shared application's own workflow still returns 200")
+    void shareContextSharedApplicationWorkflowReturns200() throws Exception {
+        UUID sharedPub = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(workflowManagementService.getWorkflow(id)).thenReturn(Optional.of(ownerWorkflow(id, sharedPub)));
+        when(orgAccessGuard.canAccess(eq(CALLER_ORG), eq(CALLER_TENANT), eq("workflow"), eq(id.toString()), any()))
+                .thenReturn(true);
+
+        mockMvc.perform(get("/api/v2/workflows/dag/" + id)
+                        .header("X-User-ID", CALLER_TENANT)
+                        .header("X-Organization-ID", CALLER_ORG)
+                        .header("X-Share-Context", "true")
+                        .header("X-Share-Resource-Type", "APPLICATION")
+                        .header("X-Share-Resource-Token", sharedPub.toString()))
+                .andExpect(status().isOk());
+    }
 }

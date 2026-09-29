@@ -863,4 +863,14 @@ public interface WorkflowRunRepository extends JpaRepository<WorkflowRunEntity, 
         @Param("workflowId") UUID workflowId,
         @Param("now") Instant now
     );
+
+    /**
+     * Public run ids of the runs started for a publication inside one workspace. Read-only; used
+     * by the share-link file scope to find which runs belong to a shared application.
+     */
+    @Query("SELECT r.runIdPublic FROM WorkflowRunEntity r "
+            + "WHERE r.publicationId = :publicationId AND r.organizationId = :organizationId")
+    List<String> findRunIdsPublicByPublicationIdAndOrganizationId(
+            @Param("publicationId") String publicationId,
+            @Param("organizationId") String organizationId);
 }

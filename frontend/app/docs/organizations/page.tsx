@@ -111,7 +111,8 @@ export default function OrganizationsPage() {
           caption="What each workspace role can do"
           rowHeaders
           rows={[
-            ['Read and use workspace resources (workflows, tables, and so on)', 'Yes', 'Yes', 'Yes', 'Read-only'],
+            ['View workspace resources (workflows, runs, tables, and so on)', 'Yes', 'Yes', 'Yes', 'Yes'],
+            ['Create, edit, run or delete resources, approve steps, connect credentials, share links', 'Yes', 'Yes', 'Yes', 'No'],
             ['Invite members', 'Yes', 'Yes', 'No', 'No'],
             ["Change a member's role", 'Yes', 'No', 'No', 'No'],
             ['Remove a member (see note)', 'Yes', 'Yes', 'No', 'No'],

@@ -48,6 +48,7 @@ public class MonolithWsActionHandler {
     private final StreamStateService streamStateService;
     private final StringRedisTemplate redisTemplate;
     private final AgentActivitySnapshotService agentActivitySnapshotService;
+    private final com.apimarketplace.auth.repository.OrganizationMemberRepository memberRepository;
 
     public MonolithWsActionHandler(InternalSignalController signalController,
                                    InternalSbsController sbsController,
@@ -55,7 +56,9 @@ public class MonolithWsActionHandler {
                                    ObjectMapper objectMapper,
                                    StreamStateService streamStateService,
                                    StringRedisTemplate redisTemplate,
-                                   AgentActivitySnapshotService agentActivitySnapshotService) {
+                                   AgentActivitySnapshotService agentActivitySnapshotService,
+                                   com.apimarketplace.auth.repository.OrganizationMemberRepository memberRepository) {
+        this.memberRepository = memberRepository;
         this.signalController = signalController;
         this.sbsController = sbsController;
         this.accessController = accessController;
@@ -82,9 +85,40 @@ public class MonolithWsActionHandler {
             try {
                 Map<String, Object> dataMap = data instanceof Map ? (Map<String, Object>) data : Map.of();
 
+                // Both actions drive a run with the owner's credentials. The role is read from
+                // the DB at action time (the JWT memberships can be stale after a demotion),
+                // the read-only VIEWER is refused here, and the role is passed on so the
+                // internal controllers also apply the member deny-list.
+                String organizationRole = resolveRole(userId, organizationId);
+                boolean drivesRun = "signal.resolve".equals(action) || "sbs.execute".equals(action);
+                // Inside a workspace, no active membership means the caller was removed since
+                // the handshake (or the ids are malformed): refused, like the gateway's
+                // notMember branch. A personal workspace is an org too, so a legitimate caller
+                // always has a membership row here.
+                if (drivesRun && organizationId != null && !organizationId.isBlank() && organizationRole == null) {
+                    log.warn("[MonolithWS] user {} is not a member of org {}: refused action {}", userId, organizationId, action);
+                    sendJson(session, new MonolithWsHandler.Envelope(1, "action.error",
+                            UUID.randomUUID().toString(), messageId, null, null,
+                            System.currentTimeMillis(),
+                            Map.of("action", action, "status", 403,
+                                    "error", "You are no longer a member of this workspace")));
+                    return;
+                }
+                if (drivesRun
+                        && organizationId != null && organizationRole != null
+                        && "VIEWER".equalsIgnoreCase(organizationRole.trim())) {
+                    log.warn("[MonolithWS] VIEWER user {} refused action {} in org {}", userId, action, organizationId);
+                    sendJson(session, new MonolithWsHandler.Envelope(1, "action.error",
+                            UUID.randomUUID().toString(), messageId, null, null,
+                            System.currentTimeMillis(),
+                            Map.of("action", action, "status", 403,
+                                    "error", "VIEWER role cannot drive workflow runs")));
+                    return;
+                }
+
                 Object result = switch (action) {
-                    case "signal.resolve" -> handleSignalResolve(userId, organizationId, dataMap);
-                    case "sbs.execute" -> handleSbsExecute(userId, organizationId, dataMap);
+                    case "signal.resolve" -> handleSignalResolve(userId, organizationId, organizationRole, dataMap);
+                    case "sbs.execute" -> handleSbsExecute(userId, organizationId, organizationRole, dataMap);
                     default -> {
                         log.warn("[MonolithWS] Unknown action: {}", action);
                         yield Map.of("error", "Unknown action: " + action);
@@ -209,18 +243,35 @@ public class MonolithWsActionHandler {
         }
     }
 
-    private Map<String, Object> handleSignalResolve(String userId, String organizationId, Map<String, Object> data) {
+    /** The caller's current role in the org (null when unknown: no org, non-numeric user, no membership). */
+    String resolveRole(String userId, String organizationId) {
+        if (organizationId == null || organizationId.isBlank() || userId == null) {
+            return null;
+        }
+        try {
+            return memberRepository
+                    .findActiveByOrganizationIdAndUserId(UUID.fromString(organizationId), Long.parseLong(userId))
+                    .map(m -> m.getRole().name())
+                    .orElse(null);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private Map<String, Object> handleSignalResolve(String userId, String organizationId, String organizationRole,
+                                                    Map<String, Object> data) {
         Object signalIdObj = data.get("signalId");
         if (signalIdObj == null) {
             throw new IllegalArgumentException("Missing signalId");
         }
         Long signalId = Long.valueOf(String.valueOf(signalIdObj));
 
-        var response = signalController.resolveSignal(signalId, userId, organizationId, data);
+        var response = signalController.resolveSignal(signalId, userId, organizationId, organizationRole, data);
         return response.getBody() != null ? response.getBody() : Map.of("status", "ok");
     }
 
-    private Map<String, Object> handleSbsExecute(String userId, String organizationId, Map<String, Object> data) {
+    private Map<String, Object> handleSbsExecute(String userId, String organizationId, String organizationRole,
+                                                 Map<String, Object> data) {
         String runId = String.valueOf(data.get("runId"));
         String nodeId = String.valueOf(data.get("nodeId"));
 
@@ -228,7 +279,7 @@ public class MonolithWsActionHandler {
             throw new IllegalArgumentException("Missing runId or nodeId");
         }
 
-        var response = sbsController.executeNode(runId, nodeId, userId, organizationId, data);
+        var response = sbsController.executeNode(runId, nodeId, userId, organizationId, organizationRole, data);
         return response.getBody() != null ? response.getBody() : Map.of("status", "ok");
     }
 

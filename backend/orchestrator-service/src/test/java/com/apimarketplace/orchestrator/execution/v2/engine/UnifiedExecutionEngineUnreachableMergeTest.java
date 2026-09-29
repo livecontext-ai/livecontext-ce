@@ -277,6 +277,152 @@ class UnifiedExecutionEngineUnreachableMergeTest {
         }
     }
 
+    /**
+     * Prod run {@code run_<id>} epoch 5: the merge was dispatched ONCE for a whole
+     * split, under the workflow item index. The gate read that index as a split item, found every
+     * branch SKIPPED for split item 0, and skipped the merge for all eight items. When the dispatch
+     * spans every split item the verdict of that one item says nothing about the others, so the gate
+     * must stand aside and let the split's own per-item routing decide.
+     */
+    @Nested
+    @DisplayName("dispatch that spans every item of a split")
+    class DispatchSpanningEverySplitItem {
+
+        private BaseNode explicitMerge() {
+            BaseNode node = mock(BaseNode.class);
+            when(node.getNodeId()).thenReturn(MERGE_ID);
+            when(node.getType()).thenReturn(NodeType.MERGE);
+            when(node.isMergeNode()).thenReturn(true);
+            when(node.canExecute(any())).thenReturn(true);
+            when(node.getSuccessors()).thenReturn(List.of());
+            when(node.getNextNodes(any())).thenReturn(List.of());
+            when(node.getPredecessorIds()).thenReturn(REPLY_MOVES);
+            return node;
+        }
+
+        @Test
+        @DisplayName("step-by-step: split item 0 unreached no longer skips the fan-out, the split-aware executor runs it")
+        void stepByStepFanOutIsNotSkippedByTheItemZeroVerdict() {
+            everyBranchSkippedForSpamItem();
+            when(splitAwareExecutor.executesForEverySplitItem(
+                    eq(draftReply), eq(RUN_ID), eq(SPAM_ITEM), any(), eq(true))).thenReturn(true);
+
+            StepByStepExecutionResult result = engine.executeSingleNode(
+                    MERGE_ID, tree, context, execution, eventService, null);
+
+            // Pre-fix: SKIPPED "All predecessors were skipped for this item", body never reached.
+            assertThat(result.nodeResult().status()).isEqualTo(NodeStatus.COMPLETED);
+            verify(splitAwareExecutor).execute(
+                    any(), any(), eq(RUN_ID), any(), eq(execution), any(), eq(SPAM_ITEM), eq(null));
+            verify(skipPropagationService, never()).cascadeFailureToSuccessors(
+                    any(), any(), anyInt(), anyInt(), anyString(), anyBoolean(), anyString());
+        }
+
+        @Test
+        @DisplayName("step-by-step: a split-aggregation merge (N to 1) is handed to the split merge handler, not skipped")
+        void stepByStepSplitAggregationMergeIsNotSkipped() {
+            everyBranchSkippedForSpamItem();
+            BaseNode merge = explicitMerge();
+            when(nodeSearchService.findNodeFromAllRoots(tree, MERGE_ID)).thenReturn(merge);
+            when(nodeSearchService.buildNodeMapFromAllRoots(tree)).thenReturn(Map.of(MERGE_ID, merge));
+            when(splitMergeHandler.isSplitMerge(eq(RUN_ID), eq(MERGE_ID), eq(SPAM_ITEM), any())).thenReturn(true);
+            when(splitMergeHandler.handleMerge(eq(RUN_ID), eq(MERGE_ID), eq(SPAM_ITEM), any(), any()))
+                    .thenReturn(NodeExecutionResult.success(MERGE_ID, Map.of("split_merge", true)));
+
+            StepByStepExecutionResult result = engine.executeSingleNode(
+                    MERGE_ID, tree, context, execution, eventService, null);
+
+            assertThat(result.nodeResult().status()).isEqualTo(NodeStatus.COMPLETED);
+            verify(splitMergeHandler).handleMerge(eq(RUN_ID), eq(MERGE_ID), eq(SPAM_ITEM), any(), any());
+        }
+
+        @Test
+        @DisplayName("AUTO: when the split-aware executor fans the merge out (e.g. direct split successor), it runs; asked with stepByStep=false and the singleton node map")
+        void autoFanOutIsNotSkippedByTheItemZeroVerdict() {
+            everyBranchSkippedForSpamItem();
+            BaseNode merge = explicitMerge();
+            when(splitContextManager.hasContexts(RUN_ID)).thenReturn(true);
+            when(splitAwareExecutor.executesForEverySplitItem(
+                    eq(merge), eq(RUN_ID), eq(SPAM_ITEM), eq(Map.of(MERGE_ID, merge)), eq(false))).thenReturn(true);
+            when(splitAwareExecutor.execute(any(), any(), anyString(), any(), any(), any(), anyInt(), any()))
+                    .thenReturn(NodeExecutionResult.success(MERGE_ID, Map.of("ok", true)));
+
+            ExecutionContext result = engine.traverseTree(
+                    merge, context, execution, eventService, new TriggerItem("2", SPAM_ITEM, Map.of()));
+
+            assertThat(result.isSuccess(MERGE_ID)).isTrue();
+            verify(splitAwareExecutor).execute(
+                    eq(merge), any(), eq(RUN_ID), any(), eq(execution), any(), eq(SPAM_ITEM), any());
+        }
+
+        private BaseNode multiInputAggregate() {
+            BaseNode node = mock(BaseNode.class);
+            when(node.getNodeId()).thenReturn(MERGE_ID);
+            when(node.getType()).thenReturn(NodeType.AGGREGATE);
+            when(node.isAggregateNode()).thenReturn(true);
+            when(node.canExecute(any())).thenReturn(true);
+            when(node.getSuccessors()).thenReturn(List.of());
+            when(node.getNextNodes(any())).thenReturn(List.of());
+            when(node.getPredecessorIds()).thenReturn(REPLY_MOVES);
+            return node;
+        }
+
+        @Test
+        @DisplayName("step-by-step: a split aggregate (N to 1) is handed to the split aggregate handler, not skipped")
+        void stepByStepSplitAggregateIsNotSkipped() {
+            everyBranchSkippedForSpamItem();
+            BaseNode aggregate = multiInputAggregate();
+            when(nodeSearchService.findNodeFromAllRoots(tree, MERGE_ID)).thenReturn(aggregate);
+            when(nodeSearchService.buildNodeMapFromAllRoots(tree)).thenReturn(Map.of(MERGE_ID, aggregate));
+            when(splitAggregateHandler.isSplitAggregate(eq(RUN_ID), eq(MERGE_ID), eq(SPAM_ITEM), any())).thenReturn(true);
+            when(splitAggregateHandler.handleAggregate(eq(RUN_ID), eq(MERGE_ID), eq(SPAM_ITEM), any(), any()))
+                    .thenReturn(NodeExecutionResult.success(MERGE_ID, Map.of("items", List.of())));
+
+            StepByStepExecutionResult result = engine.executeSingleNode(
+                    MERGE_ID, tree, context, execution, eventService, null);
+
+            assertThat(result.nodeResult().status()).isEqualTo(NodeStatus.COMPLETED);
+            verify(splitAggregateHandler).handleAggregate(eq(RUN_ID), eq(MERGE_ID), eq(SPAM_ITEM), any(), any());
+        }
+
+        @Test
+        @DisplayName("AUTO: an aggregate outside any split runs its body once, so the gate keeps its SKIPPED")
+        void autoNonSplitAggregateKeepsTheGate() {
+            everyBranchSkippedForSpamItem();
+            AtomicInteger executions = new AtomicInteger();
+            BaseNode aggregate = multiInputAggregate();
+            when(aggregate.execute(any())).thenAnswer(invocation -> {
+                executions.incrementAndGet();
+                return NodeExecutionResult.success(MERGE_ID, Map.of());
+            });
+
+            ExecutionContext result = engine.traverseTree(
+                    aggregate, context, execution, eventService, new TriggerItem("2", SPAM_ITEM, Map.of()));
+
+            assertThat(executions.get()).isZero();
+            assertThat(result.isSkipped(MERGE_ID)).isTrue();
+            // AUTO never fans an aggregate out through the split-aware executor, so it is not asked.
+            verify(splitAwareExecutor, never()).executesForEverySplitItem(any(), any(), anyInt(), any(), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("a single-item dispatch keeps the gate: the executor says no fan-out, the merge is SKIPPED")
+        void singleItemDispatchKeepsTheGate() {
+            everyBranchSkippedForSpamItem();
+            // Default answer of the mock, stated for the reader: the approval-resume shape, where
+            // the dispatch runs the node for the one held item only.
+            when(splitAwareExecutor.executesForEverySplitItem(any(), any(), anyInt(), any(), anyBoolean()))
+                    .thenReturn(false);
+
+            StepByStepExecutionResult result = engine.executeSingleNode(
+                    MERGE_ID, tree, context, execution, eventService, null);
+
+            assertThat(result.nodeResult().status()).isEqualTo(NodeStatus.SKIPPED);
+            verify(splitAwareExecutor, never())
+                    .execute(any(), any(), anyString(), any(), any(), any(), anyInt(), any());
+        }
+    }
+
     @Test
     @DisplayName("a predecessor that has not spoken yet leaves the merge executing, never mass-skipped")
     void silentPredecessorLeavesTheMergeExecuting() {

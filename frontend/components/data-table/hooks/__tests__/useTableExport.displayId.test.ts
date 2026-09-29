@@ -13,6 +13,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
 import { useTableExport } from '../useTableExport';
+import { applyDisplayTimeZone, clearDisplayTimeZone } from '@/lib/utils/timezone';
 import { createViewConfig, getFixedColumns, getRowLevelExportFields } from '../../viewConfig';
 import type { ColumnDefinition, DataSourceItemRow } from '../../types';
 
@@ -137,7 +138,7 @@ describe('useTableExport - exported ID matches the displayed one', () => {
 
     const csv = result.current.convertToCSV(rows, columns);
     const [headerLine, dataLine] = csv.split('\n');
-    expect(headerLine).toBe('ID,Priority,Created At,Email');
+    expect(headerLine).toMatch(new RegExp(`^ID,Priority,Created At \\([A-Za-z0-9/_+-]+\\),Email$`));
     // A formatted date carries commas, so the row is only well-formed if the base columns are
     // quoted like the data ones: 4 fields, not one row smeared across six.
     expect(parseCsvLine(dataLine)).toEqual(['4711', '0', expect.any(String), 'ada@example.com']);
@@ -211,7 +212,8 @@ describe('useTableExport - exported ID matches the displayed one', () => {
     const { result } = setup(rows, fixedColumnFields);
 
     // One Priority column, the base one - not a second, empty data column beside it.
-    expect(result.current.convertToCSV(rows, cols).split('\n')[0]).toBe('ID,Priority,Created At,Email');
+    expect(result.current.convertToCSV(rows, cols).split('\n')[0])
+      .toMatch(new RegExp(`^ID,Priority,Created At \\([A-Za-z0-9/_+-]+\\),Email$`));
   });
 
   it('describes a row identically in CSV and JSON, field for field', async () => {
@@ -295,7 +297,7 @@ describe('useTableExport - exported ID matches the displayed one', () => {
     const { result } = setup(rows, ROOT_FIXED_FIELDS);
 
     const [headerLine] = result.current.convertToCSV(rows, cols).split('\n');
-    expect(headerLine).toBe('ID,Priority,Created At,"Revenue, USD"');
+    expect(headerLine).toMatch(new RegExp(`^ID,Priority,Created At \\([A-Za-z0-9/_+-]+\\),"Revenue, USD"$`));
     expect(parseCsvLine(headerLine)).toHaveLength(4);
   });
 
@@ -346,7 +348,7 @@ describe('useTableExport - exported ID matches the displayed one', () => {
     await result.current.handleExportCSV();
 
     const [headerLine] = (await blobs[0].text()).split('\n');
-    expect(headerLine).toBe('ID,Priority,Created At,Email');
+    expect(headerLine).toMatch(new RegExp(`^ID,Priority,Created At \\([A-Za-z0-9/_+-]+\\),Email$`));
   });
 
   it('offers a data column named like a fixed one as fillable when the view builds no such lane', () => {
@@ -361,5 +363,31 @@ describe('useTableExport - exported ID matches the displayed one', () => {
     const { result } = setup(rows, ['checkbox', 'id', 'priority', 'created_at']);
 
     expect(result.current.getDynamicColumns().map(c => c.field)).toEqual(['email']);
+  });
+
+  /**
+   * The timestamp column says which zone it is in, because the file outlives the session.
+   *
+   * <p>Absolute timestamps are drawn in the reader's display zone and no longer carry the zone
+   * beside each value: inside the product that label only restated a preference the reader had
+   * set. A CSV is the case where that reasoning stops holding - it is opened by somebody else, on
+   * another machine, with none of our preferences - so the ATTRIBUTION moves to the column name,
+   * once per file instead of once per row.
+   *
+   * <p>Asserted against a pinned zone rather than the default, because the default resolves to UTC
+   * here and an implementation that hardcoded "UTC" would pass.
+   */
+  it("names the reader's display zone in the Created At column", async () => {
+    try {
+      applyDisplayTimeZone('Asia/Tokyo');
+      const rows = [row(1, { id: 4711, email: 'ada@example.com' }, [])];
+      const { result } = setup(rows, ['checkbox', 'id', 'priority', 'created_at']);
+
+      const [headerLine] = result.current.convertToCSV(rows, result.current.getDynamicColumns()).split('\n');
+
+      expect(headerLine).toContain('Created At (Asia/Tokyo)');
+    } finally {
+      clearDisplayTimeZone();
+    }
   });
 });

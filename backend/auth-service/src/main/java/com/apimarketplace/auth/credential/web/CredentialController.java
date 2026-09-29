@@ -96,6 +96,9 @@ public class CredentialController {
             HttpServletRequest httpRequest,
             @RequestBody Map<String, Object> request) {
 
+        if (isViewerWriteBlocked(httpRequest)) {
+            return viewerForbidden();
+        }
         String tenantId = tenantResolver.resolveOrNull(httpRequest);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
 
@@ -177,6 +180,10 @@ public class CredentialController {
             HttpServletRequest httpRequest,
             @RequestBody Map<String, Object> request) {
 
+        if (isViewerWriteBlocked(httpRequest)) {
+            return viewerForbidden();
+        }
+
         String tenantId = tenantResolver.resolveOrNull(httpRequest);
         tenantResolver.validate(tenantId);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
@@ -213,6 +220,29 @@ public class CredentialController {
         }
     }
 
+    /**
+     * Org VIEWERs are read-only. A workspace credential is shared by every member and runs
+     * every workflow that uses it, so creating, renaming, re-routing, deleting or swapping
+     * the default one is a write on the workspace. Same rule as the platform-wide gate
+     * ({@code OrgAccessGuard.isRoleWriteBlocked}, auth-client) and as
+     * {@code WorkflowVariablesController}: blocked only inside a workspace with the VIEWER role.
+     */
+    private boolean isViewerWriteBlocked(HttpServletRequest request) {
+        return isViewerWriteBlocked(tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request));
+    }
+
+    /** The rule itself, shared by the credential controllers of this package. */
+    static boolean isViewerWriteBlocked(String organizationId, String orgRole) {
+        return organizationId != null && !organizationId.isBlank()
+                && orgRole != null && "VIEWER".equalsIgnoreCase(orgRole.trim());
+    }
+
+    private static ResponseEntity<Map<String, String>> viewerForbidden() {
+        return ResponseEntity.status(403).body(Map.of(
+                "error", "Viewers cannot modify workspace credentials",
+                "code", "org_role_read_only"));
+    }
+
     private static ResponseEntity<Map<String, String>> badRequest(String message, String code) {
         return ResponseEntity.badRequest().body(Map.of("error", message, "code", code));
     }
@@ -227,6 +257,10 @@ public class CredentialController {
             @PathVariable("id") Long id,
             HttpServletRequest httpRequest,
             @RequestBody Map<String, Object> request) {
+
+        if (isViewerWriteBlocked(httpRequest)) {
+            return viewerForbidden();
+        }
 
         String tenantId = tenantResolver.resolveOrNull(httpRequest);
         tenantResolver.validate(tenantId);
@@ -257,6 +291,10 @@ public class CredentialController {
             @PathVariable("id") Long id,
             HttpServletRequest request,
             @RequestParam(value = "tenantId", required = false) String tenantIdParam) {
+
+        if (isViewerWriteBlocked(request)) {
+            return ResponseEntity.status(403).build();
+        }
 
         String tenantId = tenantResolver.resolveOrNull(request);
         String organizationId = tenantResolver.resolveOrgId(request);
@@ -319,6 +357,10 @@ public class CredentialController {
             HttpServletRequest request,
             @RequestParam(value = "tenantId", required = false) String tenantIdParam) {
 
+        if (isViewerWriteBlocked(request)) {
+            return ResponseEntity.status(403).build();
+        }
+
         String tenantId = tenantResolver.resolveOrNull(request);
         tenantResolver.validate(tenantId);
         String organizationId = tenantResolver.resolveOrgId(request);
@@ -336,6 +378,10 @@ public class CredentialController {
             @PathVariable("id") Long id,
             HttpServletRequest request,
             @RequestParam(value = "tenantId", required = false) String tenantIdParam) {
+
+        if (isViewerWriteBlocked(request)) {
+            return ResponseEntity.status(403).build();
+        }
 
         String tenantId = tenantResolver.resolveOrNull(request);
         tenantResolver.validate(tenantId);

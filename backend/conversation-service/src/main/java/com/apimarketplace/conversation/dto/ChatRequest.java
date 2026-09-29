@@ -1,5 +1,6 @@
 package com.apimarketplace.conversation.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonSetter;
 import java.util.List;
@@ -24,7 +25,14 @@ public class ChatRequest {
     @JsonProperty("timestamp")
     private String timestamp;
     
-    @JsonProperty("conversationHistory")
+    /**
+     * The history the agent turn runs on, loaded server-side from the conversation
+     * (ChatStreamingService) after the scope check. Never bound from JSON: a client-supplied
+     * history skipped that load and let the caller fabricate prior assistant / tool turns
+     * (forged tool results, forged approvals) in the agent's context. No client sends it
+     * (the frontend, the internal ConversationClient and the e2e fixtures never did).
+     */
+    @JsonIgnore
     private List<ChatMessage> conversationHistory;
 
     @JsonProperty("attachments")
@@ -79,9 +87,19 @@ public class ChatRequest {
     @JsonProperty("executionId")
     private String executionId;
 
-    // Org context (set from HTTP headers, not from JSON body)
-    private transient String orgId;
-    private transient String orgRole;
+    // Org context: set by the controllers from the validated HTTP headers, never from the JSON body.
+    //
+    // SECURITY: these are authorization inputs (__orgRole__ / __userRoles__ in the agent context,
+    // the org headers forwarded to tool calls, the skill admin check, the CLI-bridge guard). They
+    // used to be `transient` fields with public setters, and Jackson ignores the `transient` marker
+    // whenever a public setter names the property, so a body {"orgRole":"OWNER","userRoles":"admin"}
+    // made the agent run as org owner and platform admin. @JsonIgnore on the field removes the
+    // whole property (field, getter and setter) from JSON binding in both directions; the field
+    // must not be `transient`, or Jackson drops the field together with its annotation.
+    @JsonIgnore
+    private String orgId;
+    @JsonIgnore
+    private String orgRole;
 
     /**
      * Comma-separated Keycloak realm roles from the {@code X-User-Roles} header.
@@ -91,7 +109,8 @@ public class ChatRequest {
      *
      * <p>Header-derived, never deserialized from the JSON body.
      */
-    private transient String userRoles;
+    @JsonIgnore
+    private String userRoles;
 
     public ChatRequest() {}
     

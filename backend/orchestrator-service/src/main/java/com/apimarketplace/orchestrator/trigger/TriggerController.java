@@ -40,13 +40,47 @@ public class TriggerController {
     private final WorkflowRunRepository runRepository;
     private final ReusableTriggerService triggerService;
     private final WorkflowResumeService resumeService;
+    private final com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard;
 
     public TriggerController(WorkflowRunRepository runRepository,
                             ReusableTriggerService triggerService,
-                            WorkflowResumeService resumeService) {
+                            WorkflowResumeService resumeService,
+                            com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard) {
         this.runRepository = runRepository;
         this.triggerService = triggerService;
         this.resumeService = resumeService;
+        this.orgAccessGuard = orgAccessGuard;
+    }
+
+    /** Backward-compatible direct-call overload (tests, internal load-test endpoint): no role. */
+    public ResponseEntity<TriggerResponse> triggerManual(String runId, Map<String, Object> payload,
+                                                         String userPlan, String userId, String orgId) {
+        return triggerManual(runId, payload, userPlan, userId, orgId, null);
+    }
+
+    /** Backward-compatible direct-call overload used by tests: no role. */
+    public ResponseEntity<TriggerResponse> triggerChat(String runId, Map<String, Object> payload,
+                                                       String userPlan, String userId, String orgId) {
+        return triggerChat(runId, payload, userPlan, userId, orgId, null);
+    }
+
+    /** Backward-compatible direct-call overload used by tests: no role. */
+    public ResponseEntity<TriggerResponse> triggerDatasource(String runId, Map<String, Object> triggerConfig,
+                                                             String userPlan, String userId, String orgId) {
+        return triggerDatasource(runId, triggerConfig, userPlan, userId, orgId, null);
+    }
+
+    /** Backward-compatible direct-call overload used by tests: no role. */
+    public ResponseEntity<TriggerResponse> triggerForm(String runId, Map<String, Object> formData,
+                                                       String userPlan, String userId, String orgId) {
+        return triggerForm(runId, formData, userPlan, userId, orgId, null);
+    }
+
+    /** Backward-compatible direct-call overload used by tests: no role. */
+    public ResponseEntity<TriggerResponse> triggerSpecific(String runId, String triggerType, String triggerId,
+                                                           Map<String, Object> payload, String userPlan,
+                                                           String userId, String orgId) {
+        return triggerSpecific(runId, triggerType, triggerId, payload, userPlan, userId, orgId, null);
     }
 
     /**
@@ -66,11 +100,12 @@ public class TriggerController {
             @RequestBody(required = false) Map<String, Object> payload,
             @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         logger.info("[TriggerController] Manual trigger request for runId={}", runId);
 
-        return executeTrigger(runId, TriggerType.MANUAL, payload, userPlan, userId, orgId);
+        return executeTrigger(runId, TriggerType.MANUAL, payload, userPlan, userId, orgId, orgRole);
     }
 
     /**
@@ -91,7 +126,8 @@ public class TriggerController {
             @RequestBody Map<String, Object> payload,
             @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         logger.info("[TriggerController] Chat trigger request for runId={}, message={}",
                    runId, payload != null ? payload.get("message") : null);
@@ -102,7 +138,7 @@ public class TriggerController {
             );
         }
 
-        return executeTrigger(runId, TriggerType.CHAT, payload, userPlan, userId, orgId);
+        return executeTrigger(runId, TriggerType.CHAT, payload, userPlan, userId, orgId, orgRole);
     }
 
     /**
@@ -123,11 +159,12 @@ public class TriggerController {
             @RequestBody(required = false) Map<String, Object> triggerConfig,
             @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         logger.info("[TriggerController] Datasource trigger request for runId={}", runId);
 
-        return executeTrigger(runId, TriggerType.DATASOURCE, triggerConfig, userPlan, userId, orgId);
+        return executeTrigger(runId, TriggerType.DATASOURCE, triggerConfig, userPlan, userId, orgId, orgRole);
     }
 
     /**
@@ -148,12 +185,13 @@ public class TriggerController {
             @RequestBody Map<String, Object> formData,
             @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         logger.info("[TriggerController] Form trigger request for runId={}, fields={}",
                    runId, formData != null ? formData.keySet() : "null");
 
-        return executeTrigger(runId, TriggerType.FORM, formData, userPlan, userId, orgId);
+        return executeTrigger(runId, TriggerType.FORM, formData, userPlan, userId, orgId, orgRole);
     }
 
     // ========== Multi-DAG Support Endpoints ==========
@@ -265,7 +303,8 @@ public class TriggerController {
             @RequestBody(required = false) Map<String, Object> payload,
             @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         logger.info("[TriggerController] Specific trigger request: runId={}, type={}, triggerId={}",
                    runId, triggerType, triggerId);
@@ -284,6 +323,10 @@ public class TriggerController {
         ResponseEntity<TriggerResponse> scopeError = scopeError(run, runId, userId, orgId);
         if (scopeError != null) {
             return scopeError;
+        }
+        ResponseEntity<TriggerResponse> writeError = writeError(run, runId, userId, orgId, orgRole);
+        if (writeError != null) {
+            return writeError;
         }
 
         // 1b. No pre-execution credit gate. The fire proceeds so the trigger node
@@ -487,12 +530,27 @@ public class TriggerController {
     }
 
     /**
+     * Firing a trigger runs the workflow with its owner's credentials, and a body {@code plan}
+     * rewrites the run's plan first: both are writes, gated by {@link
+     * com.apimarketplace.orchestrator.controllers.workflow.RunWriteGate} (VIEWER role, then the
+     * member deny-list on the run's workflow). A share-link visitor carries the owner's
+     * identity and NO role header, so an application share keeps firing. Call after
+     * {@link #scopeError}. Returns the 403 to send, or null.
+     */
+    private ResponseEntity<TriggerResponse> writeError(
+            WorkflowRunEntity run, String runId, String userId, String orgId, String orgRole) {
+        String denial = com.apimarketplace.orchestrator.controllers.workflow.RunWriteGate.denial(
+                orgAccessGuard, run, userId, orgId, orgRole, "fire triggers on");
+        return denial == null ? null : ResponseEntity.status(com.apimarketplace.orchestrator.controllers.workflow.RunWriteGate.statusFor(denial)).body(TriggerResponse.error(runId, denial));
+    }
+
+    /**
      * Execute a trigger of the specified type.
      */
     @SuppressWarnings("unchecked")
     private ResponseEntity<TriggerResponse> executeTrigger(
             String runId, TriggerType triggerType, Map<String, Object> payload,
-            String userPlan, String userId, String orgId) {
+            String userPlan, String userId, String orgId, String orgRole) {
 
         // 1. Find the run
         Optional<WorkflowRunEntity> runOpt = runRepository.findByRunIdPublic(runId);
@@ -508,6 +566,10 @@ public class TriggerController {
         ResponseEntity<TriggerResponse> scopeError = scopeError(run, runId, userId, orgId);
         if (scopeError != null) {
             return scopeError;
+        }
+        ResponseEntity<TriggerResponse> writeError = writeError(run, runId, userId, orgId, orgRole);
+        if (writeError != null) {
+            return writeError;
         }
 
         // 1b. No pre-execution credit gate - see executeSpecificTrigger above.

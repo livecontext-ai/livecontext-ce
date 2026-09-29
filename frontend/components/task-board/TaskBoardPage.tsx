@@ -8,7 +8,6 @@ import {
   Trash2, RotateCcw, Ban, X, Settings2,
   Paperclip, ListChecks, Timer, CalendarClock, Lock, SlidersHorizontal,
 } from 'lucide-react';
-import { getClientLocale } from '@/lib/utils/locale';
 import { Button } from '@/components/ui/button';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { AvatarDisplay } from '@/components/agents';
@@ -16,7 +15,7 @@ import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { AgentPanelContent, AGENT_CONFIGURATION_TAB } from '@/components/app/AgentPanelContent';
 import { useTaskBoard, type TaskSortField } from './useTaskBoard';
-import { parseUtcAware } from '@/lib/utils/dateFormatters';
+import { formatUtcDateTime, parseUtcAware } from '@/lib/utils/dateFormatters';
 import { formatDueShort } from './taskBadgeFormat';
 import { TaskDetailPanel } from './TaskDetailPanel';
 import { CreateTaskDialog } from './CreateTaskDialog';
@@ -1112,9 +1111,23 @@ function KanbanCard({ task, agentMap, taskMap, terminalStatusKeys, peopleById, l
         {/* Meta badges: due/overdue (F5), estimate (F12), blocked (F9), checklist + attachments (F10) */}
         {(due || task.estimateMinutes != null || blockedCount > 0 || checklistTotal > 0 || attachCount > 0) && (
           <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-theme-muted" data-testid={`task-card-meta-${task.id}`}>
+            {/* The tooltip below is in the SAME zone as the badge beside it. `toLocaleString` with
+                a locale but no zone formats in the BROWSER's, so anyone who picked a zone in
+                Settings got a badge saying "Jun 20" over a tooltip saying "19/06 23:30" - the exact
+                contradiction formatDueShort was changed to remove. */}
             {due && (
-              <span className={`inline-flex items-center gap-0.5 ${overdue ? 'text-red-500 dark:text-red-400 font-medium' : ''}`} title={due.toLocaleString(getClientLocale())}>
-                <CalendarClock className="h-3 w-3" /> {formatDueShort(due)}
+              <span
+                className={`inline-flex items-center gap-0.5 ${overdue ? 'text-red-500 dark:text-red-400 font-medium' : ''}`}
+                // The raw value, not the parsed `due`: the formatter decides whether this names a
+                // day or a moment by looking at the STRING, and a parsed Date has thrown that away.
+                title={formatUtcDateTime(task.dueBy!)}
+              >
+                {/* The raw value, like the tooltip above: `formatDueShort` was widened to take a
+                    string precisely so `displayZoneFor` can see whether it names a DAY, and passing
+                    the parsed `due` here made that widening dead code - the badge went on reading a
+                    day-only value in the reader zone while its own tooltip read it in UTC, which is
+                    the contradiction both were changed to remove. */}
+                <CalendarClock className="h-3 w-3" /> {formatDueShort(task.dueBy!)}
               </span>
             )}
             {task.estimateMinutes != null && (

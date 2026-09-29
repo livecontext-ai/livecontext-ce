@@ -27,9 +27,10 @@ import java.util.Set;
  *   <li><b>MERGE_LIST_BY_LABEL</b> - for list-shaped fields keyed by a
  *       human-set {@code label} ({@code decisionConditions},
  *       {@code switchCases}, {@code classifyCategories}): items with a
- *       matching label are merged field-by-field; new labels are appended;
+ *       matching label are merged field-by-field IN PLACE; new labels are appended;
  *       existing items not in the incoming list are PRESERVED so the LLM
- *       can update one item without re-sending all of them.</li>
+ *       can update one item without re-sending all of them. Positions never
+ *       move, because port indexes (category_N, case_N) are positions.</li>
  *   <li><b>REPLACE</b> (default) - scalars and any field not registered
  *       above. The new value overwrites the old one. Explicit {@code null}
  *       deletes the field, mirroring the existing remove semantic.</li>
@@ -147,50 +148,60 @@ public final class NodeFieldMerger {
      *
      * <p>Algorithm:
      * <ol>
-     *   <li>Build a label-keyed index of {@code existing}.</li>
-     *   <li>Walk {@code incoming} in order: when a label matches, deep-merge
-     *       the incoming item INTO the existing one (so untouched fields
-     *       like {@code id}, {@code type} are preserved); otherwise append
-     *       the new item.</li>
-     *   <li>Append every existing item whose label was NOT touched by the
-     *       incoming list. This is what makes "modify one item" work
-     *       without forcing the LLM to re-send the whole list.</li>
+     *   <li>Walk {@code existing} in order: an item whose label the incoming
+     *       list names is deep-merged IN PLACE (untouched fields like
+     *       {@code id}, {@code type} are preserved); every other item is kept
+     *       as it is. This is what makes "modify one item" work without
+     *       forcing the LLM to re-send the whole list.</li>
+     *   <li>Append the incoming items whose label is new, in the caller's
+     *       order, BEFORE a trailing {@code default} item when there is one.</li>
      * </ol>
      *
-     * <p>Order: incoming items first (in the LLM's order), then any
-     * preserved-but-untouched existing items at the end. This keeps the
-     * LLM's intent visible while still preserving the rest.
+     * <p>Order: positions never move. A classify node's {@code category_N}
+     * and a switch node's {@code case_N} ports are indexes into this list and
+     * the edges hang off them, so moving an item re-points a branch. A switch
+     * keeps its default last, which is where the builder puts it and what
+     * every port-naming helper assumes.
      */
-    private static List<Map<String, Object>> mergeListByLabel(
+    public static List<Map<String, Object>> mergeListByLabel(
             List<Map<String, Object>> existing, List<Map<String, Object>> incoming) {
-        Map<String, Map<String, Object>> existingByLabel = new LinkedHashMap<>();
-        for (Map<String, Object> item : existing) {
-            String label = labelOf(item);
-            if (label != null) existingByLabel.put(label, item);
+        // Items keep their POSITION: a classify node's category_N and a switch node's case_N
+        // ports are indexes into this list, and the edges hang off those ports. Putting the
+        // edited items first (as this method once did) silently re-pointed every branch.
+        Map<String, Map<String, Object>> incomingByLabel = new LinkedHashMap<>();
+        for (Map<String, Object> incomingItem : incoming) {
+            String label = labelOf(incomingItem);
+            if (label != null) {
+                incomingByLabel.put(label, incomingItem);
+            }
         }
 
         List<Map<String, Object>> result = new ArrayList<>();
-        Set<String> touchedLabels = new HashSet<>();
-        for (Map<String, Object> incomingItem : incoming) {
-            String label = labelOf(incomingItem);
-            if (label != null && existingByLabel.containsKey(label)) {
-                Map<String, Object> merged = new LinkedHashMap<>(existingByLabel.get(label));
-                merged.putAll(incomingItem);
-                result.add(merged);
-                touchedLabels.add(label);
-            } else {
-                result.add(new LinkedHashMap<>(incomingItem));
-                if (label != null) touchedLabels.add(label);
-            }
-        }
-
-        // Preserve existing items the LLM didn't mention
+        Set<String> placed = new HashSet<>();
         for (Map<String, Object> existingItem : existing) {
             String label = labelOf(existingItem);
-            if (label != null && !touchedLabels.contains(label)) {
+            if (label != null && incomingByLabel.containsKey(label) && placed.add(label)) {
+                Map<String, Object> merged = new LinkedHashMap<>(existingItem);
+                merged.putAll(incomingByLabel.get(label));
+                result.add(merged);
+            } else {
                 result.add(existingItem);
             }
         }
+        // New items, in the order the caller gave them, before a trailing default.
+        int insertAt = result.size();
+        if (!result.isEmpty() && "default".equals(result.get(result.size() - 1).get("type"))) {
+            insertAt = result.size() - 1;
+        }
+        List<Map<String, Object>> added = new ArrayList<>();
+        for (Map<String, Object> incomingItem : incoming) {
+            String label = labelOf(incomingItem);
+            if (label == null || !placed.contains(label)) {
+                added.add(new LinkedHashMap<>(incomingItem));
+                if (label != null) placed.add(label);
+            }
+        }
+        result.addAll(insertAt, added);
         return result;
     }
 

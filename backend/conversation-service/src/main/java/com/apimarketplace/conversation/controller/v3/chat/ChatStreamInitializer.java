@@ -3,6 +3,7 @@ package com.apimarketplace.conversation.controller.v3.chat;
 import com.apimarketplace.conversation.domain.stream.StreamEvent;
 import com.apimarketplace.conversation.dto.ChatRequest;
 import com.apimarketplace.conversation.service.ConversationHistoryService;
+import com.apimarketplace.conversation.service.ConversationQueryService;
 import com.apimarketplace.conversation.service.ai.ChatStreamingService;
 import com.apimarketplace.conversation.streaming.RedisStreamingOutput;
 import com.apimarketplace.conversation.streaming.StreamMetadata;
@@ -36,11 +37,17 @@ public class ChatStreamInitializer {
     private final ConversationHistoryService conversationHistoryService;
     private final StreamStateService stateService;
     private final StreamPubSubService pubSubService;
+    private final ConversationQueryService conversationQueryService;
 
     /**
      * Initialize a stream asynchronously for WebSocket-based streaming.
      * Returns JSON {conversationId, streamId, model} immediately.
      * Events flow via Redis Pub/Sub to WebSocket channel: ws:conversation:{conversationId}
+     *
+     * <p>An existing {@code conversationId} must be one the caller may write (owner, or acting in
+     * its workspace), otherwise 404. The turn appends the user message, clears the pending cards,
+     * loads the conversation's history into the agent's context (unscoped, by id) and streams the
+     * answer on the conversation's channel, so a foreign id was both a write and a read leak.
      */
     public Mono<ResponseEntity<Map<String, String>>> initializeStreamAsync(ChatRequest request, String userId) {
         log.info("WS stream init - User: {}, Message length: {}, Conversation: {}",
@@ -48,6 +55,25 @@ public class ChatStreamInitializer {
                 request.getMessage() != null ? request.getMessage().length() : 0,
                 request.getConversationId());
 
+        String existingConversationId = request.getConversationId();
+        if (existingConversationId == null || existingConversationId.isEmpty()) {
+            return initializeStream(request, userId);
+        }
+        return Mono.fromCallable(() -> conversationQueryService.isConversationInStrictScope(
+                        existingConversationId, userId, request.getOrgId()))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(allowed -> {
+                    if (Boolean.TRUE.equals(allowed)) {
+                        return initializeStream(request, userId);
+                    }
+                    log.warn("Chat turn refused - user {} (org: {}) may not write conversation {}",
+                            userId, request.getOrgId(), existingConversationId);
+                    return Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND)
+                            .body(Map.of("error", "Conversation not found")));
+                });
+    }
+
+    private Mono<ResponseEntity<Map<String, String>>> initializeStream(ChatRequest request, String userId) {
         return getOrCreateConversationId(request, userId)
                 .flatMap(conversationId -> createStreamWithRetry(userId, conversationId, request)
                         .map(metadata -> {

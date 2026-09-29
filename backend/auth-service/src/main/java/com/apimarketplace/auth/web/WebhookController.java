@@ -85,6 +85,11 @@ public class WebhookController {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.apimarketplace.auth.service.RewardService rewardService;
 
+    // Partner revenue share (V549): one commission line per paid invoice of a customer a
+    // partner referred, voided on refund/dispute. Optional like rewardService above.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.service.PartnerCommissionService partnerCommissionService;
+
     // Lifecycle emails (Resend): checkout.completed ends the abandoned-checkout sequence.
     // Optional like the fields above: null in legacy test ctors, inert when unconfigured.
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -939,6 +944,10 @@ public class WebhookController {
         String billingReason = invoice.getBillingReason();
         logger.info("Invoice paid: {} (subscription={}, billingReason={})", invoice.getId(), subId, billingReason);
 
+        // Partner revenue share, BEFORE the credit-upgrade early return below: a pack
+        // upgrade is revenue the referred customer paid too.
+        tryRecordPartnerCommission(invoice);
+
         // Option A - credit-pack tier upgrade: grant credits when the dedicated
         // one-shot invoice is paid. Routed by metadata.kind ("credit_upgrade")
         // OR by presence of a PendingCreditUpgrade row keyed on invoice.id
@@ -1009,10 +1018,52 @@ public class WebhookController {
         }
     }
 
+    /**
+     * Record the partner's share of a paid invoice (any paid invoice with a positive amount
+     * whose Stripe customer resolves to a user attributed to a PARTNER code). The base is the
+     * amount excluding tax; idempotent on the invoice id inside the service. Never fails the
+     * webhook: a commission glitch must not block credits.
+     */
+    private void tryRecordPartnerCommission(Invoice invoice) {
+        try {
+            if (partnerCommissionService == null || invoice == null) return;
+            if (!"paid".equalsIgnoreCase(invoice.getStatus())) return;
+            Long amountPaid = invoice.getAmountPaid();
+            if (amountPaid == null || amountPaid <= 0) return;
+            // Pre-tax total scaled to what was actually paid (a customer balance can pay part of
+            // an invoice); without a tax breakdown, the amount paid is the base.
+            Long exclTax = invoice.getTotalExcludingTax();
+            Long total = invoice.getTotal();
+            long base = exclTax == null ? amountPaid
+                    : (total != null && total > 0 ? Math.min(exclTax, Math.floorDiv(exclTax * amountPaid, total)) : Math.min(exclTax, amountPaid));
+            String customerId = invoice.getCustomer();
+            if (customerId == null || customerId.isBlank()) return;
+            var customer = billingCustomerRepository.findByProviderCustomerId(customerId).orElse(null);
+            if (customer == null || customer.getUser() == null) return;
+            java.time.Instant paidAt = invoice.getStatusTransitions() != null
+                    && invoice.getStatusTransitions().getPaidAt() != null
+                    ? java.time.Instant.ofEpochSecond(invoice.getStatusTransitions().getPaidAt())
+                    : java.time.Instant.now();
+            var outcome = partnerCommissionService.recordPaidInvoice(
+                    customer.getUser().getId(), invoice.getId(), base, invoice.getCurrency(), paidAt);
+            if (outcome == com.apimarketplace.auth.service.PartnerCommissionService.RecordOutcome.RECORDED) {
+                logger.info("Partner commission recorded for invoice {}", invoice.getId());
+            }
+        } catch (org.springframework.dao.DataIntegrityViolationException duplicate) {
+            // Two deliveries of the same invoice raced past the existence check; the unique
+            // invoice constraint kept one line, which is the intended outcome.
+            logger.info("Partner commission for invoice {} already recorded by a concurrent delivery",
+                    invoice != null ? invoice.getId() : "?");
+        } catch (Exception e) {
+            logger.error("Partner commission failed for invoice {}: {}",
+                    invoice != null ? invoice.getId() : "?", e.getMessage(), e);
+        }
+    }
+
     /** Full refund of a converting charge claws back the referral reward. */
     private void handleChargeRefunded(com.stripe.model.Charge charge) {
         try {
-            if (rewardService == null || charge == null) return;
+            if ((rewardService == null && partnerCommissionService == null) || charge == null) return;
             Long amount = charge.getAmount();
             Long refunded = charge.getAmountRefunded();
             if (amount == null || amount <= 0 || refunded == null || refunded < amount) {
@@ -1020,6 +1071,8 @@ public class WebhookController {
                         charge.getId(), amount, refunded);
                 return;
             }
+            // Partner void first: it guards itself, and must not depend on the clawback below.
+            voidPartnerCommission(charge, "REFUNDED");
             clawbackByCustomer(charge.getCustomer(), "REFUNDED");
         } catch (Exception e) {
             logger.error("Error in handleChargeRefunded: {}", e.getMessage(), e);
@@ -1029,7 +1082,7 @@ public class WebhookController {
     /** A chargeback (dispute) on a converting charge claws back the referral reward. */
     private void handleDisputeCreated(com.stripe.model.Dispute dispute) {
         try {
-            if (rewardService == null || dispute == null) return;
+            if ((rewardService == null && partnerCommissionService == null) || dispute == null) return;
             clawbackByDisputedCharge(dispute.getCharge(), "DISPUTED");
         } catch (Exception e) {
             logger.error("Error in handleDisputeCreated: {}", e.getMessage(), e);
@@ -1061,12 +1114,60 @@ public class WebhookController {
     }
 
     private void clawbackByDisputedCharge(String chargeId, String reason) {
-        if (rewardService == null || chargeId == null || chargeId.isBlank()) return;
+        if ((rewardService == null && partnerCommissionService == null) || chargeId == null || chargeId.isBlank()) return;
         try {
             com.stripe.model.Charge charge = stripeClient.charges().retrieve(chargeId);
+            voidPartnerCommission(charge, reason);
             clawbackByCustomer(charge.getCustomer(), reason);
         } catch (Exception e) {
             logger.error("Dispute clawback resolve failed for charge {}: {}", chargeId, e.getMessage(), e);
+        }
+    }
+
+    /** Void the partner commission the refunded / disputed payment paid for (V549). */
+    private void voidPartnerCommission(com.stripe.model.Charge charge, String reason) {
+        String customerId = charge.getCustomer();
+        if (partnerCommissionService == null || customerId == null || customerId.isBlank()) return;
+        try {
+            InvoiceLookup invoice = invoiceIdOf(charge);
+            billingCustomerRepository.findByProviderCustomerId(customerId).ifPresent(bc ->
+                    partnerCommissionService.voidForRefund(bc.getUser().getId(), invoice.invoiceId(),
+                            invoice.failed(), charge.getAmount(), charge.getCurrency(), reason));
+        } catch (Exception e) {
+            logger.error("Partner commission void failed for customer {}: {}", customerId, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Outcome of resolving the invoice a charge paid: found ({@code invoiceId} set), confirmed
+     * none (null, not failed: the payment belongs to no invoice, so it earned no commission), or
+     * unknown ({@code failed}: no payment intent, or Stripe unreachable).
+     */
+    private record InvoiceLookup(String invoiceId, boolean failed) {}
+
+    /**
+     * The invoice a charge paid. A charge carries no invoice id in this API version; the invoice
+     * payment behind its payment intent does.
+     */
+    private InvoiceLookup invoiceIdOf(com.stripe.model.Charge charge) {
+        String paymentIntent = charge.getPaymentIntent();
+        if (paymentIntent == null || paymentIntent.isBlank()) return new InvoiceLookup(null, true);
+        try {
+            var params = com.stripe.param.InvoicePaymentListParams.builder()
+                    .setPayment(com.stripe.param.InvoicePaymentListParams.Payment.builder()
+                            .setType(com.stripe.param.InvoicePaymentListParams.Payment.Type.PAYMENT_INTENT)
+                            .setPaymentIntent(paymentIntent)
+                            .build())
+                    .setLimit(1L)
+                    .build();
+            var page = stripeClient.invoicePayments().list(params);
+            if (page == null || page.getData() == null || page.getData().isEmpty()) {
+                return new InvoiceLookup(null, false);
+            }
+            return new InvoiceLookup(page.getData().get(0).getInvoice(), false);
+        } catch (Exception e) {
+            logger.warn("Could not resolve the invoice of payment intent {}: {}", paymentIntent, e.getMessage());
+            return new InvoiceLookup(null, true);
         }
     }
 

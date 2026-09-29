@@ -12,8 +12,9 @@ import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { orchestratorApi } from '@/lib/api';
 import { AvatarDisplay } from '@/components/agents';
 
-export const AGENT_CONVERSATION_TAB = '__conversation__';
-export const AGENT_CONFIGURATION_TAB = '__configuration__';
+import { AGENT_CONVERSATION_TAB, AGENT_CONFIGURATION_TAB } from './agentPanelTabs';
+
+export { AGENT_CONVERSATION_TAB, AGENT_CONFIGURATION_TAB };
 
 interface AgentPanelContentProps {
   agentId: string;

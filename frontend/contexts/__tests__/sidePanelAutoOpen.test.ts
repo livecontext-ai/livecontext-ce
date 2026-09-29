@@ -4,6 +4,7 @@ import {
   enqueueAutoOpen,
   flushAutoOpen,
   autoOpenKey,
+  autoOpenEventDetail,
   AUTO_OPEN_TYPES,
   type AutoOpenVisualization,
 } from '../sidePanelAutoOpen';
@@ -138,5 +139,40 @@ describe('AUTO_OPEN_TYPES - workflow(action=present)', () => {
     for (const type of ['present_application', 'present_table', 'present_workflow', 'present_interface', 'present_agent', 'present_file']) {
       expect(AUTO_OPEN_TYPES).toContain(type);
     }
+  });
+});
+
+describe('enqueueAutoOpen - a plan change survives the debounce window', () => {
+  const wf = (planChanged: boolean): AutoOpenVisualization => ({ type: 'workflow', id: 'wf-1', planChanged });
+
+  it('keeps planChanged when a later load/present marker of the same workflow replaces the edit', () => {
+    const pending = new Map<string, AutoOpenVisualization>();
+    enqueueAutoOpen(pending, wf(true));   // modify
+    enqueueAutoOpen(pending, wf(false));  // load, in the same window
+    expect(pending.get('workflow:wf-1')?.planChanged).toBe(true);
+  });
+
+  it("does not credit one chat's edit to another chat's marker in the same window", () => {
+    const pending = new Map<string, AutoOpenVisualization>();
+    enqueueAutoOpen(pending, { ...wf(true), conversationId: 'conv-a' });
+    enqueueAutoOpen(pending, { ...wf(false), conversationId: 'conv-b' });
+    expect(pending.get('workflow:wf-1')).toMatchObject({ planChanged: false, conversationId: 'conv-b' });
+  });
+
+  it('stays false when nothing in the window changed the plan', () => {
+    const pending = new Map<string, AutoOpenVisualization>();
+    enqueueAutoOpen(pending, wf(false));
+    enqueueAutoOpen(pending, wf(false));
+    expect(pending.get('workflow:wf-1')?.planChanged).toBe(false);
+  });
+});
+
+describe('autoOpenEventDetail', () => {
+  it('keeps every field the workflow page decides on (a dropped one fails silently)', () => {
+    const detail = autoOpenEventDetail({
+      type: 'workflow_run', id: 'wf-1', title: 'T', runId: 'r1',
+      planChanged: true, planVersion: 13, conversationId: 'conv-1',
+    });
+    expect(detail).toMatchObject({ planChanged: true, planVersion: 13, conversationId: 'conv-1', runId: 'r1' });
   });
 });

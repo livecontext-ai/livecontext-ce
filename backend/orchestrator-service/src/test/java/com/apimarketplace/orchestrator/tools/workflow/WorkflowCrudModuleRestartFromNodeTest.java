@@ -218,6 +218,50 @@ class WorkflowCrudModuleRestartFromNodeTest {
     }
 
     @Test
+    @DisplayName("Carries the run visualization (plan version, name loaded apart) without touching the lazy workflow's fields")
+    void carriesRunVisualizationForThePage() {
+        // In production run.getWorkflow() is an uninitialised proxy (LAZY, no session here): only
+        // its id may be read. A getName() on it throws after the replay already ran.
+        WorkflowEntity lazyWorkflow = org.mockito.Mockito.mock(WorkflowEntity.class);
+        when(lazyWorkflow.getId()).thenReturn(workflowId);
+        lenient().when(lazyWorkflow.getName()).thenThrow(new org.hibernate.LazyInitializationException("no session"));
+        lenient().when(lazyWorkflow.getTenantId()).thenReturn(TENANT_ID);
+        WorkflowRunEntity entity = run(TENANT_ID);
+        entity.setWorkflow(lazyWorkflow);
+        entity.setPlanVersion(13);
+        WorkflowEntity loaded = new WorkflowEntity();
+        loaded.setId(workflowId);
+        loaded.setName("Gmail Triage");
+        when(workflowService.getWorkflow(workflowId)).thenReturn(Optional.of(loaded));
+        when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(entity));
+        rerunReturns(AutoRestartExecutionService.Outcome.QUIESCED);
+
+        ToolExecutionResult result = restart(Map.of("run_id", RUN_ID, "node", NODE), context(null));
+
+        assertThat(result.success()).isTrue();
+        assertThat(asMap(result.metadata().get("visualization")))
+                .containsEntry("type", "workflow_run")
+                .containsEntry("id", workflowId.toString())
+                .containsEntry("title", "Gmail Triage")
+                .containsEntry("runId", RUN_ID)
+                .containsEntry("planVersion", 13);
+    }
+
+    @Test
+    @DisplayName("A replay that ran stays a success when its visualization cannot be built")
+    void replayStaysSuccessfulWhenVisualizationFails() {
+        WorkflowRunEntity entity = run(TENANT_ID);
+        when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(entity));
+        when(workflowService.getWorkflow(workflowId)).thenThrow(new IllegalStateException("db down"));
+        rerunReturns(AutoRestartExecutionService.Outcome.QUIESCED);
+
+        ToolExecutionResult result = restart(Map.of("run_id", RUN_ID, "node", NODE), context(null));
+
+        assertThat(result.success()).isTrue();
+        assertThat(asMap(result.metadata().get("visualization"))).containsEntry("title", "Workflow");
+    }
+
+    @Test
     @DisplayName("A yield is reported as unfinished work, with the action that unblocks it")
     void yieldTellsTheAgentItIsNotDone() {
         // success=true would otherwise read as "the replay is done" while the run sits on an

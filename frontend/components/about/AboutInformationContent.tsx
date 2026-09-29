@@ -118,9 +118,13 @@ const faqCategories: FaqCategory[] = [
 
 /**
  * Shared content for the public About page and the in-app Settings > Information page.
+ *
+ * `titleAs` lets the public page make the first heading its `<h1>`: a standalone
+ * page needs one, while inside Settings the page already has its own.
  */
-export default function AboutInformationContent() {
+export default function AboutInformationContent({ titleAs = 'h2' }: { titleAs?: 'h1' | 'h2' }) {
   const [expandedFaq, setExpandedFaq] = useState<string | null>(null);
+  const Title = titleAs;
 
   return (
     <div className="space-y-8">
@@ -129,7 +133,7 @@ export default function AboutInformationContent() {
           {/* Decorative: a card ornament beside the heading, not a named image. */}
           <LogoAnimate size="md" className="text-theme-primary" decorative />
           <div>
-            <h2 className="text-lg font-semibold text-theme-primary">About Us</h2>
+            <Title className="text-lg font-semibold text-theme-primary">About Us</Title>
             <p className="text-sm text-theme-secondary">The platform that puts AI to work for you</p>
           </div>
         </div>

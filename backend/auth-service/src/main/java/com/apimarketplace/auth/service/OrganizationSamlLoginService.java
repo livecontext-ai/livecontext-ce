@@ -1,6 +1,7 @@
 package com.apimarketplace.auth.service;
 
 import com.apimarketplace.auth.analytics.AuthAnalyticsEmitter;
+import com.apimarketplace.auth.domain.AuthProvider;
 import com.apimarketplace.auth.domain.Organization;
 import com.apimarketplace.auth.domain.OrganizationAuditEvent;
 import com.apimarketplace.auth.domain.OrganizationMember;
@@ -32,7 +33,9 @@ public class OrganizationSamlLoginService {
         DOMAIN_NOT_VERIFIED,
         PLAN_NOT_TEAM,
         MEMBER_LIMIT,
-        SAVE_FAILED
+        SAVE_FAILED,
+        /** The token reached an account this IdP did not create (a linked password/Google/GitHub account). */
+        NOT_PROVISIONED_BY_IDP
     }
 
     private final OrganizationSamlConnectionRepository samlRepository;
@@ -85,22 +88,24 @@ public class OrganizationSamlLoginService {
             return Optional.empty();
         }
 
-        OrganizationSamlConnection connection = samlRepository.findByIdpAlias(identityProviderAlias)
-                .orElseThrow(() -> reject(reportRejection, user, null, RejectionReason.CONNECTION_INACTIVE,
-                        "SAML SSO connection is not active", null));
-        if (connection.getStatus() != OrganizationSamlConnection.Status.ACTIVE
-                || connection.getOrganization() == null
-                || connection.getOrganization().isDeleted()) {
-            throw reject(reportRejection, user, connection.getOrganization() != null ? connection.getOrganization().getId() : null,
-                    RejectionReason.CONNECTION_INACTIVE, "SAML SSO connection is not active", null);
+        // FIRST, before anything else and in particular before the existing-member return
+        // below: a workspace IdP may only sign in the account it created itself. Keycloak can
+        // link a workspace IdP to an account that already exists (same email, a password,
+        // Google or GitHub account); that IdP is configured by a workspace ADMIN and asserts
+        // whatever identity it likes, so accepting the link would let an admin sign in as any
+        // member of the workspace. Linking SAML to a pre-existing account is therefore NOT a
+        // supported flow, deliberately: such a person keeps signing in with their original
+        // method, and a SAML login landing on their account is refused here (and the link is
+        // removed from Keycloak by the caller).
+        if (!isProvisionedBy(user, identityProviderAlias)) {
+            UUID orgId = organizationIdOf(identityProviderAlias);
+            throw reject(reportRejection, user, orgId, RejectionReason.NOT_PROVISIONED_BY_IDP,
+                    "This account was not created through this workspace's SSO. Sign in with the method "
+                            + "the account was created with.", null, true);
         }
 
-        Organization organization = connection.getOrganization();
+        Organization organization = activeConnectionOrganization(identityProviderAlias, reportRejection, user);
         UUID orgId = organization.getId();
-        if (orgId == null) {
-            throw reject(reportRejection, user, null, RejectionReason.MISSING_ORGANIZATION,
-                    "SAML SSO connection is missing an organization", null);
-        }
 
         Optional<OrganizationMember> existing = memberRepository.findActiveByOrganizationIdAndUserId(orgId, user.getId());
         if (existing.isPresent()) {
@@ -149,6 +154,66 @@ public class OrganizationSamlLoginService {
         return Optional.of(orgId);
     }
 
+    /**
+     * The admission rule for a SAML login that has NO app account yet, run BEFORE the account,
+     * its FREE subscription or its credits are created: the connection is active, the asserted
+     * email sits on a domain the workspace verified, and the workspace can take one more member.
+     * The same rules {@link #ensureMembershipForIdentityProvider} applies at join time; running
+     * them first means a refused login leaves nothing behind in the app.
+     *
+     * @throws SamlMembershipException when the login must be refused
+     */
+    @Transactional(readOnly = true)
+    public void checkNewAccountAdmission(String email, String identityProviderAlias, boolean reportRejection) {
+        if (!OrganizationSamlService.isOrganizationSamlAlias(identityProviderAlias)) {
+            return;
+        }
+        Organization organization = activeConnectionOrganization(identityProviderAlias, reportRejection, null);
+        UUID orgId = organization.getId();
+        if (!domainService.isEmailOnVerifiedDomain(orgId, email)) {
+            throw reject(reportRejection, null, orgId, RejectionReason.DOMAIN_NOT_VERIFIED,
+                    "This email address is not on a domain verified for this workspace's SSO", null);
+        }
+        enforceTeamAdmission(reportRejection, null, orgId);
+    }
+
+    /**
+     * Whether {@code user} is the account the workspace IdP {@code alias} created: a SAML account
+     * whose recorded creating IdP is exactly this one. A password, Google or GitHub account, or a
+     * SAML account created by another workspace's IdP, never is.
+     */
+    static boolean isProvisionedBy(User user, String alias) {
+        return user != null
+                && user.getAuthProvider() == AuthProvider.SAML
+                && alias != null
+                && alias.equals(user.getSamlIdpAlias());
+    }
+
+    private UUID organizationIdOf(String alias) {
+        return samlRepository.findByIdpAlias(alias)
+                .map(OrganizationSamlConnection::getOrganization)
+                .map(Organization::getId)
+                .orElse(null);
+    }
+
+    private Organization activeConnectionOrganization(String identityProviderAlias, boolean reportRejection, User user) {
+        OrganizationSamlConnection connection = samlRepository.findByIdpAlias(identityProviderAlias)
+                .orElseThrow(() -> reject(reportRejection, user, null, RejectionReason.CONNECTION_INACTIVE,
+                        "SAML SSO connection is not active", null));
+        if (connection.getStatus() != OrganizationSamlConnection.Status.ACTIVE
+                || connection.getOrganization() == null
+                || connection.getOrganization().isDeleted()) {
+            throw reject(reportRejection, user, connection.getOrganization() != null ? connection.getOrganization().getId() : null,
+                    RejectionReason.CONNECTION_INACTIVE, "SAML SSO connection is not active", null);
+        }
+        Organization organization = connection.getOrganization();
+        if (organization.getId() == null) {
+            throw reject(reportRejection, user, null, RejectionReason.MISSING_ORGANIZATION,
+                    "SAML SSO connection is missing an organization", null);
+        }
+        return organization;
+    }
+
     private Organization lockOrganizationForAdmission(boolean reportRejection, User user, UUID orgId) {
         Organization organization = organizationRepository.findByIdForUpdate(orgId)
                 .orElseThrow(() -> reject(reportRejection, user, orgId, RejectionReason.CONNECTION_INACTIVE,
@@ -173,8 +238,16 @@ public class OrganizationSamlLoginService {
     /** Records the refusal for analytics (when asked to), then builds the exception the caller throws. */
     private SamlMembershipException reject(boolean reportRejection, User user, UUID orgId, RejectionReason reason,
                                            String message, Throwable cause) {
+        return reject(reportRejection, user, orgId, reason, message, cause, false);
+    }
+
+    private SamlMembershipException reject(boolean reportRejection, User user, UUID orgId, RejectionReason reason,
+                                           String message, Throwable cause, boolean notProvisionedByIdp) {
         if (reportRejection) emit(user, orgId, AuthAnalyticsEmitter.SSO_OUTCOME_REJECTED,
                 reason.name().toLowerCase(java.util.Locale.ROOT), null);
+        if (notProvisionedByIdp) {
+            return new SamlAccountNotProvisionedException(message);
+        }
         return cause != null ? new SamlMembershipException(message, cause) : new SamlMembershipException(message);
     }
 
@@ -182,7 +255,8 @@ public class OrganizationSamlLoginService {
     private void emit(User user, UUID orgId, String outcome, String reason, OrganizationRole role) {
         if (analytics == null) return;
         try {
-            analytics.ssoMemberJoined(user.getId(), orgId != null ? orgId.toString() : null, outcome, reason, role);
+            analytics.ssoMemberJoined(user != null ? user.getId() : null,
+                    orgId != null ? orgId.toString() : null, outcome, reason, role);
         } catch (Exception e) {
             log.debug("[saml] analytics dropped: {}", e.toString());
         }

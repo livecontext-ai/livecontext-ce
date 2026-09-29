@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.tools.workflow.builder;
 
+import com.apimarketplace.orchestrator.tools.workflow.builder.session.SessionPlanBuilder;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.orchestrator.domain.workflow.NodeMock;
 import com.apimarketplace.orchestrator.domain.workflow.NodePolicy;
@@ -268,6 +269,11 @@ public class WorkflowBuilderModifier {
         // Snapshot before harmonization: the report is written in these words.
         Set<String> reportedKeys = new LinkedHashSet<>(rawChanges.keySet());
         Map<String, Object> requestedByCaller = new LinkedHashMap<>(rawChanges);
+        // A session opened before load/set_plan adopted the session spelling can still hold
+        // the plan one; one spelling per node before anything reads or merges into it.
+        if (Boolean.TRUE.equals(node.get("isAgent"))) {
+            SessionPlanBuilder.adoptPlanSpellings(node);
+        }
         Map<String, Object> changes = rawChanges.isEmpty() ? new LinkedHashMap<>() : harmonizeParams(rawChanges, nodeId, node);
 
         // Refuse before anything reads the value: the interface branch below casts
@@ -917,7 +923,7 @@ public class WorkflowBuilderModifier {
         } else {
             return "Mocking is not available on this node kind (" + nodeId + ").";
         }
-        Map<String, Object> nodeCopy = new LinkedHashMap<>(node);
+        Map<String, Object> nodeCopy = SessionPlanBuilder.toPlanSpelling(node);
         nodeCopy.put(com.apimarketplace.orchestrator.domain.workflow.NodeMock.JSON_KEY, mockMap);
         Map<String, Object> miniPlan = new LinkedHashMap<>();
         miniPlan.put(section, List.of(nodeCopy));
@@ -1422,8 +1428,28 @@ public class WorkflowBuilderModifier {
             String key = entry.getKey();
             Object value = entry.getValue();
 
+            // Classify / guardrail: get_plan shows the plan spelling (classifyCategories,
+            // guardrailRules, ...), the session holds the config under its own key. Routed
+            // there, or the edit would be overwritten by the old value on the next export.
+            String sessionKey = SessionPlanBuilder.sessionKeyFor(node, key);
+            if (sessionKey != null) {
+                // classifyCategories has always merged by label (NodeFieldMerger); the session
+                // key 'categories' is replaced whole, which is how add_node's spelling removes
+                // a category. Each spelling keeps its own contract.
+                if (NodeFieldMerger.MERGE_LIST_BY_LABEL_FIELDS.contains(key)
+                        && node.get(sessionKey) instanceof List<?> existingList
+                        && value instanceof List<?> incomingList) {
+                    value = NodeFieldMerger.mergeListByLabel(
+                            (List<Map<String, Object>>) existingList, (List<Map<String, Object>>) incomingList);
+                }
+                harmonized.put(sessionKey, value);
+            }
+            // Guardrail: add_node takes the checked text as 'input' and stores it as 'content'.
+            else if ("input".equals(key) && Boolean.TRUE.equals(node.get("isGuardrail"))) {
+                harmonized.put("content", value);
+            }
             // Decision node: conditions -> decisionConditions (only for actual decision nodes)
-            if ("conditions".equals(key) && LabelNormalizer.isCoreKey(nodeId) && isDecisionNode(node)) {
+            else if ("conditions".equals(key) && LabelNormalizer.isCoreKey(nodeId) && isDecisionNode(node)) {
                 List<Map<String, Object>> conditions = (List<Map<String, Object>>) value;
                 List<Map<String, Object>> converted = new ArrayList<>();
                 String normalizedLabel = LabelNormalizer.extractLabelFromKey(nodeId);

@@ -57,6 +57,16 @@ public class FileToolsProvider implements ToolsProvider {
             if (tenantId == null) {
                 return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "tenantId is required");
             }
+            // Both tools WRITE a file into the workspace storage (and its quota). This provider
+            // has no read/write category, so the workspace role is checked directly: a VIEWER
+            // is read-only, exactly as on the upload endpoints.
+            if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(
+                    context.orgId(), context.orgRole())) {
+                return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED,
+                        "Your workspace role is read-only (VIEWER), so '" + toolName + "' is not allowed: "
+                                + "it stores a file in the workspace. Only the workspace owner can change "
+                                + "your role, you cannot.");
+            }
 
             return switch (toolName) {
                 case "download_file" -> executeDownloadFile(parameters, tenantId, context);

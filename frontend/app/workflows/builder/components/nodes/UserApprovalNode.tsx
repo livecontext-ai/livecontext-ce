@@ -15,6 +15,7 @@ import { NodeActionButtons, NodeHeader, useHoverVisibility, getIconSlug, getStat
 import { findNodeClassById } from '../../nodes/nodeClasses';
 import { NodeStatusBadge } from '../NodeStatusBadge';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
+import { useCanDriveRuns } from '@/lib/hooks/useCanDriveRuns';
 import { NodePlayButton } from '../NodePlayButton';
 import { useNodeExecutionStatus } from '../../contexts/StepByStepContext';
 import { NodeBottomBar } from './NodeBottomBar';
@@ -64,6 +65,8 @@ export function UserApprovalNode({ data, selected, id }: NodeProps<BuilderNodeDa
   const branchOut = getBranchHandleGeometry(layoutDirection, true);
 
   const tRun = useTranslations('runMode');
+  // Approve / Reject drive the run: hidden for a read-only VIEWER (the status badge stays).
+  const canMutate = useCanDriveRuns();
   const visuals = getNodeVisual('approval');
   const outputs: ApprovalOutput[] =
     (data.approvalOutputs as ApprovalOutput[] | undefined) ?? createDefaultApprovalOutputs(data.id);
@@ -262,7 +265,7 @@ export function UserApprovalNode({ data, selected, id }: NodeProps<BuilderNodeDa
       </div>
 
       {/* Approve / Reject buttons - positioned OUTSIDE the node to avoid triggering node selection */}
-      {isAwaitingSignal && (
+      {isAwaitingSignal && canMutate && (
         <div
           // z-50: the expanded per-item list extends below the node and must
           // float above SIBLING nodes (which would otherwise intercept clicks

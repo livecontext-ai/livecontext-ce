@@ -44,6 +44,13 @@ public class AvatarGenerationController {
 
         String tenantId = tenantResolver.resolveOrNull(httpRequest);
         tenantResolver.validate(tenantId);
+        // An avatar generation spends the workspace's LLM credits: refused to the read-only VIEWER.
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(
+                tenantResolver.resolveOrgId(httpRequest), tenantResolver.resolveOrgRole(httpRequest))) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "error", "avatar_generation_forbidden",
+                    "message", "Your workspace role is read-only (VIEWER): avatar generation is not allowed"));
+        }
 
         String prompt = stringOf(request.get("prompt"));
         String provider = stringOf(request.get("provider"));

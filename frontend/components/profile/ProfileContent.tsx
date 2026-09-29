@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { getClientLocale } from '@/lib/utils/locale';
-import { parseUtcAware } from '@/lib/utils/dateFormatters';
+import { displayZoneFor, parseUtcAware } from '@/lib/utils/dateFormatters';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { CalendarDays, LayoutGrid, MessageCircle } from 'lucide-react';
@@ -25,9 +25,19 @@ interface ProfileContentProps {
 function formatJoined(iso: string): string {
   const lang = getClientLocale();
   try {
-    // UTC-aware: backend timestamps are UTC wall-clock and may carry no TZ
-    // designator, so parse them as UTC and format in UTC.
-    return parseUtcAware(iso).toLocaleDateString(lang, { year: 'numeric', month: 'long', timeZone: 'UTC' });
+    // UTC-aware PARSE (backend timestamps are UTC wall-clock and may carry no TZ designator),
+    // then formatted in the reader's display zone like every other date in the product.
+    //
+    // The zone comes from `displayZoneFor`, not `getClientTimeZone`: it answers UTC for a value
+    // that names a calendar DAY, and a join date arriving as a bare `YYYY-MM-DD` would otherwise
+    // be translated into the reader's zone and land in the previous month for anybody west of
+    // Greenwich - "January 2026" reading "December 2025". No formatter produces "Month YYYY", so
+    // this builds its own Intl call and has to answer that question itself.
+    return parseUtcAware(iso).toLocaleDateString(lang, {
+      year: 'numeric',
+      month: 'long',
+      timeZone: displayZoneFor(iso),
+    });
   } catch {
     return '';
   }

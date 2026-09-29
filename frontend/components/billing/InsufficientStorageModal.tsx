@@ -15,6 +15,7 @@ import FoundingPriceNote from '@/components/pricing/FoundingPriceNote';
 import ReferencePrice from '@/components/pricing/ReferencePrice';
 import { usePricingEvent } from '@/hooks/usePricingEvent';
 import { storageApi, type StorageQuota, type StorageBreakdown, type StorageCategory, STORAGE_CATEGORY_COLORS } from '@/lib/api/storage-api';
+import { RewardCodeInline } from '@/components/reward/RewardCodeInline';
 
 /**
  * Custom event name for triggering the insufficient storage modal.
@@ -352,7 +353,8 @@ export default function InsufficientStorageModal() {
           </p>
 
           {/* Footer links */}
-          <div className="mt-4 flex justify-center gap-4">
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-4">
+            <RewardCodeInline />
             <button
               onClick={() => { setOpen(false); router.push('/app/settings/storage'); }}
               className="text-xs text-theme-muted hover:text-theme-primary underline"

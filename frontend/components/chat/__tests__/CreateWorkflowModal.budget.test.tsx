@@ -67,14 +67,15 @@ const create = () => fireEvent.click(screen.getByRole('button', { name: 'create'
 
 
 /**
- * Let the effects of the last commit run before pressing a key at them.
+ * Flush the effects of the last commit (no longer required before pressing Escape: see below).
  *
- * <p>The Escape listener is installed by an effect that closes over `isCreating`, so the
- * handler in force is the one from the last FLUSHED effect, not the last render. Seeing the
- * failure message means the state commit happened; it does not mean the listener has been
- * swapped for the post-create one. Under a full-suite load that gap opened, the old listener
- * answered the key by correctly declining it (a modal mid-create must not claim Escape), and
- * the test failed once in 12,527 while passing alone every time.
+ * <p>The Escape listener closes over `isCreating`. It used to be installed by a PASSIVE effect,
+ * so seeing the failure message did not mean the listener had been swapped for the
+ * post-create one; under a full-suite load that gap opened and the old listener declined the
+ * key (the test failed once in 12,527 here, and again on CI on 2026-09-26 in a test that did
+ * not call this). The listener is now a layout effect, swapped in the same commit, and "takes
+ * Escape pressed the instant the failure is on screen" pins that; this flush stays as a
+ * harmless belt for the tests that already use it.
  */
 async function settled() {
   await act(async () => {});
@@ -371,6 +372,35 @@ describe('when the workflow is created but its cap is not', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
 
     expect(onWorkflowCreated).toHaveBeenCalledWith(NEW_ID);
+  });
+
+  it('takes Escape pressed the instant the failure is on screen, not one effect later', async () => {
+    // The race behind the flaky test above, made deterministic. The failure message and
+    // the post-create Escape handler come from the same render; if the handler is
+    // installed by a passive effect, it lands AFTER the DOM already shows the message, and
+    // a key pressed in that gap reaches the mid-create handler, which declines it. Under a
+    // loaded CI runner the gap was wide enough to fail the test above now and then. A
+    // MutationObserver fires right after the commit, before React 19 runs passive effects,
+    // so pressing Escape from it hits the gap every time. (If a future React flushed passive
+    // effects in the same task as the commit, this would pass without the fix too.)
+    const { onWorkflowCreated } = open();
+    typeCap('2500');
+    let pressed: KeyboardEvent | null = null;
+    const observer = new MutationObserver(() => {
+      if (pressed || !document.querySelector('[data-testid="create-workflow-budget-error"]')) return;
+      pressed = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true });
+      document.dispatchEvent(pressed);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      create();
+      await waitFor(() => expect(pressed, 'the failure message never appeared').not.toBeNull());
+    } finally {
+      observer.disconnect();
+    }
+
+    expect(pressed!.defaultPrevented, 'the modal did not take the key').toBe(true);
+    expect(onWorkflowCreated, 'Escape pressed as the message appeared was dropped').toHaveBeenCalledWith(NEW_ID);
   });
 
   it('leaves nothing to type into once the workflow exists', async () => {

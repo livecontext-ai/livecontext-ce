@@ -1,5 +1,6 @@
 package com.apimarketplace.auth.service;
 
+import com.apimarketplace.auth.util.EmailNormalizer;
 import com.apimarketplace.auth.domain.PasswordResetToken;
 import com.apimarketplace.auth.domain.User;
 import com.apimarketplace.auth.repository.PasswordResetTokenRepository;
@@ -160,7 +161,7 @@ public class PasswordResetService {
     public void requestReset(String email, String requestIp) {
         if (email == null || email.isBlank()) return;
 
-        Optional<User> found = userRepository.findByEmail(email.trim().toLowerCase());
+        Optional<User> found = userRepository.findByEmail(EmailNormalizer.normalize(email));
         if (found.isEmpty()) {
             // No row, no token, no mail, and the caller cannot tell.
             logger.debug("Password reset requested for an unknown address");
@@ -239,8 +240,14 @@ public class PasswordResetService {
      * point) still gets a mail rather than silence.
      */
     private void dispatchOnCommit(User user, String rawToken) {
+        // The account row is right here, so its language travels with the mail instead of being
+        // looked up again by address. That second lookup is not equivalent: it is a query for
+        // something this method already has, and it answers English if the database is unreachable
+        // at that moment. This reader is locked out of the product, so an English mail is the end of
+        // the road for them.
+        String locale = user.getLocale();
         Runnable dispatch = () -> mailer.dispatchResetEmail(
-                user.getEmail(), displayName(user), rawToken, TOKEN_TTL_MINUTES, user.getId());
+                user.getEmail(), displayName(user), rawToken, TOKEN_TTL_MINUTES, user.getId(), locale);
 
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             dispatch.run();

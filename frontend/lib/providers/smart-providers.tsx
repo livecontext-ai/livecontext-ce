@@ -21,6 +21,9 @@ import {
 } from '../stores/current-org-store';
 // Resource Managers deprecated - use standardized hooks
 // unifiedApiService import removed - all services now use apiClient internally
+import { getClientLocale, toIdpUiLocale } from '../utils/locale';
+import { clearDisplayTimeZone } from '../utils/timezone';
+import { clearStoredAgendaTimezone } from '@/hooks/useAgendaPreferences';
 import { apiClient } from '../api/api-client';
 import { WebSocketProvider } from '../websocket/ws-provider';
 import LoadingSpinner from '../../components/LoadingSpinner';
@@ -494,6 +497,13 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
     initializationRef.current = false;
     avatarInitRef.current = false;
     lastUserSubRef.current = undefined;
+    // The display zone goes here too, not only in `logout`. A session can end with nobody pressing
+    // sign out (a missing persisted user, a failed silent renew, a redirect to login), and on a
+    // shared browser the next person's first paint - and every route until their own profile lands -
+    // would otherwise be drawn from the previous person's year-long LC_TZ cookie.
+    clearDisplayTimeZone();
+    // The agenda keeps its own copy of the zone in localStorage, which outlives the cookie.
+    clearStoredAgendaTimezone();
   }, []);
 
   const expireMissingPersistedOidcUser = useCallback((reason: string) => {
@@ -1032,7 +1042,12 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
       redirect_uri: opts?.appState?.returnTo
         ? `${window.location.origin}${opts.appState.returnTo}`
         : `${window.location.origin}/app/`,
-      extraQueryParams: opts?.authorizationParams,
+      // `ui_locales` (OIDC core) asks the identity provider to render its pages in the language
+      // the app is being read in. It is what the login and password-reset forms have to go on
+      // BEFORE there is an account: the person's stored language reaches Keycloak as a user
+      // attribute, which by definition does not exist yet on a first sign-in or a sign-up. An
+      // explicit caller parameter still wins, so nothing here overrides a deliberate one.
+      extraQueryParams: { ui_locales: toIdpUiLocale(getClientLocale()), ...opts?.authorizationParams },
     });
   }, [oidc, markSessionExpired]);
 
@@ -1050,6 +1065,16 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
       sessionStorage.removeItem(LOGIN_SIGNIN_AT_KEY);
       sessionStorage.removeItem(LOGIN_REDIRECT_LOG_KEY);
     } catch { /* ignore - storage unavailable */ }
+    // The display zone belongs to the ACCOUNT, but its cookie mirror lives a year on the BROWSER.
+    // Leaving it behind hands the next person to sign in here the previous one's zone for their
+    // whole first session. `useDisplayPreferences` also overrides it as soon as a profile lands,
+    // so this is the second of two guards, not the only one.
+    clearDisplayTimeZone();
+    // And the agenda's copy, which lives in localStorage and outlives the cookie. This call was
+    // missing here while the expiry path above had it TWICE, and the duplicate is what hid it: the
+    // test that was supposed to keep the two paths in step counted occurrences across the whole
+    // file, so two-in-one-place read the same as one-in-each. Sign out is the path people take.
+    clearStoredAgendaTimezone();
     await oidc.signoutRedirect({
       post_logout_redirect_uri: opts?.logoutParams?.returnTo || `${window.location.origin}/app/`,
     });

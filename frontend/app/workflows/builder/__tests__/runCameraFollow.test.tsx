@@ -1206,6 +1206,9 @@ describe('the call site', () => {
       toolbar.indexOf("title={t('fitView')}"),
       toolbar.indexOf("title={t('autoLayout')}"),
     );
+    // Both markers must exist, or the slice silently widens to the whole file.
+    expect(toolbar.indexOf("title={t('fitView')}")).toBeGreaterThan(-1);
+    expect(toolbar.indexOf("title={t('autoLayout')}")).toBeGreaterThan(-1);
     expect(group, 'the toggle left the Focus group').toContain('<CanvasRunFollowToggleButton />');
   });
 

@@ -26,13 +26,22 @@ public class InternalSignalController {
     private final UnifiedSignalService signalService;
     private final SignalWaitRepository signalWaitRepository;
     private final WorkflowRunRepository runRepository;
+    private final com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard;
 
     public InternalSignalController(UnifiedSignalService signalService,
                                     SignalWaitRepository signalWaitRepository,
-                                    WorkflowRunRepository runRepository) {
+                                    WorkflowRunRepository runRepository,
+                                    com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard) {
         this.signalService = signalService;
         this.signalWaitRepository = signalWaitRepository;
         this.runRepository = runRepository;
+        this.orgAccessGuard = orgAccessGuard;
+    }
+
+    /** Backward-compatible direct-call overload used by controller unit tests: no role. */
+    public ResponseEntity<Map<String, Object>> resolveSignal(Long signalId, String userId, String organizationId,
+                                                             Map<String, Object> resolutionData) {
+        return resolveSignal(signalId, userId, organizationId, null, resolutionData);
     }
 
     /**
@@ -44,6 +53,7 @@ public class InternalSignalController {
             @PathVariable Long signalId,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String organizationRole,
             @RequestBody Map<String, Object> resolutionData) {
 
         log.info("Internal signal resolution: signalId={}, userId={}", signalId, userId);
@@ -69,6 +79,14 @@ public class InternalSignalController {
                     signalId, epochInfo.get().runId(), userId, organizationId);
             return ResponseEntity.status(404)
                     .body(Map.of("status", "error", "message", "Signal not found"));
+        }
+        // Same write gate as the HTTP twin: resolving drives the run with the owner's
+        // credentials (VIEWER role, then the member deny-list on the run's workflow).
+        // The WS layer forwards the role it validated at handshake / from the DB.
+        String denial = com.apimarketplace.orchestrator.controllers.workflow.RunWriteGate.denial(
+                orgAccessGuard, run.get(), userId, organizationId, organizationRole, "resolve signals on");
+        if (denial != null) {
+            return ResponseEntity.status(com.apimarketplace.orchestrator.controllers.workflow.RunWriteGate.statusFor(denial)).body(Map.of("status", "error", "message", denial));
         }
 
         try {

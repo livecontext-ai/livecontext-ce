@@ -52,10 +52,10 @@ export const PAYG_USD_PER_1K = 1.25;
  *
  * <p>Rates are USD per 1M tokens, copied from ONE named row of the shipped model
  * catalogue: {@link PRICING_BASIS_MODEL_ID} as the {@link PRICING_BASIS_PROVIDER}
- * provider serves it: the DeepSeek Flash the cloud actually runs. Until 2026-09-26 it was
- * the dated `deepseek-v4-flash` row, which left the shipped catalogue in that day's
- * cleanup at the same price; within a class the copy names by family, the page
- * must err upward.
+ * provider serves it: GPT-6 Luna from OpenAI since 2026-09-28. Before that it was
+ * DeepSeek Flash (`deepseek/deepseek-flash`, and until 2026-09-26 the dated
+ * `deepseek-v4-flash` row, which left the shipped catalogue in that day's cleanup at the
+ * same price); within a class the copy names by family, the page must err upward.
  *
  * <p>THE ONE THING TO KNOW BEFORE EDITING THESE FOUR NUMBERS. They are a COPY of a row
  * this module cannot import (the catalogue is a backend resource), so the copy is the
@@ -67,32 +67,32 @@ export const PAYG_USD_PER_1K = 1.25;
  * {@code margin-repricing.test.ts} now reads the catalogue file off disk and fails on
  * any drift, the same way it already reads the margin out of application.yml.
  *
- * <p>cacheWrite is the INPUT rate on purpose, and it is not a missing value: the row
- * publishes a cache-write price of zero. Only the Anthropic family is billed off a
- * cache-write counter; everywhere else a first send is plain prompt input, so a DeepSeek
+ * <p>cacheWrite is the INPUT rate on purpose, and it is not the row's value: the row
+ * publishes a cache-write price of its own. Only the Anthropic family is billed off a
+ * cache-write counter; everywhere else a first send is plain prompt input, so an OpenAI
  * model's published write price is never charged and quoting it would name a price
  * nobody pays. This mirrors ModelPricingService.cacheRateFallback
  * (modelCacheWritePriceApplies = false) and model-cost-estimate.ts#resolveCacheRates,
  * which is what makes the figures below comparable with the ones a picker quotes.
  */
 export const PRICING_BASIS_RATES = {
-  input: 0.3,
-  output: 1.2,
-  cacheRead: 0.006,
-  cacheWrite: 0.3,
+  input: 0.1,
+  output: 0.5,
+  cacheRead: 0.01,
+  cacheWrite: 0.1,
 } as const;
 
 /** The catalogue row {@link PRICING_BASIS_RATES} is copied from, and its provider. */
-export const PRICING_BASIS_MODEL_ID = 'deepseek-flash';
-export const PRICING_BASIS_PROVIDER = 'deepseek';
+export const PRICING_BASIS_MODEL_ID = 'gpt-6-luna';
+export const PRICING_BASIS_PROVIDER = 'openai';
 
 /**
  * How the COPY names that row. A family name, not the catalogue id: the sentences say
  * "a lightweight model such as {basisModel}", which is an example of a class rather
- * than a model the reader is being told to select, and "deepseek-flash" in a plan
+ * than a model the reader is being told to select, and "gpt-6-luna" in a plan
  * card reads as a setting. Six locales quote this string, untranslated.
  */
-export const PRICING_BASIS_MODEL = 'DeepSeek Flash';
+export const PRICING_BASIS_MODEL = 'GPT-6 Luna';
 
 /** One unit of work, in the four DISJOINT token classes the ledger prices. */
 export interface TokenWorkload {
@@ -215,7 +215,7 @@ export const MEASURED_PROVIDER_COST: Readonly<Record<string, number>> = Object.f
  * a unit price BELOW the one the ledger will debit. margin-repricing.test.ts pins both
  * ends of that (never below the median, never more than 1.25x it).
  */
-export const CHAT_EXCHANGE_CREDITS = 25;
+export const CHAT_EXCHANGE_CREDITS = 10;
 
 /**
  * What ONE workflow node costs to run, in credits. Not an estimate: a flat, exact
@@ -227,7 +227,8 @@ export const CHAT_EXCHANGE_CREDITS = 25;
  * for workflow nodes and for chat/agent turns on the models opened to the free tier,
  * but NOT for the add-ons (web search and fetch, image generation, platform markup),
  * which draw PAYG. The Free credits tooltip quotes this unit because it is the one
- * flat, exact price in that list. A tooltip that prices a pot with a debit the pot
+ * flat, exact price in that list, and the paid credits tooltip and the pricing FAQ quote
+ * it too, since the same debit applies on every plan. A tooltip that prices a pot with a debit the pot
  * refuses is wrong in the expensive direction: it reads as a promise.
  */
 export const WORKFLOW_NODE_CREDITS = 1;
@@ -282,8 +283,8 @@ export interface CreditExample {
  * <p>WHY THREE FIGURES AND NOT ONE, here of all places. The cost of "a conversation" is
  * not one number: a plain question and answer sends the prompt once, while an agent
  * building a workflow re-sends the whole transcript on every tool round-trip, and it
- * makes dozens of them. Measured, the two differ by about 5x, and a classification step
- * is another 5x below the cheaper of them (25x below the agent one). A single average
+ * makes dozens of them. Measured, the two differ by about 6x, and a classification step
+ * costs about half the cheaper of them (13x below the agent one). A single average
  * would be true of almost no one. The classify gap USED to be two orders of magnitude
  * and is not any more: on a lightweight basis its flat per-node fee, which no margin
  * touches, is now most of its price.
@@ -312,9 +313,9 @@ export interface CreditExample {
  * understate the very driver it invokes) and says a longer build costs more.
  */
 export const CREDIT_EXAMPLES: readonly CreditExample[] = [
-  { id: 'simpleChat', creditsEach: 8, perEntryPack: 625 },
-  { id: 'agentChat', creditsEach: 40, perEntryPack: 125 },
-  { id: 'classifyStep', creditsEach: 1.6, perEntryPack: 3_125 },
+  { id: 'simpleChat', creditsEach: 2.5, perEntryPack: 2_000 },
+  { id: 'agentChat', creditsEach: 16, perEntryPack: 310 },
+  { id: 'classifyStep', creditsEach: 1.2, perEntryPack: 4_165 },
 ];
 
 /**
@@ -328,8 +329,8 @@ export const CREDIT_EXAMPLES: readonly CreditExample[] = [
  * an answer with the counts, and the FAQ figures are still derived from them
  * (see the invariants in credit-conversation-copy.test.ts).
  */
-export const AGENT_CONVERSATIONS_PER_PACK = 125;
-export const SIMPLE_CONVERSATIONS_PER_PACK = 625;
+export const AGENT_CONVERSATIONS_PER_PACK = 310;
+export const SIMPLE_CONVERSATIONS_PER_PACK = 2_000;
 
 /**
  * The entry pack expressed the way a reader thinks about it, ready to
@@ -465,11 +466,11 @@ export function clampTierIndex(tierIndex: number, maxTierIndex: number): number 
  * deliberately absent from CAPABILITY_KEYS.
  */
 export const PLAN_FEATURE_KEYS: Record<string, string[]> = {
-  free: ['creditsFree', 'nodesCore', 'users1', 'workspaces1', 'variables3', 'concurrent1', 'storage100mb', 'logs7', 'supportCommunity'],
-  starter: ['creditsDynamic', 'nodesPublishing', 'users1', 'workspaces1', 'variables25', 'concurrent5', 'storage1gb', 'logs30', 'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'analyticsBasic', 'supportEmail'],
-  pro: ['creditsDynamic', 'nodesAll', 'users1', 'workspaces3', 'variables100', 'concurrent20', 'storage10gb', 'logs30', 'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey', 'priorityExecution', 'executionSearch', 'analyticsDetailed', 'supportPriority'],
-  team: ['creditsDynamic', 'nodesAll', 'users25', 'workspaces10', 'variables500', 'concurrent50', 'storage100gb', 'logs90', 'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey', 'priorityExecution', 'executionSearch', 'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling', 'analyticsTeam', 'supportSla'],
-  enterprise: ['creditsCustom', 'nodesAll', 'usersUnlimited', 'workspacesUnlimited', 'variablesUnlimited', 'concurrentUnlimited', 'storage1tb', 'logsCustom', 'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey', 'priorityExecution', 'executionSearch', 'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling', 'dedicatedInstance', 'compliance', 'overageProtection', 'analyticsAdvanced', 'supportSla', 'sla999', 'accountManager', 'onboarding'],
+  free: ['creditsFree', 'nodesCore', 'users1', 'workspaces1', 'variables3', 'concurrent1', 'storage100mb', 'logs7', 'agentToolkit', 'chatChannels', 'channelAlerts', 'mcpServer', 'twoFactor', 'supportCommunity'],
+  starter: ['creditsDynamic', 'nodesPublishing', 'users1', 'workspaces1', 'variables25', 'concurrent5', 'storage1gb', 'logs30', 'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'agentToolkit', 'chatChannels', 'channelAlerts', 'mcpServer', 'twoFactor', 'analyticsBasic', 'supportEmail'],
+  pro: ['creditsDynamic', 'nodesAll', 'users1', 'workspaces3', 'variables100', 'concurrent20', 'storage10gb', 'logs30', 'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey', 'priorityExecution', 'executionSearch', 'agentToolkit', 'chatChannels', 'channelAlerts', 'mcpServer', 'twoFactor', 'analyticsDetailed', 'supportPriority'],
+  team: ['creditsDynamic', 'nodesAll', 'users25', 'workspaces10', 'variables500', 'concurrent50', 'storage100gb', 'logs90', 'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey', 'priorityExecution', 'executionSearch', 'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling', 'agentToolkit', 'chatChannels', 'channelAlerts', 'mcpServer', 'twoFactor', 'analyticsTeam', 'supportSla'],
+  enterprise: ['creditsCustom', 'nodesAll', 'usersUnlimited', 'workspacesUnlimited', 'variablesUnlimited', 'concurrentUnlimited', 'storage1tb', 'logsCustom', 'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey', 'priorityExecution', 'executionSearch', 'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling', 'dedicatedInstance', 'compliance', 'overageProtection', 'agentToolkit', 'chatChannels', 'channelAlerts', 'mcpServer', 'twoFactor', 'analyticsAdvanced', 'supportSla', 'sla999', 'accountManager', 'onboarding'],
 };
 
 /**
@@ -478,6 +479,7 @@ export const PLAN_FEATURE_KEYS: Record<string, string[]> = {
  * Used by the coherence test: each tier must include every capability of the tier below.
  */
 export const CAPABILITY_KEYS = [
+  'agentToolkit', 'chatChannels', 'channelAlerts', 'mcpServer', 'twoFactor',
   'versioning', 'apiAccess', 'emailAlerts', 'cePlatformCreds', 'vectorSearch', 'browserAgent', 'ownLlmKey',
   'priorityExecution', 'executionSearch',
   'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling',

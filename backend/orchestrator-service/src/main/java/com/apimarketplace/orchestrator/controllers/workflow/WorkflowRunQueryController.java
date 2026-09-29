@@ -521,6 +521,10 @@ public class WorkflowRunQueryController {
             logger.warn("[SCOPE] Ignored client-supplied tenantId on updateStorage: header={} param={}", tenantId, tenantIdParam);
         }
         if (tenantId == null) return ResponseEntity.status(401).build();
+        // Org VIEWERs are read-only: overwriting a storage row's data is a write.
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(organizationId, com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole())) {
+            return ResponseEntity.status(403).body(Map.of("error", "VIEWER role cannot modify storage"));
+        }
         Object data = body.get("data");
         Object dataMapped = body.get("data_mapped");
         return (organizationId != null && !organizationId.isBlank()

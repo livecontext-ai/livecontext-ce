@@ -184,6 +184,16 @@ public class WorkflowBuilderProvider implements ToolsProvider {
         if (workflowAccessDenied.isPresent()) {
             return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, workflowAccessDenied.get());
         }
+        // Workspace role, the per-person axis: a VIEWER keeps the same READ actions and loses
+        // every write (save, delete, execute, pin, stop_run, restart_from_node...), exactly as
+        // on the REST surface. Checked here so no builder action slips past it.
+        var workflowRoleDenied = ToolAccessControl.checkRoleWriteAccess(
+                context != null ? context.orgId() : null,
+                context != null ? context.orgRole() : null,
+                "workflow", canonicalAction);
+        if (workflowRoleDenied.isPresent()) {
+            return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, workflowRoleDenied.get());
+        }
 
         // Reject modifying actions on a loaded APPLICATION workflow up front.
         // APPLICATION-type workflows are frozen acquired marketplace clones; their plan
@@ -940,7 +950,12 @@ public class WorkflowBuilderProvider implements ToolsProvider {
             ? "Interface continued - the run advanced past '" + nodeId + "'."
             : "Approval '" + outcome.resolution() + "' recorded - the run resumed past '" + nodeId + "'.");
         result.put("next", "workflow(action='get_run', run_id='" + runId + "') to see the resumed run.");
-        return ToolExecutionResult.success(result);
+        // Same visualization as execute, so the page showing this workflow follows the resumed run.
+        Map<String, Object> viz = com.apimarketplace.orchestrator.tools.workflow.WorkflowRunVisualization
+            .metadataFor(workflowRunRepository.findByRunIdPublic(runId).orElse(null),
+                id -> workflowService.getWorkflow(id)
+                    .map(com.apimarketplace.orchestrator.domain.WorkflowEntity::getName).orElse(null));
+        return viz != null ? ToolExecutionResult.success(result, viz) : ToolExecutionResult.success(result);
     }
 
     private static Integer intOrNull(Object o) {
@@ -1375,7 +1390,8 @@ public class WorkflowBuilderProvider implements ToolsProvider {
                 String streamId = ctx.credentials() != null ? (String) ctx.credentials().get("__streamId__") : null;
                 String conversationId = ctx.credentials() != null ? (String) ctx.credentials().get("conversationId") : null;
                 conversationEventPublisher.publishVisualizationReady(
-                    streamId, conversationId, "workflow_run", workflowIdStr, workflowName, run.getRunIdPublic());
+                    streamId, conversationId, "workflow_run", workflowIdStr, workflowName, run.getRunIdPublic(),
+                    run.getPlanVersion());
             }
 
             // Bootstrap-only short-circuit: when every trigger is non-agent-fireable
@@ -1402,12 +1418,8 @@ public class WorkflowBuilderProvider implements ToolsProvider {
                     "or workflow(action='get_run', run_id='" + run.getRunIdPublic() + "') for run details.");
                 return ToolExecutionResult.success(
                     bootstrapResult,
-                    Map.of("visualization", Map.of(
-                        "type", "workflow_run",
-                        "id", workflowIdStr,
-                        "title", workflowName,
-                        "runId", run.getRunIdPublic()
-                    ))
+                    com.apimarketplace.orchestrator.tools.workflow.WorkflowRunVisualization.metadata(
+                        workflowIdStr, workflowName, run.getRunIdPublic(), run.getPlanVersion())
                 );
             }
 
@@ -1428,12 +1440,8 @@ public class WorkflowBuilderProvider implements ToolsProvider {
 
             return ToolExecutionResult.success(
                 result,
-                Map.of("visualization", Map.of(
-                    "type", "workflow_run",
-                    "id", workflowIdStr,
-                    "title", workflowName,
-                    "runId", run.getRunIdPublic()
-                ))
+                com.apimarketplace.orchestrator.tools.workflow.WorkflowRunVisualization.metadata(
+                    workflowIdStr, workflowName, run.getRunIdPublic(), run.getPlanVersion())
             );
 
         } catch (Exception e) {

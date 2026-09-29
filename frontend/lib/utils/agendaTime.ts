@@ -14,6 +14,7 @@
  *    read back numeric parts whose names must not shift with the user's language.
  */
 
+import { getBrowserTimeZone, getClientTimeZone } from '@/lib/utils/timezone';
 import { getClientLocale } from '@/lib/utils/locale';
 
 /** Wall-clock parts of an instant, as read in a specific zone. */
@@ -103,10 +104,18 @@ function zoneOffsetMs(instant: Date, timeZone: string): number {
  * (2026-03-08), America/Santiago (2026-09-06) and Atlantic/Azores (2026-03-29); verified
  * against all 418 IANA zones, where no other date resolves wrong.
  *
- * <p>A time that does not exist resolves FORWARD, to the instant the clock jumps to, which
- * is what a calendar should show and never leaves the requested day. An ambiguous time (the
- * hour that happens twice in autumn) takes its first occurrence, so a day starts at its
- * first midnight.
+ * <p>A time that does not exist resolves FORWARD, by the length of the gap, which is what a
+ * calendar should show and what {@code ZonedDateTime.ofLocal} does.
+ *
+ * <p>An ambiguous time - the hour that happens twice in autumn - resolves to the occurrence under
+ * the offset in force at the naive point, which is the LATER one east of Greenwich and the earlier
+ * one west of it. This used to claim "its first occurrence, so a day starts at its first midnight";
+ * that is not what the arithmetic does, and the two candidates it builds collapse to one instant in
+ * an overlap, so there is no second one to choose. Measured both ways in
+ * {@code dateFormatters.zone.test.ts}: Los Angeles answers the earlier instant, Paris the later.
+ * Nothing in the agenda depends on which, because a day boundary is only ambiguous in the few
+ * zones whose transition is AT midnight, and there the two candidates are an hour apart inside the
+ * same day.
  */
 export function zonedTimeToInstant(
   timeZone: string,
@@ -341,17 +350,26 @@ export function monthNames(timeZone: string, locale?: string): string[] {
 }
 
 /**
- * The timezones offered in the picker: the viewer's own first, then UTC, then the zones
- * the workspace's schedules actually use. Deduplicated, order preserved.
+ * The timezones offered in the picker: the viewer's DISPLAY zone first (their account setting,
+ * else this device's), then UTC, then the zones the workspace's schedules actually use.
+ * Deduplicated, order preserved.
  *
- * Reading the browser zone here is correct and is not the i18n violation the locale rule
- * targets: it is the user's physical location, not their language.
+ * The display zone FIRST, so the default is the one the rest of the product already formats in,
+ * and this device's zone too, because they answer different questions: how this person reads
+ * times, and where they physically are. On almost every machine they are the same value and this
+ * adds one row, not two.
+ *
+ * <p>Offering only the display zone was the first attempt, on the reasoning that re-offering the
+ * device's invites reading a calendar in a zone nothing else uses. That reasoning removes an
+ * option that had always been there: someone who pinned Tokyo while sitting in Paris could no
+ * longer look at their calendar in Paris time at all. The sibling picker in
+ * `lib/schedule/timezoneOptions.ts` reached the same conclusion; the two must not disagree.
  */
 export function buildTimezoneOptions(scheduleTimezones: string[]): string[] {
-  const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const displayZone = getClientTimeZone();
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const zone of [browserZone, 'UTC', ...scheduleTimezones]) {
+  for (const zone of [displayZone, browserTimezone(), 'UTC', ...scheduleTimezones]) {
     if (!zone || seen.has(zone)) continue;
     seen.add(zone);
     out.push(zone);
@@ -359,11 +377,15 @@ export function buildTimezoneOptions(scheduleTimezones: string[]): string[] {
   return out;
 }
 
-/** The viewer's own timezone, falling back to UTC where the browser will not say. */
+/**
+ * The viewer's own timezone, falling back to UTC where the browser will not say.
+ *
+ * <p>Delegates rather than re-reading `Intl`: the same question was being answered by three
+ * copies of the same try/catch, which is three places for the fallback to drift. This is the
+ * DEVICE's zone, which is a different question from the account's display zone
+ * ({@code getClientTimeZone}) - a person who picked another zone in Settings has both, and they
+ * differ.
+ */
 export function browserTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  } catch {
-    return 'UTC';
-  }
+  return getBrowserTimeZone() ?? 'UTC';
 }

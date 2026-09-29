@@ -23,6 +23,7 @@ import {
   Gift,
   MessagesSquare,
   Wrench,
+  Handshake,
 } from 'lucide-react';
 import { McpIcon } from '@/components/icons/McpIcon';
 import { IS_CE, IS_MANAGED_CLOUD } from '@/lib/edition';
@@ -71,6 +72,7 @@ export const settingsNavItems: SettingsNavItem[] = [
   { href: '/app/settings/storage', label: 'Storage', icon: HardDrive },
   { href: '/app/settings/rewards', label: 'Refer & earn', icon: Gift },
   { href: '/app/settings/admin-credits', label: 'Credits & Plans', icon: Crown, adminOnly: true, hiddenInCE: true },
+  { href: '/app/settings/partners', label: 'Partners', icon: Handshake, adminOnly: true, hiddenInCE: true },
   // Not hiddenInCE: a self-hosted admin has the same tool failures to chase, and
   // agent_execution_tool_calls is populated there too. The cross-tenant verdict
   // simply degrades to SINGLE_TENANT on a one-tenant install, which the page says.

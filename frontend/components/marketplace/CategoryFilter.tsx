@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import * as LucideIcons from 'lucide-react';
+import { LayoutGrid } from 'lucide-react';
+import { getCategoryIcon } from '@/lib/marketplace/categoryIcons';
 import { WorkflowCategory, orchestratorApi } from '@/lib/api';
 import { useAuth } from '@/lib/providers/smart-providers';
 import { IS_CE } from '@/lib/edition';
@@ -59,20 +60,8 @@ export function CategoryFilter({
     );
   }
 
-  const getIconComponent = (iconSlug?: string) => {
-    if (!iconSlug) return null;
-
-    // Convert kebab-case to PascalCase (e.g., 'bar-chart-3' -> 'BarChart3')
-    const pascalCase = iconSlug
-      .split('-')
-      .map((word, i) => i === 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word.charAt(0).toUpperCase() + word.slice(1))
-      .join('');
-
-    return (LucideIcons as any)[pascalCase];
-  };
-
   const selectedCategoryData = categories.find(cat => cat.slug === selectedCategory);
-  const SelectedIcon = selectedCategoryData ? getIconComponent(selectedCategoryData.iconSlug) : null;
+  const SelectedIcon = selectedCategoryData ? getCategoryIcon(selectedCategoryData.iconSlug) : null;
 
   return (
     <Select
@@ -89,7 +78,7 @@ export function CategoryFilter({
               </>
             ) : (
               <>
-                <LucideIcons.LayoutGrid className="h-3.5 w-3.5" />
+                <LayoutGrid className="h-3.5 w-3.5" />
                 <span className="text-sm">{t('allCategories')}</span>
               </>
             )}
@@ -99,12 +88,12 @@ export function CategoryFilter({
       <SelectContent>
         <SelectItem value="all">
           <div className="flex items-center gap-2">
-            <LucideIcons.LayoutGrid className="h-3.5 w-3.5" />
+            <LayoutGrid className="h-3.5 w-3.5" />
             <span>{t('allCategories')}</span>
           </div>
         </SelectItem>
         {categories.map((category) => {
-          const IconComponent = getIconComponent(category.iconSlug);
+          const IconComponent = getCategoryIcon(category.iconSlug);
           return (
             <SelectItem key={category.id} value={category.slug}>
               <div className="flex items-center gap-2">

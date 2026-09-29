@@ -30,6 +30,7 @@ import { usePaygTiers, usePaygCheckout } from '@/lib/hooks/smart-hooks-complete'
 import type { PaygTier } from '@/lib/api/services/billing-api.service';
 import { formatCreditsCompact } from '@/lib/format-cost';
 import { track } from '@/lib/analytics/analytics';
+import { RewardCodeInline } from '@/components/reward/RewardCodeInline';
 
 interface TopUpModalProps {
   isOpen: boolean;
@@ -171,6 +172,10 @@ export default function TopUpModal({ isOpen, onClose, initialTier }: TopUpModalP
               <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
             </div>
           )}
+        </div>
+
+        <div className="px-6 pb-4">
+          <RewardCodeInline />
         </div>
 
         {/* Footer */}

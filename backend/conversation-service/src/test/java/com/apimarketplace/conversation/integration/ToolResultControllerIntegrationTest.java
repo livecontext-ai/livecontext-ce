@@ -73,6 +73,9 @@ class ToolResultControllerIntegrationTest {
         // Negative-scope tests override per-call to return Optional.empty().
         Mockito.when(conversationQueryService.getConversationById(any(), any(), any()))
                 .thenReturn(Optional.of(Mockito.mock(ConversationDto.class)));
+        // Same for the write gate of the user-facing POST.
+        Mockito.when(conversationQueryService.isConversationInStrictScope(any(), any(), any()))
+                .thenReturn(true);
     }
 
     // ========================== Helper Methods ==========================

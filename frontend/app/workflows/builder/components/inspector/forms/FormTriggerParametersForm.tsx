@@ -15,6 +15,7 @@ import { normalizeLabel } from '../../../utils/labelNormalizer';
 import { formEndpointSettingsService } from '@/lib/api/orchestrator';
 import type { StandaloneFormEndpoint } from '@/lib/api/orchestrator';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { buildStandaloneSourceNodeId } from '../../../utils/standaloneSourceNodeId';
 import Link from 'next/link';
 
@@ -365,6 +366,8 @@ export function FormTriggerParametersForm({
   const t = useTranslations('formTrigger');
   const { isRunMode: isRunModeContext } = useWorkflowMode();
   const isRunMode = isRunModeContext;
+  // Auto-creating the form endpoint is a workspace write: never for a read-only VIEWER.
+  const canMutate = useCanMutateInCurrentOrg();
 
   const [copied, setCopied] = React.useState(false);
 
@@ -405,7 +408,7 @@ export function FormTriggerParametersForm({
 
   // Auto-create form endpoint if node has none (waits for list to load for unique name)
   React.useEffect(() => {
-    if (standaloneFormEndpointId || isRunMode || isCreating || isLoadingList) return;
+    if (standaloneFormEndpointId || isRunMode || !canMutate || isCreating || isLoadingList) return;
     const nodeDataId = node.id;
     // Module-level dedup guard
     const existingId = pendingOrCreatedFormEndpoints.get(nodeDataId);
@@ -439,7 +442,7 @@ export function FormTriggerParametersForm({
       })
       .finally(() => setIsLoadingEndpoint(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [standaloneFormEndpointId, isRunMode, isLoadingList]);
+  }, [standaloneFormEndpointId, isRunMode, canMutate, isLoadingList]);
 
   const effectiveFormUrl = standaloneFormUrl || standaloneEndpoint?.formUrl || '';
 

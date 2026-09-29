@@ -56,8 +56,10 @@ export const PUBLIC_ASSET_DIRECTORIES = [
 export const PUBLIC_ROOT_FILES = [
   // The mark signed at the foot of every lifecycle email (deploy/lifecycle-emails).
   'email-signature-mark.png',
+  'apple-touch-icon.png',
   'favicon.ico',
   'hero-flow.html',
+  'icon-192.png',
   'liveContext-logo-light.png',
   'liveContext-logo.png',
   'liveContext-logo.svg',

@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.controllers.workflow;
 
 import com.apimarketplace.common.scope.ScopeGuard;
+import com.apimarketplace.common.web.SharedApplicationScope;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.workflow.RunStatus;
@@ -129,6 +130,23 @@ public class WorkflowControllerHelper {
                 && run.getPublicationId() != null
                 && resourceToken != null
                 && run.getPublicationId().equals(resourceToken);
+    }
+
+    /**
+     * Share-context binding for workflow reads (definition, versions, run lookups).
+     *
+     * <p>Same reason as {@link #shareContextPermitsRun}: the owner's strict scope alone lets a
+     * share-link holder read ANY workflow of the owner by id. In an APPLICATION share context only
+     * the shared publication's own workflows (its clones, {@code source_publication_id ==
+     * X-Share-Resource-Token}) are served; callers answer 404 otherwise. Non-share requests and
+     * internal calls are unchanged.
+     */
+    public static boolean shareContextPermitsWorkflow(WorkflowEntity workflow) {
+        SharedApplicationScope scope = SharedApplicationScope.current();
+        if (!scope.isShare()) {
+            return true;
+        }
+        return workflow != null && scope.permitsPublication(workflow.getSourcePublicationId());
     }
 
     /**

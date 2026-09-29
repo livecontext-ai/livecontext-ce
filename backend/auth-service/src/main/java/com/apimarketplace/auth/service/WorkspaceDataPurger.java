@@ -4,7 +4,10 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 
@@ -47,6 +50,10 @@ public class WorkspaceDataPurger {
     @PersistenceContext
     private EntityManager em;
 
+    /** Absent outside auth.mode=keycloak, where no workspace IdP exists. */
+    @Autowired(required = false)
+    private KeycloakSamlIdentityProviderClient samlIdentityProviderClient;
+
     /**
      * Every {@code auth.<table>} this purger deletes org-scoped rows from. The tables of the
      * other schemas are each follower's business now; see the {@code *PurgeFollower} classes
@@ -56,7 +63,8 @@ public class WorkspaceDataPurger {
             "auth.org_resource_restrictions",
             "auth.org_member_quota_limit",
             "auth.credentials",
-            "auth.organization_sso_domain"
+            "auth.organization_sso_domain",
+            "auth.organization_saml_connection"
     );
 
     /** Where the log rows come from; shows up in {@code auth.purge_log.source}. */
@@ -94,6 +102,50 @@ public class WorkspaceDataPurger {
         // locked (one verified owner per domain) and routable. Freeing them lets the rightful
         // owner verify it again elsewhere.
         nativeExec("DELETE FROM auth.organization_sso_domain WHERE organization_id::text = ?", orgId, failures);
+        // The SAML connection goes too, and with it the workspace IdP in Keycloak: a purged
+        // workspace must not keep a live login door that brokers users into nothing.
+        int samlConnections = nativeExec(
+                "DELETE FROM auth.organization_saml_connection WHERE organization_id::text = ?", orgId, failures);
+        if (samlConnections > 0) {
+            deleteSamlIdentityProviderAfterCommit(orgId);
+        }
+    }
+
+    /**
+     * Removes the workspace IdP from Keycloak once the purge has COMMITTED: a rolled-back purge
+     * keeps its connection row, and must keep the IdP that row describes. Outside a transaction
+     * (never the case for the two callers) it runs at once. Best effort: a failure is logged,
+     * and the IdP it leaves behind refuses every login anyway (no connection row = inactive).
+     */
+    private void deleteSamlIdentityProviderAfterCommit(String orgId) {
+        if (samlIdentityProviderClient == null) {
+            return;
+        }
+        String alias;
+        try {
+            alias = OrganizationSamlService.aliasFor(java.util.UUID.fromString(orgId));
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+        Runnable delete = () -> {
+            try {
+                samlIdentityProviderClient.delete(alias);
+                logger.info("Workspace purge: Keycloak SAML IdP {} deleted for org {}", alias, orgId);
+            } catch (Exception e) {
+                logger.error("Workspace purge: could not delete Keycloak SAML IdP {} for org {}: {}",
+                        alias, orgId, e.toString());
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    delete.run();
+                }
+            });
+        } else {
+            delete.run();
+        }
     }
 
     /** Logs an ORG purge for the followers; see {@link #recordPurge} for where it must sit. */

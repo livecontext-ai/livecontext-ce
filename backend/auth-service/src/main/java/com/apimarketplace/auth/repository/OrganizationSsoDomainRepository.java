@@ -28,4 +28,7 @@ public interface OrganizationSsoDomainRepository extends JpaRepository<Organizat
     @Query("SELECT COUNT(d) > 0 FROM OrganizationSsoDomain d "
             + "WHERE d.organization.id = :orgId AND d.domain = :domain AND d.verifiedAt IS NOT NULL")
     boolean isVerifiedForOrganization(@Param("orgId") UUID orgId, @Param("domain") String domain);
+
+    /** Whether the workspace has proven at least one domain: until then its SAML IdP stays disabled. */
+    boolean existsByOrganization_IdAndVerifiedAtIsNotNull(UUID organizationId);
 }

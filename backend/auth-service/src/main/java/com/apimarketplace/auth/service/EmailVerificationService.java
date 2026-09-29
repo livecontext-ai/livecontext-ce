@@ -4,6 +4,7 @@ import com.apimarketplace.auth.domain.EmailVerificationCode;
 import com.apimarketplace.auth.domain.User;
 import com.apimarketplace.auth.repository.EmailVerificationCodeRepository;
 import com.apimarketplace.auth.repository.UserRepository;
+import com.apimarketplace.auth.service.mail.BrandedMail;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 import org.slf4j.Logger;
@@ -19,13 +20,29 @@ import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
+/**
+ * THE owner of email verification, in both editions: the onboarding "email" step sends a
+ * 6-digit code ({@link #sendCode}) and {@link #verifyCode} marks the address verified.
+ *
+ * <p>Cloud: the verified flag lives in Keycloak. {@link #verifyCode} writes it there through
+ * {@link KeycloakAdminEmailVerifier#markEmailVerified} and {@link #isEmailVerified} reads it back,
+ * so a Google / GitHub account (trusted, arrives verified) skips the step. Keycloak itself must
+ * NOT verify: the realm keeps {@code verifyEmail=false} (configure-keycloak.sh, the box above
+ * {@code verify_field "verifyEmail"}). Turning it on puts Keycloak's own "Verify your email" page
+ * in front of the app and bypasses this step; it happened on 2026-09-27 and stopped every
+ * password sign-up before the onboarding.
+ */
 @Service
 @Transactional
 public class EmailVerificationService {
 
     private static final Logger logger = LoggerFactory.getLogger(EmailVerificationService.class);
 
-    private static final int EXPIRY_MINUTES = 10;
+    /**
+     * How long a code stays valid. Package-private so the test can assert the mail states the same
+     * number the row is stamped with, instead of restating 10 in a second place.
+     */
+    static final int EXPIRY_MINUTES = 10;
     private static final int MAX_ATTEMPTS = 3;
     private static final int MAX_SENDS_PER_HOUR = 5;
     private static final int COOLDOWN_SECONDS = 60;
@@ -64,6 +81,11 @@ public class EmailVerificationService {
      */
     @Autowired(required = false)
     private com.apimarketplace.auth.lifecycle.UserLifecycleContextService lifecycleContext;
+
+
+    /** Subject, body and footer of the verification mail, in the six app locales. */
+    static final com.apimarketplace.common.i18n.MessageCatalog MAIL_CATALOG =
+            com.apimarketplace.auth.service.mail.AccountMailCatalog.INSTANCE;
 
     public EmailVerificationService(EmailVerificationCodeRepository codeRepository,
                                     UserRepository userRepository,
@@ -115,8 +137,11 @@ public class EmailVerificationService {
         verificationCode.setMaxAttempts(MAX_ATTEMPTS);
         codeRepository.save(verificationCode);
 
-        // Send email
-        sendVerificationEmail(email, code);
+        // Send email, in the language this account is set to. At first signup that is usually
+        // not set yet and the mail goes out in English, which is the honest answer: nothing on
+        // the request says what the person reads. A resend after the app has reported their
+        // locale (or after they picked one) arrives translated.
+        sendVerificationEmail(email, code, mailLocale(user));
 
         logger.info("Verification code sent to user {} (email={})", user.getId(), email);
         return verificationCode;
@@ -198,22 +223,47 @@ public class EmailVerificationService {
         return !isEmbeddedAuth();
     }
 
-    private void sendVerificationEmail(String email, String code) {
+    /**
+     * The account's locale, English when it has none.
+     *
+     * <p>Read straight off the row, through the shared static. It used to go through an INJECTED
+     * {@code MailLocaleResolver} and answer ENGLISH when nothing had injected one - for a
+     * {@code User} whose language is on the argument. That resolver's {@code forUser} touches no
+     * repository at all, so the collaborator bought nothing; the first fix copied its one line here
+     * instead, which left the original with no caller and the line with two homes.
+     */
+    private String mailLocale(User user) {
+        return com.apimarketplace.auth.service.mail.MailLocaleResolver.forUser(user);
+    }
+
+    private void sendVerificationEmail(String email, String code, String locale) {
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
             helper.setFrom(mailFrom, mailFromName);
             helper.setTo(email);
-            helper.setSubject("Welcome to LiveContext - your verification code");
+            // Through the same guard as the other mailers. No user input reaches this subject
+            // today, but a subject that is built one way here and another way three classes over
+            // is how the one that does gets missed.
+            helper.setSubject(BrandedMail.subject(MAIL_CATALOG.text(locale, "verify.subject")));
 
-            String plain = "Welcome to LiveContext!\n\n" +
-                    "Your verification code is: " + code + "\n\n" +
-                    "This code expires in " + EXPIRY_MINUTES + " minutes.\n\n" +
-                    "If you did not request this code, please ignore this email.\n\n" +
-                    "- LiveContext";
+            String title = MAIL_CATALOG.text(locale, "verify.title");
+            java.util.List<String> paragraphs = java.util.List.of(
+                    MAIL_CATALOG.text(locale, "verify.intro"));
+            String note = MAIL_CATALOG.text(locale, "verify.expiry",
+                    java.util.Map.of("minutes", String.valueOf(EXPIRY_MINUTES)));
+            BrandedMail.Footer footer = BrandedMail.Footer.of(MAIL_CATALOG.text(locale, "verify.footer"));
 
-            String html = buildVerificationHtml(code);
-            helper.setText(plain, html);
+            // The sign-off goes in its own SLOT, not at the end of the paragraph list.
+            //
+            // As a paragraph it rendered above the button - and in the verification mail, between
+            // "use the code below" and the code - because the shell emits paragraphs first. Five
+            // mails read backwards for it, and nothing asserted block order.
+            String signature = MAIL_CATALOG.text(locale, "common.signature");
+            helper.setText(
+                    BrandedMail.plain(title, paragraphs, code, note, null, signature, footer),
+                    BrandedMail.html(BrandedMail.logoUrl(frontendUrl), locale, MAIL_CATALOG.text(locale, "verify.preheader"),
+                            title, paragraphs, code, note, null, signature, footer));
             mailSender.send(message);
         } catch (MessagingException | java.io.UnsupportedEncodingException e) {
             handleVerificationEmailFailure(email, code, e);
@@ -221,6 +271,7 @@ public class EmailVerificationService {
             handleVerificationEmailFailure(email, code, e);
         }
     }
+
 
     private void handleVerificationEmailFailure(String email, String code, Exception failure) {
         if (mailConsoleFallbackEnabled) {
@@ -252,39 +303,6 @@ public class EmailVerificationService {
             message = failure.getMessage();
         }
         return message != null ? message : cursor.getClass().getSimpleName();
-    }
-
-    private String buildVerificationHtml(String code) {
-        return """
-                <!DOCTYPE html>
-                <html lang="en"><head><meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width,initial-scale=1">
-                <title>Welcome to LiveContext</title></head>
-                <body style="margin:0;padding:0;">
-                <span style="display:none!important;font-size:1px;line-height:1px;color:#ffffff;mso-hide:all;">Your LiveContext verification code</span>
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f5f5f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827;">
-                  <tr><td align="center" style="padding:40px 16px;">
-                    <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;background:#ffffff;border:1px solid #e7e5e4;border-radius:12px;">
-                      <tr><td align="left" style="padding:32px 40px 24px 40px;border-bottom:1px solid #e7e5e4;">
-                        <img src="{{LOGO}}" alt="LiveContext" height="32" style="display:block;height:32px;width:auto;border:0;text-decoration:none;">
-                      </td></tr>
-                      <tr><td style="padding:32px 40px;font-size:15px;line-height:1.6;color:#111827;">
-                        <h1 style="margin:0 0 16px 0;font-size:22px;font-weight:600;color:#111827;">Welcome to LiveContext</h1>
-                        <p style="margin:0 0 8px 0;">Thanks for signing up. Use the code below to verify your email address and finish creating your account.</p>
-                        <div style="margin:24px 0;padding:20px;background:#f5f5f4;border:1px solid #e7e5e4;border-radius:8px;text-align:center;font-size:28px;font-weight:600;letter-spacing:6px;color:#111827;">{{CODE}}</div>
-                        <p style="margin:0;font-size:13px;color:#6b7280;">This code expires in {{MINUTES}} minutes. If you didn't request it, you can safely ignore this email.</p>
-                      </td></tr>
-                      <tr><td style="padding:24px 40px 32px 40px;border-top:1px solid #e7e5e4;font-size:12px;line-height:1.5;color:#6b7280;">
-                        You are receiving this email because someone signed up for a LiveContext account with this address.<br><br>&copy; LiveContext
-                      </td></tr>
-                    </table>
-                  </td></tr>
-                </table>
-                </body></html>
-                """
-                .replace("{{CODE}}", code)
-                .replace("{{MINUTES}}", String.valueOf(EXPIRY_MINUTES))
-                .replace("{{LOGO}}", frontendUrl + "/liveContext-logo-light.png?v=2");
     }
 
     // Custom exception classes

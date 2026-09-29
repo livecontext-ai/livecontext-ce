@@ -137,6 +137,17 @@ public final class WorkflowBuilderActionConfig {
     }
 
     /**
+     * Actions after which the STORED plan is a new version: the resync-before-write set minus the
+     * table row actions, which auto-save a table node but are, to the user watching a run, reads
+     * or data writes rather than a change of the workflow. The workflow page leaves run mode for
+     * these (see WorkflowBuilderResultEnricher), so a find_rows after a run must not be one.
+     */
+    public static final Set<String> PLAN_WRITE_ACTIONS = Set.of(
+            "add_node", "connect", "disconnect", "modify", "remove", "undo", "set_plan",
+            "save", "finish", "create"
+    );
+
+    /**
      * Actions that mutate a loaded workflow's plan (or its referenced table rows).
      * Used by {@link WorkflowBuilderProvider} to short-circuit modifying actions on
      * an APPLICATION-type workflow with an immutability rejection. Distinct from

@@ -27,3 +27,28 @@ describe('proxy.ts middleware - Cloudflare headers', () => {
     expect(res.headers.get('x-middleware-request-cf-connecting-ip')).toBe('203.0.113.7');
   });
 });
+
+// The gateway keys its per-IP limits on CF-Connecting-IP (anonymous "Sign in with SSO"
+// discovery has its own tight bucket). Through this middleware the header must reach the
+// gateway for that anonymous POST too, or every visitor would share the frontend pod's bucket.
+describe('proxy.ts middleware - client IP for the SSO discovery limit', () => {
+  it('forwards CF-Connecting-IP on the anonymous POST /auth/sso/discover', () => {
+    const res = proxy(
+      new NextRequest('http://localhost:3000/api/proxy/auth/sso/discover', {
+        method: 'POST',
+        headers: { 'CF-Connecting-IP': '198.51.100.23', 'Content-Type': 'application/json' },
+      }),
+    ) as NextResponse;
+
+    expect(res.headers.get('x-middleware-rewrite')).toBe('http://localhost:8080/api/auth/sso/discover');
+    expect(res.headers.get('x-middleware-request-cf-connecting-ip')).toBe('198.51.100.23');
+  });
+
+  it('invents no client IP when the request carries none', () => {
+    const res = proxy(
+      new NextRequest('http://localhost:3000/api/proxy/auth/sso/discover', { method: 'POST' }),
+    ) as NextResponse;
+
+    expect(res.headers.get('x-middleware-request-cf-connecting-ip')).toBeNull();
+  });
+});

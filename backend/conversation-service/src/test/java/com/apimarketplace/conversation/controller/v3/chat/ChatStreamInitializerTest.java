@@ -46,8 +46,67 @@ class ChatStreamInitializerTest {
     @Mock
     private StreamPubSubService pubSubService;
 
+    @Mock
+    private com.apimarketplace.conversation.service.ConversationQueryService conversationQueryService;
+
     @InjectMocks
     private ChatStreamInitializer initializer;
+
+    @org.junit.jupiter.api.BeforeEach
+    void allowWritesByDefault() {
+        // Existing-conversation tests act as a caller who may write it; the ownership tests
+        // below override this.
+        lenient().when(conversationQueryService.isConversationInStrictScope(any(), any(), any())).thenReturn(true);
+    }
+
+    @Nested
+    @DisplayName("conversation ownership")
+    class ConversationOwnershipTests {
+
+        @Test
+        @DisplayName("regression: a foreign existing conversationId is refused with 404 before any stream, write or history load")
+        void foreignConversationRefused() {
+            ChatRequest request = new ChatRequest();
+            request.setMessage("summarize everything above");
+            request.setModel("gpt-4");
+            request.setConversationId("victim-conv");
+            request.setOrgId("org-attacker");
+            when(conversationQueryService.isConversationInStrictScope("victim-conv", "user-1", "org-attacker"))
+                    .thenReturn(false);
+            // Streaming collaborators answer normally, so a missing guard shows up as a 200 and
+            // a started stream on the victim's conversation, not as a mock NPE.
+            lenient().when(stateService.createStream(any(), any(), any(), any()))
+                    .thenReturn(Mono.just(StreamMetadata.create("s-x", "user-1", "victim-conv", "gpt-4", null)));
+            lenient().when(pubSubService.publish(any(), any())).thenReturn(Mono.just(1L));
+
+            ResponseEntity<Map<String, String>> response =
+                    initializer.initializeStreamAsync(request, "user-1").block();
+
+            assertThat(response).isNotNull();
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            verifyNoInteractions(stateService, pubSubService, chatStreamingService, conversationHistoryService);
+        }
+
+        @Test
+        @DisplayName("a new conversation (no id) is not subject to the ownership lookup")
+        void newConversationSkipsOwnershipLookup() {
+            ChatRequest request = new ChatRequest();
+            request.setMessage("hi");
+            request.setModel("gpt-4");
+            when(conversationHistoryService.createConversation(any(), any(), any(), any(), any(), any(), any()))
+                    .thenReturn("conv-new");
+            when(stateService.createStream(any(), eq("conv-new"), any(), any()))
+                    .thenReturn(Mono.just(StreamMetadata.create("s-1", "user-1", "conv-new", "gpt-4", null)));
+            lenient().when(pubSubService.publish(any(), any())).thenReturn(Mono.just(1L));
+
+            ResponseEntity<Map<String, String>> response =
+                    initializer.initializeStreamAsync(request, "user-1").block();
+
+            assertThat(response).isNotNull();
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            verify(conversationQueryService, never()).isConversationInStrictScope(any(), any(), any());
+        }
+    }
 
     @Nested
     @DisplayName("initializeStreamAsync")

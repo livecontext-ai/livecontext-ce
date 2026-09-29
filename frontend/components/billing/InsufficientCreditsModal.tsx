@@ -20,6 +20,7 @@ import FoundingPriceNote from '@/components/pricing/FoundingPriceNote';
 import ReferencePrice from '@/components/pricing/ReferencePrice';
 import { usePricingEvent } from '@/hooks/usePricingEvent';
 import TopUpModal from './TopUpModal';
+import { RewardCodeInline } from '@/components/reward/RewardCodeInline';
 
 /**
  * Custom event name for triggering the insufficient credits modal.
@@ -392,6 +393,7 @@ export default function InsufficientCreditsModal() {
                 it lives on the pricing page now, which "View all plans" leads
                 to, so the modal states its three cards and gets out of the way. */}
             <div className="mt-4 flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+              <RewardCodeInline />
               <button
                 onClick={() => { setOpen(false); router.push('/app/settings/pricing'); }}
                 className="text-xs text-theme-muted hover:text-theme-primary underline"

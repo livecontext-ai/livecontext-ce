@@ -23,25 +23,11 @@ public class ToolCategoryController {
     private final ToolCategoryService toolCategoryService;
 
     /**
-     * Admin-token guard for DELETE endpoints. Audit 2026-05-16: prior
-     * implementation had zero auth on category/tool-name DELETEs - any
-     * authenticated user could wipe global catalog rows.
+     * Admin gate for every write (create, update, delete). Audit 2026-05-16: the
+     * DELETEs had zero auth and any authenticated user could wipe global catalog rows.
+     * Accepts the platform ADMIN role or the catalog admin token (import Job).
      */
-    @org.springframework.beans.factory.annotation.Value("${catalog.admin-token:}")
-    private String catalogAdminToken;
-
-    private boolean isAdminCaller(String headerToken) {
-        if (catalogAdminToken == null || catalogAdminToken.isBlank()) return false;
-        if (headerToken == null || headerToken.isBlank()) return false;
-        // Trim both sides: a trailing newline in the provisioned secret value must
-        // not silently 403 every legitimate caller (the importer trims what it sends).
-        String expected = catalogAdminToken.trim();
-        String presented = headerToken.trim();
-        if (expected.isEmpty() || presented.isEmpty()) return false;
-        return java.security.MessageDigest.isEqual(
-                expected.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                presented.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    }
+    private final CatalogAdminAccess adminAccess;
     
     /**
      * Get all tool categories that have at least one active tool
@@ -194,8 +180,9 @@ public class ToolCategoryController {
     @PostMapping
     public ResponseEntity<ToolCategoryEntity> createToolCategory(
             @RequestBody ToolCategoryEntity toolCategory,
-            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
-        if (!isAdminCaller(adminToken)) {
+            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles) {
+        if (!adminAccess.isAdmin(roles, adminToken)) {
             return ResponseEntity.status(org.springframework.http.HttpStatus.FORBIDDEN).build();
         }
         ToolCategoryEntity created = toolCategoryService.createToolCategory(toolCategory);
@@ -208,8 +195,9 @@ public class ToolCategoryController {
     @PostMapping("/tool-names")
     public ResponseEntity<ToolNameEntity> createToolName(
             @RequestBody ToolNameEntity toolName,
-            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
-        if (!isAdminCaller(adminToken)) {
+            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles) {
+        if (!adminAccess.isAdmin(roles, adminToken)) {
             return ResponseEntity.status(org.springframework.http.HttpStatus.FORBIDDEN).build();
         }
         ToolNameEntity created = toolCategoryService.createToolName(toolName);
@@ -223,8 +211,9 @@ public class ToolCategoryController {
     public ResponseEntity<ToolCategoryEntity> updateToolCategory(
             @PathVariable UUID categoryId,
             @RequestBody ToolCategoryEntity toolCategory,
-            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
-        if (!isAdminCaller(adminToken)) {
+            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles) {
+        if (!adminAccess.isAdmin(roles, adminToken)) {
             return ResponseEntity.status(org.springframework.http.HttpStatus.FORBIDDEN).build();
         }
         toolCategory.setId(categoryId);
@@ -239,8 +228,9 @@ public class ToolCategoryController {
     public ResponseEntity<ToolNameEntity> updateToolName(
             @PathVariable UUID toolNameId,
             @RequestBody ToolNameEntity toolName,
-            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
-        if (!isAdminCaller(adminToken)) {
+            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles) {
+        if (!adminAccess.isAdmin(roles, adminToken)) {
             return ResponseEntity.status(org.springframework.http.HttpStatus.FORBIDDEN).build();
         }
         toolName.setId(toolNameId);
@@ -254,8 +244,9 @@ public class ToolCategoryController {
     @DeleteMapping("/{categoryId}")
     public ResponseEntity<Void> deleteToolCategory(
             @PathVariable UUID categoryId,
-            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
-        if (!isAdminCaller(adminToken)) {
+            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles) {
+        if (!adminAccess.isAdmin(roles, adminToken)) {
             return ResponseEntity.status(org.springframework.http.HttpStatus.FORBIDDEN).build();
         }
         toolCategoryService.deleteToolCategory(categoryId);
@@ -268,8 +259,9 @@ public class ToolCategoryController {
     @DeleteMapping("/tool-names/{toolNameId}")
     public ResponseEntity<Void> deleteToolName(
             @PathVariable UUID toolNameId,
-            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
-        if (!isAdminCaller(adminToken)) {
+            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken,
+            @RequestHeader(value = "X-User-Roles", required = false) String roles) {
+        if (!adminAccess.isAdmin(roles, adminToken)) {
             return ResponseEntity.status(org.springframework.http.HttpStatus.FORBIDDEN).build();
         }
         toolCategoryService.deleteToolName(toolNameId);

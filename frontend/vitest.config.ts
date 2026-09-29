@@ -4,6 +4,30 @@ import path from 'path';
 export default defineConfig({
   test: {
     environment: 'node',
+    // The process zone, pinned.
+    //
+    // Several suites read as if UTC were a given: they assert a rendered day, or compare a value
+    // parsed two ways, and both only hold when the host has no offset. That was true by accident -
+    // CI runners are UTC - and false on a developer machine, so the same test could pass in one
+    // place and fail in the other for a reason having nothing to do with the code. Pinning it makes
+    // the dependence explicit and local runs match CI.
+    //
+    // Zone-sensitive behaviour is exercised by APPLYING a display zone in the test
+    // (`applyDisplayTimeZone`) or by stubbing the device zone, never by the host - which is what
+    // makes pinning safe. One consequence to know: a defect that only appears at a non-zero offset
+    // (V8 parsing a whitespace-padded ISO date as LOCAL time) cannot fail an assertion here, and
+    // the test for it says so rather than implying coverage.
+    //
+    // Three suites in this repo say "TZ= is no help, on Windows it does not change what Node
+    // resolves", and both statements are true of different things. A shell prefix on a direct
+    // invocation does nothing on Windows (measured: `TZ=Asia/Tokyo node -e ...` still resolved
+    // Europe/Paris), because the zone is read from the OS rather than the variable. This works
+    // because vitest passes `env` in the spawn environment of a fresh worker process, where Node
+    // reads TZ on first use. Verified in-suite: the resolved zone is UTC and the offset is 0. If
+    // the pool is ever changed to `threads`, worker threads inherit the process zone and this
+    // becomes a silent no-op - the stubbing in those three suites is what keeps them honest either
+    // way, which is why it stays.
+    env: { TZ: 'UTC' },
     include: ['**/*.test.ts', '**/*.test.tsx'],
     exclude: ['**/node_modules/**', '**/dist/**'],
     globals: true,

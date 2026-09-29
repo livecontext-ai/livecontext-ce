@@ -1,5 +1,6 @@
 package com.apimarketplace.auth.service;
 
+import com.apimarketplace.auth.util.EmailNormalizer;
 import com.apimarketplace.auth.audit.AuthEventRecorder;
 import com.apimarketplace.auth.bootstrap.FirstAdminBootstrap;
 import com.apimarketplace.auth.domain.AuthProvider;
@@ -160,7 +161,7 @@ public class PasswordAuthService {
         if (email == null || email.isBlank()) {
             throw new IllegalArgumentException("Email is required");
         }
-        email = email.trim().toLowerCase();
+        email = EmailNormalizer.normalize(email);
 
         requireMinimumLength(password, "Password");
 
@@ -230,7 +231,7 @@ public class PasswordAuthService {
         if (email == null || email.isBlank() || password == null || password.isBlank()) {
             throw new AuthenticationException("Email and password are required");
         }
-        email = email.trim().toLowerCase();
+        email = EmailNormalizer.normalize(email);
 
         // Rate limiting
         Integer attempts = loginAttempts.getIfPresent(email);

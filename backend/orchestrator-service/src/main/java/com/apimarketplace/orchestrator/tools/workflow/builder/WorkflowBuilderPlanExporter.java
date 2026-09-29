@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.tools.workflow.builder;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.orchestrator.execution.v2.nodes.MediaNode;
 import com.apimarketplace.orchestrator.tools.workflow.builder.creators.DecisionNodeCreator;
+import com.apimarketplace.orchestrator.tools.workflow.builder.session.SessionPlanBuilder;
 import com.apimarketplace.orchestrator.utils.EdgeRefParser;
 import com.apimarketplace.orchestrator.domain.workflow.NodePolicy;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlanParser;
@@ -89,8 +90,13 @@ public class WorkflowBuilderPlanExporter {
         // Import triggers
         importList(plan, "triggers", session.getTriggers());
 
-        // Import mcps
+        // Import mcps (an AI node filed here gets the session spelling, as load gives it)
         importList(plan, "mcps", session.getMcps());
+        for (Map<String, Object> mcp : session.getMcps()) {
+            if (Boolean.TRUE.equals(mcp.get("isAgent"))) {
+                SessionPlanBuilder.adoptPlanSpellings(mcp);
+            }
+        }
 
         // Import agents (stored as mcps with isAgent=true + isClassify/isGuardrail flags)
         // All agent types need isAgent=true for agent: prefix lookup in SessionNodeFinder
@@ -99,14 +105,10 @@ public class WorkflowBuilderPlanExporter {
             for (Map<String, Object> a : agents) {
                 Map<String, Object> agent = LabelNormalizer.normalizeVariableReferencesDeep(new LinkedHashMap<>(a));
                 agent.put("isAgent", true);
-                String agentType = (String) agent.get("type");
-                if ("classify".equals(agentType)) {
-                    agent.put("isClassify", true);
-                } else if ("guardrail".equals(agentType)) {
-                    agent.put("isGuardrail", true);
-                } else if ("generate".equals(agentType)) {
+                if ("generate".equals(agent.get("type"))) {
                     agent.put("isGenerate", true);
                 }
+                SessionPlanBuilder.adoptPlanSpellings(agent);
                 session.getMcps().add(agent);
             }
         }

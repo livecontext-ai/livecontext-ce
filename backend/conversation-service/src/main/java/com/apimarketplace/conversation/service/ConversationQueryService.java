@@ -1,5 +1,6 @@
 package com.apimarketplace.conversation.service;
 
+import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.conversation.dto.ConversationDto;
 import com.apimarketplace.conversation.entity.Conversation;
@@ -60,6 +61,29 @@ public class ConversationQueryService {
         this.messageRepository = messageRepository;
         this.conversationMapper = conversationMapper;
         this.workflowContextProvider = workflowContextProvider;
+    }
+
+    /**
+     * Write gate for every entry point that appends to a conversation named by the caller (a chat
+     * turn, user-facing or service-to-service, a stream stop, a tool-result row): is this
+     * conversation in the caller's currently active workspace?
+     *
+     * <p>Strict isolation via {@link ScopeGuard#isInStrictScope}: in an org workspace the row's
+     * organization must be the caller's; in the personal workspace the caller must own an
+     * org-less row. So a user acting in another workspace, or a member removed from the
+     * conversation's workspace (the gateway no longer resolves that org for them), is refused.
+     * The service callers of the internal sync turn pass the conversation's own workspace: agent
+     * conversations are created and reused strictly per organization
+     * ({@code createAgentConversation}), so strict holds for them too.
+     * Out-of-scope and unknown ids alike return {@code false}, which callers map to 404.
+     */
+    public boolean isConversationInStrictScope(String conversationId, String userId, String organizationId) {
+        if (conversationId == null || conversationId.isBlank() || userId == null || userId.isBlank()) {
+            return false;
+        }
+        Conversation conv = conversationRepository.findById(conversationId).orElse(null);
+        return conv != null && ScopeGuard.isInStrictScope(
+                userId, organizationId, conv.getUserId(), conv.getOrganizationId());
     }
 
     /** Back-compat (pre-PR21) - kept for callers that haven't been migrated yet. */

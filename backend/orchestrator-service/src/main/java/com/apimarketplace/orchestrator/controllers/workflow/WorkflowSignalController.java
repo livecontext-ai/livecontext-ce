@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.controllers.workflow;
 
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.execution.SignalResolution;
 import com.apimarketplace.orchestrator.domain.execution.SignalType;
@@ -39,13 +40,16 @@ public class WorkflowSignalController {
     private final UnifiedSignalService signalService;
     private final SignalResumeService signalResumeService;
     private final WorkflowRunRepository runRepository;
+    private final OrgAccessGuard orgAccessGuard;
 
     public WorkflowSignalController(UnifiedSignalService signalService,
                                      SignalResumeService signalResumeService,
-                                     WorkflowRunRepository runRepository) {
+                                     WorkflowRunRepository runRepository,
+                                     OrgAccessGuard orgAccessGuard) {
         this.signalService = signalService;
         this.signalResumeService = signalResumeService;
         this.runRepository = runRepository;
+        this.orgAccessGuard = orgAccessGuard;
     }
 
     /**
@@ -67,6 +71,20 @@ public class WorkflowSignalController {
             return ResponseEntity.notFound().build();
         }
         return null;
+    }
+
+    /**
+     * Resolving or cancelling a signal advances (or kills) the run, whose next nodes execute
+     * with the owner's credentials: that is running the workflow, so it goes through the same
+     * {@link RunWriteGate} as every other run write (VIEWER role, then the per-member
+     * deny-list on the run's workflow). An approval gate is not an exception. Reading signals
+     * stays open. Call after {@link #guardRunScope}. Returns the 403 to send, or null.
+     */
+    private ResponseEntity<Map<String, Object>> guardRunWrite(
+            String runId, String userId, String orgId, String orgRole) {
+        WorkflowRunEntity run = runRepository.findByRunIdPublic(runId).orElse(null);
+        String denial = RunWriteGate.denial(orgAccessGuard, run, userId, orgId, orgRole, "resolve signals on");
+        return denial == null ? null : ResponseEntity.status(RunWriteGate.statusFor(denial)).body(Map.of("error", denial));
     }
 
     private ResponseEntity<List<Map<String, Object>>> guardRunScopeList(
@@ -97,12 +115,15 @@ public class WorkflowSignalController {
             @PathVariable String nodeId,
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         logger.info("[SignalController] Resolve signal: runId={}, nodeId={}, userId={}", runId, nodeId, userId);
 
         ResponseEntity<Map<String, Object>> scopeBlock = guardRunScope(runId, userId, orgId);
         if (scopeBlock != null) return scopeBlock;
+        ResponseEntity<Map<String, Object>> viewerBlock = guardRunWrite(runId, userId, orgId, orgRole);
+        if (viewerBlock != null) return viewerBlock;
 
         String resolutionStr = (String) body.get("resolution");
         if (resolutionStr == null || resolutionStr.isBlank()) {
@@ -223,12 +244,15 @@ public class WorkflowSignalController {
             @PathVariable String nodeId,
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         logger.info("[SignalController] Resolve ALL signals: runId={}, nodeId={}, userId={}", runId, nodeId, userId);
 
         ResponseEntity<Map<String, Object>> scopeBlock = guardRunScope(runId, userId, orgId);
         if (scopeBlock != null) return scopeBlock;
+        ResponseEntity<Map<String, Object>> viewerBlock = guardRunWrite(runId, userId, orgId, orgRole);
+        if (viewerBlock != null) return viewerBlock;
 
         String resolutionStr = (String) body.get("resolution");
         if (resolutionStr == null || resolutionStr.isBlank()) {
@@ -390,12 +414,15 @@ public class WorkflowSignalController {
             @PathVariable String runId,
             @PathVariable String nodeId,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         logger.info("[SignalController] Cancel signal: runId={}, nodeId={}, userId={}", runId, nodeId, userId);
 
         ResponseEntity<Map<String, Object>> scopeBlock = guardRunScope(runId, userId, orgId);
         if (scopeBlock != null) return scopeBlock;
+        ResponseEntity<Map<String, Object>> viewerBlock = guardRunWrite(runId, userId, orgId, orgRole);
+        if (viewerBlock != null) return viewerBlock;
 
         // Cancel ONLY the named node's signal(s), not every pending signal in the run.
         // cancelByRun would have cancelled sibling approvals and timers too; epoch=-1 targets
@@ -408,5 +435,23 @@ public class WorkflowSignalController {
         result.put("nodeId", nodeId);
 
         return ResponseEntity.ok(result);
+    }
+
+    /** Backward-compatible direct-call overload used by controller unit tests. */
+    public ResponseEntity<Map<String, Object>> resolveSignal(String runId, String nodeId,
+            Map<String, Object> body, String userId, String orgId) {
+        return resolveSignal(runId, nodeId, body, userId, orgId, null);
+    }
+
+    /** Backward-compatible direct-call overload used by controller unit tests. */
+    public ResponseEntity<Map<String, Object>> resolveAllSignals(String runId, String nodeId,
+            Map<String, Object> body, String userId, String orgId) {
+        return resolveAllSignals(runId, nodeId, body, userId, orgId, null);
+    }
+
+    /** Backward-compatible direct-call overload used by controller unit tests. */
+    public ResponseEntity<Map<String, Object>> cancelSignal(String runId, String nodeId,
+            String userId, String orgId) {
+        return cancelSignal(runId, nodeId, userId, orgId, null);
     }
 }

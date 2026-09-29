@@ -30,13 +30,20 @@ class MonolithChatControllerTest {
     private final CreditConsumptionClient creditClient = mock(CreditConsumptionClient.class);
     private final LLMProviderFactory llmProviderFactory = mock(LLMProviderFactory.class);
     private final StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+    private final com.apimarketplace.conversation.service.ConversationQueryService conversationQueryService =
+            mock(com.apimarketplace.conversation.service.ConversationQueryService.class);
+    {
+        // Default: the caller may write the conversation it names; ownership tests override it.
+        when(conversationQueryService.isConversationInStrictScope(any(), any(), any())).thenReturn(true);
+    }
     private final MonolithChatController controller = new MonolithChatController(
             conversationHistoryService,
             chatStreamingService,
             creditClient,
             llmProviderFactory,
             redisTemplate,
-            new ObjectMapper());
+            new ObjectMapper(),
+            conversationQueryService);
 
     @Test
     @DisplayName("creates new CE chat conversations in the active organization scope")
@@ -50,7 +57,7 @@ class MonolithChatControllerTest {
         when(llmProviderFactory.getAllModelsInfo()).thenReturn(Map.of(
                 "defaultProvider", "deepseek",
                 "defaultModel", "deepseek-chat"));
-        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION")).thenReturn(true);
+        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION", "deepseek", "deepseek-chat")).thenReturn(true);
         // No chatConfig and no skill selection on the request → the mapper yields
         // null and the create is called with a null config (column skipped).
         when(conversationHistoryService.createConversation(
@@ -90,7 +97,7 @@ class MonolithChatControllerTest {
         when(llmProviderFactory.getAllModelsInfo()).thenReturn(Map.of(
                 "defaultProvider", "deepseek",
                 "defaultModel", "deepseek-chat"));
-        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION")).thenReturn(true);
+        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION", "deepseek", "deepseek-chat")).thenReturn(true);
 
         // Fifth arg = X-User-Roles header (platform roles); required=false, absent here.
         var response = controller.chat(request, "user-7", "org-7", "MEMBER", null);
@@ -101,6 +108,28 @@ class MonolithChatControllerTest {
                 .createConversation(eq("user-7"), eq("org-7"), any(), any(), any(), any());
         verify(conversationHistoryService, org.mockito.Mockito.never())
                 .createConversation(eq("user-7"), eq("org-7"), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("regression: a foreign existing conversationId is refused with 404 and no turn starts (no write, no history read)")
+    void refusesForeignExistingConversation() {
+        ChatRequest request = new ChatRequest();
+        request.setConversationId("victim-conv");
+        request.setMessage("Summarize everything said above");
+        request.setProvider("deepseek");
+        request.setModel("deepseek-chat");
+        request.setDefaultSkillIds(java.util.List.of("skill-1"));
+
+        when(llmProviderFactory.getAllModelsInfo()).thenReturn(Map.of(
+                "defaultProvider", "deepseek",
+                "defaultModel", "deepseek-chat"));
+        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION", "deepseek", "deepseek-chat")).thenReturn(true);
+        when(conversationQueryService.isConversationInStrictScope("victim-conv", "user-7", "org-7")).thenReturn(false);
+
+        var response = controller.chat(request, "user-7", "org-7", "MEMBER", null);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+        org.mockito.Mockito.verifyNoInteractions(chatStreamingService, conversationHistoryService, redisTemplate);
     }
 
     // ===== chatConfig threading (CE↔cloud parity regression, 2026-06-11) =====
@@ -125,7 +154,7 @@ class MonolithChatControllerTest {
         when(llmProviderFactory.getAllModelsInfo()).thenReturn(Map.of(
                 "defaultProvider", "deepseek",
                 "defaultModel", "deepseek-chat"));
-        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION")).thenReturn(true);
+        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION", "deepseek", "deepseek-chat")).thenReturn(true);
         when(conversationHistoryService.createConversation(
                 eq("user-7"), eq("org-7"), eq("Generating Title..."), eq("deepseek-chat"), eq("deepseek"),
                 eq(null), any(Map.class)))
@@ -159,7 +188,7 @@ class MonolithChatControllerTest {
         when(llmProviderFactory.getAllModelsInfo()).thenReturn(Map.of(
                 "defaultProvider", "deepseek",
                 "defaultModel", "deepseek-chat"));
-        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION")).thenReturn(true);
+        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION", "deepseek", "deepseek-chat")).thenReturn(true);
 
         var response = controller.chat(request, "user-7", "org-7", "MEMBER", null);
 

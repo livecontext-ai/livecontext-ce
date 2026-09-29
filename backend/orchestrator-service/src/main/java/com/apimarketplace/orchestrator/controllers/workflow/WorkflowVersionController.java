@@ -507,6 +507,10 @@ public class WorkflowVersionController {
         if (!ScopeGuard.isInStrictScope(tenantId, orgId, wf.getTenantId(), wf.getOrganizationId())) {
             return false;
         }
+        // A share-link holder acts as the owner: only the shared application's own workflow.
+        if (!WorkflowControllerHelper.shareContextPermitsWorkflow(wf)) {
+            return false;
+        }
         String workflowOrgId = wf.getOrganizationId();
         if (workflowOrgId != null
                 && !orgAccessGuard.canAccess(workflowOrgId, tenantId, "workflow", workflowId.toString(), orgRole)) {

@@ -54,6 +54,9 @@ public class TaskStatusController {
     /** Create a custom column. */
     @PostMapping
     public ResponseEntity<?> create(@RequestBody CreateStatusBody body, HttpServletRequest request) {
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request))) {
+            return ResponseEntity.status(403).body(Map.of("error", "your workspace role is read-only (VIEWER): board column changes are not allowed"));
+        }
         String tenantId = tenantResolver.resolve(request);
         String orgId = tenantResolver.resolveOrgId(request);
         try {
@@ -69,6 +72,9 @@ public class TaskStatusController {
     @PatchMapping("/{id}")
     public ResponseEntity<?> update(@PathVariable UUID id, @RequestBody UpdateStatusBody body,
                                     HttpServletRequest request) {
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request))) {
+            return ResponseEntity.status(403).body(Map.of("error", "your workspace role is read-only (VIEWER): board column changes are not allowed"));
+        }
         String tenantId = tenantResolver.resolve(request);
         String orgId = tenantResolver.resolveOrgId(request);
         try {
@@ -90,6 +96,9 @@ public class TaskStatusController {
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<?> delete(@PathVariable UUID id, HttpServletRequest request) {
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request))) {
+            return ResponseEntity.status(403).body(Map.of("error", "your workspace role is read-only (VIEWER): board column changes are not allowed"));
+        }
         String tenantId = tenantResolver.resolve(request);
         String orgId = tenantResolver.resolveOrgId(request);
         try {
@@ -106,6 +115,9 @@ public class TaskStatusController {
     /** Apply a new column order. Body lists status ids in the desired order. */
     @PutMapping("/order")
     public ResponseEntity<?> reorder(@RequestBody ReorderBody body, HttpServletRequest request) {
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request))) {
+            return ResponseEntity.status(403).body(Map.of("error", "your workspace role is read-only (VIEWER): board column changes are not allowed"));
+        }
         String tenantId = tenantResolver.resolve(request);
         String orgId = tenantResolver.resolveOrgId(request);
         if (body == null || body.orderedIds() == null || body.orderedIds().isEmpty()) {

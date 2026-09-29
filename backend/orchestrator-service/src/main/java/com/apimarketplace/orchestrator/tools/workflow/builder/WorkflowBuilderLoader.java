@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.tools.workflow.builder;
 import com.apimarketplace.agent.tools.ToolErrorCode;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.common.scope.ScopeGuard;
+import com.apimarketplace.orchestrator.tools.workflow.builder.session.SessionPlanBuilder;
 import com.apimarketplace.datasource.client.DataSourceClient;
 import com.apimarketplace.datasource.client.dto.ColumnMappingSpecDto;
 import com.apimarketplace.datasource.client.dto.DataSourceDto;
@@ -463,10 +464,13 @@ public class WorkflowBuilderLoader {
         if (steps != null) {
             for (Map<String, Object> step : steps) {
                 Map<String, Object> stepCopy = LabelNormalizer.normalizeVariableReferencesDeep(new LinkedHashMap<>(step));
+                boolean isAgent = Boolean.TRUE.equals(step.get("isAgent"));
+                if (isAgent) {
+                    SessionPlanBuilder.adoptPlanSpellings(stepCopy);
+                }
                 session.getMcps().add(stepCopy);
 
                 // Assign logical number
-                boolean isAgent = Boolean.TRUE.equals(step.get("isAgent"));
                 String prefix = isAgent ? "agent" : "mcp";
                 String nodeId = computeNodeId(stepCopy, prefix);
                 // Rebuild schema (for available_variables in describe)
@@ -491,6 +495,7 @@ public class WorkflowBuilderLoader {
                 if ("generate".equals(agentCopy.get("type"))) {
                     agentCopy.put("isGenerate", true);
                 }
+                SessionPlanBuilder.adoptPlanSpellings(agentCopy);
                 session.getMcps().add(agentCopy);
 
                 // Assign logical number

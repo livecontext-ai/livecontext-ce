@@ -230,10 +230,30 @@ describe('proxy: everything that must keep working', () => {
   it('sends a locale-prefixed unknown path to the bare path first, then 404s it', () => {
     // `/fr/ru` is stripped to `/ru` by the branch above this one, and the
     // redirect target is what then answers 404. Two hops, and pinned so nobody
-    // reads the 307 as "handled".
+    // reads the 308 as "handled".
     const response = proxy(request('/fr/ru')) as Response;
     expect(response.headers.get('location')).toBe('https://livecontext.ai/ru');
     expect(isNotFound('/ru')).toBe(true);
+  });
+
+  it('strips the locale from a single-URL page with a PERMANENT redirect', () => {
+    // /about, /compare and the other English-only pages live at one URL. A 307
+    // kept `/fr/about` in the index as a URL of its own.
+    for (const [from, to] of [['/fr/about', '/about'], ['/de/compare/n8n-alternative', '/compare/n8n-alternative']]) {
+      const response = proxy(request(from)) as Response;
+      expect(response.status, from).toBe(308);
+      expect(response.headers.get('location'), from).toBe(`https://livecontext.ai${to}`);
+      // A day, not forever: this branch depends on LOCALE_REQUIRED_PREFIXES,
+      // and a prefix added later must reach returning browsers.
+      expect(response.headers.get('cache-control'), from).toBe('public, max-age=86400');
+    }
+  });
+
+  it('strips the locale from a dotted path on a real route with a permanent redirect too', () => {
+    const response = proxy(request('/en/marketplace/listing.v2')) as Response;
+    expect(response.status).toBe(308);
+    expect(response.headers.get('location')).toBe('https://livecontext.ai/marketplace/listing.v2');
+    expect(response.headers.get('cache-control')).toBe('public, max-age=86400');
   });
 
   it('does not claim the whole path space of the docs subdomain', () => {

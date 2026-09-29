@@ -21,7 +21,7 @@ const API_PROXY_CORS_HEADERS = {
  * because the page exists under `[locale]`.
  *
  * MISSING AN ENTRY IS A HARD 404, not a degraded page: the locale is stripped by
- * a 307, the one-segment path matches no static route and is not in
+ * a redirect, the one-segment path matches no static route and is not in
  * PUBLIC_INDEX_SEGMENTS, so isKnownRoute rejects it. Adding a directory under
  * `app/[locale]/` without adding it here therefore ships a route nobody can
  * reach. `proxy.localeRequiredPrefixes.test.ts` derives the real list from disk
@@ -159,6 +159,23 @@ function getPathLocale(pathname: string): string | null {
   return routing.locales.find(
     (locale) => pathname === `/${locale}` || pathname.startsWith(`/${locale}/`),
   ) ?? null;
+}
+
+/**
+ * A permanent (308) redirect that browsers keep for one day only.
+ *
+ * Search engines read the 308 as "this URL moved for good", which is what
+ * consolidates the old URL into the new one. A bare 308 is also cached by
+ * browsers with no expiry, and two of the branches using it depend on route
+ * lists that have changed before (a page later localized, a prefix missing
+ * from LOCALE_REQUIRED_PREFIXES): a day's cache means fixing the list reaches
+ * every returning visitor by the next day instead of never.
+ */
+function permanentRedirect(url: URL): NextResponse {
+  return NextResponse.redirect(url, {
+    status: 308,
+    headers: { 'Cache-Control': 'public, max-age=86400' },
+  });
 }
 
 /**
@@ -367,7 +384,7 @@ function routeRequest(request: NextRequest) {
     const dottedPath = dottedLocale ? pathname.slice(dottedLocale.length + 1) || '/' : pathname;
 
     // A locale prefix in front of a REAL route is stripped here, which is the
-    // same 307 the branch far below gives the dotless twin. Without it,
+    // same 308 the branch far below gives the dotless twin. Without it,
     // `/en/marketplace/wp-login.php` answered `next()` and rendered the
     // prerendered landing with a 404 body and a 200 status: an invented name
     // wearing a locale prefix walked straight through the guard.
@@ -376,7 +393,7 @@ function routeRequest(request: NextRequest) {
     if (dottedLocale && !requiresLocale(dottedPath) && isKnownRoute(dottedPath)) {
       const stripped = new URL(dottedPath, request.url);
       stripped.search = request.nextUrl.search;
-      return NextResponse.redirect(stripped);
+      return permanentRedirect(stripped);
     }
 
     if (isServedFilePath(pathname) || isKnownRoute(dottedPath) || requiresLocale(dottedPath)) {
@@ -440,7 +457,9 @@ function routeRequest(request: NextRequest) {
       : (locale ? `/${locale}#pricing` : '/#pricing');
     const newUrl = new URL(target, request.url);
     newUrl.search = request.nextUrl.search;
-    return NextResponse.redirect(newUrl);
+    // Permanent: a 307 tells search engines to keep this URL indexed in case a
+    // page comes back to it.
+    return permanentRedirect(newUrl);
   }
 
   if (pathnameWithoutLocale.startsWith('/dashboard')) {
@@ -489,7 +508,9 @@ function routeRequest(request: NextRequest) {
   if (locale && pathnameWithoutLocale !== '/' && !requiresLocale(pathnameWithoutLocale)) {
     const newUrl = new URL(pathnameWithoutLocale, request.url);
     newUrl.search = request.nextUrl.search;
-    return NextResponse.redirect(newUrl);
+    // Permanent (308): these pages exist at ONE URL, the bare one. A temporary
+    // redirect kept `/fr/about` and friends alive in the index as separate URLs.
+    return permanentRedirect(newUrl);
   }
 
   // Locale-required pages already live under [locale]. Let them through once a

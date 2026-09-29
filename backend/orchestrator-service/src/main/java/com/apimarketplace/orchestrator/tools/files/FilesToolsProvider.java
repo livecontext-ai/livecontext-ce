@@ -214,6 +214,12 @@ public class FilesToolsProvider implements ToolsProvider {
         if (fileAccessDenied.isPresent()) {
             return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, fileAccessDenied.get());
         }
+        // Workspace role (VIEWER is read-only), the per-person axis beside the per-agent one:
+        // create_folder had no role check at all, move_to_folder only its per-file canWrite.
+        var fileRoleDenied = ToolAccessControl.checkRoleWriteAccess(orgId, orgRole, "file", action);
+        if (fileRoleDenied.isPresent()) {
+            return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, fileRoleDenied.get());
+        }
 
         try {
             return switch (action) {

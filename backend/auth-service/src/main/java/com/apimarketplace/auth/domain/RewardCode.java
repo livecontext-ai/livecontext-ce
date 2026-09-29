@@ -85,6 +85,27 @@ public class RewardCode {
     @Column(name = "payout_external_account_id", length = 255)
     private String payoutExternalAccountId;
 
+    /**
+     * V549: how many months a referred customer earns the partner a revenue share
+     * (PARTNER_PAYOUT codes only; NULL otherwise).
+     */
+    @Column(name = "payout_months")
+    private Integer payoutMonths;
+
+    /** V549: admin-facing name ("Techdox, creator code"). Never shown to redeemers. */
+    @Column(name = "label", length = 128)
+    private String label;
+
+    /**
+     * V549: complimentary plan granted at redeem time (e.g. {@code PRO}), for
+     * {@link #benefitPlanDays} days, on top of the credit grant. NULL = no plan.
+     */
+    @Column(name = "benefit_plan_code", length = 32)
+    private String benefitPlanCode;
+
+    @Column(name = "benefit_plan_days", nullable = false)
+    private int benefitPlanDays = 0;
+
     @Column(nullable = false)
     private boolean active = true;
 
@@ -155,4 +176,12 @@ public class RewardCode {
     public Instant getValidUntil() { return validUntil; }
     public void setValidUntil(Instant validUntil) { this.validUntil = validUntil; }
     public Instant getCreatedAt() { return createdAt; }
+    public Integer getPayoutMonths() { return payoutMonths; }
+    public void setPayoutMonths(Integer payoutMonths) { this.payoutMonths = payoutMonths; }
+    public String getLabel() { return label; }
+    public void setLabel(String label) { this.label = label; }
+    public String getBenefitPlanCode() { return benefitPlanCode; }
+    public void setBenefitPlanCode(String benefitPlanCode) { this.benefitPlanCode = benefitPlanCode; }
+    public int getBenefitPlanDays() { return benefitPlanDays; }
+    public void setBenefitPlanDays(int benefitPlanDays) { this.benefitPlanDays = benefitPlanDays; }
 }

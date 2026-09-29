@@ -155,7 +155,11 @@ public class MonolithSecurityFilter implements Filter {
         String path = httpRequest.getRequestURI();
         String claimedActiveOrgId = httpRequest.getHeader(ACTIVE_ORG_ID_HEADER);
         boolean loopbackRequest = isLoopbackRequest(httpRequest);
-        boolean protectedMonolithPath = isProtectedMonolithPath(path);
+        // Classify on BOTH the raw and the canonical form (see canonicalPath), each time in the
+        // restrictive direction: protected if either form is, public only if both forms are. An
+        // encoded or dot-segment spelling can then never make a path less protected.
+        String canonical = canonicalPath(path);
+        boolean protectedMonolithPath = isProtectedMonolithPath(path) || isProtectedMonolithPath(canonical);
 
         // SECURITY: /api/internal/** is the service-to-service surface (credential resolvers that
         // return DECRYPTED secrets, workspace purge, signal resolution, run/agent access checks,
@@ -184,7 +188,7 @@ public class MonolithSecurityFilter implements Filter {
                 : new StrippedIdentityHeadersRequestWrapper(httpRequest);
         String authHeader = trustedRequest.getHeader(AUTHORIZATION_HEADER);
         boolean hasBearerToken = authHeader != null && authHeader.startsWith(BEARER_PREFIX);
-        boolean publicPath = isPublicPath(path);
+        boolean publicPath = isPublicPath(path) && isPublicPath(canonical);
 
         // Public endpoints remain accessible without authentication, but if a CE
         // bearer token is present we still validate it and inject gateway headers.
@@ -671,9 +675,13 @@ public class MonolithSecurityFilter implements Filter {
      * set of internal paths that are legitimately reachable from outside. The allowed set mirrors
      * the cloud gateway plus the two cross-container CE clients:
      * <ul>
-     *   <li>the public gateway rewrite targets {@code webhook/}, {@code chat/}, {@code form/},
-     *       {@code widget/}, {@code app/public/} - each self-validates its own webhook/share/form
-     *       token (see {@code SimpleGatewayConfig} / {@link ServicePrefixRewriteFilter});</li>
+     *   <li>the public gateway rewrite targets {@code webhook/}, {@code chat/<token>/...},
+     *       {@code form/}, {@code widget/}, {@code app/public/} - each self-validates its own
+     *       webhook/share/form token (see {@code SimpleGatewayConfig} /
+     *       {@link ServicePrefixRewriteFilter}). The chat allowance covers only the token-scoped
+     *       public chat routes: {@code /api/internal/chat/sync} is the service-to-service agent
+     *       turn (schedule, webhook, task, widget) and stays loopback-only, see
+     *       {@link #isPublicChatTokenPath};</li>
      *   <li>the JWT-protected paths ({@link #isProtectedMonolithPath}), e.g.
      *       {@code conversation/tools/execute}, which enforce a real token below;</li>
      *   <li>{@code auth/pricing/} - the read-only, non-sensitive pricing snapshot the bridge reads;</li>
@@ -689,15 +697,26 @@ public class MonolithSecurityFilter implements Filter {
      * </ul>
      * Everything else under {@code /api/internal/**} is internal-only and gets a 404 externally.
      */
-    private boolean isExternallyBlockedInternalPath(String path) {
+    private boolean isExternallyBlockedInternalPath(String rawPath) {
+        // Decide on the canonical path (percent-decoded, path parameters and empty / dot segments
+        // resolved), because Spring MVC matches handlers on the decoded segments: a raw-string
+        // check would let "/api/%69nternal/..." or "/api/internal/chat/%73ync" through to a
+        // handler the raw form does not name.
+        String path = canonicalPath(rawPath);
         if (path == null || !path.startsWith("/api/internal/")) {
             return false;
+        }
+        // A segment that only becomes a path separator once decoded (%2F, %5C, double-encoded
+        // forms) has no legitimate use on the internal surface; it is how "tok%2F..%2Fsync"
+        // would hide a traversal inside a single segment. Refuse it outright.
+        if (hasEncodedSeparator(rawPath)) {
+            return true;
         }
         if (isProtectedMonolithPath(path)) {
             return false;
         }
         return !(path.startsWith("/api/internal/webhook/")
-                || path.startsWith("/api/internal/chat/")
+                || isPublicChatTokenPath(path)
                 || path.startsWith("/api/internal/form/")
                 || path.startsWith("/api/internal/widget/")
                 || path.startsWith("/api/internal/app/public/")
@@ -710,6 +729,114 @@ public class MonolithSecurityFilter implements Filter {
                 // is the auth, plus each provider's own check in its controller (Telegram
                 // secret_token, Slack HMAC, Discord Ed25519, WhatsApp verify token).
                 || path.startsWith("/api/internal/approval-callback/"));
+    }
+
+    /**
+     * True only for the token-scoped PUBLIC chat routes ({@code /api/internal/chat/<token>/...},
+     * served by the orchestrator's PublicChatController, which validates the chat token itself).
+     *
+     * <p>{@code /api/internal/chat/sync} is NOT one of them: it is the service-to-service agent turn
+     * the in-process schedule / webhook / task / widget callers reach over loopback, and it runs the
+     * agent under the identity and roles carried in its headers. Leaving it on the external
+     * allow-list let any authenticated CE user (a VIEWER included) drive an agent turn directly.
+     * The bare {@code /api/internal/chat} root is excluded for the same reason.
+     *
+     * @param canonicalPath a path already normalized by {@link #canonicalPath}
+     */
+    static boolean isPublicChatTokenPath(String canonicalPath) {
+        if (canonicalPath == null || !canonicalPath.startsWith("/api/internal/chat/")) {
+            return false;
+        }
+        String rest = canonicalPath.substring("/api/internal/chat/".length());
+        int slash = rest.indexOf('/');
+        String token = slash >= 0 ? rest.substring(0, slash) : rest;
+        return !token.isEmpty() && !"sync".equalsIgnoreCase(token);
+    }
+
+    /**
+     * Canonical form of a request URI, used only to DECIDE access (the request is never rewritten):
+     * each segment is percent-decoded (repeatedly, so a double encoding cannot hide a segment),
+     * stripped of its {@code ;} path parameters, and empty, {@code .} and {@code ..} segments are
+     * resolved. Returns {@code null} for a null input.
+     */
+    static String canonicalPath(String rawPath) {
+        if (rawPath == null) {
+            return null;
+        }
+        String path = rawPath;
+        int query = path.indexOf('?');
+        if (query >= 0) {
+            path = path.substring(0, query);
+        }
+        Deque<String> segments = new ArrayDeque<>();
+        for (String rawSegment : path.split("/")) {
+            // A decoded separator splits the segment again, so the canonical form is the path the
+            // most permissive downstream decoder could see (never a single opaque segment).
+            for (String part : percentDecodeUntilStable(rawSegment).split("[/\\\\]", -1)) {
+                String segment = part;
+                int semicolon = segment.indexOf(';');
+                if (semicolon >= 0) {
+                    segment = segment.substring(0, semicolon);
+                }
+                if (segment.isEmpty() || ".".equals(segment)) {
+                    continue;
+                }
+                if ("..".equals(segment)) {
+                    segments.pollLast();
+                    continue;
+                }
+                segments.addLast(segment);
+            }
+        }
+        return "/" + String.join("/", segments);
+    }
+
+    /** True when a raw path segment decodes to something containing a slash or a backslash. */
+    static boolean hasEncodedSeparator(String rawPath) {
+        if (rawPath == null) {
+            return false;
+        }
+        int query = rawPath.indexOf('?');
+        String path = query >= 0 ? rawPath.substring(0, query) : rawPath;
+        for (String rawSegment : path.split("/")) {
+            String decoded = percentDecodeUntilStable(rawSegment);
+            if (decoded.indexOf('/') >= 0 || decoded.indexOf('\\') >= 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String percentDecodeUntilStable(String segment) {
+        String current = segment;
+        for (int i = 0; i < 3 && current.indexOf('%') >= 0; i++) {
+            String decoded = percentDecode(current);
+            if (decoded.equals(current)) {
+                break;
+            }
+            current = decoded;
+        }
+        return current;
+    }
+
+    /** RFC 3986 percent-decoding ({@code +} stays literal); a malformed escape is kept as-is. */
+    private static String percentDecode(String value) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(value.length());
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        for (int i = 0; i < bytes.length; i++) {
+            byte b = bytes[i];
+            if (b == '%' && i + 2 < bytes.length) {
+                int hi = Character.digit(bytes[i + 1], 16);
+                int lo = Character.digit(bytes[i + 2], 16);
+                if (hi >= 0 && lo >= 0) {
+                    out.write((hi << 4) + lo);
+                    i += 2;
+                    continue;
+                }
+            }
+            out.write(b);
+        }
+        return out.toString(StandardCharsets.UTF_8);
     }
 
     private boolean isLoopbackRequest(HttpServletRequest request) {
@@ -871,7 +998,7 @@ public class MonolithSecurityFilter implements Filter {
      * resolves to the OWNER's identity, so any GET would otherwise read the owner's
      * whole workspace. This confines share-context reads to exactly the endpoints
      * the {@code /s/{token}} application viewer calls to render and operate the
-     * shared app: the shared publication + its reviews + the acquired list, the
+     * shared app: the shared publication + its reviews (never the owner's acquired-apps list), the
      * shared workflow definition + its run lookups, the DAG run state/signals and
      * versions, the interface definition + render, interface media by file id, and
      * the publisher avatar. Everything else (datasource configs, agent webhook
@@ -905,11 +1032,11 @@ public class MonolithSecurityFilter implements Filter {
     private static final java.util.regex.Pattern SHARE_APPLICATION_GET_ALLOW =
             java.util.regex.Pattern.compile(
                     "^/api/(?:"
-                            + "publications/(?:acquired|[0-9a-fA-F\\-]{36}(?:/application-workflow|/reviews(?:/comments-count|/mine|/[0-9a-fA-F\\-]{36}/replies)?)?)"
+                            + "publications/(?:[0-9a-fA-F\\-]{36}(?:/application-workflow|/reviews(?:/comments-count|/mine|/[0-9a-fA-F\\-]{36}/replies)?)?)"
                             + "|workflows/[0-9a-fA-F\\-]{36}(?:/runs/(?:application|pinned))?"
                             + "|v2/workflows/dag/(?:[0-9a-fA-F\\-]{36}/versions|runs/[^/]+/(?:state|signals))"
                             + "|interfaces/[0-9a-fA-F\\-]{36}(?:/render)?"
-                            + "|files/by-id/[^/]+/raw"
+                            + "|files/by-id/[^/]+/(?:raw|signed-url)"
                             + "|users/[^/]+/avatar"
                             + ")$");
 

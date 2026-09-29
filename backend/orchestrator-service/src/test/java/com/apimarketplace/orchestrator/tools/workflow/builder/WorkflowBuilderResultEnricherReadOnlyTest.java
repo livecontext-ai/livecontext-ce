@@ -213,5 +213,26 @@ class WorkflowBuilderResultEnricherReadOnlyTest {
 
             assertThat(enriched.metadata()).containsKey("visualization");
         }
+
+        @Test
+        @DisplayName("Marks the visualization planChanged only for actions that write the stored plan (the page leaves run mode on it)")
+        void planChanged_onlyForPlanWritingActions() {
+            mockSingleSession("wf-1", "Some Workflow");
+            for (String action : List.of("modify", "set_plan", "add_node", "finish", "save")) {
+                ToolExecutionResult enriched = enricher.addSessionSnapshot(
+                        new ToolExecutionResult(true, Map.of(), null, null, Map.of()), Map.of(), "tenant-1", action);
+                @SuppressWarnings("unchecked")
+                Map<String, Object> viz = (Map<String, Object>) enriched.metadata().get("visualization");
+                assertThat(viz).as(action).containsEntry("planChanged", true);
+            }
+            // Row actions (reads included) auto-save a table node but must not pull the page out of a run.
+            for (String action : java.util.Arrays.asList("load", "run_node", "present", "find_rows", "read_rows", "insert_row", null)) {
+                ToolExecutionResult enriched = enricher.addSessionSnapshot(
+                        new ToolExecutionResult(true, Map.of(), null, null, Map.of()), Map.of(), "tenant-1", action);
+                @SuppressWarnings("unchecked")
+                Map<String, Object> viz = (Map<String, Object>) enriched.metadata().get("visualization");
+                assertThat(viz).as(String.valueOf(action)).containsEntry("planChanged", false);
+            }
+        }
     }
 }

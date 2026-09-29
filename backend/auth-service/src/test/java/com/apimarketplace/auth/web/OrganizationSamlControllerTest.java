@@ -33,8 +33,7 @@ class OrganizationSamlControllerTest {
                 "Acme SSO",
                 "https://idp.example.com/metadata",
                 "https://idp.example.com/sso",
-                "AQIDBA==",
-                true);
+                "AQIDBA==");
         when(samlService.upsert(eq(orgId), eq(42L), any()))
                 .thenThrow(new SamlProvisioningException("KC down"));
 

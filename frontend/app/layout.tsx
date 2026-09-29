@@ -22,7 +22,7 @@ const outfit = Outfit({
 })
 
 const SITE_TITLE = 'LiveContext: The AI automation platform. Chat, workflows, agents, apps.';
-const SITE_DESCRIPTION = `Build AI agents, automate workflows and ship interactive apps without code. ${CATALOG_INTEGRATIONS_CLAIM} integrations, custom APIs, data tables, marketplace and AI chat in one platform.`;
+const SITE_DESCRIPTION = `Build AI agents, automate workflows and ship interactive apps without code. ${CATALOG_INTEGRATIONS_CLAIM} integrations, data tables, marketplace and AI chat in one platform.`;
 const SITE_URL = 'https://livecontext.ai';
 
 export const metadata: Metadata = {
@@ -94,33 +94,25 @@ export const metadata: Metadata = {
       'max-image-preview': 'large',
     },
   },
+  // Each icon is a file of its real size. They all used to point at the
+  // 1024x1024 logo (1.4 MB), the heaviest request on every public page.
   icons: {
     icon: [
       {
-        url: '/liveContext-logo.png',
-        sizes: '32x32',
-        type: 'image/png',
+        url: '/favicon.ico',
+        sizes: '16x16 32x32 48x48',
+        type: 'image/x-icon',
       },
       {
-        url: '/liveContext-logo.png',
-        sizes: '48x48',
-        type: 'image/png',
-      },
-      {
-        url: '/liveContext-logo.png',
-        sizes: '96x96',
-        type: 'image/png',
-      },
-      {
-        url: '/liveContext-logo.png',
+        url: '/icon-192.png',
         sizes: '192x192',
         type: 'image/png',
       },
     ],
-    shortcut: '/liveContext-logo.png',
+    shortcut: '/favicon.ico',
     apple: [
       {
-        url: '/liveContext-logo.png',
+        url: '/apple-touch-icon.png',
         sizes: '180x180',
         type: 'image/png',
       }

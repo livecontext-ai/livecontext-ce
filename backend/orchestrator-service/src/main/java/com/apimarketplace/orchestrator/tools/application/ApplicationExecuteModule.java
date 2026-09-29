@@ -65,6 +65,11 @@ public class ApplicationExecuteModule implements ToolModule {
         var accessDenied = com.apimarketplace.agent.config.ToolAccessControl.checkWriteAccess(
                 context != null ? context.credentials() : null, "application", action);
         if (accessDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get()));
+        // Workspace role (VIEWER is read-only): the READ actions stay, every write is refused.
+        var roleDenied = com.apimarketplace.agent.config.ToolAccessControl.checkRoleWriteAccess(
+                context != null ? context.orgId() : null,
+                context != null ? context.orgRole() : null, "application", action);
+        if (roleDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, roleDenied.get()));
 
         if ("stop_run".equals(action)) {
             return Optional.of(stopRun(parameters, tenantId, context));

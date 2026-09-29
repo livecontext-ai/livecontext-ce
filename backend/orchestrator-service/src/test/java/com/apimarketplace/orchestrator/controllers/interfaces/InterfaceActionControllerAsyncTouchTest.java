@@ -62,7 +62,8 @@ class InterfaceActionControllerAsyncTouchTest {
 
     @BeforeEach
     void setUp() {
-        controller = new InterfaceActionController(signalService, interfaceActionService, runRepository, interfaceClient);
+        controller = new InterfaceActionController(signalService, interfaceActionService, runRepository, interfaceClient,
+                com.apimarketplace.orchestrator.testsupport.OrgAccessGuardStubs.allowAll());
         WorkflowRunEntity run = new WorkflowRunEntity();
         run.setTenantId(USER_ID);
         when(runRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));

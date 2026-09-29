@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useIsomorphicLayoutEffect } from '@/lib/hooks/useIsomorphicLayoutEffect';
 import {
   ArrowLeft, ArrowRight, Check, History, Loader2, Sparkles, X, FolderOpen,
   Coins, Download, AlertCircle, LayoutGrid, PenLine, Pencil, Upload,
@@ -883,8 +884,12 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
     }
   }, [tFile]);
 
+  // Refreshed in a LAYOUT effect: the result and `running = false` arrive in one render, and a
+  // passive refresh left the running-time `dismiss` in the ref right after the commit that shows
+  // the result, so an Escape pressed then was swallowed and refused (same gap as the one
+  // CreateWorkflowModal had). The listener below stays registered once, for its capture order.
   const dismissRef = useRef(dismiss);
-  useEffect(() => { dismissRef.current = dismiss; }, [dismiss]);
+  useIsomorphicLayoutEffect(() => { dismissRef.current = dismiss; }, [dismiss]);
 
   /**
    * Escape dismisses this dialog, and the key stops here.

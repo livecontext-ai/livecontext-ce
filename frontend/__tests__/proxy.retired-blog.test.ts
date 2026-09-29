@@ -89,7 +89,7 @@ describe('proxy: the removed blog answers 404', () => {
   it('covers every locale prefix, not just the bare path', () => {
     // A locale-prefixed blog URL must 404 on its own. Handled by the middleware
     // it answers 404 directly; left to the generic locale-strip redirect below
-    // it would answer 307 to a path that then answers 200 with the landing.
+    // it would answer a redirect to a path that then answers 200 with the landing.
     for (const path of ['/en/blog', '/fr/blog', '/de/blog/ai-agent-audit-trail', '/zh/blog']) {
       expect(rewriteTarget(proxy(request(path)) as Response), path)
         .toBe('https://livecontext.ai/_not-found');

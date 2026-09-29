@@ -79,7 +79,7 @@ import {
   type FilesSortPreference,
   type FilesViewMode,
 } from '@/lib/files/filesViewPreferences';
-import { formatUtcDate } from '@/lib/utils/dateFormatters';
+import { dayEdgeInstant, formatUtcDate } from '@/lib/utils/dateFormatters';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { track } from '@/lib/analytics/analytics';
 
@@ -323,15 +323,18 @@ export function FileBrowser() {
   // Date inputs are yyyy-mm-dd; converted to ISO instants.
   const [dateFromInput, setDateFromInput] = React.useState('');
   const [dateToInput, setDateToInput] = React.useState('');
-  // Boundaries are UTC to match the UTC dates shown on every row (formatUtcDate);
-  // the backend filters createdAt against these ISO instants.
+  // Boundaries are the READER'S midnight, not UTC midnight, because the day they typed is the day
+  // they see on the rows (which render in their display zone). Pinning the bounds to UTC put the
+  // last hours of every westward day in the next bucket: a file whose row reads "Jan 15" went
+  // missing from a filter asking for the 15th. The backend filters createdAt against these ISO
+  // instants, so the conversion has to happen here, where the zone is known.
   const handleDateFrom = React.useCallback((v: string) => {
     setDateFromInput(v);
-    setDateFrom(v ? `${v}T00:00:00.000Z` : '');
+    setDateFrom(dayEdgeInstant(v, 'start') ?? '');
   }, [setDateFrom]);
   const handleDateTo = React.useCallback((v: string) => {
     setDateToInput(v);
-    setDateTo(v ? `${v}T23:59:59.999Z` : '');
+    setDateTo(dayEdgeInstant(v, 'end') ?? '');
   }, [setDateTo]);
 
   const filtersActive = !!search || !!sourceTypeFilter || !!dateFrom || !!dateTo || fileType !== '_all';

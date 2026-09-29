@@ -100,6 +100,7 @@ describe('buildNodeRows', () => {
     expect(fetch.partials).toBe(0);
     expect(fetch.avgElapsedMs).toBe(2000);
     expect(fetch.maxElapsedMs).toBe(3000);
+    expect(fetch.minElapsedMs).toBe(1000);
     // A node whose items only PARTLY failed mostly worked: counted apart, never as "failed".
     expect(rows[1].failures).toBe(0);
     expect(rows[1].partials).toBe(1);
@@ -113,6 +114,7 @@ describe('buildNodeRows', () => {
     ]);
 
     expect(row.maxElapsedMs).toBe(1_000);
+    expect(row.minElapsedMs).toBe(1_000);
   });
 
   it('leaves the average empty when the node never succeeded with a measured time', () => {
@@ -120,29 +122,49 @@ describe('buildNodeRows', () => {
 
     expect(row.avgElapsedMs).toBeNull();
     expect(row.maxElapsedMs).toBe(0);
+    expect(row.minElapsedMs).toBe(0);
   });
 });
 
 describe('heatLevel', () => {
   it('grades a cell against its own row, so a slow agent does not make every other node look fast', () => {
-    expect(heatLevel(100, 1000)).toBe(0);
-    expect(heatLevel(300, 1000)).toBe(1);
-    expect(heatLevel(500, 1000)).toBe(2);
-    expect(heatLevel(700, 1000)).toBe(3);
-    expect(heatLevel(1000, 1000)).toBe(4);
+    expect(heatLevel(100, 0, 1000)).toBe(0);
+    expect(heatLevel(300, 0, 1000)).toBe(1);
+    expect(heatLevel(500, 0, 1000)).toBe(2);
+    expect(heatLevel(700, 0, 1000)).toBe(3);
+    expect(heatLevel(1000, 0, 1000)).toBe(4);
   });
 
-  it('switches level exactly at each fifth of the row maximum', () => {
-    expect(heatLevel(199, 1000)).toBe(0);
-    expect(heatLevel(200, 1000)).toBe(1);
-    expect(heatLevel(799, 1000)).toBe(3);
-    expect(heatLevel(800, 1000)).toBe(4);
+  it('switches level exactly at each fifth of the span between the fastest and slowest run', () => {
+    expect(heatLevel(1199, 1000, 2000)).toBe(0);
+    expect(heatLevel(1200, 1000, 2000)).toBe(1);
+    expect(heatLevel(1799, 1000, 2000)).toBe(3);
+    expect(heatLevel(1800, 1000, 2000)).toBe(4);
+  });
+
+  it('paints the fastest run of a row palest even when it is far from zero', () => {
+    expect(heatLevel(10_000, 10_000, 20_000)).toBe(0);
+    expect(heatLevel(20_000, 10_000, 20_000)).toBe(4);
+  });
+
+  // Regression: the only epoch of a run was its own maximum, so a sub-second cell read "slowest".
+  it('paints a lone success palest instead of darkest', () => {
+    expect(heatLevel(300, 300, 300)).toBe(0);
+  });
+
+  it('treats durations that barely differ as equal, in absolute and in relative terms', () => {
+    // 60 ms apart: under the 100 ms floor.
+    expect(heatLevel(260, 200, 260)).toBe(0);
+    // 200 ms apart on a 30 s node: under 10% of its slowest run.
+    expect(heatLevel(30_000, 29_800, 30_000)).toBe(0);
+    // Exactly at the threshold, the scale applies.
+    expect(heatLevel(1_000, 900, 1_000)).toBe(4);
   });
 
   it('has no level for a cell without an elapsed time, and level 0 on an all-zero row', () => {
-    expect(heatLevel(null, 1000)).toBeNull();
-    expect(heatLevel(undefined, 1000)).toBeNull();
-    expect(heatLevel(0, 0)).toBe(0);
+    expect(heatLevel(null, 0, 1000)).toBeNull();
+    expect(heatLevel(undefined, 0, 1000)).toBeNull();
+    expect(heatLevel(0, 0, 0)).toBe(0);
   });
 });
 

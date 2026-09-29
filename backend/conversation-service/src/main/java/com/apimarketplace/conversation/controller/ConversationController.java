@@ -797,6 +797,9 @@ public class ConversationController {
         if (conversationQueryService.getConversationById(conversationId, userId, organizationId).isEmpty()) {
             return ResponseEntity.notFound().build();
         }
+        if (isViewerApprovalBlocked(organizationId)) {
+            return viewerApprovalForbidden();
+        }
         @SuppressWarnings("unchecked")
         List<String> services = (List<String>) request.getOrDefault("services", List.of());
         logger.info("🔓 [SERVICE_APPROVAL] Approve endpoint called for conversation: {} (no-op)", conversationId);
@@ -842,6 +845,9 @@ public class ConversationController {
         }
         if (conversationQueryService.getConversationById(conversationId, userId, organizationId).isEmpty()) {
             return ResponseEntity.notFound().build();
+        }
+        if (isViewerApprovalBlocked(organizationId)) {
+            return viewerApprovalForbidden();
         }
         String rule = request != null ? (String) request.get("rule") : null;
         if (rule == null || rule.isBlank()) {
@@ -915,6 +921,23 @@ public class ConversationController {
     }
 
     /**
+     * A read-only VIEWER cannot APPROVE a held tool action (it would run a write with the
+     * workspace credentials) nor connect a service. Declining, dismissing and answering an
+     * ask_user question stay open: they never run anything. Checked after the scope check,
+     * so a refusal never reveals a conversation the caller cannot see.
+     */
+    private static boolean isViewerApprovalBlocked(String organizationId) {
+        return com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(
+                organizationId, com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole());
+    }
+
+    private static ResponseEntity<Map<String, Object>> viewerApprovalForbidden() {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                "error", "VIEWER role cannot approve tool actions",
+                "code", "org_role_read_only"));
+    }
+
+    /**
      * The parked call's id from the request body, or null when it names none.
      *
      * <p>Reads the value rather than casting it: a client sending a number would turn a
@@ -956,6 +979,11 @@ public class ConversationController {
         Object rawApproved = request.get("approved");
         boolean approved = Boolean.TRUE.equals(rawApproved)
                 || (rawApproved instanceof String s && "true".equalsIgnoreCase(s.trim()));
+        // Releasing a held call as APPROVED runs it with the workspace credentials: refused
+        // to the read-only VIEWER. Releasing it as refused stays open (it only stops the agent).
+        if (approved && isViewerApprovalBlocked(organizationId)) {
+            return viewerApprovalForbidden();
+        }
         boolean released = toolApprovalGateResolver.resolve(conversationId, gateKey, approved);
         return ResponseEntity.ok(Map.of(
             "conversationId", conversationId,
@@ -1101,12 +1129,20 @@ public class ConversationController {
             @RequestHeader("X-User-ID") String userId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
             @RequestBody Map<String, Object> body) {
+        // Publishing a workspace conversation to anyone with the link (or changing / revoking
+        // it) is a workspace write, refused to the read-only VIEWER.
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(organizationId, com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot change conversation sharing"));
+        }
         try {
             String shareMode = (String) body.getOrDefault("shareMode", "read");
             Boolean memoryEnabled = (Boolean) body.get("memoryEnabled");
             ConversationDto dto = conversationSharingService.enableSharing(
                     conversationId, userId, organizationId, shareMode, memoryEnabled);
             return ResponseEntity.ok(dto);
+        } catch (ConversationSharingService.ReadWriteShareRequiresOwnerException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
@@ -1121,12 +1157,20 @@ public class ConversationController {
             @RequestHeader("X-User-ID") String userId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
             @RequestBody Map<String, Object> body) {
+        // Publishing a workspace conversation to anyone with the link (or changing / revoking
+        // it) is a workspace write, refused to the read-only VIEWER.
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(organizationId, com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot change conversation sharing"));
+        }
         try {
             String shareMode = (String) body.get("shareMode");
             Boolean memoryEnabled = (Boolean) body.get("memoryEnabled");
             ConversationDto dto = conversationSharingService.updateShareSettings(
                     conversationId, userId, organizationId, shareMode, memoryEnabled);
             return ResponseEntity.ok(dto);
+        } catch (ConversationSharingService.ReadWriteShareRequiresOwnerException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
@@ -1140,6 +1184,12 @@ public class ConversationController {
             @PathVariable("conversationId") String conversationId,
             @RequestHeader("X-User-ID") String userId,
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+        // Publishing a workspace conversation to anyone with the link (or changing / revoking
+        // it) is a workspace write, refused to the read-only VIEWER.
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(organizationId, com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot change conversation sharing"));
+        }
         try {
             conversationSharingService.disableSharing(conversationId, userId, organizationId);
             return ResponseEntity.noContent().build();

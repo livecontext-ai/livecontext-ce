@@ -115,6 +115,12 @@ public class WorkflowCrudModule implements ToolModule {
         var accessDenied = com.apimarketplace.agent.config.ToolAccessControl.checkWriteAccess(
                 context != null ? context.credentials() : null, "workflow", action);
         if (accessDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get()));
+        // Workspace role (VIEWER is read-only). WorkflowBuilderProvider checks it first; this
+        // repeats it so the module stays safe on any other dispatch path.
+        var roleDenied = com.apimarketplace.agent.config.ToolAccessControl.checkRoleWriteAccess(
+                context != null ? context.orgId() : null,
+                context != null ? context.orgRole() : null, "workflow", action);
+        if (roleDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, roleDenied.get()));
 
         return Optional.of(switch (action) {
             case "get" -> executeGet(parameters, tenantId, context);
@@ -752,7 +758,10 @@ public class WorkflowCrudModule implements ToolModule {
                         workflowId, tenantId, callerOrgId);
                 return ToolExecutionResult.failure(ToolErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found: " + workflowIdStr);
             }
-            boolean deleted = workflowService.deleteWorkflow(workflowId, tenantId);
+            // Pass the role so OrgAccessGuard.canWrite sees it: the 2-arg overload sends null,
+            // which the guard cannot recognise as VIEWER.
+            boolean deleted = workflowService.deleteWorkflow(workflowId, tenantId,
+                    context != null ? context.orgRole() : null);
             if (!deleted) {
                 return ToolExecutionResult.failure(ToolErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found: " + workflowIdStr);
             }
@@ -1141,10 +1150,14 @@ public class WorkflowCrudModule implements ToolModule {
             payload.put("epoch", result.epoch());
             payload.put("attempt", result.spawn());
             payload.put("outcome", outcome.name());
-            payload.put("status", workflowRunRepository.findByRunIdPublic(runId)
-                    .map(r -> r.getStatus().getValue()).orElse(result.status()));
+            WorkflowRunEntity after = workflowRunRepository.findByRunIdPublic(runId).orElse(null);
+            payload.put("status", after != null ? after.getStatus().getValue() : result.status());
             payload.put("summary", restartSummary(outcome, result.resetSteps().size(), result.stepId()));
-            return ToolExecutionResult.success(payload);
+            // Same visualization as execute: the page showing this workflow binds the replayed run
+            // (on the version it now runs), so the user watches what the agent just touched.
+            Map<String, Object> viz = WorkflowRunVisualization.metadataFor(after,
+                    id -> workflowService.getWorkflow(id).map(WorkflowEntity::getName).orElse(null));
+            return viz != null ? ToolExecutionResult.success(payload, viz) : ToolExecutionResult.success(payload);
         } catch (IllegalStateException e) {
             // The node is not in a state a restart can start from (still pending, or never ran).
             return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, e.getMessage());

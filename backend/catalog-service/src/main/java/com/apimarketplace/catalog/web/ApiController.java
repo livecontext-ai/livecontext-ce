@@ -400,16 +400,11 @@ public class ApiController {
                                                           @Valid @RequestBody ApiConfigurationRequest.PricingModelsUpdateRequest request,
                                                           @RequestHeader(value = "X-User-ID", required = false) String userId,
                                                           @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        try {
-            // Extract user ID from either X-User-Id header or Authorization header
-            String finalUserId = userId;
-            if (finalUserId == null && authHeader != null && authHeader.startsWith("Bearer ")) {
-                // For now, use a default user ID when Bearer token is present
-                // In production, you would decode and validate the JWT token
-                finalUserId = "authenticated-user";
-            }
+        // Pricing is part of the API: same owner-only rule as PUT /{id}, /config, /tools/{toolId}.
+        authorizationService.verifyApiOwnership(userId, id);
 
-            ApiResponse response = apiService.updatePricingModels(id, request, finalUserId);
+        try {
+            ApiResponse response = apiService.updatePricingModels(id, request, userId);
             return ResponseEntity.ok(response);
         } catch (RuntimeException e) {
             if (e.getMessage().contains("not found")) {
@@ -428,14 +423,11 @@ public class ApiController {
                                                       @Valid @RequestBody ApiConfigurationRequest.PaidPlansUpdateRequest request,
                                                       @RequestHeader(value = "X-User-ID", required = false) String userId,
                                                       @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        try {
-            // Extract user ID from either X-User-Id header or Authorization header
-            String finalUserId = userId;
-            if (finalUserId == null && authHeader != null && authHeader.startsWith("Bearer ")) {
-                finalUserId = "authenticated-user";
-            }
+        // Pricing is part of the API: same owner-only rule as PUT /{id}, /config, /tools/{toolId}.
+        authorizationService.verifyApiOwnership(userId, id);
 
-            ApiResponse response = apiService.updatePaidPlans(id, request, finalUserId);
+        try {
+            ApiResponse response = apiService.updatePaidPlans(id, request, userId);
             return ResponseEntity.ok(response);
         } catch (RuntimeException e) {
             if (e.getMessage().contains("not found")) {
@@ -520,7 +512,9 @@ public class ApiController {
             @Valid @RequestBody ApiConfigurationRequest.ToolFreemiumConfigUpdateRequest request,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        
+        // Pricing is part of the API: same owner-only rule as PUT /{id}, /config, /tools/{toolId}.
+        authorizationService.verifyApiOwnership(userId, apiId);
+
         try {
             log.info("Updating FREEMIUM config for tool {} in API {}", apiToolId, apiId);
             
@@ -543,7 +537,9 @@ public class ApiController {
             @Valid @RequestBody ApiConfigurationRequest.BatchToolFreemiumConfigUpdateRequest request,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        
+        // Pricing is part of the API: same owner-only rule as PUT /{id}, /config, /tools/{toolId}.
+        authorizationService.verifyApiOwnership(userId, apiId);
+
         try {
             log.info("Batch updating FREEMIUM config for {} tools in API {}", request.toolsConfig().size(), apiId);
             
@@ -567,7 +563,9 @@ public class ApiController {
             @Valid @RequestBody ApiConfigurationRequest.ToolPaidConfigUpdateRequest request,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        
+        // Pricing is part of the API: same owner-only rule as PUT /{id}, /config, /tools/{toolId}.
+        authorizationService.verifyApiOwnership(userId, apiId);
+
         try {
             log.info("Updating PAID config for tool {} in API {}", apiToolId, apiId);
             
@@ -590,7 +588,9 @@ public class ApiController {
             @Valid @RequestBody ApiConfigurationRequest.BatchToolPaidConfigUpdateRequest request,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        
+        // Pricing is part of the API: same owner-only rule as PUT /{id}, /config, /tools/{toolId}.
+        authorizationService.verifyApiOwnership(userId, apiId);
+
         try {
             log.info("Batch updating PAID config for {} tools in API {}", request.toolsConfig().size(), apiId);
             

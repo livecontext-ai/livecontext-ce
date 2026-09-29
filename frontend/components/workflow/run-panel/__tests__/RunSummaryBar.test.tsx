@@ -200,6 +200,75 @@ describe('RunSummaryBar - which epoch the bar says you are on', () => {
     expect(document.querySelector('[data-run-epoch-chip]')).toBeNull();
   });
 
+  it('keeps one width whichever epoch it shows, by reserving the "All epochs" label', () => {
+    // Switching epoch used to resize the whole bar, and with it the canvas pill.
+    renderBar('COMPLETED', { epochCount: 12, selectedEpoch: 7 });
+    const label = document.querySelector('[data-run-epoch-chip-label]') as HTMLElement;
+    const [reserved, shown] = Array.from(label.children) as HTMLElement[];
+
+    // Both in the same grid cell, so the cell takes the wider one; the shown one is centred.
+    expect(label.className).toContain('inline-grid');
+    expect(label.className).toContain('justify-items-center');
+    // Each layer carries its own calendar icon, so a short "7" sits right next to it.
+    expect(reserved.querySelector('.lucide-calendar')).not.toBeNull();
+    expect(shown.querySelector('.lucide-calendar')).not.toBeNull();
+    // Two calendars in the DOM, one per layer: the reserve's is invisible with it, so one shows.
+    // None outside the cell, which is the chip's only content.
+    const chip = document.querySelector('[data-run-epoch-chip]') as HTMLElement;
+    expect(chip.querySelectorAll('.lucide-calendar')).toHaveLength(2);
+    expect(label.parentElement).toBe(chip);
+    expect(reserved.className).toContain('col-start-1 row-start-1');
+    expect(shown.className).toContain('col-start-1 row-start-1');
+    // The reserve is invisible and silent; the epoch is what is seen and read.
+    expect(reserved.textContent).toBe('workflow.runSteps.allEpochsCount(12)');
+    expect(reserved.className).toContain('invisible');
+    expect(reserved.getAttribute('aria-hidden')).toBe('true');
+    expect(shown.textContent).toBe('7');
+    expect((document.querySelector('[data-run-epoch-chip]') as HTMLElement).getAttribute('data-epoch-shown')).toBe('7');
+  });
+
+  it('shows the "All epochs" label itself, visible, when no epoch is picked', () => {
+    renderBar('COMPLETED', { epochCount: 12, selectedEpoch: null });
+    const label = document.querySelector('[data-run-epoch-chip-label]') as HTMLElement;
+
+    expect(label.children).toHaveLength(1);
+    expect(label.children[0].className).not.toContain('invisible');
+    expect(label.children[0].getAttribute('aria-hidden')).toBeNull();
+    // The calendar sits inside the visible label, right before "All epochs (12)".
+    expect(label.children[0].firstElementChild?.getAttribute('class')).toContain('lucide-calendar');
+  });
+
+  it('keeps the chip a plain label when nothing unfolds from it (the side-panel header)', () => {
+    renderBar('COMPLETED', { epochCount: 3, selectedEpoch: null });
+    expect((document.querySelector('[data-run-epoch-chip]') as HTMLElement).tagName).toBe('SPAN');
+  });
+
+  it('turns the chip into a control, same label, that does not reach the bar around it', () => {
+    const onEpochChipClick = vi.fn();
+    const onBarClick = vi.fn();
+    render(
+      <div onClick={onBarClick}>
+        <RunSummaryBar
+          currentRunInfo={{ runId: 'run-1', status: 'COMPLETED', planVersion: 3 } as never}
+          epochCount={3}
+          selectedEpoch={2}
+          onEpochChipClick={onEpochChipClick}
+          epochChipExpanded
+        />
+      </div>,
+    );
+    const chip = document.querySelector('[data-run-epoch-chip]') as HTMLElement;
+
+    expect(chip.tagName).toBe('BUTTON');
+    expect(chip.getAttribute('data-epoch-shown')).toBe('2');
+    expect(chip.getAttribute('aria-expanded')).toBe('true');
+
+    fireEvent.click(chip);
+
+    expect(onEpochChipClick).toHaveBeenCalledTimes(1);
+    expect(onBarClick).not.toHaveBeenCalled();
+  });
+
 });
 
 describe('RunSummaryBar - where the action button sits', () => {
