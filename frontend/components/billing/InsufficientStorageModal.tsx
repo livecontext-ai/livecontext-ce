@@ -16,6 +16,10 @@ import ReferencePrice from '@/components/pricing/ReferencePrice';
 import { usePricingEvent } from '@/hooks/usePricingEvent';
 import { storageApi, type StorageQuota, type StorageBreakdown, type StorageCategory, STORAGE_CATEGORY_COLORS } from '@/lib/api/storage-api';
 import { RewardCodeInline } from '@/components/reward/RewardCodeInline';
+import { usePersonalOffer } from '@/lib/hooks/usePersonalOffer';
+import { savePersonalOfferJourney } from '@/lib/lifecycle/personalOfferJourney';
+import { hasAttachedPersonalOfferCheckout, personalOfferCheckoutApiError, personalOfferCheckoutBlock } from '@/lib/billing/personal-offer-checkout';
+import { ApiError } from '@/lib/api/api-client';
 
 /**
  * Custom event name for triggering the insufficient storage modal.
@@ -49,11 +53,15 @@ function formatBytes(bytes: number): string {
 export default function InsufficientStorageModal() {
   const t = useTranslations('modals.insufficientStorage');
   const tBilling = useTranslations('pricing.billing');
+  const tOffer = useTranslations('reward.personalOffer');
   const router = useRouter();
   const { createSubscription } = useSubscription();
   const [open, setOpen] = useState(false);
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('yearly');
   const [processingPlanId, setProcessingPlanId] = useState<string | null>(null);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [continueWithoutOffer, setContinueWithoutOffer] = useState(false);
+  const personalOffer = usePersonalOffer(0, billingCycle);
   const [quota, setQuota] = useState<StorageQuota | null>(null);
   const [breakdown, setBreakdown] = useState<StorageBreakdown[]>([]);
 
@@ -80,12 +88,40 @@ export default function InsufficientStorageModal() {
 
     setProcessingPlanId(planId);
     try {
+      setCheckoutError(null);
       const backendPlanCode = PLAN_MAPPING[planId] || planId.toUpperCase();
+      const offerBlock = personalOffer.current?.offerId && (!continueWithoutOffer || personalOffer.current.status === 'REVIEW_REQUIRED')
+        ? personalOfferCheckoutBlock(personalOffer.current.status) : null;
+      if (offerBlock) {
+        setCheckoutError(tOffer(offerBlock));
+        return;
+      }
+      if (!continueWithoutOffer && (personalOffer.isLoading || personalOffer.isError)) {
+        setCheckoutError(tOffer('verifyUnavailable'));
+        return;
+      }
+      const hasOffer = !continueWithoutOffer && (!!personalOffer.candidateCode || !!personalOffer.current?.offerId &&
+        ['AVAILABLE', 'CHECKOUT_OPEN'].includes(personalOffer.current.status));
+      const offerPlan = personalOffer.preview?.plans.find((entry) => entry.planCode === backendPlanCode);
+      if (hasOffer && (!personalOffer.preview || !offerPlan || offerPlan.status === 'UNAVAILABLE')) {
+        setCheckoutError(!personalOffer.preview ? tOffer('verifyUnavailable') : tOffer('planUnavailable'));
+        return;
+      }
+      savePersonalOfferJourney(window, {
+        planCode: backendPlanCode,
+        creditTierIndex: 0,
+        billingCycle,
+        returnToWork: window.location.pathname.startsWith('/') ? window.location.pathname : '/app/chat',
+      });
       const result = await createSubscription({
         planCode: backendPlanCode,
         billingCycle,
         creditTierIndex: '0',
+        ...(hasOffer ? { personalOfferId: personalOffer.preview?.offerId, offerVersion: personalOffer.preview?.offerVersion } : {}),
       });
+      if (hasOffer && !hasAttachedPersonalOfferCheckout(result)) {
+        throw new Error(tOffer('attachFailed'));
+      }
 
       if (result === 'FREE_PLAN_SELECTED' || result === 'SWAP_IMMEDIAT') {
         setOpen(false);
@@ -100,12 +136,12 @@ export default function InsufficientStorageModal() {
       }
     } catch (error) {
       console.error('Error creating subscription from storage modal:', error);
-      setOpen(false);
-      router.push('/app/settings/pricing');
+      const offerPaymentError = error instanceof ApiError ? personalOfferCheckoutApiError(error.code) : null;
+      setCheckoutError(offerPaymentError ? tOffer(offerPaymentError) : error instanceof Error ? error.message : tOffer('verifyUnavailable'));
     } finally {
       setProcessingPlanId(null);
     }
-  }, [createSubscription, billingCycle, router]);
+  }, [createSubscription, billingCycle, personalOffer, continueWithoutOffer, tOffer]);
 
   const calcPrice = (planId: string) => calcPriceBase(planId, billingCycle, 0);
   // Same server-resolved window as the pricing page, so the two never disagree.
@@ -271,7 +307,7 @@ export default function InsufficientStorageModal() {
 
         {/* Plans grid */}
         <div className="p-6 pt-3">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {plans.map((plan) => (
               <div
                 key={plan.id}
@@ -316,6 +352,18 @@ export default function InsufficientStorageModal() {
                     creditTierIndex={0}
                     event={pricingEvent}
                   />
+                  {plan.id !== 'free' && billingCycle === 'yearly' && <p className="mt-2 text-sm text-theme-secondary">{tOffer('annualTotal', { amount: new Intl.NumberFormat(getClientLocale(), { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(plan.monthlyPrice * 12) })}</p>}
+                  {plan.id !== 'free' && ['AVAILABLE', 'CHECKOUT_OPEN'].includes(personalOffer.current?.status ?? '') && !continueWithoutOffer && (
+                    <div className="mt-2 text-sm text-theme-secondary">
+                      {(() => {
+                        const bonus = personalOffer.preview?.plans.find((entry) => entry.planCode === plan.id.toUpperCase());
+                        if (!bonus) return <p>{tOffer('checking')}</p>;
+                        if (bonus.status === 'ELIGIBLE' && bonus.bonusCredits > 0) return <p>{tOffer('bonus', { credits: bonus.bonusCredits.toLocaleString(getClientLocale()), value: new Intl.NumberFormat(getClientLocale(), { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(bonus.paygFaceValueUsd) })}</p>;
+                        if (bonus.status === 'NO_BONUS') return <><p>{tOffer('noBonus')}</p>{personalOffer.preview?.nextEligibleMonthlyCredits != null && <p>{tOffer('nextEligible', { credits: personalOffer.preview.nextEligibleMonthlyCredits.toLocaleString(getClientLocale()) })}</p>}<p>{tOffer('firstPurchaseUsed')}</p></>;
+                        return <p>{tOffer('planUnavailable')}</p>;
+                      })()}
+                    </div>
+                  )}
                 </div>
 
                 <ul className="space-y-1.5 mb-4">
@@ -354,7 +402,7 @@ export default function InsufficientStorageModal() {
 
           {/* Footer links */}
           <div className="mt-4 flex flex-wrap items-center justify-center gap-4">
-            <RewardCodeInline />
+            <RewardCodeInline subscriptionCheckout creditTierIndex={0} billingCycle={billingCycle} />
             <button
               onClick={() => { setOpen(false); router.push('/app/settings/storage'); }}
               className="text-xs text-theme-muted hover:text-theme-primary underline"
@@ -368,6 +416,15 @@ export default function InsufficientStorageModal() {
               {t('viewAllPlans')}
             </button>
           </div>
+          {(personalOffer.isError || !!personalOffer.current?.offerId && !['ALREADY_USED', 'REVIEW_REQUIRED', 'GRANTED', 'NO_BONUS', 'CLAWED_BACK'].includes(personalOffer.current.status)) && (
+            <div className="mt-3 text-center text-sm text-theme-secondary">
+              {continueWithoutOffer && <p role="alert">{tOffer('firstPurchaseUsed')}</p>}
+              <button type="button" className="underline" onClick={() => setContinueWithoutOffer((value) => !value)}>
+                {continueWithoutOffer ? tOffer('useOffer') : tOffer('continueWithout')}
+              </button>
+            </div>
+          )}
+          {checkoutError && <p className="mt-3 text-sm text-red-600" role="alert">{checkoutError}</p>}
         </div>
       </DialogContent>
     </Dialog>

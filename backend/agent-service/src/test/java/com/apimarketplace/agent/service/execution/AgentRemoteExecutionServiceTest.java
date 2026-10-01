@@ -886,6 +886,49 @@ class AgentRemoteExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("regression: a LINKED bridge dispatch tells the bridge the caller publishes the failure - the bridge's own `error` ended the chat turn before the fallback streamed its reply on the same stream")
+    void linkedBridgeDispatchAsksTheBridgeNotToAnnounceTheFailureItRetries() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("codex", "gpt-5.3-codex")));
+        wireExecutionLinks(linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
+        ArgumentCaptor<AgentExecutionRequestDto> dispatched = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
+        when(bridgeDispatcher.dispatchRaw(dispatched.capture(), any(), anyBoolean())).thenReturn(null);
+        ArgumentCaptor<AgentLoopContext> fallbackCtx = ArgumentCaptor.forClass(AgentLoopContext.class);
+        when(agentLoopService.execute(fallbackCtx.capture(), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
+
+        // The bridge request carries the marker the bridge matches (lib/runFailureEvent.mjs).
+        assertThat(dispatched.getValue().credentials())
+            .containsEntry(AgentExecutionRequestDto.CALLER_PUBLISHES_FAILURE_KEY, true);
+        // The retry itself is the direct loop, which publishes its own terminal event through
+        // its callback: the marker is a bridge instruction and never rides into that run.
+        verify(agentLoopService).execute(any(AgentLoopContext.class), any(StreamingCallback.class));
+        assertThat(fallbackCtx.getValue().credentials())
+            .doesNotContainKey(AgentExecutionRequestDto.CALLER_PUBLISHES_FAILURE_KEY);
+    }
+
+    @Test
+    @DisplayName("A DIRECT (non-linked) bridge dispatch has no fallback, so the bridge keeps announcing its own failure: no caller-publishes marker")
+    void directBridgeDispatchKeepsTheBridgesOwnFailureEvent() {
+        when(bridgeDispatcher.shouldDispatch(any())).thenReturn(true);
+        ArgumentCaptor<AgentExecutionRequestDto> dispatched = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
+        when(bridgeDispatcher.dispatchRaw(dispatched.capture(), any(), anyBoolean())).thenReturn(null);
+
+        service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
+
+        assertThat(dispatched.getValue().credentials())
+            .doesNotContainKey(AgentExecutionRequestDto.CALLER_PUBLISHES_FAILURE_KEY);
+        verify(agentLoopService, never()).execute(any(), any(StreamingCallback.class));
+    }
+
+    @Test
     @DisplayName("A non-linked (direct bridge selection) FAILED response with empty content does NOT fall back - the billed pair already IS the bridge, so there is nothing distinct to retry on")
     void nonLinkedBridgeEmptyFailureDoesNotFallBack() {
         // No execution link wired: executionLinkRouter stays null, so executionRoute is null

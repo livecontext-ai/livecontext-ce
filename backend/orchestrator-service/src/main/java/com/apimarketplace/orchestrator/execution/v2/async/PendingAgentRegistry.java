@@ -79,6 +79,20 @@ public class PendingAgentRegistry {
     }
 
     /**
+     * Replaces an entry that is still pending, without the overwrite warning {@link #register}
+     * gives: a scheduled retry is re-registered with the moment its request actually left.
+     */
+    public void replace(PendingAgent agent) {
+        if (agent == null || agent.correlationId() == null) {
+            throw new IllegalArgumentException("PendingAgent and correlationId must not be null");
+        }
+        pending.put(agent.correlationId(), agent);
+        if (redisStore != null) {
+            redisStore.store(agent);
+        }
+    }
+
+    /**
      * Re-register an entry recovered from the Redis side-store on startup.
      * Skips writing back to Redis to avoid refreshing the TTL during recovery.
      */

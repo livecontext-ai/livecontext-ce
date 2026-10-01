@@ -99,6 +99,31 @@ class ToolAuthorizationApprovalServiceTest {
     }
 
     @Test
+    @DisplayName("enableAutoAuthorize turns the toggle on, keeps every other chatConfig key, and the next turn gets '*'")
+    void enableAutoAuthorizeKeepsOtherKeys() {
+        conversation.setChatConfig(new java.util.HashMap<>(java.util.Map.of("temperature", 0.3, "webSearch", false)));
+
+        assertThat(service.enableAutoAuthorize("conv-1")).isTrue();
+
+        assertThat(conversation.getChatConfig())
+                .containsEntry("autoAuthorizeTools", true)
+                .containsEntry("temperature", 0.3)
+                .containsEntry("webSearch", false);
+        assertThat(service.resolveAndConsumeForTurn("conv-1")).contains("*");
+    }
+
+    @Test
+    @DisplayName("enableAutoAuthorize works on a conversation with no chatConfig and is a no-op for an unknown one")
+    void enableAutoAuthorizeEdgeCases() {
+        conversation.setChatConfig(null);
+        assertThat(service.enableAutoAuthorize("conv-1")).isTrue();
+        assertThat(conversation.getChatConfig()).containsEntry("autoAuthorizeTools", true);
+
+        assertThat(service.enableAutoAuthorize("missing")).isFalse();
+        assertThat(service.enableAutoAuthorize(null)).isFalse();
+    }
+
+    @Test
     @DisplayName("revoke removes a rule from both buckets")
     void revokeRemovesRule() {
         service.approve("conv-1", "application:acquire", true);

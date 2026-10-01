@@ -1033,33 +1033,12 @@ public class CustomApiRegistrationService {
      * and seed routes agree on what a caller may not set.
      */
     /**
-     * A static header value is a short literal, not prose and not a template.
-     *
-     * <p>Rejects: blank, longer than 64 characters, and ANY value carrying an unresolved
-     * {@code {...}}/{@code &#123;&#123;...&#125;&#125;} placeholder (e.g. {@code {{api_key}}},
-     * {@code {YYYYMM}}), which are runtime/credential templates that would shadow a real
-     * credential header or go out verbatim.
-     *
-     * <p>Whitespace is rejected too, with ONE exception: a space that directly follows a
-     * {@code ;}. That is the media-type parameter form, and it is the only place a genuine
-     * literal holds a space: {@code application/vnd.heroku+json; version=3}. Prose never looks
-     * like that, so the exception costs nothing.
-     *
-     * <p>Measured over the 980-seed corpus before widening it: of the 12 distinct static header
-     * values the whitespace test used to reject, 10 are credential templates
-     * ({@code Bearer {token}}, {@code Basic {base64(id:secret)}}) which the brace test rejects
-     * anyway, and 2 are documentation prose (fly_io's "Required if machine is leased"). Heroku's
-     * {@code Accept} was the only true literal among them, and its 26 endpoints answered
-     * 400 {@code missing_version} in production because this rule dropped it.
+     * A static header value is a short literal. The rule is shared with the seed importer, see
+     * {@link com.apimarketplace.common.web.StaticHeaderLiteral}, so both routes accept exactly the
+     * same values.
      */
     static boolean isLiteralHeaderValue(String value) {
-        if (value == null || value.isBlank() || value.length() > 64) {
-            return false;
-        }
-        if (value.indexOf('{') >= 0 || value.indexOf('}') >= 0) {
-            return false;
-        }
-        return value.replace("; ", ";").chars().noneMatch(Character::isWhitespace);
+        return com.apimarketplace.common.web.StaticHeaderLiteral.isLiteral(value);
     }
 
     private static final Set<String> STATIC_HEADER_SKIP = Set.of(
@@ -1479,9 +1458,11 @@ public class CustomApiRegistrationService {
      * string ("obtain this via /connections") claim the name and block a later, valid entry for the
      * same header - reintroducing the silent drop this whole method exists to remove.
      *
-     * <p>A literal is short and unambiguous: non-blank, at most 64 characters, no whitespace, and no
-     * {@code &#123;} / {@code &#125;}. Anything else is prose or a runtime template, and sending it
-     * verbatim would put a literal {@code &#123;&#123;api_key&#125;&#125;} on the wire.
+     * <p>A literal is short and unambiguous: non-blank, at most 64 characters, no {@code &#123;} /
+     * {@code &#125;}, and no whitespace except one space after a {@code ;} or a {@code ,} (see
+     * {@link com.apimarketplace.common.web.StaticHeaderLiteral}). Anything else is prose or a runtime
+     * template, and sending it verbatim would put a literal {@code &#123;&#123;api_key&#125;&#125;}
+     * on the wire.
      */
     private void addStaticHeaderParams(List<HeaderDto> out, Set<String> emitted, JsonNode headersNode) {
         if (headersNode == null || !headersNode.isObject()) return;
@@ -1506,7 +1487,7 @@ public class CustomApiRegistrationService {
             boolean literal = isLiteralHeaderValue(value);
             if (!literal) {
                 log.warn("Static header '{}' not registered: its value is not a short literal "
-                        + "(at most 64 characters, no braces, and no space except after a ';')", name);
+                        + "(at most 64 characters, no braces, and no space except one after a ';' or a ',')", name);
                 continue;
             }
 
@@ -1678,6 +1659,13 @@ public class CustomApiRegistrationService {
             // validateParams normalizes the `in` value. `fileRef` keeps its canonical
             // camelCase form in the whitelist; accept any casing from the LLM.
             String type = "fileref".equals(rawType.toLowerCase()) ? "fileRef" : rawType.toLowerCase();
+            // JSON Schema (and every param declaration here) spells whole numbers 'integer', so agents
+            // write it in outputSchema too. The output layer has ONE numeric type, 'number', and every
+            // reader compares that literal, so the field is rewritten in place, never stored as 'integer'.
+            if ("integer".equals(type) && field instanceof ObjectNode objectField) {
+                objectField.put("type", "number");
+                type = "number";
+            }
             if (!ALLOWED_OUTPUT_TYPES.contains(type)) {
                 throw new IllegalArgumentException(
                         "Field '" + label + "' on endpoint '" + endpointName

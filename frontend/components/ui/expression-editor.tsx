@@ -93,7 +93,7 @@ const SPEL_SUGGESTIONS: SuggestionItem[] = [
   { label: 'formatdate()', insert: "formatdate(value, 'yyyy-MM-dd')", description: 'Format date with pattern', category: 'date', returnType: 'string' },
   { label: 'formatnumber()', insert: 'formatnumber(value, 2)', description: 'Format number with decimals', category: 'date', returnType: 'string' },
   { label: 'formatcurrency()', insert: "formatcurrency(value, 'EUR')", description: 'Format as currency', category: 'date', returnType: 'string' },
-  { label: 'now()', insert: 'now()', description: 'Current timestamp (epoch ms)', category: 'date', returnType: 'number' },
+  { label: 'now()', insert: 'now()', description: 'Current UTC date-time (ISO, e.g. 2026-03-04T15:30:45)', category: 'date', returnType: 'string' },
   { label: 'today()', insert: 'today()', description: "Today's date (ISO format)", category: 'date', returnType: 'string' },
 
   // ARITHMETIC OPERATORS

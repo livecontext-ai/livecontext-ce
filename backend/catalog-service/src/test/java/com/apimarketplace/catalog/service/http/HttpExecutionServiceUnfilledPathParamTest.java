@@ -77,7 +77,7 @@ class HttpExecutionServiceUnfilledPathParamTest {
         lenient().when(userCredentialService.getAccessToken(anyString(), anyString())).thenReturn(Optional.empty());
         service = new HttpExecutionService(
                 apiToolParameterRepository, userCredentialService, encryptionService,
-                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine(2, 10_000L));
+                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine());
         CredentialModeContext.clear();
     }
 

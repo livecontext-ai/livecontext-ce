@@ -226,19 +226,15 @@ class CeCatalogCloudRelayTest {
                     .requestId(REQUEST_ID)
                     .build();
             when(relayClient.execute(eq(CREDENTIALS), eq("telegram"), eq("send-message"),
-                    any(), any(), any(), any(), any())).thenReturn(cloudResponse);
+                    any(), any(), any(), any())).thenReturn(cloudResponse);
 
             ToolExecutionRequest request = platformRequest();
             Optional<ToolExecutionResponse> result = relay.tryRelay(TOOL, request, USER_ID, REQUEST_ID);
 
             assertThat(result).containsSame(cloudResponse);
-            // The budget the node decided travels with the relay, or a self-hosted install's
-            // "do not retry underneath me" would stop at its own catalog while the cloud went on
-            // re-sending: the feature would work in one edition and be inert in the other.
             verify(relayClient).execute(CREDENTIALS, "telegram", "send-message",
                     request.getParameters(), request.getExpand(),
-                    request.getMaxItems(), request.getInlineBinaries(),
-                    request.getProviderRetryMaxWaitSeconds());
+                    request.getMaxItems(), request.getInlineBinaries());
         }
 
         @Test
@@ -250,7 +246,7 @@ class CeCatalogCloudRelayTest {
             // available=true, "local wins" swallowed every relay, and the local path then
             // failed credentials_required: the happy path was circularly unreachable.
             ToolExecutionResponse cloudResponse = ToolExecutionResponse.builder().success(true).build();
-            when(relayClient.execute(any(), anyString(), anyString(), any(), any(), any(), any(), any()))
+            when(relayClient.execute(any(), anyString(), anyString(), any(), any(), any(), any()))
                     .thenReturn(cloudResponse);
             when(credentialClient.findPlatformCredentialByName(INTEGRATION)).thenReturn(Optional.empty());
 
@@ -268,7 +264,7 @@ class CeCatalogCloudRelayTest {
                     .success(false)
                     .error("Telegram returned 400: chat not found")
                     .build();
-            when(relayClient.execute(any(), anyString(), anyString(), any(), any(), any(), any(), any()))
+            when(relayClient.execute(any(), anyString(), anyString(), any(), any(), any(), any()))
                     .thenReturn(cloudFailure);
 
             Optional<ToolExecutionResponse> result = relay.tryRelay(TOOL, platformRequest(), USER_ID, REQUEST_ID);
@@ -290,7 +286,7 @@ class CeCatalogCloudRelayTest {
                 "AUTHENTICATION_REQUIRED|reconnect the cloud account in settings",
         })
         void mapsRelayErrorCodes(String errorCode, String expectedFragment) {
-            when(relayClient.execute(any(), anyString(), anyString(), any(), any(), any(), any(), any()))
+            when(relayClient.execute(any(), anyString(), anyString(), any(), any(), any(), any()))
                     .thenThrow(new CloudCatalogRelayClient.CatalogRelayException(errorCode, false, "refused"));
 
             Optional<ToolExecutionResponse> result = relay.tryRelay(TOOL, platformRequest(), USER_ID, REQUEST_ID);
@@ -310,7 +306,7 @@ class CeCatalogCloudRelayTest {
         @Test
         @DisplayName("INSUFFICIENT_CREDITS with delinquent=true also mentions the outstanding payment")
         void insufficientCreditsDelinquentMentionsPayment() {
-            when(relayClient.execute(any(), anyString(), anyString(), any(), any(), any(), any(), any()))
+            when(relayClient.execute(any(), anyString(), anyString(), any(), any(), any(), any()))
                     .thenThrow(new CloudCatalogRelayClient.CatalogRelayException(
                             "INSUFFICIENT_CREDITS", true, "refused"));
 
@@ -323,7 +319,7 @@ class CeCatalogCloudRelayTest {
         @Test
         @DisplayName("transport failure yields a failed 'Cloud relay unreachable' response, never an exception")
         void transportFailureBecomesFailedResponse() {
-            when(relayClient.execute(any(), anyString(), anyString(), any(), any(), any(), any(), any()))
+            when(relayClient.execute(any(), anyString(), anyString(), any(), any(), any(), any()))
                     .thenThrow(new RuntimeException("Connection refused"));
 
             Optional<ToolExecutionResponse> result = relay.tryRelay(TOOL, platformRequest(), USER_ID, REQUEST_ID);
@@ -339,7 +335,7 @@ class CeCatalogCloudRelayTest {
         @DisplayName("credentialSource matching is case-insensitive ('PLATFORM' relays too)")
         void platformSourceMatchIsCaseInsensitive() {
             ToolExecutionResponse cloudResponse = ToolExecutionResponse.builder().success(true).build();
-            when(relayClient.execute(any(), anyString(), anyString(), any(), any(), any(), any(), any()))
+            when(relayClient.execute(any(), anyString(), anyString(), any(), any(), any(), any()))
                     .thenReturn(cloudResponse);
 
             ToolExecutionRequest request = ToolExecutionRequest.builder()

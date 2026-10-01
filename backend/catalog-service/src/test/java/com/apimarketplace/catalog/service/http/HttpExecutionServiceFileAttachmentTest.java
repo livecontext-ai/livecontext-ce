@@ -122,7 +122,7 @@ class HttpExecutionServiceFileAttachmentTest {
         objectMapper = new ObjectMapper();
         service = new HttpExecutionService(
                 apiToolParameterRepository, userCredentialService, encryptionService,
-                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine(2, 10_000L));
+                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine());
         ReflectionTestUtils.setField(service, "fileAttachmentResolver",
                 new FileAttachmentResolver(storageClient, objectMapper, 20L * 1024 * 1024));
     }

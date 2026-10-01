@@ -12,6 +12,8 @@ import com.apimarketplace.common.folder.FolderScope;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.publication.client.PublicationClient;
 import com.apimarketplace.common.web.TenantResolver;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,7 +21,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
@@ -71,6 +78,38 @@ public class AgentService {
 
     @Value("${services.trigger-service.url:http://localhost:8091}")
     private String triggerServiceUrl;
+
+    /**
+     * Only used for the per-workspace name-allocation lock ({@link #lockAgentNameScope}).
+     * Null in Mockito unit tests (constructor injection only), where the lock is skipped:
+     * those tests never have concurrent callers.
+     */
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    /**
+     * Writes a new agent's conversation id back after commit (see attachAgentConversation),
+     * in a transaction of its own. Null in Mockito unit tests, which never defer.
+     */
+    @Autowired(required = false)
+    private PlatformTransactionManager transactionManager;
+
+    /** {@code agent.agents.name} is VARCHAR(255) (V5); validateCreateOrUpdate enforces the same bound. */
+    static final int AGENT_NAME_MAX_LENGTH = 255;
+
+    /**
+     * The partial unique index behind "one active agent per name per workspace":
+     * {@code agent.agents (organization_id, name) WHERE is_active} (V269, which replaced the
+     * tenant-scoped V90 index). Case-SENSITIVE: "Nova" and "nova" may coexist.
+     */
+    static final String AGENT_NAME_UNIQUE_INDEX = "uq_agents_org_name_active";
+
+    /** Upper bound on "Name (n)" probes; a workspace never holds this many same-stem agents. */
+    private static final int MAX_NAME_SUFFIX = 1000;
+
+    /** "Stem (n)" with n >= 2: the shape allocateAgentName itself produces. */
+    private static final java.util.regex.Pattern NUMBERED_NAME =
+            java.util.regex.Pattern.compile("^(.*\\S) \\(([2-9]|[1-9]\\d{1,5})\\)$");
 
     /**
      * Folders of the agent list (V449). Optional: a context without it (a slice test, an
@@ -281,17 +320,6 @@ public class AgentService {
             throw new com.apimarketplace.auth.client.access.OrgAccessDeniedException("agent", "new");
         }
 
-        // Duplicate name check - backed by V269 partial unique index on
-        // (organization_id, name) WHERE is_active = true. Batch A2 (2026-05-20):
-        // route through the org-strict variant so two personal workspaces can
-        // legitimately host an agent of the same name without colliding.
-        Optional<AgentEntity> dupName = (organizationId != null && !organizationId.isBlank())
-                ? agentRepository.findByOrganizationIdStrictAndNameAndIsActiveTrue(organizationId, name)
-                : agentRepository.findByTenantIdAndNameAndIsActiveTrue(tenantId, name);
-        dupName.ifPresent(existing -> {
-            throw new IllegalArgumentException("An active agent with name '" + name + "' already exists (ID: " + existing.getId() + "). Use agent(action='update', ...) to modify it, or choose a different name.");
-        });
-
         // Plan resource limit check (mapped to HTTP 409 by global handler in auth-client,
         // and to a "DO NOT RETRY" tool result by AgentCrudModule in shared-agent-lib).
         // Batch A2 - org-aware count so org workspaces see the org's quota, not
@@ -302,6 +330,26 @@ public class AgentService {
                     () -> (organizationId != null && !organizationId.isBlank())
                             ? agentRepository.countByOrganizationIdStrict(organizationId)
                             : agentRepository.countByTenantId(tenantId));
+        }
+
+        // Duplicate name check - backed by V269 partial unique index on
+        // (organization_id, name) WHERE is_active = true, in the workspace the row will
+        // actually be stamped with (see effectiveAgentOrgId). Batch A2 (2026-05-20):
+        // two workspaces can legitimately host an agent of the same name.
+        // The name is TYPED here (UI form, agent(action='create')), so a taken name is
+        // REFUSED, never silently renamed: an LLM retrying create in a loop must hit a
+        // wall, not mint "Nova (2)", "Nova (3)"... The refusal carries the first free
+        // name so the caller can accept it in one step. The workspace lock (taken after
+        // the quota check, held to commit) makes the check and the insert atomic against
+        // the other writers of this index.
+        String nameScopeOrgId = effectiveAgentOrgId(organizationId);
+        if (nameScopeOrgId != null) {
+            lockAgentNameScope(nameScopeOrgId);
+            agentRepository.findByOrganizationIdStrictAndNameAndIsActiveTrue(nameScopeOrgId, name)
+                    .ifPresent(existing -> {
+                        throw new AgentNameConflictException(name, existing.getId(),
+                                allocateAgentName(nameScopeOrgId, name));
+                    });
         }
 
         // Apply defaults from yml config when values are null
@@ -339,8 +387,10 @@ public class AgentService {
             entity.setBudgetResetMode(budgetResetMode);
         }
 
-        if (organizationId != null) {
-            entity.setOrganizationId(organizationId);
+        // Stamp the workspace the name was checked in (the same value OrgScopedEntityListener
+        // would resolve at persist), so the check, the lock and the index share one scope.
+        if (nameScopeOrgId != null) {
+            entity.setOrganizationId(nameScopeOrgId);
         }
 
         // Per-agent reasoning effort (bridge/CLI). Normalize to the canonical wire
@@ -353,20 +403,17 @@ public class AgentService {
 
         AgentEntity saved = agentRepository.save(entity);
 
-        // Create a dedicated conversation for this agent
-        if (conversationServiceClient != null) {
-            try {
-                String convId = conversationServiceClient.findOrCreateAgentConversation(
-                    saved.getId().toString(), tenantId, name, organizationId);
-                if (convId != null) {
-                    saved.setConversationId(UUID.fromString(convId));
-                    saved = agentRepository.save(saved);
-                    logger.info("Created conversation {} for new agent {}", convId, saved.getId());
-                }
-            } catch (Exception e) {
-                logger.warn("Failed to create conversation for agent {}: {}", saved.getId(), e.getMessage());
-            }
-        }
+        // Create a dedicated conversation for this agent (an HTTP call to conversation-service),
+        // in the workspace the row was stamped with. When this method opened the transaction
+        // the call runs after commit: what that buys is the workspace name lock (a
+        // transaction-scoped advisory lock) being released before the remote call, so other
+        // creates and clones in the workspace do not queue behind it. It does NOT free the
+        // database connection: with open-in-view (the Spring Boot default, on in both
+        // editions) the request keeps its connection until the response, and the write-back
+        // takes a second pooled connection for its own short transaction. See
+        // attachAgentConversation for the inline case.
+        attachAgentConversation(saved, tenantId, name,
+                nameScopeOrgId != null ? nameScopeOrgId : organizationId);
 
         return saved;
     }
@@ -987,6 +1034,31 @@ public class AgentService {
         validateReasoningEffort(reasoningEffort);
         validateNoCircularAgentReferences(id, toolsConfig, tenantId);
 
+        // Rename / re-activation against V269 (one ACTIVE agent per name per workspace).
+        // Checked only when this update would ENTER the index under a name it does not
+        // already hold there: a rename of an active agent, or an inactive agent switched
+        // back on. Every other update (the common case: same name, or the agent stays
+        // inactive) skips it, so it never refuses what it used to accept. The name is
+        // typed by the caller, so a taken one is refused with the first free name, like
+        // create. Checked BEFORE setName: the lookup auto-flushes the persistence context.
+        boolean activeAfter = isActive != null ? isActive : Boolean.TRUE.equals(existing.getIsActive());
+        boolean enteringIndexUnderNewName = activeAfter
+                && (!name.equals(existing.getName()) || !Boolean.TRUE.equals(existing.getIsActive()));
+        // The row's own organization is the index scope (NOT NULL since V263).
+        if (enteringIndexUnderNewName && agentOrgId != null && !agentOrgId.isBlank()) {
+            lockAgentNameScope(agentOrgId);
+            agentRepository.findByOrganizationIdStrictAndNameAndIsActiveTrue(agentOrgId, name)
+                    .filter(other -> !id.equals(other.getId()))
+                    .ifPresent(other -> {
+                        // The renamed agent's own current name is free for it, so the
+                        // suggestion must not step over it ("Nova (2)" renamed to "Nova"
+                        // keeps "Nova (2)" as a valid answer).
+                        String ownName = Boolean.TRUE.equals(existing.getIsActive()) ? existing.getName() : null;
+                        throw AgentNameConflictException.forRename(name, other.getId(),
+                                allocateAgentName(agentOrgId, name, "", ownName));
+                    });
+        }
+
         // Update fields
         existing.setName(name);
         if (description != null) {
@@ -1403,8 +1475,13 @@ public class AgentService {
         // agent conclusions it never reached, and every future correction to a fact
         // would then have to be made twice. The workspace's shared memory (agent_id
         // NULL) reaches the clone anyway, because it reaches every agent here.
+        // The clone's name is NOT typed by the caller, so it must never make the clone fail:
+        // "X (Copy)", then "X (Copy) (2)", "X (Copy) (3)"... in the workspace the clone lands
+        // in (the caller's, see below). Before this, a second clone of the same agent hit the
+        // V269 unique index at commit and the user got a bare error.
+        String cloneName = allocateAgentName(callerOrgId, source.getName(), " (Copy)");
         AgentEntity clone = new AgentEntity(
-            tenantId, source.getName() + " (Copy)", source.getDescription(),
+            tenantId, cloneName, source.getDescription(),
             source.getSystemPrompt(), source.getModelProvider(), source.getModelName(),
             source.getTemperature(), source.getMaxTokens(), source.getMaxIterations(),
             normalizeToolsConfig(source.getToolsConfig()), source.getWorkflowId(), source.getDataSourceId(),
@@ -1422,6 +1499,247 @@ public class AgentService {
             clone.setOrganizationId(callerOrgId);
         }
         return agentRepository.save(clone);
+    }
+
+    // ==================== Agent name allocation (V269) ====================
+
+    /**
+     * THE one way to pick a name that the V269 index ({@value #AGENT_NAME_UNIQUE_INDEX}:
+     * one ACTIVE agent per name per workspace) will accept: {@code desiredName} itself when
+     * it is free, else {@code "desiredName (2)"}, {@code "desiredName (3)"}...
+     *
+     * <p>Two uses, one primitive:
+     * <ul>
+     *   <li>names the caller did NOT type (clone, marketplace install) are taken from here
+     *       directly, so those paths never fail on a name;</li>
+     *   <li>names the caller DID type (create, rename) are refused when taken, and this is the
+     *       {@code suggestedName} the refusal carries ({@link AgentNameConflictException}).</li>
+     * </ul>
+     *
+     * <p>Scope is the index's: one organization (never a tenant: a tenant spans several
+     * workspaces, so a by-tenant lookup is not the index's question and its Optional finder
+     * throws once two of them hold the same name). Case-sensitive, like the index. The
+     * workspace lock is taken first and held to the end of the CALLER's transaction, so the
+     * answer stays true until the caller's insert commits: a concurrent clone in the same
+     * workspace waits instead of picking the same name. ONE query reads every taken name
+     * that could collide with a candidate.
+     *
+     * @return the free name; {@code desiredName} unchanged when it is null or blank (nothing
+     *         to allocate, the caller's own validation reports it)
+     */
+    public String allocateAgentName(String organizationId, String desiredName) {
+        return allocateAgentName(organizationId, desiredName, "");
+    }
+
+    /**
+     * Same, for a name made of a {@code stem} the caller does not control and a fixed
+     * {@code fixedSuffix} it does (a clone: {@code "<source>"} + {@code " (Copy)"}). The
+     * candidates are {@code stem + fixedSuffix}, then {@code stem + fixedSuffix + " (2)"}...,
+     * and when the column is too short it is the STEM that is cut, measured against the
+     * whole suffix, so " (Copy)" and " (2)" always survive.
+     */
+    public String allocateAgentName(String organizationId, String stem, String fixedSuffix) {
+        return allocateAgentName(organizationId, stem, fixedSuffix, null);
+    }
+
+    /**
+     * The free name to suggest when renaming (or re-activating) {@code agentId} onto
+     * {@code desiredName} failed: the agent's own current name, if it is active, counts as free
+     * because it holds that name itself. Used where the refusal is translated after the fact (a
+     * write that lost the race at the index), so it reads the agent in a fresh transaction.
+     */
+    public String allocateAgentNameForRename(String organizationId, String desiredName, UUID agentId) {
+        String ownName = agentId == null ? null : agentRepository.findById(agentId)
+                .filter(a -> Boolean.TRUE.equals(a.getIsActive()))
+                .map(AgentEntity::getName)
+                .orElse(null);
+        return allocateAgentName(organizationId, desiredName, "", ownName);
+    }
+
+    /**
+     * Same, treating {@code releasedName} as free: the current name of the active agent being
+     * renamed, which it holds itself and may keep.
+     */
+    String allocateAgentName(String organizationId, String stem, String fixedSuffix, String releasedName) {
+        if (stem == null || stem.isBlank()) {
+            return stem;
+        }
+        String suffix = fixedSuffix == null ? "" : fixedSuffix;
+        String scopeOrgId = effectiveAgentOrgId(organizationId);
+        if (scopeOrgId == null) {
+            // No workspace at all: the row cannot be inserted (OrgScopedEntityListener refuses
+            // it loudly at persist), so there is no index scope to allocate in.
+            return fitAgentName(stem, suffix);
+        }
+        lockAgentNameScope(scopeOrgId);
+        // A name that already ends in " (n)" continues its own count: a conflict on
+        // "Nova (2)" suggests "Nova (3)", never "Nova (2) (2)".
+        int firstNumber = 1;
+        if (suffix.isEmpty()) {
+            java.util.regex.Matcher numbered = NUMBERED_NAME.matcher(stem);
+            if (numbered.matches()) {
+                stem = numbered.group(1);
+                firstNumber = Integer.parseInt(numbered.group(2));
+            }
+        }
+        int lastNumber = firstNumber + MAX_NAME_SUFFIX - 1;
+        // Every candidate starts with the stem cut for the LONGEST suffix it can carry, so
+        // one prefix query returns every name that could collide with any of them.
+        String commonPrefix = cutStem(stem, (suffix + " (" + lastNumber + ")").length());
+        Set<String> taken = new HashSet<>(agentRepository.findActiveNamesByOrganizationIdStrictAndNamePrefix(
+                scopeOrgId, escapeLike(commonPrefix) + "%"));
+        if (releasedName != null) {
+            taken.remove(releasedName);
+        }
+        for (int n = firstNumber; n <= lastNumber; n++) {
+            String candidate = fitAgentName(stem, n <= 1 ? suffix : suffix + " (" + n + ")");
+            if (!taken.contains(candidate)) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("No free agent name left for '" + stem + suffix
+                + "' after " + MAX_NAME_SUFFIX + " attempts. Choose a different name.");
+    }
+
+    /**
+     * {@code stem + suffix}, cutting the STEM (never the suffix) so the result fits
+     * {@link #AGENT_NAME_MAX_LENGTH}. The cut never splits a surrogate pair.
+     */
+    static String fitAgentName(String stem, String suffix) {
+        return cutStem(stem, suffix.length()) + suffix;
+    }
+
+    /** {@code stem} cut to leave room for {@code suffixLength} characters, never mid surrogate pair. */
+    private static String cutStem(String stem, int suffixLength) {
+        int room = Math.max(AGENT_NAME_MAX_LENGTH - suffixLength, 0);
+        if (stem.length() <= room) {
+            return stem;
+        }
+        int cut = room;
+        if (cut > 0 && Character.isHighSurrogate(stem.charAt(cut - 1))) {
+            cut--;
+        }
+        return stem.substring(0, cut);
+    }
+
+    /** Escapes LIKE's wildcards (and the escape itself) so a name like "50%_off" matches literally. */
+    static String escapeLike(String value) {
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    }
+
+    /**
+     * The workspace an agent row will carry, which is therefore the V269 index scope: the
+     * explicit organization, else the one bound to the request, exactly the fallback
+     * {@code OrgScopedEntityListener} applies at persist. {@code null} when neither exists:
+     * the listener then refuses the insert loudly (organization_id is NOT NULL since V263),
+     * so there is no index scope to check a name in.
+     */
+    private static String effectiveAgentOrgId(String organizationId) {
+        if (organizationId != null && !organizationId.isBlank()) {
+            return organizationId;
+        }
+        String fromRequest = TenantResolver.currentRequestOrganizationId();
+        return fromRequest != null && !fromRequest.isBlank() ? fromRequest : null;
+    }
+
+    /**
+     * Serializes name allocation within ONE workspace for the rest of the current transaction
+     * ({@code pg_advisory_xact_lock}, released at commit or rollback; re-entrant within the
+     * transaction). Without it the check-then-insert is a race: two concurrent clones of the
+     * same agent both see "X (Copy)" free and the second insert dies on the unique index.
+     * Keyed on the workspace, not the name, because "X (2)" depends on several names.
+     * Skipped when there is no EntityManager (Mockito unit tests, no concurrency); the real
+     * lock is exercised by AgentNameAllocationPostgresTest.
+     */
+    private void lockAgentNameScope(String organizationId) {
+        if (entityManager == null) {
+            return;
+        }
+        entityManager.createNativeQuery("SELECT pg_advisory_xact_lock(hashtext(:key))")
+                .setParameter("key", "agent-name:org:" + organizationId)
+                .getSingleResult();
+    }
+
+    /**
+     * Links a new agent to its dedicated conversation (an HTTP call to conversation-service).
+     * Best-effort in every case: a failure leaves the agent without a conversation id and
+     * logs, as it always did.
+     *
+     * <ul>
+     *   <li><b>createAgent opened the transaction</b> (every REST and agent-tool create): the
+     *       call is deferred to afterCommit, so the workspace name lock is already released.
+     *       The id is then written by a targeted UPDATE in a REQUIRES_NEW transaction (the
+     *       finished one is still bound during afterCommit, and a plain save would join it and
+     *       never commit). The UPDATE touches only {@code conversation_id}, and only while it is
+     *       still NULL, so it can never overwrite a concurrent edit with this stale snapshot.
+     *       Being a bulk update it skips {@code @PreUpdate}: {@code updated_at} keeps the
+     *       creation instant, which is right, linking the conversation is not a user edit (the
+     *       folder bulk updates leave it alone for the same reason). The returned entity gets
+     *       the id only when that UPDATE hit the row.</li>
+     *   <li><b>a transaction was already open on entry</b> (a caller inside its own
+     *       transaction), or no transaction at all (unit tests): inline, exactly as before,
+     *       so the returned entity is never silently missing its conversation id. The cost:
+     *       the name lock is then held across the remote call, until the caller commits.</li>
+     * </ul>
+     */
+    private void attachAgentConversation(AgentEntity saved, String tenantId, String name, String organizationId) {
+        if (conversationServiceClient == null) {
+            return;
+        }
+        if (openedByThisCall() && transactionManager != null
+                && TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        UUID conversationId = requestAgentConversation(saved, tenantId, name, organizationId);
+                        if (conversationId == null) {
+                            return;
+                        }
+                        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+                        tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                        Integer updated = tx.execute(status ->
+                                agentRepository.linkConversationIfAbsent(saved.getId(), conversationId));
+                        if (updated != null && updated == 1) {
+                            saved.setConversationId(conversationId);
+                            logger.info("Created conversation {} for new agent {}", conversationId, saved.getId());
+                        } else {
+                            logger.warn("Conversation {} not linked to agent {}: the row is gone or already linked",
+                                    conversationId, saved.getId());
+                        }
+                    } catch (Exception e) {
+                        logger.warn("Failed to create conversation for agent {}: {}", saved.getId(), e.getMessage());
+                    }
+                }
+            });
+            return;
+        }
+        try {
+            UUID conversationId = requestAgentConversation(saved, tenantId, name, organizationId);
+            if (conversationId != null) {
+                saved.setConversationId(conversationId);
+                agentRepository.save(saved);
+                logger.info("Created conversation {} for new agent {}", conversationId, saved.getId());
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to create conversation for agent {}: {}", saved.getId(), e.getMessage());
+        }
+    }
+
+    private UUID requestAgentConversation(AgentEntity saved, String tenantId, String name, String organizationId) {
+        String convId = conversationServiceClient.findOrCreateAgentConversation(
+                saved.getId().toString(), tenantId, name, organizationId);
+        return convId != null ? UUID.fromString(convId) : null;
+    }
+
+    /** True when the current transaction was begun by the proxied call we are in, not joined. */
+    private static boolean openedByThisCall() {
+        try {
+            return org.springframework.transaction.interceptor.TransactionAspectSupport
+                    .currentTransactionStatus().isNewTransaction();
+        } catch (org.springframework.transaction.NoTransactionException e) {
+            return false;
+        }
     }
 
     /**

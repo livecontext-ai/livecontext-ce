@@ -226,10 +226,22 @@ public class ResponseContextBuilder {
         return patterns;
     }
 
+    private static final Pattern WORKFLOW_VARIABLE = Pattern.compile("(?<![A-Za-z0-9_])(?:vars:|\\$vars\\.)");
+
     private boolean isKnownReference(String reference, Set<String> knownPatterns,
                                      WorkflowBuilderSession session) {
         // Direct match
         if (knownPatterns.contains(reference)) return true;
+
+        // A SpEL expression around node references (int(core:a.output.n) > 5, 'x' + core:a.output.y):
+        // known when every node it names exists. Cutting at the first '.' named "int(core:a".
+        List<String> nodes = ExpressionNodeReferences.of(reference);
+        if (!nodes.isEmpty()) {
+            return nodes.stream().allMatch(node ->
+                    session.nodeExists(node) || session.nodeExists(session.resolveNodeReference(node)));
+        }
+        // A workflow variable ({{vars:x}}, {{$vars.x}}) is not a node, as ReferenceValidator treats it.
+        if (WORKFLOW_VARIABLE.matcher(reference).find()) return true;
 
         // Check if it's a node output pattern (node:label.field)
         String[] parts = reference.split("\\.", 2);

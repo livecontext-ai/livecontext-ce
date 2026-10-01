@@ -2,6 +2,7 @@ package com.apimarketplace.auth.service;
 
 import com.apimarketplace.auth.domain.*;
 import com.apimarketplace.auth.repository.PartnerCommissionRepository;
+import com.apimarketplace.auth.repository.PartnerStandingRepository;
 import com.apimarketplace.auth.repository.RewardCodeRepository;
 import com.apimarketplace.auth.repository.RewardRedemptionRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,6 +30,7 @@ class PartnerCommissionServiceTest {
     private PartnerCommissionRepository commissionRepository;
     private RewardRedemptionRepository redemptionRepository;
     private RewardCodeRepository codeRepository;
+    private PartnerStandingRepository standingRepository;
     private PartnerCommissionService service;
     private RewardCode code;
     private RewardRedemption redemption;
@@ -39,7 +41,13 @@ class PartnerCommissionServiceTest {
         when(commissionRepository.voidIfOnHold(any(), any(), any())).thenReturn(1);
         redemptionRepository = mock(RewardRedemptionRepository.class);
         codeRepository = mock(RewardCodeRepository.class);
-        service = new PartnerCommissionService(commissionRepository, redemptionRepository, codeRepository);
+        standingRepository = mock(PartnerStandingRepository.class);
+        // The real tier service over the mocked repositories: Silver 30%, Gold 40% at $5,000 of
+        // settled revenue, Platinum 50% at $25,000.
+        PartnerTierService tierService = new PartnerTierService(standingRepository, commissionRepository,
+                3000, 4000, 5000, 500_000L, 2_500_000L, "usd", 60, Instant.parse("2027-01-01T00:00:00Z"),
+                java.time.Clock.fixed(Instant.parse("2026-10-01T00:00:00Z"), ZoneOffset.UTC));
+        service = new PartnerCommissionService(commissionRepository, redemptionRepository, codeRepository, tierService);
 
         code = new RewardCode();
         code.setId(400L);
@@ -83,6 +91,62 @@ class PartnerCommissionServiceTest {
         assertThat(c.getDueAt()).isEqualTo(paidAt.plus(14, ChronoUnit.DAYS));
         assertThat(c.isPayableAt(paidAt.plus(13, ChronoUnit.DAYS))).isFalse();
         assertThat(c.isPayableAt(paidAt.plus(14, ChronoUnit.DAYS))).isTrue();
+    }
+
+    @Test
+    @DisplayName("V556: once settled revenue reaches Gold, the next invoice earns the Gold rate and the tier is raised")
+    void goldThresholdRaisesTheRateOfTheNextInvoice() {
+        when(commissionRepository.sumSettledRevenue(eq(PARTNER), eq("usd"), any())).thenReturn(500_000L);
+
+        service.recordPaidInvoice(CUSTOMER, "in_gold", 2400, "usd", Instant.parse("2026-10-01T10:00:00Z"));
+
+        ArgumentCaptor<PartnerCommission> saved = ArgumentCaptor.forClass(PartnerCommission.class);
+        verify(commissionRepository).save(saved.capture());
+        assertThat(saved.getValue().getPayoutBps()).isEqualTo(4000);
+        assertThat(saved.getValue().getCommissionMinor()).isEqualTo(960);
+        verify(standingRepository).raise(eq(PARTNER), eq("GOLD"), eq(false), isNull(), any());
+    }
+
+    @Test
+    @DisplayName("V556: a founder (stored Platinum) earns the Platinum rate with no revenue at all")
+    void storedFounderTierEarnsPlatinumRate() {
+        PartnerStanding founder = new PartnerStanding();
+        founder.setUserId(PARTNER);
+        founder.setTier(PartnerTier.PLATINUM);
+        founder.setFounder(true);
+        when(standingRepository.findById(PARTNER)).thenReturn(Optional.of(founder));
+
+        service.recordPaidInvoice(CUSTOMER, "in_founder", 2400, "usd", Instant.parse("2026-10-01T10:00:00Z"));
+
+        ArgumentCaptor<PartnerCommission> saved = ArgumentCaptor.forClass(PartnerCommission.class);
+        verify(commissionRepository).save(saved.capture());
+        assertThat(saved.getValue().getCommissionMinor()).isEqualTo(1200);
+        verify(standingRepository, never()).raise(any(), any(), anyBoolean(), any(), any());
+    }
+
+    @Test
+    @DisplayName("V556: a custom deal above the tier rate is kept (the higher of the two wins)")
+    void customCodeRateAboveTierIsKept() {
+        code.setPayoutBps(6000);
+
+        service.recordPaidInvoice(CUSTOMER, "in_deal", 2400, "usd", Instant.parse("2026-10-01T10:00:00Z"));
+
+        ArgumentCaptor<PartnerCommission> saved = ArgumentCaptor.forClass(PartnerCommission.class);
+        verify(commissionRepository).save(saved.capture());
+        assertThat(saved.getValue().getPayoutBps()).isEqualTo(6000);
+        assertThat(saved.getValue().getCommissionMinor()).isEqualTo(1440);
+    }
+
+    @Test
+    @DisplayName("V556: a code created below the tier rate is raised to the tier rate")
+    void codeRateBelowTierIsRaised() {
+        code.setPayoutBps(1000);
+
+        service.recordPaidInvoice(CUSTOMER, "in_low", 2400, "usd", Instant.parse("2026-10-01T10:00:00Z"));
+
+        ArgumentCaptor<PartnerCommission> saved = ArgumentCaptor.forClass(PartnerCommission.class);
+        verify(commissionRepository).save(saved.capture());
+        assertThat(saved.getValue().getPayoutBps()).isEqualTo(3000);
     }
 
     @Test

@@ -315,6 +315,83 @@ class ModelReplacementResolverTest {
     }
 
     @Nested
+    @DisplayName("an UNLISTED model (V554): enabled, so never swapped, its replacement paused")
+    class Unlisted {
+
+        /**
+         * The rows the resolver reads are what {@code findDisabledOrDeprecated} selects. Pinned
+         * here, next to the tests that depend on it: an unlisted model is enabled, so it is not
+         * among them, and that is the whole mechanism that keeps its replacement from applying.
+         * Adding {@code unlisted} to that query would swap every agent still on such a model.
+         */
+        @Test
+        @DisplayName("findDisabledOrDeprecated selects disabled or deprecated rows and never looks at unlisted")
+        void queryIgnoresUnlisted() throws NoSuchMethodException {
+            var query = ModelConfigOverrideRepository.class.getMethod("findDisabledOrDeprecated")
+                    .getAnnotation(org.springframework.data.jpa.repository.Query.class);
+
+            assertThat(query).isNotNull();
+            assertThat(query.value())
+                    .contains("m.enabled = false")
+                    .contains("m.deprecatedAt IS NOT NULL")
+                    .doesNotContainIgnoringCase("unlisted");
+        }
+
+        @Test
+        @DisplayName("an unlisted model with a replacement set runs as itself")
+        void unlistedWithReplacementIsNotSwapped() {
+            // The table as an admin leaves it: one model off (swapped), one unlisted with the
+            // replacement it had while it was off. The snapshot is what the pinned query selects.
+            ModelConfigOverrideEntity unlisted = new ModelConfigOverrideEntity();
+            unlisted.setProvider("openai");
+            unlisted.setModelId("gpt-4o");
+            unlisted.setEnabled(true);
+            unlisted.setUnlisted(true);
+            unlisted.setReplacementProvider("openai");
+            unlisted.setReplacementModel("gpt-5");
+            disabled("openai", "gpt-4", "openai", "gpt-5");
+            List<ModelConfigOverrideEntity> table = new ArrayList<>(disabledRows);
+            table.add(unlisted);
+            disabledRows.clear();
+            table.stream()
+                    .filter(r -> Boolean.FALSE.equals(r.getEnabled()) || r.getDeprecatedAt() != null)
+                    .forEach(disabledRows::add);
+            when(catalog.isModelAvailable("openai", "gpt-5")).thenReturn(true);
+
+            assertThat(resolver.substituteIfDisabled("openai", "gpt-4o")).isEmpty();
+            assertThat(resolver.substituteIfDisabled("openai", "gpt-4").orElseThrow().model())
+                    .as("the switched-off neighbour still moves: the snapshot is not simply empty")
+                    .isEqualTo("gpt-5");
+        }
+
+        @Test
+        @DisplayName("switched off again, the same model is swapped for the replacement it kept")
+        void switchedOffAgainIsSwapped() {
+            disabled("openai", "gpt-4o", "openai", "gpt-5");
+            disabledRows.get(0).setUnlisted(true); // the flag outlives the switch, and changes nothing
+            when(catalog.isModelAvailable("openai", "gpt-5")).thenReturn(true);
+
+            var sub = resolver.substituteIfDisabled("openai", "gpt-4o").orElseThrow();
+
+            assertThat(sub.model()).isEqualTo("gpt-5");
+            assertThat(sub.explicit()).isTrue();
+        }
+
+        @Test
+        @DisplayName("an unlisted model is a valid replacement target: it is runnable")
+        void unlistedIsAValidTarget() {
+            disabled("openai", "gpt-4", "openai", "gpt-4o");
+            // listAvailableModels carries unlisted models, so isModelAvailable says yes.
+            when(catalog.isModelAvailable("openai", "gpt-4o")).thenReturn(true);
+
+            var sub = resolver.substituteIfDisabled("openai", "gpt-4").orElseThrow();
+
+            assertThat(sub.model()).isEqualTo("gpt-4o");
+            assertThat(sub.explicit()).isTrue();
+        }
+    }
+
+    @Nested
     @DisplayName("explicitReplacementIfDisabled (an execution-link TARGET)")
     class LinkTarget {
 

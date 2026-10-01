@@ -670,8 +670,9 @@ public abstract class CreatorBase {
 
     /**
      * Return empty position so the frontend auto-layout (Dagre) handles positioning.
-     * The frontend's needsLayout() detects missing/empty positions and applies
-     * a proper graph-based layout algorithm that respects edges and topology.
+     * When the frontend imports a plan in which any node has no position, it lays
+     * the WHOLE graph out again (WorkflowPlanImporter), so adding a node re-flows
+     * the canvas instead of dropping the node next to the old layout.
      */
     protected Map<String, Integer> calculatePosition(WorkflowBuilderSession session, NodeType nodeType) {
         return Map.of();

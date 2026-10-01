@@ -34,6 +34,18 @@ public class RewardCode {
     @Column(name = "owner_user_id")
     private Long ownerUserId;
 
+    @Column(name = "recipient_user_id")
+    private Long recipientUserId;
+
+    @Column(name = "campaign_key", length = 64)
+    private String campaignKey;
+
+    @Column(name = "policy_version_id")
+    private Long policyVersionId;
+
+    @Column(name = "issued_at")
+    private Instant issuedAt;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "benefit_kind", nullable = false, length = 24)
     private BenefitKind benefitKind;
@@ -139,6 +151,14 @@ public class RewardCode {
     public void setProgram(RewardProgram program) { this.program = program; }
     public Long getOwnerUserId() { return ownerUserId; }
     public void setOwnerUserId(Long ownerUserId) { this.ownerUserId = ownerUserId; }
+    public Long getRecipientUserId() { return recipientUserId; }
+    public void setRecipientUserId(Long recipientUserId) { this.recipientUserId = recipientUserId; }
+    public String getCampaignKey() { return campaignKey; }
+    public void setCampaignKey(String campaignKey) { this.campaignKey = campaignKey; }
+    public Long getPolicyVersionId() { return policyVersionId; }
+    public void setPolicyVersionId(Long policyVersionId) { this.policyVersionId = policyVersionId; }
+    public Instant getIssuedAt() { return issuedAt; }
+    public void setIssuedAt(Instant issuedAt) { this.issuedAt = issuedAt; }
     public BenefitKind getBenefitKind() { return benefitKind; }
     public void setBenefitKind(BenefitKind benefitKind) { this.benefitKind = benefitKind; }
     public int getBenefitAmount() { return benefitAmount; }

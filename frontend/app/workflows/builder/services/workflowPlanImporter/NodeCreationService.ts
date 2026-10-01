@@ -27,6 +27,7 @@ import { nodeRegistry } from '../../registry/nodeRegistry';
 import { sanitizeNodePolicy } from '../../utils/nodePolicy';
 import { extractMediaDataFromPlanParams } from '../../utils/mediaParams';
 import { sanitizeNodeMock } from '../../utils/nodeMock';
+import { normalizeFormField } from '@/lib/forms/formFieldShape';
 
 export interface NodeCreationResult {
   nodes: Node<BuilderNodeData>[];
@@ -311,7 +312,12 @@ export class NodeCreationService {
           description: (params as any).formDescription || '',
           authType,
           submitButtonText: (params as any).submitButtonText || 'Submit',
-          fields: (params as any).fields || [],
+          // The inspector keys on field ids and [{id, label, value}] options, and shows the
+          // default from defaultValue: older plans may carry neither (string-shorthand options,
+          // a `default` alias an agent wrote), so read every stored field in that one shape.
+          fields: Array.isArray((params as any).fields)
+            ? (params as any).fields.map((field: unknown, index: number) => normalizeFormField(field, index))
+            : [],
         };
         if (authType === 'basic') {
           formTriggerData.basicAuth = { username: (params as any).basicUsername || '', password: (params as any).basicPassword || '' };

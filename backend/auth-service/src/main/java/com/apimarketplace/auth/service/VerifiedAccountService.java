@@ -153,6 +153,25 @@ public class VerifiedAccountService {
         if (!isFeatureEnabled() || handles == null || handles.isEmpty()) {
             return Set.of();
         }
+        Map<Long, String> handleByUserId = handleOwners(handles);
+        Set<Long> verifiedIds = verifiedAmong(handleByUserId.keySet());
+        Set<String> result = new HashSet<>();
+        for (Long userId : verifiedIds) {
+            result.add(handleByUserId.get(userId));
+        }
+        return result;
+    }
+
+    /**
+     * Owner id of each of {@code handles}, mapped to the exact spelling the caller used
+     * (the match itself is case-insensitive). Unknown handles are simply absent. Shared
+     * with {@link PartnerBadgeService}, whose handle-keyed lookup answers the same way.
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, String> handleOwners(Collection<String> handles) {
+        if (handles == null || handles.isEmpty()) {
+            return Map.of();
+        }
         Map<String, String> byLowercase = new HashMap<>();
         for (String handle : handles) {
             if (handle != null && !handle.isBlank()) {
@@ -160,7 +179,7 @@ public class VerifiedAccountService {
             }
         }
         if (byLowercase.isEmpty()) {
-            return Set.of();
+            return Map.of();
         }
         // Already lowercased above, which is what findIdsByHandles requires: it matches
         // the indexed column exactly rather than LOWER()-ing it into a sequential scan.
@@ -177,12 +196,7 @@ public class VerifiedAccountService {
                 handleByUserId.put(userId, asRequested);
             }
         }
-        Set<Long> verifiedIds = verifiedAmong(handleByUserId.keySet());
-        Set<String> result = new HashSet<>();
-        for (Long userId : verifiedIds) {
-            result.add(handleByUserId.get(userId));
-        }
-        return result;
+        return handleByUserId;
     }
 
     /**

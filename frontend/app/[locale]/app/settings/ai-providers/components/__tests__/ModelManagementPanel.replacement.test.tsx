@@ -143,7 +143,11 @@ describe('ModelManagementPanel - replacement of a disabled model', () => {
     fireEvent.click(tab!);
 
     await waitFor(() => expect(mocks.getEffectiveModels).toHaveBeenCalledWith('browser_agent'));
-    await waitFor(() => expect(screen.queryByTestId(OPUS_48)).not.toBeInTheDocument());
+    // Wait for the tab's fetch to LAND (the row is back) before asserting the
+    // absence: while it is in flight the whole panel is the loading spinner,
+    // which would satisfy "not in the document" without the tab ever rendering.
+    await screen.findByTestId('model-toggle-anthropic-claude-opus-4-8');
+    expect(screen.queryByTestId(OPUS_48)).not.toBeInTheDocument();
   });
 
   it('saves the chosen pair, and only that', async () => {

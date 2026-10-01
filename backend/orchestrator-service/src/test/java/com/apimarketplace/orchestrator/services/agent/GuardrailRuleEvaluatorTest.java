@@ -496,4 +496,57 @@ class GuardrailRuleEvaluatorTest {
             assertThat(outcome.llmRules()).hasSize(1);
         }
     }
+    /**
+     * {@code needsModel} decides, before a guardrail node runs, whether it will wait on the worker
+     * queue; {@code evaluate(...).needsLlm()} decides it at run time. Two readings of one split,
+     * so they must agree on every shape of configuration, whatever the content.
+     */
+    @Nested
+    @DisplayName("needsModel - the model's share, read from the configuration alone")
+    class NeedsModel {
+
+        private final Map<String, List<Map<String, Object>>> cases = new LinkedHashMap<>();
+
+        {
+            cases.put("keyword only", List.of(rule("kw", "keyword_filter", "block", config("keywordsExpression", "refund"))));
+            cases.put("regex only", List.of(rule("rx", "regex_pattern", "block", config("pattern", "[0-9]{3}"))));
+            cases.put("length only", List.of(rule("len", "length_check", null, config("maxLength", 50))));
+            cases.put("custom only", List.of(rule("c", "custom", null, config("expression", "#length(#input) > 10"))));
+            cases.put("competitors only", List.of(rule("cm", "competitor_mention", "block", config("topicsExpression", "Acme"))));
+            cases.put("pii by pattern", List.of(rule("pii", "pii_detection", "block", config("piiTypes", List.of("email")))));
+            cases.put("pii default types", List.of(rule("pii", "pii_detection", "block", config())));
+            cases.put("pii address", List.of(rule("pii", "pii_detection", "block", config("piiTypes", List.of("address")))));
+            cases.put("pii email and address", List.of(rule("pii", "pii_detection", "block", config("piiTypes", List.of("email", "address")))));
+            cases.put("legacy description", List.of(rule("kw", "keyword_filter", "block",
+                config("keywordsExpression", "Block spam messages", "description", "Block spam messages"))));
+            cases.put("untyped", List.of(rule("r", null, "block", config("description", "Be polite"))));
+            cases.put("unknown type", List.of(rule("r", "toxicity", "block", config("threshold", 0.5))));
+            cases.put("pattern and model", List.of(
+                rule("kw", "keyword_filter", "block", config("keywordsExpression", "refund")),
+                rule("r", "toxicity", "block", config("threshold", 0.5))));
+            cases.put("no id", List.of(Map.of("type", "keyword_filter", "config", config("keywordsExpression", "refund"))));
+            cases.put("no rules", List.of());
+        }
+
+        @Test
+        @DisplayName("agrees with evaluate(...).needsLlm() on every shape of configuration")
+        void agreesWithEvaluate() {
+            for (String content : List.of("", "call 555-010-0199 or mail a@b.co about a refund from Acme")) {
+                cases.forEach((name, rules) -> assertThat(GuardrailRuleEvaluator.needsModel(rules))
+                    .as(name + " / content '" + content + "'")
+                    .isEqualTo(GuardrailRuleEvaluator.evaluate(rules, content, LITERAL).needsLlm()));
+            }
+            assertThat(GuardrailRuleEvaluator.needsModel(null)).isEqualTo(GuardrailRuleEvaluator.evaluate(null, "x", LITERAL).needsLlm());
+        }
+
+        @Test
+        @DisplayName("rules its patterns decide alone need no model; one model rule, or none at all, does")
+        void theThreeAnswers() {
+            assertThat(GuardrailRuleEvaluator.needsModel(cases.get("keyword only"))).isFalse();
+            assertThat(GuardrailRuleEvaluator.needsModel(cases.get("pii by pattern"))).isFalse();
+            assertThat(GuardrailRuleEvaluator.needsModel(cases.get("pattern and model"))).isTrue();
+            assertThat(GuardrailRuleEvaluator.needsModel(cases.get("pii address"))).isTrue();
+            assertThat(GuardrailRuleEvaluator.needsModel(cases.get("no rules"))).isTrue();
+        }
+    }
 }

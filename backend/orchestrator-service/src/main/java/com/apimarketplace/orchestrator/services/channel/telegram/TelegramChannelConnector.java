@@ -53,6 +53,7 @@ public class TelegramChannelConnector implements ChatChannelConnector {
     private static final ToolRef TOOL_SET_WEBHOOK = new ToolRef("telegram/telegram-set-webhook", 1);
     private static final ToolRef TOOL_GET_UPDATES = new ToolRef("telegram/telegram-get-updates", 1);
     private static final ToolRef TOOL_SEND_MESSAGE = new ToolRef("telegram/telegram-send-message", 1);
+    private static final ToolRef TOOL_GET_CHAT = new ToolRef("telegram/telegram-get-chat", 1);
     private static final ToolRef TOOL_EDIT_MESSAGE_TEXT = new ToolRef("telegram/telegram-edit-message-text", 1);
     private static final ToolRef TOOL_ANSWER_CALLBACK_QUERY =
             new ToolRef("telegram/telegram-answer-callback-query", 1);
@@ -212,6 +213,34 @@ public class TelegramChannelConnector implements ChatChannelConnector {
             }
         }
         return Outcome.of(new ArrayList<>(byChatId.values()));
+    }
+
+    /**
+     * A public channel or group typed as "@name" becomes its numeric chat id; anything else is
+     * already the id Telegram speaks in.
+     *
+     * <p>Telegram delivers to "@name" happily, so the test message goes through, but every press
+     * comes back with the numeric chat id and a press is matched to its destination exactly: a
+     * row stored as "@name" would receive every question and refuse every answer. The workflow
+     * approval notifier has always stored the id Telegram answered with, for the same reason.
+     */
+    @Override
+    public Outcome<ChatCandidate> resolveDestination(String tenantId, Long credentialId, String chatId) {
+        if (!chatId.startsWith("@")) {
+            return Outcome.of(new ChatCandidate(chatId, null, null, null));
+        }
+        return call(TOOL_GET_CHAT, Map.of("chat_id", chatId), tenantId, credentialId).map(result -> {
+            Map<String, Object> chat = asMap(result.output() != null ? result.output().get("result") : null);
+            Object id = chat != null ? chat.get("id") : null;
+            if (id == null) {
+                return Outcome.<ChatCandidate>failed("Telegram does not know a chat called " + chatId
+                        + " that this bot can see. Add the bot to that channel or group first, or give "
+                        + "the chat's numeric id.");
+            }
+            String numericId = id instanceof Number number ? String.valueOf(number.longValue()) : str(id);
+            String title = str(chat.get("title"));
+            return Outcome.of(new ChatCandidate(numericId, title != null ? title : chatId, str(chat.get("type")), null));
+        });
     }
 
     @Override

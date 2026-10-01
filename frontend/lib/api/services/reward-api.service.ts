@@ -30,6 +30,38 @@ export interface RewardRedeemResult {
   grantedPlan?: string | null;
   /** When that complimentary plan ends, as an ISO instant (UTC, ending in Z). */
   planEndsAt?: string | null;
+  /** Personal offers are selected now and granted only after a first paid subscription. */
+  offerId?: number;
+  offerVersion?: number;
+}
+
+export interface PersonalOfferCurrent {
+  status: string;
+  offerId?: number | null;
+  offerVersion?: number | null;
+  expiresAt?: string | null;
+  code?: string | null;
+  reservedBonusCredits?: number | null;
+  grantedCredits?: number | null;
+  sessionExpiresAt?: string | null;
+}
+
+export interface PersonalOfferPlanPreview {
+  planCode: string;
+  bonusCredits: number;
+  paygFaceValueUsd: number;
+  status: 'ELIGIBLE' | 'NO_BONUS' | 'UNAVAILABLE';
+}
+
+export interface PersonalOfferPreview {
+  status: string;
+  offerId: number;
+  offerVersion: number;
+  expiresAt: string;
+  monthlyCredits: number;
+  billingCycle: 'monthly' | 'yearly';
+  plans: PersonalOfferPlanPreview[];
+  nextEligibleMonthlyCredits?: number | null;
 }
 
 /**
@@ -56,6 +88,19 @@ export class RewardApiService {
   async redeem(code: string): Promise<RewardRedeemResult> {
     const path = IS_CE ? '/cloud-link/redeem' : '/billing/redeem';
     return apiClient.post<RewardRedeemResult>(path, { code });
+  }
+
+  async getCurrentPersonalOffer(): Promise<PersonalOfferCurrent> {
+    return apiClient.get<PersonalOfferCurrent>('/billing/offers/current');
+  }
+
+  async previewPersonalOffer(input: {
+    offerId?: number;
+    code?: string;
+    creditTierIndex: number;
+    billingCycle: 'monthly' | 'yearly';
+  }): Promise<PersonalOfferPreview> {
+    return apiClient.post<PersonalOfferPreview>('/billing/offers/preview', input);
   }
 }
 

@@ -244,6 +244,7 @@ describe('ModelManagementPanel bulk actions', () => {
     fireEvent.click(screen.getByTestId('bulk-disable'));
 
     await waitFor(() => expect(mocks.saveOverride).toHaveBeenCalledTimes(1));
+    // Only what moves (V554): the row carried no unlisted flag, so none is written.
     expect(mocks.saveOverride).toHaveBeenCalledWith({
       provider: 'openai', modelId: 'gpt-5', enabled: false,
     });
@@ -258,11 +259,12 @@ describe('ModelManagementPanel bulk actions', () => {
     fireEvent.change(screen.getByTestId('model-search'), { target: { value: 'mini' } });
 
     fireEvent.click(screen.getByTestId('model-select-all'));
-    fireEvent.click(await screen.findByTestId('bulk-enable'));
+    // Disable, not Enable: both rows are already on, and Enable leaves a row that is on alone.
+    fireEvent.click(await screen.findByTestId('bulk-disable'));
 
     await waitFor(() => expect(mocks.saveOverride).toHaveBeenCalledTimes(1));
     expect(mocks.saveOverride).toHaveBeenCalledWith({
-      provider: 'openai', modelId: 'gpt-5-mini', enabled: true,
+      provider: 'openai', modelId: 'gpt-5-mini', enabled: false,
     });
   });
 
@@ -305,7 +307,8 @@ describe('ModelManagementPanel bulk actions', () => {
   });
 
   it('reports how many failed instead of claiming the whole batch worked', async () => {
-    mocks.getEffectiveModels.mockResolvedValue(two);
+    // OFF rows: Enable leaves a row that is already on alone, so only these reach the backend.
+    mocks.getEffectiveModels.mockResolvedValue(two.map((m) => ({ ...m, enabled: false })));
     mocks.saveOverride
       .mockResolvedValueOnce({})
       .mockRejectedValueOnce(new Error('model is unpriced'));

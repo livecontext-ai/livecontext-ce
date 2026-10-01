@@ -846,4 +846,33 @@ class NodeCompletionServiceTest {
             verifyNoInteractions(stepCompletionOrchestrator);
         }
     }
+    @Nested
+    @DisplayName("recordSplitOutcome()")
+    class RecordSplitOutcomeTests {
+
+        @Test
+        @DisplayName("REGRESSION: writes the fan-out's node-level mark, then drops the run's cached readiness context")
+        void marksThenInvalidatesTheReadinessCache() {
+            // The mark decides the node's readiness walk. It lands after the last per-item
+            // completion, the last point that invalidated the cache, so a context cached in
+            // between would still see the node as unresolved for up to the cache's TTL.
+            com.apimarketplace.orchestrator.services.context.ReadinessContextCache cache =
+                mock(com.apimarketplace.orchestrator.services.context.ReadinessContextCache.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "readinessCache", cache);
+
+            service.recordSplitOutcome("run-1", "trigger:start", "mcp:call", 2, 2L, 1L);
+
+            org.mockito.InOrder order = inOrder(stepCompletionOrchestrator, cache);
+            order.verify(stepCompletionOrchestrator).recordSplitOutcome("run-1", "trigger:start", "mcp:call", 2, 2L, 1L);
+            order.verify(cache).invalidateRun("run-1");
+        }
+
+        @Test
+        @DisplayName("without a readiness cache (focused wiring) it only writes the mark")
+        void withoutACacheOnlyMarks() {
+            service.recordSplitOutcome("run-1", "trigger:start", "mcp:call", 2, 0L, 3L);
+
+            verify(stepCompletionOrchestrator).recordSplitOutcome("run-1", "trigger:start", "mcp:call", 2, 0L, 3L);
+        }
+    }
 }

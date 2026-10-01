@@ -744,4 +744,114 @@ class ReferenceValidatorTest {
                     w.message().contains("vars"));
         }
     }
+
+    /**
+     * 2026-09-29, a Gemini chat: the validator told the agent to wrap a whole expression in one
+     * {{...}}, then flagged the result it had asked for, because the node was taken to be
+     * everything left of the first '.'. The agent dropped the concatenation to silence it.
+     */
+    @Nested
+    @DisplayName("References inside a full SpEL expression")
+    class FullExpressionReferenceTests {
+
+        private ValidationResult validateTransform(String... expressions) {
+            Map<String, Object> source = new HashMap<>();
+            source.put("label", "Formatage Metriques");
+            List<Map<String, Object>> mappings = new ArrayList<>();
+            for (int i = 0; i < expressions.length; i++) {
+                mappings.add(Map.of("label", "f" + i, "expression", expressions[i]));
+            }
+            Map<String, Object> transform = new HashMap<>();
+            transform.put("label", "Synthese");
+            transform.put("transform", Map.of("mappings", mappings));
+
+            stubSession(List.of(Map.of("label", "Start")), List.of(), List.of(source, transform));
+            lenient().when(session.hasMissingCredentials()).thenReturn(false);
+
+            ValidationResult result = ValidationResult.builder().build();
+            validator.validate(session, result);
+            return result;
+        }
+
+        private List<String> invalidReferenceMessages(ValidationResult result) {
+            return result.getWarnings().stream()
+                    .filter(w -> w.code().equals("INVALID_REFERENCE"))
+                    .map(w -> w.message())
+                    .toList();
+        }
+
+        @Test
+        @DisplayName("A string literal concatenated before a valid reference is not flagged (the exact Gemini expressions)")
+        void literalBeforeValidReferenceIsNotFlagged() {
+            ValidationResult result = validateTransform(
+                    "{{'Analyse : ' + core:formatage_metriques.output.theme_maj}}",
+                    "{{core:formatage_metriques.output.quote_text + ' (' + core:formatage_metriques.output.author_name + ')'}}");
+
+            assertThat(invalidReferenceMessages(result)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("A comparison and a ternary around valid references are not flagged")
+        void ternaryAroundValidReferencesIsNotFlagged() {
+            ValidationResult result = validateTransform(
+                    "{{core:formatage_metriques.output.words_count > 10 ? 'Citation longue' : 'Citation concise'}}",
+                    "{{int(core:formatage_metriques.output.words_count) > 10 ? trigger:start.output.a : core:formatage_metriques.output.b}}");
+
+            assertThat(invalidReferenceMessages(result)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Text shaped like a reference inside a string literal is never read as one")
+        void referenceShapedLiteralIsIgnored() {
+            ValidationResult result = validateTransform(
+                    "{{'see core:ghost.output.x' + core:formatage_metriques.output.theme_maj}}",
+                    "{{\"mcp:ghost.output.y\" + core:formatage_metriques.output.theme_maj}}");
+
+            assertThat(invalidReferenceMessages(result)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("An unknown node inside a concatenation is flagged by its own id, not by the operand before it")
+        void unknownNodeInsideConcatenationIsNamedExactly() {
+            ValidationResult result = validateTransform(
+                    "{{'Analyse : ' + core:ghost.output.theme_maj}}");
+
+            assertThat(invalidReferenceMessages(result))
+                    .singleElement()
+                    .satisfies(m -> assertThat(m).contains("unknown node 'core:ghost'"));
+        }
+
+        @Test
+        @DisplayName("Every reference of a multi-argument function is checked (was skipped wholesale)")
+        void everyArgumentOfMultiArgFunctionIsChecked() {
+            ValidationResult result = validateTransform(
+                    "{{concat(core:formatage_metriques.output.a, mcp:ghost.output.b)}}");
+
+            assertThat(invalidReferenceMessages(result))
+                    .singleElement()
+                    .satisfies(m -> assertThat(m).contains("unknown node 'mcp:ghost'"));
+        }
+
+        @Test
+        @DisplayName("An un-normalized label is still reported as unknown")
+        void unNormalizedLabelIsStillReported() {
+            ValidationResult result = validateTransform(
+                    "{{core:Formatage Metriques.output.theme_maj}}");
+
+            assertThat(invalidReferenceMessages(result))
+                    .singleElement()
+                    .satisfies(m -> assertThat(m).contains("unknown node 'core:Formatage Metriques'"));
+        }
+
+        @Test
+        @DisplayName("Two unknown nodes in one expression are both reported")
+        void twoUnknownNodesAreBothReported() {
+            ValidationResult result = validateTransform(
+                    "{{mcp:ghost_a.output.x + ' / ' + agent:ghost_b.output.response}}");
+
+            assertThat(invalidReferenceMessages(result)).hasSize(2)
+                    .anySatisfy(m -> assertThat(m).contains("'mcp:ghost_a'"))
+                    .anySatisfy(m -> assertThat(m).contains("'agent:ghost_b'"));
+        }
+    }
 }

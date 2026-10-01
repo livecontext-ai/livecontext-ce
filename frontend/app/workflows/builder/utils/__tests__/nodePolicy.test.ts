@@ -7,7 +7,6 @@ import {
   nodeSupportsPolicy,
   isContinueOnFailureBlocked,
   isExecuteOnceBlocked,
-  nodeCallsProvider,
 } from '../nodePolicy';
 
 function makeNode(type: string, kind: string, id = `${kind}-1`): Node<BuilderNodeData> {
@@ -65,8 +64,11 @@ describe('sanitizeNodePolicy', () => {
     expect(sanitizeNodePolicy({ retryCount: -1, timeoutMs: 'abc', retryBackoffMs: NaN })).toBeUndefined();
   });
 
-  it('does not clamp large values - the backend is the validator', () => {
-    expect(sanitizeNodePolicy({ retryCount: 50 })).toEqual({ retryCount: 50 });
+  it('keeps values within the caps as they are (clamping only applies above the backend caps)', () => {
+    expect(sanitizeNodePolicy({ retryCount: 7, retryBackoffMs: 60000 })).toEqual({
+      retryCount: 7,
+      retryBackoffMs: 60000,
+    });
   });
 
   it('ignores unknown fields (forward compatibility)', () => {
@@ -90,13 +92,29 @@ describe('nodeSupportsPolicy', () => {
 });
 
 describe('gating - mirrors WorkflowPlanParser rejections', () => {
-  it('blocks continueOnFailure on decision / switch / option only', () => {
+  it('blocks continueOnFailure on every node that picks where the run goes, and only there', () => {
     expect(isContinueOnFailureBlocked(makeNode('decisionNode', 'decision'))).toBe(true);
     expect(isContinueOnFailureBlocked(makeNode('switchNode', 'switch', 'switch-1'))).toBe(true);
     expect(isContinueOnFailureBlocked(makeNode('optionNode', 'option', 'option-1'))).toBe(true);
     expect(isContinueOnFailureBlocked(makeNode('flowNode', 'action'))).toBe(false);
     expect(isContinueOnFailureBlocked(makeNode('forkNode', 'fork', 'fork-1'))).toBe(false);
     expect(isContinueOnFailureBlocked(makeNode('splitNode', 'split'))).toBe(false);
+  });
+
+  it('REGRESSION: blocks continueOnFailure on a loop, a classify and a guardrail, which the backend refuses too', () => {
+    // The UI offered the toggle there, saved it, and the run then silently ignored it while the
+    // inspector said the next nodes would run.
+    expect(isContinueOnFailureBlocked(makeNode('whileGroupNode', 'loop'))).toBe(true);
+    expect(isContinueOnFailureBlocked(makeNode('classifyNode', 'classify', 'classify-1'))).toBe(true);
+    expect(isContinueOnFailureBlocked(makeNode('guardrailNode', 'guardrail', 'guardrail-1'))).toBe(true);
+    expect(isContinueOnFailureBlocked(makeNode('agentNode', 'agent', 'agent-1'))).toBe(false);
+  });
+
+  it('strips a stored continueOnFailure from a classify on the next save', () => {
+    const classify = makeNode('classifyNode', 'classify', 'classify-1');
+    expect(
+      gateNodePolicyForNode({ retryCount: 1, continueOnFailure: true }, classify)
+    ).toEqual({ retryCount: 1 });
   });
 
   it('blocks executeOnce on split / aggregate / merge / loop only', () => {
@@ -132,85 +150,52 @@ describe('gating - mirrors WorkflowPlanParser rejections', () => {
   });
 });
 
-describe('providerRetryMaxWaitSec', () => {
-  // The one field of the block where 0 is a STATEMENT and not a default. Absent means "the
-  // platform waits out a rate limit for me"; 0 means "do not, I pace my own calls". Every other
-  // numeric field here resolves 0 to unset and drops it, so this field needed its own coercion,
-  // and collapsing the two states would silently re-enable the retry it exists to switch off.
-  it('keeps 0, which every other numeric field drops', () => {
-    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: 0 })).toEqual({
-      providerRetryMaxWaitSec: 0,
-    });
-    expect(sanitizeNodePolicy({ retryCount: 0 })).toBeUndefined();
+describe('providerRetryMaxWaitSec (removed)', () => {
+  // The platform no longer re-sends a call a provider refused, so the knob that bounded that wait
+  // is gone. A plan saved before carries it; the builder must drop it on import and on save
+  // rather than carry a setting nothing reads (the backend now refuses it on a new write).
+  it('is dropped from a stored policy, keeping the rest', () => {
+    expect(
+      sanitizeNodePolicy({ retryCount: 1, retryBackoffMs: 60000, providerRetryMaxWaitSec: 0 })
+    ).toEqual({ retryCount: 1, retryBackoffMs: 60000 });
   });
 
-  it('keeps a positive budget', () => {
-    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: 60 })).toEqual({
-      providerRetryMaxWaitSec: 60,
-    });
+  it('a policy holding only the removed key is no policy at all', () => {
+    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: 45 })).toBeUndefined();
+  });
+});
+
+describe('sanitizeNodePolicy - retryOn and caps', () => {
+  it('keeps retryOn=rate_limit and drops any other value', () => {
+    expect(sanitizeNodePolicy({ retryCount: 1, retryOn: 'rate_limit' })).toEqual({ retryCount: 1, retryOn: 'rate_limit' });
+    expect(sanitizeNodePolicy({ retryCount: 1, retryOn: 'always' })).toEqual({ retryCount: 1 });
   });
 
-  it('coerces a numeric string, the shape a number input produces', () => {
-    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: '30' })).toEqual({
-      providerRetryMaxWaitSec: 30,
-    });
-    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: '0' })).toEqual({
-      providerRetryMaxWaitSec: 0,
-    });
-  });
-
-  it('drops a value the backend would reject rather than sending it', () => {
-    // -5 and 'soon' are what the backend refuses; sending them would turn a typo into a refused
-    // save of the whole plan instead of a field the user can correct.
-    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: -5 })).toBeUndefined();
-    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: 'soon' })).toBeUndefined();
-    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: null })).toBeUndefined();
-  });
-
-  it('survives the type gate on EVERY node type, including ones that call no provider', () => {
-    // Deliberate: the gate runs on every save. Dropping an inert field here would mean that
-    // opening an agent-built workflow and saving it silently deleted a setting nobody removed.
-    const core = makeNode('flowNode', 'code', 'code-1');
-    expect(gateNodePolicyForNode({ providerRetryMaxWaitSec: 0 }, core)).toEqual({
-      providerRetryMaxWaitSec: 0,
+  it('clamps retryCount to 10 and retryBackoffMs to 60000, the backend caps', () => {
+    expect(sanitizeNodePolicy({ retryCount: 50, retryBackoffMs: 1_000_000 })).toEqual({
+      retryCount: 10,
+      retryBackoffMs: 60000,
     });
   });
 });
 
-describe('nodeCallsProvider', () => {
-  // This decides whether the provider-retry field is OFFERED. The only defensible answer is the one
-  // the plan emitter gives, because a node the emitter does not turn into a `mcps` entry has
-  // nowhere for the setting to land: `attachNodePolicies` joins on emitted entries. A second,
-  // similar-looking predicate disagreed with it in both directions, so these tests compare against
-  // the emitter's own rule rather than restating a list.
-  function withToolData(node: Node<BuilderNodeData>): Node<BuilderNodeData> {
-    // The two fields toolData actually requires, so this is a shape the builder can really hold.
-    return { ...node, data: { ...node.data, toolData: { apiName: 'Slack', method: 'POST' } } };
+describe('gateNodePolicyForNode - retryOn', () => {
+  function toolNode(): Node<BuilderNodeData> {
+    const node = makeNode('flowNode', 'action', 'tool-1');
+    return { ...node, data: { ...node.data, toolData: { apiName: 'Slack', method: 'POST' } } as BuilderNodeData };
   }
 
-  it('needs the tool data, not merely the absence of another family', () => {
-    // The half a deny-list drops. A node with no toolData and no apiData is never emitted as a
-    // `mcps` entry, so offering a provider-only control on it offers a setting that cannot land.
-    expect(nodeCallsProvider(makeNode('flowNode', 'action'))).toBe(false);
-    expect(nodeCallsProvider(withToolData(makeNode('flowNode', 'action', 'tool-2')))).toBe(true);
+  it('keeps retryOn on a tool step with retries', () => {
+    expect(gateNodePolicyForNode({ retryCount: 1, retryOn: 'rate_limit' }, toolNode())).toEqual({
+      retryCount: 1,
+      retryOn: 'rate_limit',
+    });
   });
 
-  it('an apiData node counts too, like the emitter', () => {
-    const node = makeNode('flowNode', 'action', 'api-1');
-    const withApi = { ...node, data: { ...node.data, apiData: { apiName: 'Slack' } } };
-    expect(nodeCallsProvider(withApi)).toBe(true);
-  });
-
-  it('every excluded family stays excluded even carrying tool data', () => {
-    // One assertion per exclusion, so deleting any single clause of the shared predicate fails a
-    // named test rather than passing silently.
-    expect(nodeCallsProvider(withToolData(makeNode('triggerNode', 'entry', 'entry-1')))).toBe(false);
-    expect(nodeCallsProvider(withToolData(makeNode('noteNode', 'note', 'note-1')))).toBe(false);
-    expect(nodeCallsProvider(withToolData(makeNode('agentNode', 'reasoning', 'agent-1')))).toBe(false);
-    expect(nodeCallsProvider(withToolData(makeNode('interfaceNode', 'interface', 'interface-1')))).toBe(false);
-    expect(nodeCallsProvider(withToolData(makeNode('crudNode', 'crud', 'crud-1')))).toBe(false);
-    expect(nodeCallsProvider(withToolData(makeNode('decisionNode', 'decision', 'decision-1')))).toBe(false);
-    expect(nodeCallsProvider(withToolData(makeNode('mergeNode', 'merge', 'merge-1')))).toBe(false);
-    expect(nodeCallsProvider(withToolData(makeNode('flowNode', 'code', 'code-1')))).toBe(false);
+  it('drops retryOn on a node that is not a tool step, and without retries', () => {
+    expect(gateNodePolicyForNode({ retryCount: 1, retryOn: 'rate_limit' }, makeNode('flowNode', 'action'))).toEqual({
+      retryCount: 1,
+    });
+    expect(gateNodePolicyForNode({ retryOn: 'rate_limit', timeoutMs: 5 }, toolNode())).toEqual({ timeoutMs: 5 });
   });
 });

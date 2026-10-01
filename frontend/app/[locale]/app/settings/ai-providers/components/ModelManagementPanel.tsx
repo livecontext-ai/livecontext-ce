@@ -12,6 +12,7 @@ import {
   useSensors,
   DragEndEvent,
   DragOverlay,
+  TraversalOrder,
 } from "@dnd-kit/core";
 import {
   arrayMove,
@@ -38,6 +39,8 @@ import {
   Sparkles,
   KeyRound,
   Archive,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -68,6 +71,13 @@ import ToastContainer from '@/components/ToastContainer';
 import { useToast } from '@/components/Toast';
 import { formatUtcDateOrNull } from '@/lib/utils/dateFormatters';
 import RetiredModelsPanel from "./RetiredModelsPanel";
+import {
+  listingTransitionPatch,
+  modelListingState,
+  nextStateFromEye,
+  nextStateFromSwitch,
+  type ModelListingState,
+} from "@/lib/ai-providers/modelListing";
 
 interface ModelManagementPanelProps {
   /**
@@ -104,6 +114,16 @@ const ESTIMATED_ROW_HEIGHT = 72;
 const LIST_VIEWPORT_SHARE = 0.7;
 /** Rows mounted beyond the viewport, so a short drag or a fast scroll finds them ready. */
 const LIST_OVERSCAN = 8;
+/**
+ * A drag held at an edge scrolls the innermost container first: the list, and the settings
+ * page only once the list has reached its end (at dnd-kit's next re-pick). dnd-kit's default
+ * walks from the outermost one, and the list's bottom edge also sits in the page's own edge
+ * band, so a pointer held there scrolled the PAGE. Whether the list took over afterwards
+ * depended on the row under the pointer changing after the page's last scroll step (dnd-kit
+ * re-picks a container only when its inputs change), i.e. on a few pixels of layout: a model
+ * could stay stuck among the rows in view.
+ */
+const LIST_AUTO_SCROLL = { order: TraversalOrder.ReversedTreeOrder } as const;
 
 type VirtualModelRowProps = {
   rows: ModelConfigEntry[];
@@ -171,9 +191,12 @@ const EFFORT_SELECT_OPTIONS = [
 // on every CLI row (the only ones with an effort select) the name column was
 // 0px wide and the name did not show at all. The provider column is the
 // flexible one now; its badge truncates and keeps the full slug in its title.
+//
+// The third column holds the on/off switch AND, on the Chat tab, the unlist button
+// beside it (V554): the two together are the model's state, so they sit together.
 const ROW_GRID_COLS = IS_CE
-  ? "grid-cols-[28px_40px_28px_minmax(0,1fr)_auto_auto_24px_100px_140px_76px]"
-  : "grid-cols-[28px_40px_28px_88px_60px_minmax(0,1fr)_auto_auto_24px_100px_140px_76px]";
+  ? "grid-cols-[28px_40px_56px_minmax(0,1fr)_auto_auto_24px_100px_140px_76px]"
+  : "grid-cols-[28px_40px_56px_88px_60px_minmax(0,1fr)_auto_auto_24px_100px_140px_76px]";
 
 function ProviderBadge({ provider }: { provider: string }) {
   const iconSrc = getProviderIconSrc(provider);
@@ -590,11 +613,17 @@ function ReplacementSelect({
   model,
   options,
   onChange,
+  paused = false,
   t,
 }: {
   model: ModelConfigEntry;
   options: ModelConfigEntry[];
   onChange: (model: ModelConfigEntry, provider: string | null, modelId: string | null) => void;
+  /**
+   * V554: the model is unlisted, so this replacement is kept but not applied. Still editable,
+   * because it is what the runs will move to the day the model is switched off.
+   */
+  paused?: boolean;
   t: (key: string) => string;
 }) {
   const current =
@@ -608,9 +637,13 @@ function ReplacementSelect({
     && !options.some((o) => `${o.provider}${REPLACEMENT_SEPARATOR}${o.id}` === current);
   return (
     <div
-      className="flex flex-shrink-0 items-center gap-1 text-sm text-theme-secondary"
-      title={t("modelConfig.replacementTooltip")}
+      className={cn(
+        "flex flex-shrink-0 items-center gap-1 text-sm text-theme-secondary",
+        paused && "opacity-60",
+      )}
+      title={paused ? t("modelConfig.replacementPausedTooltip") : t("modelConfig.replacementTooltip")}
       data-testid={`model-replacement-${model.provider}-${model.id}`}
+      data-paused={paused ? "true" : undefined}
     >
       <span className="whitespace-nowrap">{t("modelConfig.replacedBy")}</span>
       <Select
@@ -647,6 +680,9 @@ function ReplacementSelect({
           ))}
         </SelectContent>
       </Select>
+      {paused && (
+        <span className="whitespace-nowrap text-xs">{t("modelConfig.replacementPaused")}</span>
+      )}
     </div>
   );
 }
@@ -661,6 +697,7 @@ function SortableModelRow({
   onExecutionLinksChanged,
   onExecutionLinkError,
   onToggleEnabled,
+  onCycleListing,
   onCycleBundleEnabled,
   onToggleFreeTier,
   onToggleRecommended,
@@ -695,6 +732,11 @@ function SortableModelRow({
   /** Surface a failed link write, or clear a previous one with null. */
   onExecutionLinkError: (message: string | null) => void;
   onToggleEnabled: (model: ModelConfigEntry) => void;
+  /**
+   * V554: the eye button, which lists an unlisted model again and unlists any other (an off
+   * one included, in one save). Chat tab only, like the replacement: the flag is global.
+   */
+  onCycleListing: (model: ModelConfigEntry) => void;
   onCycleBundleEnabled: (model: ModelConfigEntry) => void;
   onToggleFreeTier: (model: ModelConfigEntry) => void;
   onToggleRecommended: (model: ModelConfigEntry) => void;
@@ -703,6 +745,7 @@ function SortableModelRow({
   /**
    * Only on the chat tab, whose rows carry the GLOBAL enabled flag the runtime swap reads.
    * Other tabs show a per-category flag, so a replacement offered there would do nothing.
+   * Also gates the unlist button, for the same reason: unlisted is a global flag.
    */
   showReplacement: boolean;
   /** null/null = no explicit replacement (the platform default is used). */
@@ -744,6 +787,12 @@ function SortableModelRow({
     transition,
   };
   const releasedOn = showReleaseDate ? formatUtcDateOrNull(model.releaseDate) : null;
+  const listing: ModelListingState = modelListingState(model);
+  const addedOn = model.isNew ? formatUtcDateOrNull(model.addedAt) : null;
+  // The replacement acts while the model is off. While it is unlisted it is kept but paused,
+  // and shown only when there is one to show: "Platform default (paused)" would be noise.
+  const replacementPaused =
+    listing === "unlisted" && !!model.replacementProvider && !!model.replacementModel;
 
   return (
     <div
@@ -753,8 +802,10 @@ function SortableModelRow({
       className={cn(
         "px-3 py-2 rounded-lg border border-theme bg-theme-primary transition-colors",
         isDragging && "opacity-50 shadow-lg z-50",
-        model.enabled === false && "opacity-40"
+        listing === "off" && "opacity-40",
+        listing === "unlisted" && "opacity-70"
       )}
+      data-listing={listing}
     >
       {/* Model name, then the real id beside it, then the badges, on a line of their
           own so no column width can squeeze the name out (see ROW_GRID_COLS).
@@ -775,6 +826,30 @@ function SortableModelRow({
             data-testid={`model-id-${model.provider}-${model.id}`}
           >
             {model.id}
+          </span>
+        )}
+        {/* The one text pill on the line, on purpose: a model the catalogue just gained is what
+            an admin scans the list for, and it is rare, so it does not turn the row into a
+            sentence of badges. The date it arrived is in the tooltip. */}
+        {model.isNew && (
+          <span
+            title={addedOn ? t("modelConfig.newBadgeTooltip", { date: addedOn }) : undefined}
+            data-testid={`model-new-${model.provider}-${model.id}`}
+            className="flex-shrink-0 rounded px-1.5 py-0.5 text-xs font-medium bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300"
+          >
+            {t("modelConfig.newBadge")}
+          </span>
+        )}
+        {/* Off the Chat tab the unlist button is not offered (the flag is global), but the
+            state still is: a category tab lists the model as unlisted too. */}
+        {!showReplacement && listing === "unlisted" && (
+          <span
+            title={t("modelConfig.listing.unlistedTooltip")}
+            aria-label={t("modelConfig.stateUnlisted")}
+            data-testid={`model-unlisted-${model.provider}-${model.id}`}
+            className="flex-shrink-0 text-theme-secondary"
+          >
+            <EyeOff className="w-3.5 h-3.5" />
           </span>
         )}
         {/* Both of these used to be text pills. On a catalogue where most rows carry at
@@ -829,11 +904,12 @@ function SortableModelRow({
             workflow nodes, chat endpoints): they run on this replacement instead, or on the
             platform default when none is chosen. Only shown while the model is disabled,
             the only state in which it does anything. */}
-        {showReplacement && model.enabled === false && (
+        {showReplacement && (listing === "off" || replacementPaused) && (
           <ReplacementSelect
             model={model}
             options={replacementOptions}
             onChange={onReplacementChange}
+            paused={replacementPaused}
             t={t}
           />
         )}
@@ -868,13 +944,40 @@ function SortableModelRow({
         />
       </div>
 
-      {/* Enable/disable toggle */}
-      <Switch
-        checked={model.enabled !== false}
-        onCheckedChange={() => onToggleEnabled(model)}
-        testId={`model-toggle-${model.provider}-${model.id}`}
-        aria-label={model.id}
-      />
+      {/* Enable/disable toggle, and beside it (Chat tab) the unlist button: off, unlisted
+          and listed are the three states, and the pair is how the row shows which one. */}
+      <div className="flex items-center gap-1">
+        <Switch
+          checked={model.enabled !== false}
+          onCheckedChange={() => onToggleEnabled(model)}
+          testId={`model-toggle-${model.provider}-${model.id}`}
+          aria-label={model.id}
+        />
+        {showReplacement && (
+          <button
+            type="button"
+            onClick={() => onCycleListing(model)}
+            data-testid={`model-listing-${model.provider}-${model.id}`}
+            aria-pressed={listing === "unlisted"}
+            title={
+              listing === "unlisted"
+                ? `${t("modelConfig.listing.unlistedTooltip")} ${t("modelConfig.listing.list")}`
+                : listing === "off"
+                  ? t("modelConfig.listing.unlistFromOff")
+                  : t("modelConfig.listing.unlist")
+            }
+            aria-label={`${listing === "unlisted" ? t("modelConfig.listing.list") : t("modelConfig.listing.unlist")}: ${model.name}`}
+            className={cn(
+              "flex-shrink-0 p-0.5 rounded transition-colors",
+              listing === "unlisted"
+                ? "text-amber-600 dark:text-amber-400"
+                : "text-theme-secondary hover:text-amber-600",
+            )}
+          >
+            {listing === "unlisted" ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+          </button>
+        )}
+      </div>
 
       {/* Cloud-admin bundle override (V381): what the CE bundle ships for this
           model, independent of the cloud's enabled toggle. 3 states: inherit
@@ -1095,8 +1198,10 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
   /** Free-text match on the model id and on the name an admin gave it. */
   const [search, setSearch] = useState<string>("");
   const [tierFilter, setTierFilter] = useState<string>("all");
-  /** "all" | "on" | "off" - which side of the per-model switch to show. */
+  /** "all" | "on" (listed) | "unlisted" | "off" - which of the three states to show (V554). */
   const [stateFilter, setStateFilter] = useState<string>("all");
+  /** Only the models the catalogue gained in the last two weeks (the "New" badge). */
+  const [newOnly, setNewOnly] = useState(false);
   /**
    * "rank" (the fallback order, the default) or a release-date order, which is how an admin
    * finds the old models worth retiring. Models with no known release date go last either way.
@@ -1238,8 +1343,11 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
       filtered = filtered.filter(m => (m.tier ?? "") === tierFilter);
     }
     if (stateFilter !== "all") {
-      const wantEnabled = stateFilter === "on";
-      filtered = filtered.filter(m => (m.enabled !== false) === wantEnabled);
+      const wanted: ModelListingState = stateFilter === "on" ? "listed" : (stateFilter as ModelListingState);
+      filtered = filtered.filter(m => modelListingState(m) === wanted);
+    }
+    if (newOnly) {
+      filtered = filtered.filter(m => m.isNew === true);
     }
     const needle = search.trim().toLowerCase();
     if (needle) {
@@ -1253,15 +1361,20 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
       filtered = sortByReleaseDate(filtered, sortOrder);
     }
     return filtered;
-  }, [models, providerFilter, category, tierFilter, stateFilter, search, sortOrder]);
+  }, [models, providerFilter, category, tierFilter, stateFilter, newOnly, search, sortOrder]);
+
+  /** How many models on this tab carry the New badge: the count on the filter chip. */
+  const newCount = useMemo(() => models.filter(m => m.isNew === true).length, [models]);
 
   const filtersActive =
-    providerFilter !== "all" || tierFilter !== "all" || stateFilter !== "all" || search.trim() !== "";
+    providerFilter !== "all" || tierFilter !== "all" || stateFilter !== "all" || newOnly
+    || search.trim() !== "";
 
   const clearFilters = useCallback(() => {
     setProviderFilter("all");
     setTierFilter("all");
     setStateFilter("all");
+    setNewOnly(false);
     setSearch("");
   }, []);
 
@@ -1394,16 +1507,33 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
     (enabled: boolean) =>
       applyToSelection(
         enabled ? t("modelConfig.bulkEnable") : t("modelConfig.bulkDisable"),
-        (model) =>
-          category === "chat"
-            ? modelConfigService.saveOverride({
-                provider: model.provider,
-                modelId: model.id,
-                enabled,
-              })
-            : modelConfigService.setCategoryEnabled(model.provider, model.id, category, enabled),
+        (model) => {
+          if (category !== "chat") {
+            return modelConfigService.setCategoryEnabled(model.provider, model.id, category, enabled);
+          }
+          // Like the row switch: "Disable" leaves no unlisted flag behind on an off row, and
+          // "Enable" switches an off row on, listed. A row already on is left as it is, an
+          // unlisted one included: a range picked to switch some models on must not quietly
+          // list every unlisted model inside it.
+          const current = modelListingState(model);
+          if (enabled && current !== "off") return Promise.resolve();
+          const patch = listingTransitionPatch(model, enabled ? "listed" : "off");
+          if (Object.keys(patch).length === 0) return Promise.resolve();
+          return modelConfigService.saveOverride({ provider: model.provider, modelId: model.id, ...patch });
+        },
       ),
     [applyToSelection, category, t],
+  );
+
+  /** V554: keep the selection available but stop offering it. Chat tab only (global flag). */
+  const bulkUnlist = useCallback(
+    () =>
+      applyToSelection(t("modelConfig.bulkUnlist"), (model) => {
+        const patch = listingTransitionPatch(model, "unlisted");
+        if (Object.keys(patch).length === 0) return Promise.resolve();
+        return modelConfigService.saveOverride({ provider: model.provider, modelId: model.id, ...patch });
+      }),
+    [applyToSelection, t],
   );
 
   const bulkSetTier = useCallback(
@@ -1689,7 +1819,50 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
     [models],
   );
 
+  /**
+   * Put a model in one of its three states (V554) on the Chat tab, where both flags are
+   * global. Optimistic like the switch; rolled back with the server's message on failure.
+   */
+  const applyListingState = (model: ModelConfigEntry, next: ModelListingState) => {
+    const patch = listingTransitionPatch(model, next);
+    if (Object.keys(patch).length === 0) return;
+    setModels((prev) =>
+      prev.map((m) =>
+        m.provider === model.provider && m.id === model.id
+          ? { ...m, ...patch, hasOverride: true }
+          : m,
+      ),
+    );
+    setSaving(true);
+    modelConfigService
+      .saveOverride({ provider: model.provider, modelId: model.id, ...patch })
+      .then(() => {
+        clearModelsCache();
+      })
+      .catch((e) => {
+        setModels((prev) =>
+          prev.map((m) =>
+            m.provider === model.provider && m.id === model.id
+              ? { ...m, enabled: model.enabled, unlisted: model.unlisted }
+              : m,
+          ),
+        );
+        setError(e instanceof Error && e.message ? e.message : t("modelConfig.saveError"));
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const handleCycleListing = (model: ModelConfigEntry) => {
+    applyListingState(model, nextStateFromEye(modelListingState(model)));
+  };
+
   const handleToggleEnabled = (model: ModelConfigEntry) => {
+    // chat = global flags on the parent row: off <-> listed, both flags written, so an
+    // unlisted model switched off and on again comes back listed, not silently unlisted.
+    if (category === 'chat') {
+      applyListingState(model, nextStateFromSwitch(modelListingState(model)));
+      return;
+    }
     // currently disabled (enabled === false) → turn on; otherwise turn off.
     const nextEnabled = model.enabled === false;
     // Optimistic: flip the row in place so it reacts instantly. Toggling
@@ -1704,22 +1877,14 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
       ),
     );
     setSaving(true);
-    // chat = global enabled flag on the parent row (legacy);
-    // other categories = sidecar enabled flag, leaves the parent row alone so
+    // Other categories = sidecar enabled flag, leaves the parent row alone so
     // the same model stays usable in chat while disabled in (say) browser_agent.
-    const persist =
-      category === 'chat'
-        ? modelConfigService.saveOverride({
-            provider: model.provider,
-            modelId: model.id,
-            enabled: nextEnabled,
-          })
-        : modelConfigService.setCategoryEnabled(
-            model.provider,
-            model.id,
-            category,
-            nextEnabled,
-          );
+    const persist = modelConfigService.setCategoryEnabled(
+      model.provider,
+      model.id,
+      category,
+      nextEnabled,
+    );
     persist
       .then(() => {
         clearModelsCache();
@@ -1808,7 +1973,7 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         await modelConfigService.saveOverride({
           provider: model.provider,
           modelId: model.id,
-          enabled: false,
+          ...listingTransitionPatch(model, "off"),
         });
       });
     }
@@ -1921,6 +2086,7 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         onExecutionLinksChanged={loadExecutionLinks}
         onExecutionLinkError={setExecutionLinkError}
         onToggleEnabled={handleToggleEnabled}
+        onCycleListing={handleCycleListing}
         onCycleBundleEnabled={handleCycleBundleEnabled}
         onToggleFreeTier={handleToggleFreeTier}
         onToggleRecommended={handleToggleRecommended}
@@ -2032,9 +2198,24 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
             <SelectContent>
               <SelectItem value="all">{t("modelConfig.allStates")}</SelectItem>
               <SelectItem value="on">{t("modelConfig.stateOn")}</SelectItem>
+              <SelectItem value="unlisted">{t("modelConfig.stateUnlisted")}</SelectItem>
               <SelectItem value="off">{t("modelConfig.stateOff")}</SelectItem>
             </SelectContent>
           </Select>
+          {/* The models the catalogue just gained. Only offered when there is at least one
+              (or while it is on, so it can be switched off again). */}
+          {(newCount > 0 || newOnly) && (
+            <Button
+              size="sm"
+              variant={newOnly ? "default" : "outline"}
+              onClick={() => setNewOnly((v) => !v)}
+              aria-pressed={newOnly}
+              title={t("modelConfig.filterNewTooltip")}
+              data-testid="new-filter"
+            >
+              {t("modelConfig.filterNew", { count: String(newCount) })}
+            </Button>
+          )}
           <Select value={providerFilter} onValueChange={setProviderFilter}>
             {/* rounded-lg keeps a softly-squared edge (less pill-like than the
                 action buttons); height inherits the standard h-9 control size. */}
@@ -2145,7 +2326,7 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
           turn (chat, browser agent) and each is refused independently, so "nothing open
           here" is the true and useful statement. The copy says "on this tab" for that
           reason. */}
-      {!IS_CE && models.length > 0 && !models.some((m) => m.freeTierEnabled) && (
+      {!IS_CE && models.length > 0 && !models.some((m) => m.freeTierEnabled && modelListingState(m) === "listed") && (
         <div
           data-testid="free-tier-none-open"
           className="flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3"
@@ -2182,6 +2363,12 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
           <Button size="sm" variant="outline" data-testid="bulk-disable" onClick={() => bulkSetEnabled(false)}>
             {t("modelConfig.bulkDisable")}
           </Button>
+          {category === "chat" && (
+            <Button size="sm" variant="outline" data-testid="bulk-unlist" onClick={bulkUnlist}>
+              <EyeOff className="w-3.5 h-3.5 mr-1" />
+              {t("modelConfig.bulkUnlist")}
+            </Button>
+          )}
           <div data-testid="bulk-tier">
             <Select value="" onValueChange={bulkSetTier}>
               <SelectTrigger className="rounded-lg px-3 text-sm min-w-[130px] h-8" aria-label={t("modelConfig.bulkTier")}>
@@ -2250,6 +2437,7 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
+        autoScroll={LIST_AUTO_SCROLL}
         onDragStart={(e) => setDraggingKey(String(e.active.id))}
         onDragCancel={() => setDraggingKey(null)}
         onDragEnd={(e) => {

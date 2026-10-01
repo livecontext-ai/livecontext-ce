@@ -2871,8 +2871,43 @@ class SubAgentExecutionHandlerTest {
             verify(bridgeClientMock).execute(dispatched.capture());
             // A sub-agent chosen on a CLI provider is a real agent with a real toolset,
             // unlike the single-shot classify and guardrail judges, so nothing is removed.
+            // And with no fallback to run, the bridge keeps announcing its own failures.
             assertThat(dispatched.getValue().credentials())
-                .doesNotContainKey(ExecutionLinkRouter.RESTRICTED_TOOLSET_KEY);
+                .doesNotContainKey(ExecutionLinkRouter.RESTRICTED_TOOLSET_KEY)
+                .doesNotContainKey(AgentExecutionRequestDto.CALLER_PUBLISHES_FAILURE_KEY);
+        }
+
+        @Test
+        @DisplayName("regression: a bridge-linked sub-agent tells the bridge the caller publishes the failure (its `error` ended the sub-agent turn before the fallback streamed on the same stream), and the retry does not carry that marker")
+        void bridgeLinkedSubAgentAsksTheBridgeNotToAnnounceTheFailureItRetries() {
+            ReflectionTestUtils.setField(handler, "bridgeClient", bridgeClientMock);
+            when(router.runnableRoute("openai", "gpt-4", "SUB_AGENT")).thenReturn(bridgeRoute);
+            AgentEntity entity = createAgent();
+            when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
+            var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
+            when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(mockCallback);
+            ArgumentCaptor<AgentExecutionRequestDto> dispatched = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
+            when(bridgeClientMock.execute(dispatched.capture())).thenReturn(
+                new AgentExecutionResponseDto(false, null, null, List.of(), 0, Map.of(), "spawn codex ENOENT", 10L,
+                    "claude-code", "claude-opus-4-8", List.of(), "ERROR",
+                    Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
+            ArgumentCaptor<AgentLoopContext> retried = ArgumentCaptor.forClass(AgentLoopContext.class);
+            when(agentLoopService.execute(retried.capture(), any(StreamingCallback.class)))
+                .thenReturn(AgentLoopResult.success(
+                    CompletionResponse.text("OK"), List.of(), 1, null, 100, "openai", "gpt-4"));
+
+            ToolCall toolCall = createToolCall(Map.of(
+                "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "hello"));
+            handler.execute(toolCall, TENANT_ID, defaultCredentials());
+
+            assertThat(dispatched.getValue().credentials())
+                .containsEntry(AgentExecutionRequestDto.CALLER_PUBLISHES_FAILURE_KEY, Boolean.TRUE);
+            // The fallback ran, and the one terminal event of the stream is this handler's.
+            assertThat(retried.getValue().credentials())
+                .doesNotContainKey(AgentExecutionRequestDto.CALLER_PUBLISHES_FAILURE_KEY);
+            verify(mockCallback).onComplete(any());
         }
 
         @Test

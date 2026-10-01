@@ -147,6 +147,65 @@ class AskUserToolsProviderTest {
     }
 
     @Test
+    @DisplayName("Bug B14: a declared 'Autre' option no longer fails the ask; the card omits it and the result names it")
+    @SuppressWarnings("unchecked")
+    void declaredOtherOptionIsDroppedAndNamedInTheResult() {
+        Map<String, Object> params = askParams();
+        Map<String, Object> q = new HashMap<>((Map<String, Object>) ((List<?>) params.get("questions")).get(0));
+        q.put("options", List.of(Map.of("label", "Friendly"), Map.of("label", "Formal"), Map.of("label", "Autre")));
+        params.put("questions", List.of(q));
+        // No gate: the question is raised as a non-blocking card, whose payload travels in the metadata.
+        when(gate.isEnabled()).thenReturn(false);
+
+        var result = provider.execute("ask_user", params, context(chatCredentials()));
+
+        assertThat(result.success()).isTrue();
+        assertThat(data(result)).containsEntry("status", "pending_user");
+        assertThat((String) data(result).get("note")).contains("questions[0].options[2] 'Autre'")
+                .contains("never declare an 'Other' option");
+        Object card = result.metadata().get(ApprovalCardExtractor.USER_QUESTION_KEY);
+        assertThat(card.toString()).contains("Friendly", "Formal").doesNotContain("Autre");
+        // The card-painting metadata survives the note being added.
+        assertThat(result.metadata()).containsEntry(ApprovalCardExtractor.USER_QUESTION_REQUESTED_KEY, true);
+    }
+
+    @Test
+    @DisplayName("An unavailable result gets no dropped-option note: nothing was put to anyone")
+    @SuppressWarnings("unchecked")
+    void noNoteOnAnUnavailableResult() {
+        Map<String, Object> params = askParams();
+        Map<String, Object> q = new HashMap<>((Map<String, Object>) ((List<?>) params.get("questions")).get(0));
+        q.put("options", List.of(Map.of("label", "Friendly"), Map.of("label", "Formal"), Map.of("label", "Other")));
+        params.put("questions", List.of(q));
+        Map<String, Object> creds = new HashMap<>();
+        creds.put(AskUserToolsProvider.KEY_TOOL_CALL_ID, "call-7");
+
+        var result = provider.execute("ask_user", params, context(creds));
+
+        assertThat(data(result)).containsEntry("status", "unavailable").doesNotContainKey("note");
+    }
+
+    @Test
+    @DisplayName("A failed result passes through the note step untouched")
+    void failedResultIsNotAnnotated() {
+        var failure = ToolsProvider.ToolExecutionResult.failure(ToolErrorCode.VALIDATION_ERROR, "bad");
+
+        var out = AskUserToolsProvider.withDroppedOptionsNote(failure, List.of("questions[0].options[2] 'Other'"));
+
+        assertThat(out).isSameAs(failure);
+    }
+
+    @Test
+    @DisplayName("Without a declared 'Other' the result carries no note")
+    void noNoteWithoutADroppedOption() {
+        when(gate.isEnabled()).thenReturn(false);
+
+        var result = provider.execute("ask_user", askParams(), context(chatCredentials()));
+
+        assertThat(data(result)).doesNotContainKey("note");
+    }
+
+    @Test
     @DisplayName("A malformed questions argument fails with VALIDATION_ERROR naming the index; nothing is parked")
     void malformedQuestions() {
         Map<String, Object> params = askParams();

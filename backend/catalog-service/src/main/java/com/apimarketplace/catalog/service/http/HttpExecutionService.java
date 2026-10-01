@@ -69,17 +69,6 @@ public class HttpExecutionService {
     private record CachedSubToken(String token, long expiresAtMs) {}
 
     /**
-     * Retry counter. Optional for the same reason as the strategies below, and because a missing
-     * registry must never be the thing that stops a provider call.
-     *
-     * <p>Without it the retry is invisible: the wait happens on the serving thread, so a
-     * provider-wide throttle shows up only as latency with no way to attribute it. The counter is
-     * what turns "the catalogue got slow" into "this provider threw 429s for ten minutes".
-     */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private io.micrometer.core.instrument.MeterRegistry meterRegistry;
-
-    /**
      * Whether the OAuth scope preflight REFUSES a call, or merely logs what it would
      * refuse. Defaults to observe-only: the guard has never run against real traffic
      * (0 firings in production), so arming it silently would put 814 unverified scope
@@ -826,6 +815,8 @@ public class HttpExecutionService {
             // Dynamic-URL endpoints first (placeholder reject + host allow-list, no DNS toward
             // non-allowed hosts), then the generic SSRF validation for every URL.
             enforceDynamicUrlConstraints(tool, url);
+            // Nothing fills a placeholder on this credential-less path: one left is refused now.
+            requireResolvedUrl(url, api, tool, null, false);
             // SSRF protection: validate after path parameter substitution so {placeholders} don't break URI parsing
             UrlSafetyValidator.validateUrl(url);
 
@@ -837,18 +828,6 @@ public class HttpExecutionService {
             Object body = prepareRequestBody(tool, filteredParameters);
             log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Request body: {}", tool.getId(), LoggedShape.of(body));
 
-            // Check if URL still contains unexpanded variables
-            if (url.contains("{") && url.contains("}")) {
-                Pattern pattern = Pattern.compile("\\{([^}]+)\\}");
-                Matcher matcher = pattern.matcher(url);
-                List<String> remainingVars = new ArrayList<>();
-                while (matcher.find()) {
-                    remainingVars.add(matcher.group(1));
-                }
-                log.error("[HttpExecutionService.executeHttpCall] Tool: {}, URL still contains unexpanded variables: {}",
-                        tool.getId(), remainingVars);
-            }
-
             dropContentTypeWhenBodyless(headers, body);
             HttpEntity<Object> request = new HttpEntity<>(body, headers);
 
@@ -856,13 +835,11 @@ public class HttpExecutionService {
                     tool.getId(), url, tool.getMethod());
 
             final String requestUrl = url;
-            ResponseEntity<Object> response = exchangeWithRetry(
-                    () -> restTemplate.exchange(
-                            requestUrl,
-                            HttpMethod.valueOf(tool.getMethod()),
-                            request,
-                            Object.class),
-                    requestUrl, tool, api);
+            ResponseEntity<Object> response = readingText(() -> restTemplate.exchange(
+                    requestUrl,
+                    HttpMethod.valueOf(tool.getMethod()),
+                    request,
+                    Object.class), false).get();
 
             // Create mutable Map to allow adding fields later
             int statusCode = response.getStatusCode().value();
@@ -880,7 +857,7 @@ public class HttpExecutionService {
             int statusCode = e.getStatusCode().value();
             String errorBody = e.getResponseBodyAsString();
             String errorMessage = extractErrorMessage(errorBody, e.getMessage());
-            errorMessage = declaredErrorMessage(api, statusCode, errorBody, e.getResponseHeaders(), errorMessage);
+            errorMessage = declaredErrorMessage(api, statusCode, errorBody, errorMessage);
 
             Map<String, Object> result = new HashMap<>();
             result.put("success", false);
@@ -889,6 +866,7 @@ public class HttpExecutionService {
             result.put("data", Map.of());
             result.put("error", errorMessage);
             result.put("errorBody", errorBody);
+            putRetryAfter(result, e);
 
             log.error("[HttpExecutionService.executeHttpCall] HTTP error: status={}, error={}", statusCode, errorMessage);
             return result;
@@ -989,6 +967,8 @@ public class HttpExecutionService {
             // AFTER the credential fill: {token}, {apiKey}, {project_id} are declared path
             // parameters too, and are legitimately still unfilled before this point.
             requireFilledPathParameters(url, tool);
+            requireResolvedUrl(url, api, tool, credentialName,
+                    credentialValue.isPresent() && !"platform".equals(resolvedCredentialSource));
             realUrl = url;
 
             log.info("[HttpExecutionService.executeHttpCallWithCredentials] Final URL: {}", safeUrl);
@@ -1013,35 +993,22 @@ public class HttpExecutionService {
             // any stray header and is a no-op for non-AWS hosts.
             maybeSignAws(tool, url, headers, body, userId, credentialName);
 
-            // Check for unexpanded variables
-            if (url.contains("{") && url.contains("}")) {
-                Pattern pattern = Pattern.compile("\\{([^}]+)\\}");
-                Matcher matcher = pattern.matcher(url);
-                List<String> remainingVars = new ArrayList<>();
-                while (matcher.find()) {
-                    remainingVars.add(matcher.group(1));
-                }
-                log.error("[HttpExecutionService.executeHttpCallWithCredentials] URL still contains unexpanded variables: {}", remainingVars);
-            }
-
             dropContentTypeWhenBodyless(headers, body);
             HttpEntity<Object> request = new HttpEntity<>(body, headers);
 
             log.info("[HttpExecutionService.executeHttpCallWithCredentials] Calling {} {}", tool.getMethod(), safeUrl);
 
             try {
-                // Retries the call while the provider says "rejected, come back later" (429, or
-                // 503 with a Retry-After), then rethrows so the catch branches below handle the
-                // final outcome exactly as they always have.
+                // Sent exactly once. A provider refusal (429 included) is returned to the caller
+                // as it stands: the platform never re-sends on its own, retrying is the caller's
+                // decision (a workflow node's retryCount, or the agent).
+                // URI.create prevents Spring from re-expanding {variables} as URI templates
                 final String requestUrl = url;
-                ResponseEntity<Object> response = exchangeWithRetry(
-                    // URI.create prevents Spring from re-expanding {variables} as URI templates
-                    () -> restTemplate.exchange(
-                        java.net.URI.create(requestUrl),
-                        HttpMethod.valueOf(tool.getMethod()),
-                        request,
-                        Object.class),
-                    safeUrl, tool, api);
+                ResponseEntity<Object> response = readingText(() -> restTemplate.exchange(
+                    java.net.URI.create(requestUrl),
+                    HttpMethod.valueOf(tool.getMethod()),
+                    request,
+                    Object.class), false).get();
 
                 int statusCode = response.getStatusCode().value();
                 Map<String, Object> result = new HashMap<>();
@@ -1133,26 +1100,23 @@ public class HttpExecutionService {
                     dropContentTypeWhenBodyless(retryHeaders, body);
                     HttpEntity<Object> retryRequest = new HttpEntity<>(body, retryHeaders);
 
-                    final String refreshedUrl = url;
                     ResponseEntity<Object> response;
                     try {
-                        response = exchangeWithRetry(
-                            () -> restTemplate.exchange(
-                                refreshedUrl,
-                                HttpMethod.valueOf(tool.getMethod()),
-                                retryRequest,
-                                Object.class),
-                            safeUrl, tool, api);
+                        final String refreshedUrl = url;
+                        response = readingText(() -> restTemplate.exchange(
+                            refreshedUrl,
+                            HttpMethod.valueOf(tool.getMethod()),
+                            retryRequest,
+                            Object.class), false).get();
                     } catch (org.springframework.web.client.HttpStatusCodeException afterRefresh) {
                         // This call sits INSIDE the Unauthorized catch, so anything it throws would
                         // otherwise skip the sibling catches and land in the generic Exception
-                        // handler: status 0, the raw exception message, no declared message and no
-                        // Retry-After. A provider that throttles right after a token refresh is
-                        // routine on the OAuth integrations this feature targets.
+                        // handler: status 0, the raw exception message and no declared message. A
+                        // provider that throttles right after a token refresh is routine on the
+                        // OAuth integrations.
                         int failedStatus = afterRefresh.getStatusCode().value();
                         String failedBody = afterRefresh.getResponseBodyAsString();
                         String failedMessage = declaredErrorMessage(api, failedStatus, failedBody,
-                                afterRefresh.getResponseHeaders(),
                                 extractErrorMessage(failedBody, afterRefresh.getMessage()));
 
                         Map<String, Object> failedResult = new HashMap<>();
@@ -1162,6 +1126,7 @@ public class HttpExecutionService {
                         failedResult.put("data", Map.of());
                         failedResult.put("error", failedMessage);
                         failedResult.put("errorBody", failedBody);
+                        putRetryAfter(failedResult, afterRefresh);
 
                         log.error("[HttpExecutionService.executeHttpCallWithCredentials] "
                                 + "HTTP error after token refresh: status={}, error={}",
@@ -1188,7 +1153,7 @@ public class HttpExecutionService {
                 // revoked scope, a suspended app) can say it here through the seed, like every
                 // other error return.
                 errorMessage = declaredErrorMessage(api, 401, e.getResponseBodyAsString(),
-                        e.getResponseHeaders(), errorMessage);
+                        errorMessage);
 
                 Map<String, Object> result = new HashMap<>();
                 result.put("success", false);
@@ -1213,7 +1178,7 @@ public class HttpExecutionService {
                 // A 403 is a common carrier of a refusal only the account owner can act on
                 // (unapproved app, missing consent). When the seed names it, its wording wins over
                 // the provider's raw reason.
-                errorMessage = declaredErrorMessage(api, 403, errorBody, e.getResponseHeaders(), errorMessage);
+                errorMessage = declaredErrorMessage(api, 403, errorBody, errorMessage);
 
                 Map<String, Object> result = new HashMap<>();
                 result.put("success", false);
@@ -1222,18 +1187,19 @@ public class HttpExecutionService {
                 result.put("data", Map.of());
                 result.put("error", errorMessage);
                 result.put("errorBody", errorBody);
+                // GitHub's secondary rate limit is a 403 that says when to come back.
+                putRetryAfter(result, e);
 
                 log.error("[HttpExecutionService.executeHttpCallWithCredentials] Forbidden error: {} body={}", errorMessage, errorBody);
                 return result;
 
             } catch (org.springframework.web.client.HttpStatusCodeException e) {
-                // Other HTTP errors (400, 404, 429, 500, etc.) - return error result. A 429 only
-                // reaches here once exchangeWithRetry has given up (attempts exhausted, or the
-                // provider asked to wait longer than a request thread may be held).
+                // Other HTTP errors (400, 404, 429, 500, etc.) - return error result. A 429 lands
+                // here on the first refusal: the platform does not re-send it.
                 int statusCode = e.getStatusCode().value();
                 String errorBody = e.getResponseBodyAsString();
                 String errorMessage = extractErrorMessage(errorBody, e.getMessage());
-                errorMessage = declaredErrorMessage(api, statusCode, errorBody, e.getResponseHeaders(), errorMessage);
+                errorMessage = declaredErrorMessage(api, statusCode, errorBody, errorMessage);
 
                 Map<String, Object> result = new HashMap<>();
                 result.put("success", false);
@@ -1242,6 +1208,7 @@ public class HttpExecutionService {
                 result.put("data", Map.of());
                 result.put("error", errorMessage);
                 result.put("errorBody", errorBody);
+                putRetryAfter(result, e);
 
                 log.error("[HttpExecutionService.executeHttpCallWithCredentials] HTTP error: status={}, error={}", statusCode, errorMessage);
                 return result;
@@ -1272,141 +1239,47 @@ public class HttpExecutionService {
     }
 
     /**
-     * Sends the request, waiting and re-sending while {@link ErrorPolicyEngine} says the provider
-     * rejected the call and asked us to come back.
+     * Wraps the send of an untyped read ({@code Object.class}) so that a body the RestTemplate could
+     * not convert is taken instead of failing the call. See {@link TextualResponseBody}: a textual,
+     * non-JSON, non-HTML body is read as text (or as the JSON it holds); anything else rethrows the
+     * original refusal, unchanged. It wraps the single SEND of each untyped path (legacy,
+     * credentialed, its 401 refresh re-send, typed); nothing here re-sends anything. The shared
+     * RestTemplate bean is never touched, so every other caller of it, in this module or another,
+     * reads exactly as before.
      *
-     * <p>Only the exchange is repeated. Everything above it (credential resolution, header and
-     * body building) already happened and is reused, and a multipart body is backed by
-     * {@code ByteArrayResource}, so re-sending it is byte-identical rather than a consumed stream.
-     *
-     * <p>When the engine stops saying RETRY, the last exception is rethrown untouched so the
-     * caller's existing catch branches produce exactly the result they always did.
-     *
-     * <p>The send itself is a {@link java.util.function.Supplier} because the two call sites do not
-     * dispatch identically: the credentialed path passes a {@code URI} so Spring cannot re-expand
-     * {@code {placeholders}} in an already-substituted URL, while the legacy path still passes the
-     * String form. Sharing the loop without touching that difference keeps this change to the
-     * retry behaviour alone.
+     * @param declaredText the endpoint declares {@code response.type=text}, which only the TYPED
+     *                     path reads (the legacy and credentialed paths always pass false): then ANY
+     *                     unconvertible body, HTML or untyped included, is its result, as a String
      */
-    private <T> ResponseEntity<T> exchangeWithRetry(java.util.function.Supplier<ResponseEntity<T>> send,
-                                                   String url, ApiToolEntity tool, ApiEntity api) {
-        // The caller's budget can only TIGHTEN the platform's, never raise it. A node that paces
-        // itself sends 0, which refuses every wait and therefore every retry: the author owns the
-        // retrying, and the platform must not multiply their requests underneath them.
-        //
-        // The clamp is the load-bearing half. Our caller waits on ONE HTTP read window (the
-        // orchestrator's is 30s), and it does not know how long we intend to sleep. Sleep past it
-        // and the caller gives up while WE go on to re-send the call, succeed, store the result and
-        // commit the charge: the customer is billed for a step the run reports as failed, and
-        // nothing releases it because from here nothing failed. That is not hypothetical - it is
-        // written up in the orchestrator's own RestTemplateConfig, which met it once with a
-        // generation call. The platform's configured budget is chosen to fit inside that window, so
-        // honouring a larger one would be honouring a request to break the caller.
-        Long callerBudget = ProviderRetryContext.getMaxWaitMs();
-        long platformBudgetMs = errorPolicyEngine.getMaxWaitMs();
-        long budgetMs = callerBudget == null ? platformBudgetMs : Math.min(callerBudget, platformBudgetMs);
-        boolean budgetWasCapped = callerBudget != null && callerBudget > platformBudgetMs;
-
-        long sleptMs = 0L;
-        for (int attempt = 0; ; attempt++) {
+    private static java.util.function.Supplier<ResponseEntity<Object>> readingText(
+            java.util.function.Supplier<ResponseEntity<Object>> send, boolean declaredText) {
+        return () -> {
             try {
                 return send.get();
-            } catch (org.springframework.web.client.HttpStatusCodeException e) {
-                // The engine is asked only WHETHER this refusal is retryable and for how long the
-                // provider asked to wait. The budget is applied below, on the running total, which
-                // is strictly stronger than a per-wait cap and needs no change to a shared engine
-                // signature: a caller can only ever tighten, so a wait the engine allows and the
-                // budget does not is refused here, before anything is slept.
-                ErrorPolicyEngine.Verdict verdict = errorPolicyEngine.classify(
-                        e.getStatusCode().value(),
-                        e.getResponseBodyAsString(),
-                        e.getResponseHeaders(),
-                        api.getErrorPolicy(),
-                        attempt,
-                        tool.getMethod());
-
-                if (verdict.action() != ErrorPolicyEngine.Action.RETRY) {
-                    throw e;
+            } catch (org.springframework.web.client.UnknownContentTypeException unreadable) {
+                org.springframework.http.MediaType type = unreadable.getContentType();
+                byte[] bytes = unreadable.getResponseBody();
+                Object body = declaredText
+                        ? TextualResponseBody.read(bytes, type).orElseGet(() -> TextualResponseBody.decode(bytes, type))
+                        : TextualResponseBody.read(bytes, type).orElseThrow(() -> unreadable);
+                HttpHeaders headers = new HttpHeaders();
+                if (unreadable.getResponseHeaders() != null) {
+                    headers.putAll(unreadable.getResponseHeaders());
                 }
-
-                // The budget is the TOTAL wait for this call, not a per-wait cap: two allowed
-                // retries of the cap each would hold the thread for twice what the cap promises,
-                // and this request thread is also paying for the dispatches between the waits.
-                if (sleptMs + verdict.waitMs() > budgetMs) {
-                    // Logged here and nowhere else. A capped budget is an ordinary, documented,
-                    // user-configured state that the UI invites, so warning merely because it was
-                    // capped would emit one line per node execution - a thousand per run inside a
-                    // split, none of them actionable. The moment it decides anything is the moment
-                    // a retry is refused, and that is what this says.
-                    log.warn("[HttpExecutionService] {} {} answered {} and asked for {}ms more, "
-                                    + "over the {}ms budget already {}ms spent - not retrying{}",
-                            tool.getMethod(), stripQueryString(url), e.getStatusCode().value(),
-                            verdict.waitMs(), budgetMs, sleptMs,
-                            budgetWasCapped
-                                    ? " (the caller asked for " + callerBudget + "ms, capped at the "
-                                            + "platform's " + platformBudgetMs + "ms)"
-                                    : "");
-                    throw e;
-                }
-
-                log.warn("[HttpExecutionService] {} {} answered {} - waiting {}ms and retrying "
-                                + "(attempt {} of {})",
-                        tool.getMethod(), stripQueryString(url), e.getStatusCode().value(),
-                        verdict.waitMs(), attempt + 1, errorPolicyEngine.getMaxRetries());
-
-                countRetry(api, e.getStatusCode().value());
-                // Travels back to the node, which stamps it on the step output: the wait happens
-                // inside one tool call, so without this a re-sent call is indistinguishable from a
-                // slow one.
-                ProviderRetryContext.recordRetry();
-
-                try {
-                    Thread.sleep(verdict.waitMs());
-                    sleptMs += verdict.waitMs();
-                } catch (InterruptedException interrupted) {
-                    // A shutdown or a cancelled request must not be turned into a retry: restore
-                    // the flag and let the provider's own error be the outcome.
-                    Thread.currentThread().interrupt();
-                    throw e;
-                }
+                return ResponseEntity.status(unreadable.getStatusCode()).headers(headers).body(body);
             }
-        }
+        };
     }
 
     /**
      * The message an API's {@code errorPolicy} declares for this refusal, or {@code fallback} when
-     * it declares none. Called with the attempts already spent, so a {@code retry} rule can only
-     * contribute its wording here, never another wait.
+     * it declares none. Wording only: nothing here re-sends the call.
      */
-    private String declaredErrorMessage(ApiEntity api, int status, String body,
-                                        HttpHeaders headers, String fallback) {
-        ErrorPolicyEngine.Verdict verdict = errorPolicyEngine.classifyForMessage(
-                status, body, headers, api.getErrorPolicy());
-        return verdict.action() == ErrorPolicyEngine.Action.USER_ERROR && verdict.message() != null
-                ? verdict.message()
-                : fallback;
+    private String declaredErrorMessage(ApiEntity api, int status, String body, String fallback) {
+        String declared = errorPolicyEngine.declaredMessage(status, body, api.getErrorPolicy());
+        return declared != null ? declared : fallback;
     }
 
-    /**
-     * One counter per (integration, status), so a provider-wide throttle is attributable rather
-     * than showing up as unexplained latency on the whole catalogue. Tagged by icon slug because
-     * that is the identifier the rest of the platform's dashboards already use.
-     */
-    private void countRetry(ApiEntity api, int status) {
-        if (meterRegistry == null) {
-            return;
-        }
-        String integration = api.getIconSlug() != null ? api.getIconSlug() : api.getApiName();
-        meterRegistry.counter("catalog_tool_retry_total",
-                "integration", integration == null ? "unknown" : integration,
-                "status", String.valueOf(status)).increment();
-    }
-
-    /**
-     * Drops the query string, which on several providers carries the access token itself. Scoped
-     * to the retry log below: it does not undo the full-URL logging this service already does
-     * elsewhere.
-     */
     /** Class names of {@code e} and its causes, outermost first: a diagnosis without their messages. */
     private static String exceptionChain(Throwable e) {
         StringBuilder sb = new StringBuilder();
@@ -1420,11 +1293,6 @@ public class HttpExecutionService {
             }
         }
         return sb.toString();
-    }
-
-    private static String stripQueryString(String url) {
-        int q = url.indexOf('?');
-        return q < 0 ? url : url.substring(0, q);
     }
 
     /**
@@ -2240,10 +2108,14 @@ public class HttpExecutionService {
         Pattern pattern = Pattern.compile("\\{([^}]+)\\}");
         Matcher matcher = pattern.matcher(url);
         StringBuffer sb = new StringBuffer();
+        boolean upgradeToHttps = false;
         while (matcher.find()) {
             String varName = matcher.group(1);
-            String replacement = resolveUrlVariable(varName, credentialDataMap, credentialValue);
+            String replacement = resolveUrlVariable(varName, credentialDataMap, credentialValue,
+                    isHostSlot(url, matcher.start()));
             if (replacement != null) {
+                upgradeToHttps |= hostSlotAsksForHttps(url, matcher.start(), replacement);
+                replacement = fitUrlVariableValue(url, matcher.start(), matcher.end(), replacement);
                 log.info("[HttpExecutionService] Replacing URL variable {{{}}} from credential data", varName);
                 if (substituted != null) {
                     substituted.add(replacement);
@@ -2255,15 +2127,25 @@ public class HttpExecutionService {
             }
         }
         matcher.appendTail(sb);
-        return sb.toString();
+        String filled = sb.toString();
+        // http://{host} filled with a value that says https:// stays https: see hostSlotAsksForHttps.
+        return upgradeToHttps ? "https://" + filled.substring("http://".length()) : filled;
     }
 
     /**
      * Resolves a URL template variable name to a value from credential data.
      * Tries: exact match → lowercase match → common aliases → fallback to primary credential value.
      */
-    private String resolveUrlVariable(String varName, Map<String, String> credentialDataMap, String fallbackValue) {
-        if (credentialDataMap.isEmpty()) return fallbackValue;
+    private String resolveUrlVariable(String varName, Map<String, String> credentialDataMap, String fallbackValue,
+                                      boolean hostSlot) {
+        // The primary-value fallbacks (the empty-map one here and step 4 below) exist for PATH
+        // variables of single-field credentials (Twilio, Bandwidth {AccountSid}-style ids). In
+        // the HOST slot the primary value is a secret (an API key or a token) and a host is never
+        // one: filling the host with it sends the key to DNS and to whatever server answers that
+        // name. No seed relies on it (every base-URL variable gets its own connection field at
+        // import), so a host is filled only by a field that names it; otherwise it stays
+        // unfilled and requireResolvedUrl refuses the call, naming the value.
+        if (credentialDataMap.isEmpty()) return hostSlot ? null : fallbackValue;
 
         // 1. Exact match
         if (credentialDataMap.containsKey(varName)) return credentialDataMap.get(varName);
@@ -2272,6 +2154,18 @@ public class HttpExecutionService {
         String lowerVar = varName.toLowerCase(java.util.Locale.ROOT);
         for (Map.Entry<String, String> entry : credentialDataMap.entrySet()) {
             if (entry.getKey().toLowerCase(java.util.Locale.ROOT).equals(lowerVar)) return entry.getValue();
+        }
+
+        // 2b. The name the importer gives the connection field. addUrlTemplateVariableFields
+        // stores {your-coolify-host} as your_coolify_host (every character outside [a-z0-9_]
+        // becomes '_'), so an exact match can never find it: Coolify, Dynatrace
+        // {environment-id}, Azure Key Vault {vault-name} and Upstash Kafka {cluster-endpoint}
+        // were unfillable however the user filled the form.
+        String normalizedVar = lowerVar.replaceAll("[^a-z0-9_]", "_");
+        if (!normalizedVar.equals(lowerVar)) {
+            for (Map.Entry<String, String> entry : credentialDataMap.entrySet()) {
+                if (entry.getKey().toLowerCase(java.util.Locale.ROOT).equals(normalizedVar)) return entry.getValue();
+            }
         }
 
         // 3. Common aliases for token-like variables
@@ -2288,7 +2182,207 @@ public class HttpExecutionService {
         // For a multi-field credential, injecting the primary value into the URL would silently send
         // a WRONG-but-non-empty secret into the path; return null so the unresolved {var} fails loudly
         // downstream (URI parse / SSRF validation) instead of making a wrong-credential call.
-        return credentialDataMap.size() <= 1 ? fallbackValue : null;
+        return !hostSlot && credentialDataMap.size() <= 1 ? fallbackValue : null;
+    }
+
+    /** A scheme at the start of a value: {@code https://}, {@code http://}. */
+    private static final Pattern LEADING_URL_SCHEME = Pattern.compile("^[A-Za-z][A-Za-z0-9+.\\-]*://");
+
+    /** Whether the placeholder starting at {@code start} is the host of the URL's own scheme. */
+    static boolean isHostSlot(String template, int start) {
+        return start >= 3 && template.startsWith("://", start - 3) && template.indexOf("://") == start - 3;
+    }
+
+    /**
+     * Whether filling this host slot must raise the URL to {@code https}: the template says
+     * {@code http://{host}} and the user's value says {@code https://}. The value is the user's
+     * statement about their own server; sending the credential to it over plain http because the
+     * seed guessed http would be a downgrade. The reverse never happens: an {@code https} template
+     * stays {@code https} whatever the value says.
+     */
+    static boolean hostSlotAsksForHttps(String template, int start, String value) {
+        return value != null
+                && isHostSlot(template, start)
+                && template.regionMatches(true, 0, "http://", 0, 7)
+                && value.strip().regionMatches(true, 0, "https://", 0, 8);
+    }
+
+    /**
+     * Fits a credential value into the URL slot it fills, when the user typed more than the slot
+     * holds.
+     *
+     * <p>A connection field that names a host is filled by people pasting what their browser
+     * shows. Ghost in production, 2026-09: {@code admin_domain} held
+     * {@code https://company-bible.ghost.io/}, the base URL is {@code https://{admin_domain}/ghost/api},
+     * and the call went to {@code https://https://company-bible.ghost.io//ghost/api/admin/site/},
+     * which fails as an I/O error. 230 seeds open their base URL with {@code https://{var}}, so this
+     * is fixed here, once, rather than per seed.
+     *
+     * <ul>
+     *   <li>In the HOST slot (right after the URL's own {@code ://}) surrounding whitespace, a
+     *       leading scheme and every trailing slash are dropped, whatever follows the slot
+     *       ({@code /api}, {@code :8000}, {@code .example.com}): a host never contains either.
+     *       The scheme the value named is honoured by the caller, see
+     *       {@link #hostSlotAsksForHttps}.</li>
+     *   <li>A value that is itself a URL (the self-hosted {@code {instance_url}/api/v1} form) is
+     *       trimmed, and loses its trailing slashes when the template continues with {@code /}, so
+     *       the join does not produce {@code //}.</li>
+     *   <li>Anything else (a token or an id in a path slot, which may legitimately end with
+     *       {@code /} or hold spaces) is returned exactly as stored.</li>
+     * </ul>
+     */
+    static String fitUrlVariableValue(String template, int start, int end, String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        String stripped = value.strip();
+        if (isHostSlot(template, start)) {
+            return stripTrailingSlashes(LEADING_URL_SCHEME.matcher(stripped).replaceFirst(""));
+        }
+        if (LEADING_URL_SCHEME.matcher(stripped).find()) {
+            return end < template.length() && template.charAt(end) == '/'
+                    ? stripTrailingSlashes(stripped)
+                    : stripped;
+        }
+        return value;
+    }
+
+    private static String stripTrailingSlashes(String s) {
+        int cut = s.length();
+        while (cut > 0 && s.charAt(cut - 1) == '/') {
+            cut--;
+        }
+        return s.substring(0, cut);
+    }
+
+    /** Any {@code {name}} (or {@code {{name}}}) still in a URL about to be sent. */
+    private static final Pattern RESIDUAL_URL_PLACEHOLDER = Pattern.compile("\\{+([^{}]*)\\}+");
+
+    /**
+     * Refuses a URL that still holds a {@code {placeholder}}, before anything is sent, naming it.
+     *
+     * <p>Coolify in production, 2026-09: the base URL {@code http://{your-coolify-host}:8000/api/v1}
+     * reached the transport unfilled and the agent read "Illegal character in authority at index 7",
+     * which names neither the missing value nor who can supply it. A brace can never reach the
+     * provider in a usable form: the credentialed and typed paths call {@code URI.create}, which
+     * rejects it, and the legacy and refresh-retry paths hand a String to the RestTemplate, whose URI
+     * template expansion fails on a {@code {name}} pair. One narrow case DID go out before and is now
+     * refused: on the String paths a LONE brace (no closing pair), or a pair whose content Spring's
+     * template parser does not take as a variable, was percent-encoded and sent; no seed produces
+     * one, and such a value was already a malformed request. Every call with a real placeholder
+     * failed before; this swaps that error for one the agent can act on.
+     *
+     * <p>Runs LAST, after {@link #requireFilledPathParameters} (which names a missing path
+     * parameter the agent passes) and after the credential fill. What is left falls in three kinds:
+     * <ul>
+     *   <li>an ACCOUNT value: a variable of the base URL, or of the endpoint template that the
+     *       endpoint does not declare as a parameter (only the credential could have filled it).
+     *       The agent is told which call shows the user a card to add it: a plain
+     *       {@code credential(action='require')} when nothing is connected, the same call with
+     *       {@code force=true} when a connection exists (the plain call is refused then);</li>
+     *   <li>a declared path PARAMETER, read from the endpoint's declarations before the template
+     *       is consulted: the agent can pass it, wherever it sits. When the base URL names it too
+     *       (azure_devops {@code {organization}}, firebase and sanity {@code {project_id}}, aws
+     *       {@code {region}}), the connection may also carry it, and the message says both;</li>
+     *   <li>a brace that came from a VALUE. Only names written in the templates are ever echoed:
+     *       a brace can come from an agent's param or from a stored secret, and a fragment of a
+     *       secret must never be quoted back in an error.</li>
+     * </ul>
+     *
+     * @param credentialName the integration whose connection fills the URL; null on the
+     *                       credential-less path, where no connection can supply anything
+     * @param hasConnection  whether a connection of that integration was found for this call
+     * @throws IllegalArgumentException naming every placeholder left
+     */
+    void requireResolvedUrl(String url, ApiEntity api, ApiToolEntity tool, String credentialName,
+                            boolean hasConnection) {
+        if (url == null || (url.indexOf('{') < 0 && url.indexOf('}') < 0)) {
+            return;
+        }
+        String baseUrl = api == null || api.getBaseUrl() == null ? "" : api.getBaseUrl();
+        String endpointTemplate = tool == null || tool.getEndpoint() == null ? "" : tool.getEndpoint();
+        Map<String, ParameterMetadata> declared = null;
+        Set<String> fromAccount = new LinkedHashSet<>();
+        Set<String> params = new LinkedHashSet<>();
+        // Declared path parameters that the base URL ALSO names: the agent may pass them, and
+        // the connection may carry them too (azure_devops {organization}, firebase {project_id}).
+        Set<String> paramsAlsoOnAccount = new LinkedHashSet<>();
+        boolean fromValue = false;
+        Matcher m = RESIDUAL_URL_PLACEHOLDER.matcher(url);
+        while (m.find()) {
+            String name = m.group(1);
+            String token = "{" + name + "}";
+            boolean inBase = baseUrl.contains(token);
+            boolean inEndpoint = endpointTemplate.contains(token);
+            if (name.isBlank() || (!inBase && !inEndpoint)) {
+                fromValue = true;
+                continue;
+            }
+            // The declaration is read FIRST: a declared path parameter is something the agent
+            // can pass, wherever the template puts it, and telling it "you cannot supply it"
+            // would be false (processPathParameters fills base-URL placeholders too).
+            if (declared == null) {
+                declared = tool == null ? Map.of() : loadParameterMetadata(tool.getId());
+            }
+            ParameterMetadata meta = declared.get(name);
+            if (meta != null && "path".equalsIgnoreCase(meta.parameterType())) {
+                (inBase ? paramsAlsoOnAccount : params).add(name);
+            } else {
+                fromAccount.add(name);
+            }
+        }
+        if (fromAccount.isEmpty() && params.isEmpty() && paramsAlsoOnAccount.isEmpty()) {
+            fromValue = true;
+        }
+        String slug = tool == null || tool.getToolSlug() == null ? "this tool" : tool.getToolSlug();
+        boolean noConnection = credentialName == null || credentialName.isBlank();
+        List<String> sentences = new ArrayList<>();
+        if (!fromAccount.isEmpty()) {
+            boolean many = fromAccount.size() > 1;
+            String names = String.join(", ", fromAccount);
+            String them = many ? "them" : "it";
+            if (noConnection) {
+                sentences.add(slug + " needs " + (many ? "the values " : "the value ") + names
+                        + ", which only a connected account can supply, and this call runs without one."
+                        + " You cannot supply " + them + " in params: tell the user this integration is missing "
+                        + names + ".");
+            } else if (hasConnection) {
+                sentences.add(slug + " needs " + (many ? "the values " : "the value ") + names
+                        + " from the user's " + credentialName + " connection, and that connection does not"
+                        + " include " + them + ". You cannot supply " + them + " in params."
+                        + " The user can add a connection that includes " + them + " from the reconnect card:"
+                        + " credential(action='require', services=['" + credentialName
+                        + "'], reason='<why you need it>', force=true) (without force=true the call is refused"
+                        + " because a connection already exists). If the connect form has no field for "
+                        + them + ", tell the user this integration cannot take " + names + " yet.");
+            } else {
+                sentences.add(slug + " needs " + (many ? "the values " : "the value ") + names
+                        + " from a " + credentialName + " connection, and none is connected. You cannot supply "
+                        + them + " in params. Ask the user to connect one: credential(action='require',"
+                        + " services=['" + credentialName + "'], reason='<why you need it>'). If that answers"
+                        + " that the connection already exists, call it again with force=true. If the connect"
+                        + " form has no field for " + them + ", tell the user this integration cannot take "
+                        + names + " yet.");
+            }
+        }
+        if (!params.isEmpty()) {
+            sentences.add(slug + " still has no value for the path parameter" + (params.size() > 1 ? "s " : " ")
+                    + String.join(", ", params) + ": pass " + (params.size() > 1 ? "them" : "it") + " in params.");
+        }
+        if (!paramsAlsoOnAccount.isEmpty()) {
+            boolean many = paramsAlsoOnAccount.size() > 1;
+            sentences.add(slug + " still has no value for the path parameter" + (many ? "s " : " ")
+                    + String.join(", ", paramsAlsoOnAccount) + ": pass " + (many ? "them" : "it") + " in params"
+                    + (noConnection ? "." : ", or have the user add " + (many ? "them" : "it") + " to the "
+                        + credentialName + " connection."));
+        }
+        if (fromValue) {
+            sentences.add("A value (from params or from the connection) would put a { or } in the request"
+                    + " address, which it cannot carry: remove the braces from the value you passed; if you"
+                    + " passed none, tell the user.");
+        }
+        sentences.add("Nothing was sent to the provider.");
+        throw new IllegalArgumentException(String.join(" ", sentences));
     }
 
     /**
@@ -3985,6 +4079,8 @@ public class HttpExecutionService {
                 url = replaceUrlTemplateVariables(url, userId, credentialName, credentialValue.orElse(null), secrets);
             }
             requireFilledPathParameters(url, tool); // after the credential fill, see executeHttpCallWithCredentials
+            requireResolvedUrl(url, api, tool, credentialName,
+                    credentialValue.isPresent() && !"platform".equals(resolvedCredentialSource));
             realUrl = url;
 
             HttpHeaders headers = prepareHeadersWithCredentials(api, tool, userId, credentialName, injection, credentialValue);
@@ -4123,13 +4219,11 @@ public class HttpExecutionService {
             }
 
             final String typedUrl = url;
-            ResponseEntity<Object> response = exchangeWithRetry(
-                () -> restTemplate.exchange(
-                    java.net.URI.create(typedUrl),
-                    HttpMethod.valueOf(tool.getMethod()),
-                    request,
-                    Object.class),
-                safeUrl, tool, api);
+            ResponseEntity<Object> response = readingText(() -> restTemplate.exchange(
+                java.net.URI.create(typedUrl),
+                HttpMethod.valueOf(tool.getMethod()),
+                request,
+                Object.class), "text".equals(responseType)).get();
             int statusCode = response.getStatusCode().value();
             Object responseBody = response.getBody() != null ? response.getBody() : Map.of();
 
@@ -4199,7 +4293,7 @@ public class HttpExecutionService {
             // errorPolicy exists for: an upload or a publish refused for a reason only the account
             // owner can act on reads as a platform bug otherwise.
             String readerMessage = declaredErrorMessage(
-                    api, statusCode, errorMessage, httpEx.getResponseHeaders(), errorMessage);
+                    api, statusCode, errorMessage, errorMessage);
             Map<String, Object> failed = failure(statusCode, readerMessage, tool);
             if (!readerMessage.equals(errorMessage)) {
                 // A rule replaced the provider's own words. Keep them alongside, the way the
@@ -4207,6 +4301,7 @@ public class HttpExecutionService {
                 // failure, the only thing that says what actually happened is this body.
                 failed.put("errorBody", errorMessage);
             }
+            putRetryAfter(failed, httpEx);
             return failed;
         } catch (com.apimarketplace.catalog.service.exception.CredentialSelectionException e) {
             // The typed path serves binary responses, multipart uploads, async
@@ -4244,18 +4339,11 @@ public class HttpExecutionService {
         if (binaryResponseHandler == null) {
             return failure(0, "Binary response handler not available", tool);
         }
-        // Image, audio and video generation live behind this branch, which is the endpoint class
-        // that gets throttled hardest. It dispatches separately from the JSON typed path, so
-        // without its own wrapper the 429 retry would apply everywhere except where it is needed
-        // most.
-        final String binaryUrl = url;
-        ResponseEntity<byte[]> response = exchangeWithRetry(
-            () -> restTemplate.exchange(
-                java.net.URI.create(binaryUrl),
-                HttpMethod.valueOf(tool.getMethod()),
-                request,
-                byte[].class),
-            safeUrl, tool, api);
+        ResponseEntity<byte[]> response = restTemplate.exchange(
+            java.net.URI.create(url),
+            HttpMethod.valueOf(tool.getMethod()),
+            request,
+            byte[].class);
         int statusCode = response.getStatusCode().value();
         byte[] bytes = response.getBody();
         String contentType = response.getHeaders().getFirst("Content-Type");
@@ -4285,6 +4373,53 @@ public class HttpExecutionService {
             log.warn("[HttpExecutionService.executeTyped] Failed to parse execution_spec: {}", e.getMessage());
             return objectMapper.createObjectNode();
         }
+    }
+
+    /**
+     * Result key carrying how long the provider asked the caller to wait, in whole seconds.
+     * Set on any refusal (4xx/5xx) that sent a usable {@code Retry-After}: most providers pair it
+     * with a 429 or 503, but some rate-limit with a 403 (GitHub's secondary limit) and still say
+     * when to come back. The platform never re-sends a refused call itself: this is what lets the
+     * caller (a workflow node's retry, or an agent's wait) come back when the provider said.
+     */
+    public static final String RETRY_AFTER_SECONDS = "retryAfterSeconds";
+
+    /** A day. Anything longer is reported as a day: no caller waits that long anyway. */
+    private static final long MAX_RETRY_AFTER_SECONDS = 86_400L;
+
+    private static void putRetryAfter(Map<String, Object> result,
+                                      org.springframework.web.client.HttpStatusCodeException e) {
+        Long seconds = retryAfterSecondsOf(e.getStatusCode().value(), e.getResponseHeaders());
+        if (seconds != null) {
+            result.put(RETRY_AFTER_SECONDS, seconds);
+            // The only trace that a provider really said when to come back: without it nobody can
+            // tell, after a deploy, whether this capture ever fires.
+            log.info("[HttpExecutionService] provider refusal status={} retryAfterSeconds={}",
+                    e.getStatusCode().value(), seconds);
+        }
+    }
+
+    /**
+     * Whole seconds (rounded up, capped at a day) from a refusal's {@code Retry-After}, or null.
+     * Read on seconds, never {@code toMillis()}: a hostile or broken header with 17 digits would
+     * overflow and turn a clean refusal into an exception.
+     */
+    static Long retryAfterSecondsOf(int status, HttpHeaders headers) {
+        if (status < 400 || headers == null) {
+            return null;
+        }
+        java.time.Duration d;
+        try {
+            d = com.apimarketplace.common.scheduling.BundlePollBackoff.parseRetryAfter(
+                    headers.getFirst(HttpHeaders.RETRY_AFTER), java.time.Instant.now());
+        } catch (RuntimeException malformed) {
+            return null;
+        }
+        if (d == null || d.isNegative()) {
+            return null;
+        }
+        long seconds = d.getSeconds() + (d.getNano() > 0 ? 1 : 0);
+        return Math.min(seconds, MAX_RETRY_AFTER_SECONDS);
     }
 
     /** Build a uniform failure result. */

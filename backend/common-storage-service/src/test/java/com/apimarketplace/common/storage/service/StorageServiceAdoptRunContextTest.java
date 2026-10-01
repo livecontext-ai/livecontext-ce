@@ -43,7 +43,7 @@ import static org.mockito.Mockito.when;
 class StorageServiceAdoptRunContextTest {
 
     private static final String TENANT = "tenant-1";
-    private static final String WORKFLOW = "wf-1";
+    private static final String WORKFLOW = "3f2b8c1e-5d4a-4e7b-9c6d-1a2b3c4d5e6f";
     private static final String RUN = "run-7";
     private static final String STEP = "mcp:elevenlabs_tts";
 
@@ -263,6 +263,22 @@ class StorageServiceAdoptRunContextTest {
             // Without a workflow id there is no folder to adopt into - the point of the call.
             assertThat(storageService.adoptRunContext(TENANT, List.of(UUID.randomUUID()), null, RUN, STEP, 1, 0, null)).isZero();
             assertThat(storageService.adoptRunContext(TENANT, List.of(UUID.randomUUID()), "  ", RUN, STEP, 1, 0, null)).isZero();
+            verifyNoInteractions(storageRepository);
+        }
+
+        @Test
+        @DisplayName("an ad-hoc run adopts nothing (the file would move into a folder the Files browser cannot show)")
+        void adHocRunAdoptsNothing() {
+            assertThat(storageService.adoptRunContext(TENANT, List.of(UUID.randomUUID()), WORKFLOW,
+                    WorkflowFileScope.AD_HOC_RUN_ID_PREFIX + WORKFLOW, STEP, 1, 0, null)).isZero();
+            verifyNoInteractions(storageRepository);
+        }
+
+        @Test
+        @DisplayName("a non-UUID workflow id ('unknown') adopts nothing")
+        void unknownWorkflowAdoptsNothing() {
+            assertThat(storageService.adoptRunContext(TENANT, List.of(UUID.randomUUID()), "unknown",
+                    RUN, STEP, 1, 0, null)).isZero();
             verifyNoInteractions(storageRepository);
         }
 

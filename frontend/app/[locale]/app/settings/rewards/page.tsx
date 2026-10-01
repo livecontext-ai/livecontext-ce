@@ -2,6 +2,7 @@
 
 import { InvitePanel } from '@/components/reward/InvitePanel';
 import { RewardRedeemCard } from '@/components/reward/RewardRedeemCard';
+import { PartnerProgramCard } from '@/components/reward/PartnerProgramCard';
 
 /**
  * Settings -> Refer & earn: the owner's "invite friends" panel plus a card to
@@ -13,6 +14,7 @@ export default function RewardsSettingsPage() {
   return (
     <div className="max-w-3xl space-y-6">
       <InvitePanel />
+      <PartnerProgramCard />
       <RewardRedeemCard />
     </div>
   );

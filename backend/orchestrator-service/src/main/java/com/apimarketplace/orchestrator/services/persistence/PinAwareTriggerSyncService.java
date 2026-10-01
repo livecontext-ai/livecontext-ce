@@ -5,6 +5,7 @@ import com.apimarketplace.orchestrator.domain.WorkflowPlanVersionEntity;
 import com.apimarketplace.orchestrator.domain.workflow.Trigger;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan;
 import com.apimarketplace.orchestrator.services.WorkflowPlanVersionService;
+import com.apimarketplace.orchestrator.tools.workflow.builder.FormFieldCanonicalizer;
 import com.apimarketplace.trigger.client.TriggerClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -420,8 +422,7 @@ public class PinAwareTriggerSyncService {
             return existing;
         }
         Map<String, Object> params = formTrigger.params() != null ? formTrigger.params() : Map.of();
-        Object fieldsObj = params.get("fields");
-        List<Map<String, Object>> fields = (fieldsObj instanceof List<?>) ? (List<Map<String, Object>>) fieldsObj : null;
+        List<Map<String, Object>> fields = publicFormFields(params, workflow, formTriggerId);
         String label = formTrigger.label() != null ? formTrigger.label() : formTriggerId;
         // workflowId/workflowName left null here (mirrors the builder): the back-link in the caller
         // stamps workflow_id immediately after, which is also what makes the next sync idempotent.
@@ -534,6 +535,40 @@ public class PinAwareTriggerSyncService {
         return null;
     }
 
+    /**
+     * The fields the public form renders. It reads this copy, never the plan, so the copy takes
+     * the builder's canonical shape (defaultValue, [{id, label, value}] options, real field
+     * types) whatever path wrote the plan: add_node, set_plan, the editor, a raw plan import, a
+     * marketplace clone. A problem the builder would refuse is logged and the rest is still
+     * sent: the copy must follow the plan even when one field is imperfect. An entry that is not
+     * a field object is left out: the trigger service refuses the whole copy over one, and
+     * neither public page could render it anyway.
+     *
+     * @return the canonical fields, or null when the plan has no {@code fields} list
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> publicFormFields(Map<String, Object> params, WorkflowEntity workflow,
+                                                       String formTriggerId) {
+        Map<String, Object> canonical = new LinkedHashMap<>(params);
+        List<String> issues = FormFieldCanonicalizer.canonicalize(canonical);
+        if (!issues.isEmpty()) {
+            // Debug, not warn: this runs on every save of the plan, and the agent and the editor
+            // already name these problems (set_plan, validate), where they can be fixed.
+            logger.debug("[TriggerSync] Form fields of workflow {} trigger {} sent to the public form with problems: {}",
+                    workflow.getId(), formTriggerId, String.join("; ", issues));
+        }
+        if (!(canonical.get("fields") instanceof List<?> fields)) {
+            return null;
+        }
+        List<Map<String, Object>> formFields = new ArrayList<>(fields.size());
+        for (Object field : fields) {
+            if (field instanceof Map<?, ?> map) {
+                formFields.add((Map<String, Object>) map);
+            }
+        }
+        return formFields;
+    }
+
     @SuppressWarnings("unchecked")
     private void pushFormEndpointConfig(WorkflowEntity workflow, String tenantId,
                                          UUID formEndpointId, String formTriggerId, Trigger trigger) {
@@ -542,8 +577,8 @@ public class PinAwareTriggerSyncService {
 
         String name = trigger.label() != null ? trigger.label() : formTriggerId;
         String description = stringOrNull(params.get("formDescription"));
-        Object fieldsObj = params.get("fields");
-        List<Map<String, Object>> formConfig = (fieldsObj instanceof List<?>) ? (List<Map<String, Object>>) fieldsObj : List.of();
+        List<Map<String, Object>> formConfig = publicFormFields(params, workflow, formTriggerId);
+        if (formConfig == null) formConfig = List.of();
         String successMessage = stringOrNull(params.get("submitButtonText"));
 
         com.apimarketplace.trigger.client.dto.StandaloneFormEndpointRequest request =

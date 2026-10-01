@@ -37,6 +37,7 @@ public class PublicationModerationService {
     private final WorkflowPublicationService workflowPublicationService;
     private final LandingInterfaceSnapshotter landingInterfaceSnapshotter;
     private final Map<PublicationType, ResourcePublicationStrategy> resourceStrategies;
+    private final CreatorFollowNotifier creatorFollowNotifier;
 
     public PublicationModerationService(WorkflowPublicationRepository publicationRepository,
                                         OrchestratorInternalClient orchestratorClient,
@@ -45,7 +46,8 @@ public class PublicationModerationService {
                                         DataSourceClient dataSourceClient,
                                         WorkflowPublicationService workflowPublicationService,
                                         LandingInterfaceSnapshotter landingInterfaceSnapshotter,
-                                        List<ResourcePublicationStrategy> strategies) {
+                                        List<ResourcePublicationStrategy> strategies,
+                                        CreatorFollowNotifier creatorFollowNotifier) {
         this.publicationRepository = publicationRepository;
         this.orchestratorClient = orchestratorClient;
         this.agentClient = agentClient;
@@ -58,6 +60,7 @@ public class PublicationModerationService {
             map.put(s.getPublicationType(), s);
         }
         this.resourceStrategies = map;
+        this.creatorFollowNotifier = creatorFollowNotifier;
     }
 
     @Transactional(readOnly = true)
@@ -806,6 +809,8 @@ public class PublicationModerationService {
         publication.setReviewerId(reviewerId);
         publication.setReviewedAt(Instant.now());
         publication.setRejectionReason(null);
+        // First public go-live of this listing: tell the creator's followers (after commit).
+        creatorFollowNotifier.onApproved(publication);
 
         log.info("Publication {} approved by reviewer {}", publicationId, reviewerId);
         return publicationRepository.save(publication);

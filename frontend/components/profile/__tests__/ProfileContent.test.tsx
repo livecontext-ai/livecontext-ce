@@ -6,18 +6,26 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next-intl', () => ({
-  useTranslations: (ns?: string) => (key: string) => `${ns}.${key}`,
+  useTranslations: (ns?: string) =>
+    Object.assign((key: string) => `${ns}.${key}`, {
+      rich: (key: string, values?: Record<string, unknown>) => `${ns}.${key}:${String(values?.count)}`,
+    }),
 }));
 
-const { getPublicProfileByHandle, getByPublisher } = vi.hoisted(() => ({
+const { getPublicProfileByHandle, getByPublisher, getCreatorFollow, me } = vi.hoisted(() => ({
   getPublicProfileByHandle: vi.fn(),
   getByPublisher: vi.fn(),
+  getCreatorFollow: vi.fn(),
+  me: { current: null as { id: number } | null },
 }));
 
 vi.mock('@/lib/api/unified-api-service', () => ({
   unifiedApiService: { getPublicProfileByHandle },
 }));
-vi.mock('@/lib/api', () => ({ orchestratorApi: { getByPublisher } }));
+vi.mock('@/lib/api', () => ({
+  orchestratorApi: { getByPublisher, getCreatorFollow, followCreator: vi.fn(), unfollowCreator: vi.fn() },
+}));
+vi.mock('@/hooks/useUserProfile', () => ({ useUserProfile: () => ({ profile: me.current }) }));
 vi.mock('@/lib/api/dm-api', () => ({ dmApi: { openThread: vi.fn() } }));
 // PublisherAvatar (the canonical USER avatar) is intentionally NOT mocked - the
 // regression test below asserts the profile renders the user avatar endpoint and
@@ -29,7 +37,7 @@ vi.mock('@/components/marketplace/PublicationCard', () => ({
   PublicationCardSkeleton: () => null,
 }));
 
-import ProfileContent from '../ProfileContent';
+import ProfileContent, { isFounderMember } from '../ProfileContent';
 
 function renderWithClient(ui: React.ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -46,7 +54,11 @@ const profile = {
 };
 
 describe('ProfileContent', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    me.current = { id: 99 };
+    getCreatorFollow.mockResolvedValue({ following: false, followerCount: 3 });
+  });
   afterEach(() => cleanup());
 
   it('renders the display name + @handle, bio and apps - looked up by handle (never the tenant id)', async () => {
@@ -99,6 +111,59 @@ describe('ProfileContent', () => {
 
     expect(await screen.findByText('Alice A.')).toBeInTheDocument();
     expect(await screen.findByText('profile.noApps')).toBeInTheDocument();
+  });
+
+  it('labels an account created before 2027 as a founder member instead of a plain member', async () => {
+    getPublicProfileByHandle.mockResolvedValue({ ...profile, joinedAt: '2026-12-31T23:59:59' });
+    getByPublisher.mockResolvedValue({ publications: [], count: 0 });
+
+    renderWithClient(<ProfileContent handle="alice_a" />);
+
+    expect(await screen.findByText(/profile\.founderMemberSince/)).toBeInTheDocument();
+    expect(screen.queryByText(/profile\.memberSince/)).toBeNull();
+  });
+
+  it('keeps the plain member label for accounts created on or after 1 January 2027 (UTC)', async () => {
+    getPublicProfileByHandle.mockResolvedValue({ ...profile, joinedAt: '2027-01-01T00:00:00' });
+    getByPublisher.mockResolvedValue({ publications: [], count: 0 });
+
+    renderWithClient(<ProfileContent handle="alice_a" />);
+
+    expect(await screen.findByText(/profile\.memberSince/)).toBeInTheDocument();
+    expect(screen.queryByText(/profile\.founderMemberSince/)).toBeNull();
+  });
+
+  it('isFounderMember: strict UTC cutoff, and no badge without a join date', () => {
+    expect(isFounderMember('2026-12-31T23:59:59Z')).toBe(true);
+    expect(isFounderMember('2026-12-31')).toBe(true);
+    expect(isFounderMember('2027-01-01T00:00:00Z')).toBe(false);
+    expect(isFounderMember('2027-01-01')).toBe(false);
+    expect(isFounderMember(null)).toBe(false);
+    expect(isFounderMember('not a date')).toBe(false);
+  });
+
+  it("shows the Subscribe button and the follower count on someone else's profile", async () => {
+    getPublicProfileByHandle.mockResolvedValue(profile);
+    getByPublisher.mockResolvedValue({ publications: [], count: 0 });
+
+    renderWithClient(<ProfileContent handle="alice_a" />);
+
+    expect(await screen.findByTestId('follow-creator-button')).toHaveTextContent('profile.follow');
+    expect(await screen.findByTestId('profile-follower-count')).toHaveTextContent('profile.followerCount:3');
+    expect(getCreatorFollow).toHaveBeenCalledWith(7);
+  });
+
+  it('hides the Subscribe button on your own profile (nobody subscribes to themselves)', async () => {
+    me.current = { id: 7 };
+    getPublicProfileByHandle.mockResolvedValue(profile);
+    getByPublisher.mockResolvedValue({ publications: [], count: 0 });
+
+    renderWithClient(<ProfileContent handle="alice_a" />);
+
+    expect(await screen.findByText('Alice A.')).toBeInTheDocument();
+    expect(screen.queryByTestId('follow-creator-button')).toBeNull();
+    // Your own follower count still shows.
+    expect(await screen.findByTestId('profile-follower-count')).toBeInTheDocument();
   });
 
   it('regression: the empty state stretches with the page instead of collapsing into a strip', async () => {

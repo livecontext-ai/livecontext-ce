@@ -169,6 +169,22 @@ class WebSearchToolsProviderHelpModelsTest {
     }
 
     @Test
+    @DisplayName("help_models leaves UNLISTED models out (V554): runnable, not offered")
+    @SuppressWarnings("unchecked")
+    void unlistedModelsAreNotOffered() {
+        Map<String, Object> openai = providerEntry("openai", "gpt-5", "gpt-4o");
+        List<Map<String, Object>> models = (List<Map<String, Object>>) openai.get("models");
+        models.get(1).put("unlisted", true);
+        when(agentClient.getModelsInfo("browser_agent")).thenReturn(catalog("openai", "gpt-5", List.of(openai)));
+
+        ToolExecutionResult res = provider.execute("web_search", Map.of("action", "help_models"), ctx());
+
+        Map<String, Object> data = (Map<String, Object>) res.data();
+        assertThat((List<String>) data.get("pairs")).containsExactly("openai/gpt-5 (#1)");
+        assertThat(data.get("total_enabled")).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("help_models exposes top 30 by displayOrder (global priority, not per-provider)")
     @SuppressWarnings("unchecked")
     void truncatesToTop30GloballyByPriority() {

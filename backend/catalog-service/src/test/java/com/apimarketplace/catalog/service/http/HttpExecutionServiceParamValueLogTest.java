@@ -76,7 +76,7 @@ class HttpExecutionServiceParamValueLogTest {
         lenient().when(userCredentialService.getAccessTokenInfo(anyString(), anyString())).thenReturn(Optional.empty());
         lenient().when(userCredentialService.getAccessToken(anyString(), anyString())).thenReturn(Optional.empty());
         service = new HttpExecutionService(apiToolParameterRepository, userCredentialService, encryptionService,
-                mapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine(2, 10_000L));
+                mapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine());
         CredentialModeContext.clear();
         root = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
         logs = new ListAppender<>();

@@ -6,9 +6,11 @@
  * in CE mode, gates the "Top up instead" CTA on PAYG tier configuration, and
  * scopes the Free-plan note to the FREE plan only.
  */
+import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react';
+import { ApiError } from '@/lib/api/api-client';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -26,6 +28,9 @@ const mocks = vi.hoisted(() => ({
   // request still in flight, which is what most tests here are: they are about
   // the modal's own behaviour, not about the allowance.
   plans: { value: undefined as unknown },
+  offer: { current: { status: 'NONE' } as { status: string; offerId?: number },
+    preview: null as null | { offerId: number; offerVersion: number; plans: { planCode: string; bonusCredits: number; paygFaceValueUsd: number; status: string }[] },
+    candidateCode: null, isLoading: false, isError: false, refresh: vi.fn() },
 }));
 
 vi.mock('next-intl', () => ({
@@ -67,6 +72,9 @@ vi.mock('@/lib/hooks/smart-hooks-complete', () => ({
   // quotes what the account will actually get rather than a constant an admin
   // may have moved since the build.
   usePlans: () => ({ plans: mocks.plans.value }),
+}));
+vi.mock('@/lib/hooks/usePersonalOffer', () => ({
+  usePersonalOffer: () => mocks.offer,
 }));
 
 // Radix Slider requires ResizeObserver, which jsdom does not provide.
@@ -128,9 +136,57 @@ describe('InsufficientCreditsModal', () => {
     // No plan rows by default: the request in flight, which is what most tests
     // here are, since they are about the modal rather than about the allowance.
     mocks.plans.value = undefined;
+    mocks.offer.current = { status: 'NONE' };
+    mocks.offer.preview = null;
   });
 
   afterEach(() => cleanup());
+
+  it('attaches the server preview ID and version to direct subscription checkout', async () => {
+    const createSubscription = vi.fn().mockResolvedValue({ offerStatus: 'ATTACHED', url: window.location.href });
+    mocks.useSubscription.mockReturnValue({ createSubscription, subscription: null });
+    mocks.offer.current = { status: 'AVAILABLE', offerId: 42 };
+    mocks.offer.preview = { offerId: 42, offerVersion: 5, plans: [
+      { planCode: 'PRO', bonusCredits: 10000, paygFaceValueUsd: 10, status: 'ELIGIBLE' },
+      { planCode: 'STARTER', bonusCredits: 0, paygFaceValueUsd: 0, status: 'NO_BONUS' },
+      { planCode: 'TEAM', bonusCredits: 20000, paygFaceValueUsd: 20, status: 'ELIGIBLE' },
+    ] };
+    render(<InsufficientCreditsModal />);
+    openViaEvent();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /modals.insufficientCredits.upgrade/ })[1]);
+    await waitFor(() => expect(createSubscription).toHaveBeenCalledWith(expect.objectContaining({
+      planCode: 'PRO', personalOfferId: 42, offerVersion: 5,
+    })));
+  });
+
+  it('does not silently continue when checkout omits offer attachment', async () => {
+    const createSubscription = vi.fn().mockResolvedValue({ url: window.location.href });
+    mocks.useSubscription.mockReturnValue({ createSubscription, subscription: null });
+    mocks.offer.current = { status: 'AVAILABLE', offerId: 42 };
+    mocks.offer.preview = { offerId: 42, offerVersion: 5, plans: [
+      { planCode: 'PRO', bonusCredits: 10000, paygFaceValueUsd: 10, status: 'ELIGIBLE' },
+    ] };
+    render(<InsufficientCreditsModal />);
+    openViaEvent();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /modals.insufficientCredits.upgrade/ })[1]);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('reward.personalOffer.attachFailed'));
+  });
+
+  it('explains a zero first payment rejection before any Stripe redirect', async () => {
+    const createSubscription = vi.fn().mockRejectedValue(new ApiError('zero invoice', 409, 'OFFER_FIRST_PAYMENT_REQUIRED'));
+    mocks.useSubscription.mockReturnValue({ createSubscription, subscription: null });
+    mocks.offer.current = { status: 'AVAILABLE', offerId: 42 };
+    mocks.offer.preview = { offerId: 42, offerVersion: 5, plans: [
+      { planCode: 'PRO', bonusCredits: 10000, paygFaceValueUsd: 10, status: 'ELIGIBLE' },
+    ] };
+    render(<InsufficientCreditsModal />);
+    openViaEvent();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /modals.insufficientCredits.upgrade/ })[1]);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('reward.personalOffer.errors.firstPaymentRequired'));
+  });
 
   describe('event-driven open/close', () => {
     it('is closed by default and opens when showInsufficientCreditsModal() dispatches the event', () => {

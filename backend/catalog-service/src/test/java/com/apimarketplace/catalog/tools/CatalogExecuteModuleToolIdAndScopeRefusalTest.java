@@ -32,6 +32,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
@@ -233,6 +234,186 @@ class CatalogExecuteModuleToolIdAndScopeRefusalTest {
             assertThat(result.error())
                     .as("'retrying is refused the same way' ends the thread; this refusal has a next step")
                     .doesNotContain("Retrying unchanged is refused the same way");
+        }
+
+        /**
+         * The platform no longer re-sends a rate-limited call, so the agent owns the retry. The
+         * generic "retrying unchanged is refused the same way" is false for a 429 (the same call
+         * later IS the fix), and it must not be told to re-call immediately either.
+         */
+        @Test
+        @DisplayName("a 429 tells the agent the platform did not re-send and to wait before calling again")
+        void rateLimitRefusalTellsTheAgentToWait() {
+            stubPreflightPasses();
+            stubExecuteAnswers("""
+                    {"success":false,
+                     "result":{"httpStatus":{"code":429},
+                               "error":"You've exceeded the 30 request(s) every 1 minute(s) rate limit"},
+                     "error":"You've exceeded the 30 request(s) every 1 minute(s) rate limit",
+                     "metadata":{"toolName":"list_messages","endpoint":"/messages","method":"GET",
+                                 "iconSlug":"gmail","status":"unknown"},
+                     "toolId":"2f0a4d76-8a52-4b8d-9f11-0a0a0a0a0a0a"}
+                    """);
+
+            ToolExecutionResult result = runGmail();
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).startsWith(CatalogExecuteModule.UPSTREAM_REJECTED_CODE + ":");
+            assertThat(result.error()).contains("30 request(s) every 1 minute(s)");
+            assertThat(result.error())
+                    .contains("the platform did not re-send this one")
+                    .contains("Wait before calling it again");
+            assertThat(result.error())
+                    .as("the same call later is exactly the fix for a rate limit")
+                    .doesNotContain("Retrying unchanged is refused the same way");
+        }
+
+        @Test
+        @DisplayName("a 503 is described as temporary, never as 'refused the same way'")
+        void unavailableRefusalTellsTheAgentToWait() {
+            stubPreflightPasses();
+            stubExecuteAnswers("""
+                    {"success":false,
+                     "result":{"httpStatus":{"code":503},"error":"Service Unavailable"},
+                     "error":"Service Unavailable",
+                     "metadata":{"toolName":"list_messages","endpoint":"/messages","method":"GET",
+                                 "iconSlug":"gmail","status":"unknown"},
+                     "toolId":"2f0a4d76-8a52-4b8d-9f11-0a0a0a0a0a0a"}
+                    """);
+
+            ToolExecutionResult result = runGmail();
+
+            assertThat(result.error()).startsWith(CatalogExecuteModule.UPSTREAM_REJECTED_CODE + ":");
+            assertThat(result.error())
+                    .contains("temporarily unavailable")
+                    .contains("did not re-send")
+                    .doesNotContain("Retrying unchanged is refused the same way");
+        }
+
+        @Test
+        @DisplayName("a 429 carrying the provider's wait names the exact wait call to make")
+        void rateLimitWithRetryAfterNamesTheWaitCall() {
+            stubPreflightPasses();
+            stubExecuteAnswers("""
+                    {"success":false,
+                     "result":{"httpStatus":{"code":429},"error":"slow down"},
+                     "error":"slow down",
+                     "metadata":{"toolName":"list_messages","endpoint":"/messages","method":"GET",
+                                 "iconSlug":"gmail","status":429,"retryAfterSeconds":42},
+                     "toolId":"2f0a4d76-8a52-4b8d-9f11-0a0a0a0a0a0a"}
+                    """);
+
+            ToolExecutionResult result = runGmail();
+
+            assertThat(result.error())
+                    .contains("asked to wait 42 seconds")
+                    .contains("wait(action='sleep', seconds=42)");
+        }
+
+        @Test
+        @DisplayName("a 403 carrying a Retry-After (GitHub secondary limit) gets the wait advice, not 'refused the same way'")
+        void forbiddenWithRetryAfterIsTreatedAsARateLimit() {
+            stubPreflightPasses();
+            stubExecuteAnswers("""
+                    {"success":false,
+                     "result":{"httpStatus":{"code":403},"error":"You have exceeded a secondary rate limit"},
+                     "error":"You have exceeded a secondary rate limit",
+                     "metadata":{"toolName":"list_messages","endpoint":"/messages","method":"GET",
+                                 "iconSlug":"gmail","status":403,"retryAfterSeconds":60},
+                     "toolId":"2f0a4d76-8a52-4b8d-9f11-0a0a0a0a0a0a"}
+                    """);
+            when(capability.describe(any(), anyString(), anyList(), anyString())).thenReturn(null);
+
+            ToolExecutionResult result = runGmail();
+
+            assertThat(result.error())
+                    .contains("seconds=60")
+                    .doesNotContain("Retrying unchanged is refused the same way");
+        }
+
+        @Test
+        @DisplayName("a 403 that says 'rateLimitExceeded' without a Retry-After is advised as a rate limit")
+        void forbiddenRateLimitWordingIsARateLimit() {
+            stubPreflightPasses();
+            stubExecuteAnswers("""
+                    {"success":false,
+                     "result":{"httpStatus":{"code":403},"error":"Quota: rateLimitExceeded"},
+                     "error":"Quota: rateLimitExceeded",
+                     "metadata":{"toolName":"list_messages","endpoint":"/messages","method":"GET",
+                                 "iconSlug":"gmail","status":403},
+                     "toolId":"2f0a4d76-8a52-4b8d-9f11-0a0a0a0a0a0a"}
+                    """);
+            when(capability.describe(any(), anyString(), anyList(), anyString())).thenReturn(null);
+
+            ToolExecutionResult result = runGmail();
+
+            assertThat(result.error())
+                    .contains("rate limiting")
+                    .doesNotContain("Retrying unchanged is refused the same way");
+        }
+
+        private void stubRefusal(int status, String error, String retryAfterJson) {
+            stubExecuteAnswers("""
+                    {"success":false,
+                     "result":{"httpStatus":{"code":%d},"error":"%s"},
+                     "error":"%s",
+                     "metadata":{"toolName":"list_messages","endpoint":"/messages","method":"GET",
+                                 "iconSlug":"gmail","status":%d%s},
+                     "toolId":"2f0a4d76-8a52-4b8d-9f11-0a0a0a0a0a0a"}
+                    """.formatted(status, error, error, status, retryAfterJson));
+        }
+
+        @Test
+        @DisplayName("a 500 saying 'try again later' is not reclassified as a rate limit (same rule as a node)")
+        void serverErrorWordingIsNotARateLimit() {
+            stubPreflightPasses();
+            stubRefusal(500, "Internal error, please try again later", "");
+
+            assertThat(runGmail().error()).contains("Retrying unchanged is refused the same way");
+        }
+
+        @Test
+        @DisplayName("a 502 carrying a Retry-After is not reclassified either: a node would not retry it")
+        void serverErrorRetryAfterIsNotARateLimit() {
+            stubPreflightPasses();
+            stubRefusal(502, "Bad gateway", ",\"retryAfterSeconds\":5");
+
+            assertThat(runGmail().error())
+                    .contains("Retrying unchanged is refused the same way")
+                    .doesNotContain("rate limiting");
+        }
+
+        @Test
+        @DisplayName("a 4xx with Retry-After 0 is a rate limit with no wait to name")
+        void retryAfterZeroIsARateLimitWithoutSeconds() {
+            stubPreflightPasses();
+            stubRefusal(409, "Conflict", ",\"retryAfterSeconds\":0");
+            when(capability.describe(any(), anyString(), anyList(), anyString())).thenReturn(null);
+
+            assertThat(runGmail().error())
+                    .contains("rate limiting")
+                    .contains("seconds=30")
+                    .doesNotContain("Retrying unchanged is refused the same way");
+        }
+
+        @Test
+        @DisplayName("REGRESSION: a rate-limited 403 on an account that also lacks a scope is told to wait, not to reconnect")
+        void rateLimitedForbiddenBeatsTheScopeRemedy() {
+            stubPreflightPasses();
+            stubRefusal(403, "You have exceeded a secondary rate limit", ",\"retryAfterSeconds\":60");
+            lenient().when(capability.describe(any(), anyString(), anyList(), anyString()))
+                    .thenReturn(Map.of(
+                            "accounts", List.of(Map.of(
+                                    "name", "Jaden", "status", "active", "canRunThis", false,
+                                    "missingScopes", List.of("https://www.googleapis.com/auth/gmail.readonly"))),
+                            "remedy", "Ask the user to connect Gmail with their own OAuth client credentials."));
+
+            ToolExecutionResult result = runGmail();
+
+            assertThat(result.error())
+                    .startsWith(CatalogExecuteModule.UPSTREAM_REJECTED_CODE + ":")
+                    .contains("seconds=60")
+                    .doesNotContain("own OAuth client credentials");
         }
 
         /**

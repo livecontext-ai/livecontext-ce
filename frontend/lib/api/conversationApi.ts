@@ -626,17 +626,21 @@ export class ConversationApiService {
    * @param toolCallId - id of the call the agent is HOLDING on this card. Passing it lets
    *                     the backend release that call so the assistant finishes its current
    *                     turn; omitting it leaves the older resume-by-new-turn flow.
+   * @param conversationWide - the card's "don't ask again in this conversation" checkbox:
+   *                     persists auto-authorize for the conversation and lifts the gate for
+   *                     the rest of the turn that is running now
    * @returns whether a held call was actually released. False means nobody was holding any
    *          more (the hold timed out, or there never was one), so the caller must resume
    *          the agent with a message or the approval visibly does nothing.
    */
   async approveToolAuthorization(conversationId: string, rule: string, remember: boolean,
-                                 toolCallId?: string): Promise<boolean> {
+                                 toolCallId?: string, conversationWide?: boolean): Promise<boolean> {
     const res = await apiClient.post<{ parkedCallReleased?: boolean }>(
       `/conversations/${conversationId}/tool-authorization/approve`, {
         rule,
         remember,
         toolCallId,
+        ...(conversationWide ? { conversationWide: true } : {}),
       });
     return res?.parkedCallReleased === true;
   }

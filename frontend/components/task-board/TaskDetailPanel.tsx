@@ -274,16 +274,21 @@ export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], la
   useEffect(() => { loadData(); }, [loadData]);
 
   // Auto-open the advanced section when a task already has advanced config, so it
-  // is not hidden behind the collapse. Keyed on task id (re-eval per opened task).
-  useEffect(() => {
-    if (!task) return;
+  // is not hidden behind the collapse. Decided once per opened task (keyed on its id),
+  // DURING render rather than in an effect. An effect flushes after the commit that
+  // first shows the toggle, so a click landing in between was applied first and then
+  // overwritten by the effect's decision: the section stayed shut however long one
+  // waited. Deciding in render also means the first frame is already right, with no
+  // collapsed flash before the section opens.
+  const [advancedDecidedFor, setAdvancedDecidedFor] = useState<string | null>(null);
+  if (task && advancedDecidedFor !== task.id) {
+    setAdvancedDecidedFor(task.id);
     setAdvancedOpen(
       task.estimateMinutes != null || task.timeSpentMinutes != null
       || task.blockedByIds.length > 0 || task.checklist.length > 0
       || !!task.reviewerAgentId || !!task.reviewerUserId,
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task?.id]);
+  }
 
   // ─── Staged edits hook (after task is loaded) ────────────────
   const staged = useTaskStagedEdits(task, initialStagedStatus);

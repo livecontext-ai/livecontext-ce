@@ -128,7 +128,8 @@ public class WorkflowBuilderHelpModule implements ToolModule {
             "Returns as soon as the run leaves the running state - including paused/awaiting-input states, since those wait on " +
             "an action from you or the user. On timeout the response has timed_out=true and the run keeps going: call wait_run " +
             "again to keep waiting. After an execute, ONE wait_run replaces a get_run poll loop.");
-        runInspection.put("get_node_output", "Full output/error of a single node in a run. Params: run_id, epoch, node_id " +
+        runInspection.put("get_node_output", "Full output/error of a single node in a run. Params: run_id, node_id, epoch " +
+            "(optional: omitted = the most recent epoch in which that node ran, named in epoch_note) " +
             "(+ optional item_index / iteration / spawn / field paging)");
         runInspection.put("stop_run", "End a run that is still going - the counterpart of execute. " +
             "Use it as soon as you can tell the execution went wrong (wrong input, a browser agent stuck on a login wall, " +

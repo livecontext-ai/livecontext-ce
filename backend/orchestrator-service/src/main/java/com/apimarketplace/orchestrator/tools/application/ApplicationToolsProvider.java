@@ -114,7 +114,7 @@ public class ApplicationToolsProvider implements ToolsProvider {
             stringParam("run_id", "Run ID (for: get_run, get_node_output, stop_run; and create to pin the showcase run). Returned by execute. On create, omit to auto-pick the latest successful automatic run (COMPLETED/PARTIAL_SUCCESS/WAITING_TRIGGER). On stop_run, omit ONLY when you are an agent running inside a workflow and want to stop your own run.", false),
             stringParam("reason", "(for: stop_run) Why you are stopping the run, in one sentence. Recorded on the run and returned by get_run as stop_reason, so the user and any agent reading the run later see the cause instead of a bare CANCELLED.", false),
             stringParam("mode", "(for: stop_run) 'cancel' (default) ends the run for good AND suspends the schedules of the app's workflow, so a scheduled app stops firing until it is reactivated. 'graceful' only closes the epoch that is running and returns the run to WAITING_TRIGGER, leaving the schedules alone: prefer it when you only want to end THIS execution. 'graceful' is refused when the run is PENDING or WAITING_TRIGGER (nothing is executing yet).", false),
-            intParam("epoch", "Epoch number (for: get_run detail, get_node_output; and create to pin the showcase epoch). On create, omit to leave unpinned - the app then renders the latest epoch.", false, null),
+            intParam("epoch", "Epoch number (for: get_run detail, get_node_output; and create to pin the showcase epoch). On create, omit to leave unpinned - the app then renders the latest epoch. On get_node_output, omit it to read the most recent epoch in which that node ran; the response then says which one in epoch_note.", false, null),
             stringParam("node_id", "Node ID (for: get_node_output). From get_run epoch detail.", false),
             intParam("item_index", "Split item index (for: get_node_output). Optional targeting filter.", false, null),
             intParam("iteration", "Loop iteration (for: get_node_output). Optional targeting filter.", false, null),
@@ -143,7 +143,7 @@ public class ApplicationToolsProvider implements ToolsProvider {
                 - stop_run: End a run that is still going (run_id + optional reason + mode; an agent running inside a workflow can omit run_id to stop its own run). Use it when the execution went wrong instead of letting it finish: it cancels the nodes still in flight, including any browser-agent session. Same action, same parameters on workflow(action='stop_run').
                 - runs: List execution history (application_id required)
                 - get_run: Inspect a run - macro overview, or epoch detail with epoch=N (run_id required)
-                - get_node_output: Full output/error for one node (run_id + epoch + node_id required). A TEXT field >128 KB returns a truncated preview + NEXT pointer; follow it (field=<dot-path> + offset) to page the full value.
+                - get_node_output: Full output/error for one node (run_id + node_id required; epoch optional: omitted = the most recent epoch in which that node ran, named in epoch_note). A TEXT field >128 KB returns a truncated preview + NEXT pointer; follow it (field=<dot-path> + offset) to page the full value.
                 - visualize: Show an app preview card in chat (application_id required)
                 - help: Full reference; filter with topics=['actions','parameters','examples',...]
 

@@ -42,7 +42,7 @@ vi.mock('@/components/billing/InsufficientStorageModal', () => ({
   showInsufficientStorageModal: vi.fn(),
 }));
 vi.mock('@/lib/billing/ceRelayErrorModals', () => ({ handleCeRelayError: () => false }));
-vi.mock('@/lib/websocket', () => ({ wsClient: { sendAction: vi.fn() } }));
+vi.mock('@/lib/websocket', () => ({ wsClient: { onReconnected: () => () => {}, sendAction: vi.fn() } }));
 vi.mock('@/app/workflows/builder/utils/labelNormalizer', () => ({
   normalizeLabel: (label: string) =>
     label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''),

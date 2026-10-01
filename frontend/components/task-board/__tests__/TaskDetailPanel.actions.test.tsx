@@ -530,12 +530,38 @@ describe('TaskDetailPanel contextual task actions', () => {
 
     // Expanding "Advanced" reveals estimate / blockers / checklist in the rail.
     //
-    // AWAITED, because the editor appears as a result of the click rather than with it. Asserted
-    // synchronously this passed on an idle machine and failed in full-suite runs, which reads as
-    // flakiness and is really a missing wait: `getBy` demands the element in the same tick the
-    // click was dispatched in.
+    // AWAITED, because the editor appears as a result of the click rather than with it. The wait
+    // alone did not make this deterministic: the intermittent failure was the auto-open decision
+    // overwriting the click (see the regression test right below).
     fireEvent.click(screen.getByRole('button', { name: /^Advanced$/i }));
     expect(scroll).toContainElement(await screen.findByTestId('task-extras-editor'));
+  });
+
+  // Regression (main CI run_<id>): the test above failed under load after waiting its
+  // full 15 s for the editor. The auto-open decision ran in a passive effect, which flushes
+  // AFTER the commit that first shows the toggle. A click landing in between was queued first,
+  // then the effect's setAdvancedOpen(false) was applied on top of it, so the section stayed
+  // shut for good: no amount of waiting could find the editor. The click is fired here from a
+  // MutationObserver, i.e. in the microtask right after that commit, which is the earliest a
+  // user event can arrive and exactly the window the loaded CI machine hit.
+  it('keeps Advanced open when the toggle is clicked before the auto-open decision would have flushed', async () => {
+    const observer = new MutationObserver(() => {
+      const toggle = document.querySelector<HTMLButtonElement>('[data-testid="task-advanced-toggle"]');
+      if (!toggle) return;
+      observer.disconnect();
+      toggle.click();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      renderPanel(task({ title: 'Early click' }));
+
+      const toggle = await screen.findByTestId('task-advanced-toggle');
+      await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'));
+      expect(screen.getByTestId('task-meta-scroll')).toContainElement(screen.getByTestId('task-extras-editor'));
+    } finally {
+      // Never leave the observer armed: it would click the toggle of the next test's panel.
+      observer.disconnect();
+    }
   });
 
   // A task that already carries advanced config (here: an estimate) auto-opens the
@@ -543,12 +569,12 @@ describe('TaskDetailPanel contextual task actions', () => {
   it('auto-opens the Advanced section when the task already has advanced data', async () => {
     renderPanel(task({ title: 'Has an estimate', estimateMinutes: 45 }));
     await screen.findByText('Has an estimate');
-    // The auto-open effect commits after the first render, so await the editor.
+    // The task itself loads asynchronously, so await the editor rather than assume it.
     const extras = await screen.findByTestId('task-extras-editor');
     expect(screen.getByTestId('task-meta-scroll')).toContainElement(extras);
   });
 
-  // The auto-open effect keys on several fields, not just estimate - a blocker also opens it.
+  // The auto-open decision keys on several fields, not just estimate - a blocker also opens it.
   it('auto-opens the Advanced section when the task already has blockers', async () => {
     renderPanel(task({ title: 'Has a blocker', blockedByIds: ['x1'] }));
     await screen.findByText('Has a blocker');

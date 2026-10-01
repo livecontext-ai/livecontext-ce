@@ -12,6 +12,7 @@ import com.apimarketplace.orchestrator.repository.WorkflowRepository;
 import com.apimarketplace.orchestrator.service.NodeLibraryService;
 import com.apimarketplace.orchestrator.services.WorkflowManagementService;
 import com.apimarketplace.orchestrator.services.WorkflowPlanVersionService;
+import com.apimarketplace.orchestrator.utils.EdgeRefParser;
 import com.apimarketplace.orchestrator.utils.LabelNormalizer;
 import com.apimarketplace.trigger.client.TriggerClient;
 import com.apimarketplace.trigger.client.dto.StandaloneWebhookDto;
@@ -698,15 +699,19 @@ public class WorkflowBuilderLoader {
      * <p>Only the node part is rewritten. A port suffix is preserved as written
      * (generate declares none, but an edge is free to carry one and swallowing
      * it would change where the edge lands).
+     *
+     * <p>The ref is split by {@link EdgeRefParser#parse}, the one edge-ref parser,
+     * rather than by hand. A ref it cannot type (a bare, unprefixed id, which the
+     * adoption map also registers) is a node key with no port.
      */
     private Map<String, Object> rekeyAdoptedEnds(Map<String, Object> edge, Map<String, String> adopted) {
         if (adopted.isEmpty()) return edge;
         Map<String, Object> rekeyed = new LinkedHashMap<>(edge);
         for (String end : List.of("from", "to")) {
             if (!(rekeyed.get(end) instanceof String ref) || ref.isBlank()) continue;
-            int portAt = ref.indexOf(':', ref.indexOf(':') + 1);
-            String node = portAt < 0 ? ref : ref.substring(0, portAt);
-            String port = portAt < 0 ? "" : ref.substring(portAt);
+            EdgeRefParser.EdgeRef parsed = EdgeRefParser.parse(ref);
+            String node = parsed == null ? ref : parsed.getNodeKey();
+            String port = parsed != null && parsed.hasPort() ? ":" + parsed.port() : "";
             String adoptedKey = adopted.get(node);
             if (adoptedKey != null) rekeyed.put(end, adoptedKey + port);
         }
@@ -971,6 +976,10 @@ public class WorkflowBuilderLoader {
         buildLogger.logSessionEnd(session, wasLoaded ? "DISCARDED (loaded)" : "DISCARDED (draft)");
 
         sessionStore.delete(sessionId);
+        // An explicit discard means "not this one": the no-session hint must not offer to reopen
+        // it. (finish and an expired session keep the memory: there the workflow is still wanted.)
+        sessionStore.forgetLastWorkflow(session.getTenantId(), session.getConversationId(),
+                session.getLoadedWorkflowId());
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", "OK");

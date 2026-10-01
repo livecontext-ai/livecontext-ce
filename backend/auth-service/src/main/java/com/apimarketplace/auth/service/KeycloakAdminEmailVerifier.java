@@ -17,7 +17,8 @@ import org.springframework.web.client.RestTemplate;
 import java.util.Map;
 
 /**
- * Keycloak Admin REST client for email-verification operations.
+ * Keycloak Admin REST client for the per-user operations auth-service needs: e-mail
+ * verification, locale, whether an identity still exists, and the sign-up canary's identity.
  *
  * <p>Extracted from {@link EmailVerificationService} to keep KC admin coupling
  * isolated in a single class. Gated cloud-only via {@code auth.mode=keycloak}.
@@ -234,6 +235,55 @@ public class KeycloakAdminEmailVerifier {
             case "zh" -> "zh-CN";
             default -> null;
         };
+    }
+
+    /**
+     * Whether the Keycloak identity still exists: true on 200, false on 404, empty when Keycloak
+     * could not answer (the caller decides what an unknown answer means).
+     */
+    public java.util.Optional<Boolean> identityExists(String providerId) {
+        try {
+            String url = keycloakServerUrl + "/admin/realms/" + keycloakRealm + "/users/" + providerId;
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(getAdminToken());
+            restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
+            return java.util.Optional.of(true);
+        } catch (org.springframework.web.client.HttpClientErrorException.NotFound gone) {
+            return java.util.Optional.of(false);
+        } catch (Exception e) {
+            logger.warn("Could not check whether Keycloak identity {} exists: {}", providerId, e.getMessage());
+            return java.util.Optional.empty();
+        }
+    }
+
+    /** Result of {@link #createPasswordUser}. */
+    public enum CreateOutcome { CREATED, ALREADY_EXISTS }
+
+    /**
+     * Creates an enabled password identity whose username is its e-mail, e-mail NOT verified (the
+     * app onboarding owns verification). Used only by the sign-up canary.
+     *
+     * @throws IllegalStateException on any answer other than 201 or 409
+     */
+    public CreateOutcome createPasswordUser(String email, String password) {
+        String url = keycloakServerUrl + "/admin/realms/" + keycloakRealm + "/users";
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(getAdminToken());
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        Map<String, Object> body = Map.of(
+                "username", email,
+                "email", email,
+                "enabled", true,
+                "emailVerified", false,
+                "credentials", java.util.List.of(Map.of("type", "password", "value", password, "temporary", false)));
+        try {
+            restTemplate.exchange(url, HttpMethod.POST, new HttpEntity<>(body, headers), Void.class);
+            return CreateOutcome.CREATED;
+        } catch (org.springframework.web.client.HttpClientErrorException.Conflict exists) {
+            return CreateOutcome.ALREADY_EXISTS;
+        } catch (org.springframework.web.client.RestClientException e) {
+            throw new IllegalStateException("Keycloak user creation failed: " + e.getMessage(), e);
+        }
     }
 
     private String getAdminToken() {

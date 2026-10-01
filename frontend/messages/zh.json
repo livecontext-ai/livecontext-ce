@@ -1,4 +1,405 @@
 {
+  "partnerDashboard": {
+    "title": "合作伙伴计划",
+    "subtitle": "从客户支付的每张发票中获得分成，并展示官方合作伙伴徽章。",
+    "learnMore": "了解计划如何运作",
+    "error": "无法加载您的合作伙伴计划，请稍后重试。",
+    "selfHosted": {
+      "title": "合作伙伴计划是云端功能",
+      "body": "它运行在 LiveContext 云端。请通过您的 livecontext.ai 账号加入。"
+    },
+    "terms": {
+      "commission": "每张已付款发票的 {percent}%",
+      "duration": "每位客户持续 {months} 个月",
+      "credits": "您带来的每位客户可获 {credits} 免费积分",
+      "hold": "{days} 天退款期后可结算",
+      "commissionRange": "每张已付账单的 {from}% 到 {to}%，按等级计算"
+    },
+    "apply": {
+      "title": "申请成为合作伙伴",
+      "intro": "请介绍您的业务。我们会审核每一份申请，并通过邮件回复，通常在几天内。",
+      "company": "公司或品牌",
+      "companyPlaceholder": "Acme 自动化",
+      "website": "网站",
+      "audience": "您为谁提供服务？",
+      "audiencePlaceholder": "例如：房地产中介、电商品牌、内部运营团队",
+      "message": "还有其他需要告诉我们的吗？",
+      "submit": "提交申请",
+      "submitting": "正在提交...",
+      "submitSignIn": "登录并发送",
+      "terms": "我已阅读并接受<link>合作伙伴计划条款</link>（版本 {version}）。"
+    },
+    "pending": {
+      "title": "已收到申请",
+      "body": "我们正在审核 {company} 的申请。一旦有结果，您将收到邮件，此页面也会变为您的合作伙伴控制台。",
+      "submittedOn": "提交于 {date}"
+    },
+    "rejected": {
+      "title": "您之前的申请未获通过",
+      "note": "我们的说明：{note}",
+      "again": "您可以在下方重新申请。"
+    },
+    "errors": {
+      "already_pending": "您已有一份申请正在审核中。",
+      "already_partner": "您已经是合作伙伴。",
+      "missing_company": "请输入公司或品牌名称。",
+      "invalid_website": "请输入完整的网址，以 https:// 开头",
+      "too_long": "有字段内容过长。",
+      "not_available_in_ce": "自托管安装不提供合作伙伴计划。",
+      "generic": "出错了，请重试。",
+      "terms_not_accepted": "请先勾选接受合作伙伴计划条款，再提交申请。",
+      "terms_outdated": "合作伙伴计划条款刚刚更新。请重新加载页面阅读新版本，然后接受。",
+      "not_partner": "只有合作伙伴和申请人需要接受条款。"
+    },
+    "toasts": {
+      "applied": "申请已发送",
+      "appliedBody": "我们会通过邮件回复您。",
+      "copied": "已复制",
+      "copyFailed": "无法复制"
+    },
+    "dashboard": {
+      "inactive": "您的合作伙伴代码未激活，因此新注册不会归属于您。如有疑问请联系我们。",
+      "linkTitle": "您的合作伙伴链接",
+      "linkHint": "分享此链接。通过它创建的新账号可获得 {credits} 免费积分，并归属于您。",
+      "copyLink": "复制链接",
+      "validUntil": "您的代码可用于新注册，有效期至 {date}。",
+      "maxUses": "您的代码最多可供 {count} 个新账户使用。",
+      "code": "您的代码：",
+      "copyCode": "复制代码",
+      "yourRate": "您的比例：每张已付款发票的 {percent}%，每位客户持续 {months} 个月。",
+      "badgeTitle": "官方合作伙伴",
+      "badgeBody": "您的金色徽章会显示在您的名字旁边，包括个人主页和您发布的模板。",
+      "badgeInactive": "合作伙伴代码重新激活后，徽章会再次显示。",
+      "stats": {
+        "signups": "注册数",
+        "paying": "付费客户",
+        "onHold": "冻结中",
+        "onHoldHint": "处于 {days} 天退款期内",
+        "payable": "待支付",
+        "paid": "已支付给您"
+      },
+      "lines": {
+        "title": "佣金记录",
+        "empty": "暂无佣金。您推荐的客户支付发票后，记录会显示在这里。",
+        "date": "发票日期",
+        "invoice": "发票（不含税）",
+        "commission": "您的佣金",
+        "status": "状态",
+        "statusOnHold": "冻结至 {date}",
+        "statusPayable": "待支付",
+        "statusPaid": "已于 {date} 支付",
+        "statusVoid": "已作废（退款或争议）"
+      },
+      "payoutTitle": "如何收款",
+      "payoutBody": "退款期结束后，佣金在发票开具 {days} 天后可结算。当您的可结算余额达到 50 美元时，我们每月通过银行转账付款，并代您开具发票（自开票），除非您希望自行开具。请将您的姓名或公司名称、地址、税号和银行信息（IBAN）发送至 <email></email>。",
+      "tier": {
+        "title": "您的等级",
+        "names": {
+          "silver": "Silver",
+          "gold": "Gold",
+          "platinum": "Platinum"
+        },
+        "founder": "创始合作伙伴",
+        "rate": "每张已付账单 {percent}%",
+        "progressLabel": "升级到 {tier} 的进度",
+        "progress": "已达 {revenue}，达到 {threshold} 即升级为 {tier}",
+        "top": "您已处于最高等级。",
+        "topFounder": "创始合作伙伴：在您参与本计划的整个期间享有 Platinum，依照合作伙伴计划条款（第 7.5 条）。",
+        "hint": "账单满 {days} 天且未退款后才计入您的等级。您的业务量不会导致等级下降。",
+        "hintGeneric": "账单无法再退款后才计入您的等级。您的业务量不会导致等级下降。"
+      }
+    },
+    "agreement": {
+      "titleFirst": "请接受合作伙伴计划条款",
+      "bodyFirst": "请阅读并接受<link>合作伙伴计划条款</link>（本计划的合同）：在您接受之前，我们无法向您支付任何佣金。",
+      "titleUpdated": "合作伙伴计划条款已更新",
+      "bodyUpdated": "<link>合作伙伴计划条款</link>的 {version} 版本现已生效。请阅读并确认您接受该版本。",
+      "accept": "我已阅读并接受条款（版本 {version}）",
+      "accepting": "正在保存...",
+      "accepted": "您已于 {date} 接受<link>合作伙伴计划条款</link>（版本 {version}）。"
+    }
+  },
+  "partnersLanding": {
+    "metadata": {
+      "title": "面向代理机构和顾问的合作伙伴计划",
+      "description": "把您的客户带到 LiveContext，从他们支付的每张账单中获得持续分成，分成比例随合作伙伴等级提升。官方合作伙伴徽章，以及为客户托管 LiveContext 的权利。"
+    },
+    "hero": {
+      "eyebrow": "合作伙伴计划",
+      "title": "从客户支付的每张发票中赚取最高 <rate>{max}%</rate>",
+      "titleGeneric": "从客户支付的每张发票中获得分成",
+      "lead": "面向为客户构建自动化的代理机构、顾问和自由职业者。把客户带到 LiveContext，交付他们的工作流和应用，并从他们支付的每张发票中获得收益，每位客户持续 {months} 个月。",
+      "leadGeneric": "面向为客户构建自动化的代理机构、顾问和自由职业者。把客户带到 LiveContext，交付他们的工作流和应用，并从他们支付的每张发票中获得收益。",
+      "apply": "成为合作伙伴",
+      "estimate": "看看您能赚多少",
+      "note": "免费加入，无最低业务量要求。每份申请都由团队审核。",
+      "founder": "创始合作伙伴：从第一天起 {percent}%，终身有效",
+      "founderDays": "还剩 {days} 天"
+    },
+    "heroCard": {
+      "roleFounder": "创始合作伙伴，从第一天起即为 Platinum",
+      "role": "合作一年的伙伴",
+      "thisMonth": "第 {month} 个月的佣金",
+      "perMonth": "/ 月",
+      "fromClients": "来自 {count} 位 {plan} 客户，每月 {credits} 积分",
+      "yearTotal": "全年收入",
+      "rate": "已达费率",
+      "rateValue": "{percent}%（{tier}）",
+      "disclosure": "示意：虚构的合作伙伴。收益按我们的公开价格计算，并非对结果的承诺。",
+      "chartLabel": "示例：一位合作伙伴一年内的月度佣金，其付费客户从 {from} 位增长到 {to} 位",
+      "month": "第 {month} 个月"
+    },
+    "stats": {
+      "label": "计划条款",
+      "commissionValue": "最高 {max}%",
+      "commissionLabel": "每张已付发票",
+      "monthsValue": "{months} 个月",
+      "monthsLabel": "每位客户的佣金期",
+      "joinValue": "{zero}",
+      "joinLabel": "加入费用，无最低业务量",
+      "creditsValue": "{credits}",
+      "creditsLabel": "您带来的每位客户可获得的免费积分"
+    },
+    "earnings": {
+      "eyebrow": "您的收入",
+      "title": "合作伙伴每月能赚多少",
+      "lead": "按真实价目表、按月计费，以 Platinum 费率（{percent}%）计算。客户规模越大，佣金越高：一位大客户就已经很可观。",
+      "upTo": "最高",
+      "perMonth": "/ 月",
+      "perYear": "每年 {amount}",
+      "agency": "代理机构",
+      "ownTitle": "算算您自己的收入",
+      "ownLead": "拖动滑块：估算按真实等级逐月计算。",
+      "single": "一位大客户",
+      "large": "大型代理机构",
+      "clientsOn": "{count} 位客户，{plan} 套餐，{credits} 积分",
+      "billEach": "每位客户每月 {bill}"
+    },
+    "tiers": {
+      "eyebrow": "合作伙伴等级",
+      "title": "三个等级。客户付款越多，您的费率越高。",
+      "lead": "每位合作伙伴都从 Silver 起步。当客户支付的发票达到门槛，您会自动升级，而且永不降级。",
+      "perInvoice": "每张已付发票，每位客户持续 {months} 个月",
+      "rate": "{percent}%",
+      "equivalent": "约等于 {count} 位 {plan} 客户（{credits} 积分，每月 {bill}），持续一年",
+      "founderShortcut": "创始合作伙伴从这里起步",
+      "silver": {
+        "name": "Silver",
+        "when": "自获批之日起"
+      },
+      "gold": {
+        "name": "Gold",
+        "when": "当您的客户累计支付 {amount} 后"
+      },
+      "platinum": {
+        "name": "Platinum",
+        "when": "当您的客户累计支付 {amount} 后"
+      },
+      "rules": {
+        "auto": {
+          "title": "自动升级",
+          "body": "客户的已付发票一达到门槛，您就会升级，无需申请。"
+        },
+        "never": {
+          "title": "永不降级",
+          "body": "达到的等级永久保留。新费率适用于变更后支付的每张发票。"
+        },
+        "settle": {
+          "title": "{days} 天后计入",
+          "body": "发票满 {days} 天且未退款后，才计入等级。"
+        }
+      },
+      "topTier": "最高等级"
+    },
+    "founder": {
+      "eyebrow": "创始合作伙伴，截至 {date}",
+      "title": "直接从顶级开始。",
+      "titleRate": "从第一天起 {percent}%，终身有效。",
+      "body": "在 {date} 之前，团队会从收到的申请中任命一小批创始合作伙伴。创始合作伙伴直接从 Platinum 起步，无需达到门槛，并依照合作伙伴计划条款终身保留。",
+      "points": {
+        "first": "从第一位客户起即享 Platinum 费率（{percent}%）",
+        "life": "依照合作伙伴计划条款，终身享有 Platinum",
+        "badge": "合作伙伴徽章，个人资料显示 Platinum"
+      },
+      "cta": "申请成为创始合作伙伴",
+      "daysLeft": "{days, plural, other {天内可以申请}}",
+      "closes": "创始合作伙伴的任命截至 {date}。",
+      "termsLink": "阅读合作伙伴计划条款",
+      "fine": "团队会从 {date} 之前收到的申请中挑选创始合作伙伴。提交申请并不会自动成为创始合作伙伴。“终身”是指您参与本计划的整个期间，除非我们依照合作伙伴计划条款终止（例如连续 12 个月没有任何佣金）。",
+      "plate": "创始合作伙伴"
+    },
+    "calculator": {
+      "clients": "您带来的付费客户数",
+      "founder": "如果团队任命我为创始合作伙伴（在 {date} 之前）",
+      "founderGeneric": "如果团队任命我为创始合作伙伴",
+      "byMonth12": "第 12 个月，您每月可赚",
+      "perMonth": "/ 月",
+      "firstMonth": "第 1 个月",
+      "yearOne": "第一年合计",
+      "chartLabel": "第一年每月的佣金，按等级着色",
+      "month": "第 {month} 个月",
+      "legend": "{tier} {percent}%",
+      "pathStays": "今年您保持 {tier}：带来更多客户即可升级。",
+      "pathReached": "从第 {month} 个月起为 {tier}。",
+      "pathFounder": "从第一天起即为 {tier}，终身有效。",
+      "disclaimer": "仅为估算，并非承诺：假设每位客户一开始就按月订阅并每月付款，且无退款。佣金按不含税发票计算。",
+      "plan": "客户套餐",
+      "plans": {
+        "starter": "Starter",
+        "pro": "Pro",
+        "team": "Team"
+      },
+      "credits": "每月积分",
+      "bill": "每位客户每月 {bill}",
+      "billHint": "该套餐及积分的标价，按月计费，不含税。"
+    },
+    "badge": {
+      "eyebrow": "合作伙伴徽章",
+      "title": "您的应用在市场中脱颖而出",
+      "body": "这里是 LiveContext 市场，客户在这里寻找应用。您名字旁边的金色合作伙伴徽章，让您的应用在众多应用中格外醒目。",
+      "label": "LiveContext 官方合作伙伴",
+      "disclosure": "示意：所展示的合作伙伴、应用和评分均为虚构。周围的列表是市场中的真实应用。",
+      "oneBadge": "所有等级使用同一个徽章。您的个人资料会显示 Silver、Gold 或 Platinum。",
+      "places": {
+        "profile": "您的公开个人资料",
+        "apps": "您发布的每个应用",
+        "search": "市场列表和搜索结果"
+      },
+      "you": "您的应用",
+      "appTitle": "Invoice Autopilot",
+      "appDescription": "读取 Gmail 中的供应商发票，提取金额并记入 QuickBooks。",
+      "marketplace": "LiveContext 市场",
+      "search": "搜索应用、工作流、智能体",
+      "profile": "您的个人资料",
+      "profileApps": "已发布 {count} 个应用",
+      "profileRating": "{rating}（{count} 条评价）"
+    },
+    "how": {
+      "eyebrow": "运作方式",
+      "title": "四个步骤，无最低业务量",
+      "apply": {
+        "title": "提交申请",
+        "body": "介绍您的业务和客户，只需两分钟。"
+      },
+      "link": {
+        "title": "获取链接",
+        "body": "获批后，您将获得合作伙伴代码、可追踪链接和合作伙伴控制台。"
+      },
+      "clients": {
+        "title": "带来客户",
+        "body": "通过您的链接注册的客户可获得免费积分起步。您在 LiveContext 上为他们构建自动化和应用。"
+      },
+      "earn": {
+        "title": "每月获得收益",
+        "body": "在 {months} 个月内，您最高可从他们支付的每张发票中获得 {platinum}%，在 {days} 天的退款期后可结算。",
+        "bodyGeneric": "您可从他们支付的每张发票中获得分成，在短暂的退款期后支付。"
+      }
+    },
+    "benefits": {
+      "eyebrow": "更多权益",
+      "title": "不止是佣金",
+      "lead": "为客户销售、交付和运行自动化所需的一切。",
+      "credits": {
+        "title": "客户免费积分",
+        "body": "通过您的链接注册的客户可获得免费积分，外加其套餐包含的额度。"
+      },
+      "hosting": {
+        "title": "为客户托管",
+        "body": "LiveContext 许可证允许您为每位客户安装和运行它，可部署在客户或您自己的服务器上，并为此收费。"
+      },
+      "apps": {
+        "title": "交付应用，而不只是工作流",
+        "body": "在客户的自动化之上提供真正的界面、表单和仪表盘，销售完整的产品。"
+      },
+      "tracking": {
+        "title": "实时追踪",
+        "body": "在合作伙伴控制台中逐条查看注册数、付费客户和收益。"
+      },
+      "payout": {
+        "title": "银行转账付款",
+        "body": "每笔佣金在短暂的退款期后变为可支付，并通过银行转账支付给您。"
+      },
+      "team": {
+        "title": "与团队直接沟通",
+        "body": "告诉我们客户需要什么。合作伙伴会影响我们接下来构建的内容。"
+      },
+      "visual": {
+        "creditsAmount": "+{credits}",
+        "creditsUnit": "每位客户的免费积分",
+        "signups": "注册",
+        "paying": "付费",
+        "earned": "收入",
+        "payout": "打款",
+        "paid": "已支付",
+        "client": "客户 {letter}",
+        "running": "运行中",
+        "ask": "我的客户想要一个 Shopify 触发器。",
+        "reply": "已记录，谢谢反馈！我们会研究一下。",
+        "team": "LiveContext 团队"
+      }
+    },
+    "faq": {
+      "eyebrow": "常见问题",
+      "title": "合作伙伴常见问题",
+      "cost": {
+        "question": "加入需要多少费用？",
+        "answer": "完全免费。没有费用，也没有最低业务量。"
+      },
+      "commission": {
+        "question": "佣金如何计算？",
+        "answer": "对于通过您的链接注册的客户，您可以在其首次付款起 {months} 个月内，从每张已付账单（不含税）中获得分成：Silver 为 {silver}%，最高 Platinum 为 {platinum}%。每笔佣金会保留 {days} 天以防退款，之后即可支付。",
+        "answerGeneric": "对于通过您的链接注册的客户，您可从其每张已付款发票（不含税）中获得分成。每笔佣金会在短暂的退款期内冻结，之后即可结算。"
+      },
+      "payout": {
+        "question": "如何以及何时付款？",
+        "answer": "可结算的佣金在可结算余额达到 50 美元后，每月通过银行转账支付（合作伙伴计划条款第 8 条）。合作伙伴控制台会显示冻结中、待支付和已支付的金额。"
+      },
+      "clients": {
+        "question": "哪些客户计入？",
+        "answer": "通过您的链接或使用您的代码创建的新账号。每位客户只归属于一位合作伙伴，且不能推荐您自己的账号。"
+      },
+      "hosting": {
+        "question": "我可以为客户安装 LiveContext 吗？",
+        "answer": "可以。LiveContext 许可证允许服务提供商为每位客户安装、托管和维护，每位客户一个部署。若要作为您自己的多客户平台运营，需要商业许可证：请联系我们。"
+      },
+      "credits": {
+        "question": "我的客户能得到什么？",
+        "answer": "通过您的链接注册时可获得 {credits} 免费积分，另加其套餐包含的内容。",
+        "answerGeneric": "通过您的链接注册时可获得免费积分，另加其套餐包含的内容。"
+      },
+      "badge": {
+        "question": "什么时候获得徽章？",
+        "answer": "您的申请一经批准即可获得。所有等级使用同一个徽章，只要您的合作伙伴代码有效就会显示。"
+      },
+      "tiers": {
+        "question": "等级如何运作？",
+        "answer": "每位合作伙伴都从 Silver（{silver}%）开始。当为您带来佣金的账单累计达到 {goldAmount} 时，您升级为 Gold（{gold}%）；达到 {platinumAmount} 时升级为 Platinum（{platinum}%）。账单满 {settleDays} 天且未退款后才计入。等级永不下降，新的分成比例适用于变更之后支付的账单。"
+      },
+      "founder": {
+        "question": "什么是创始合作伙伴？",
+        "answer": "在 {date} 之前，团队会从收到的申请中任命创始合作伙伴：请通过本页的表单申请。创始合作伙伴直接从 Platinum（{platinum}%）起步，无需达到门槛，并终身保留：在其参与本计划的整个期间，除非依照合作伙伴计划条款被终止（例如连续 12 个月没有任何佣金）。{date} 之后，Platinum 与其他等级一样按收入达成。"
+      }
+    },
+    "apply": {
+      "eyebrow": "申请",
+      "title": "两分钟完成申请",
+      "body": "介绍一下您的业务以及您为谁构建方案。我们会审核每份申请并通过电子邮件回复。",
+      "question": "先有问题要问？",
+      "contact": "联系我们",
+      "points": {
+        "free": "免费，无最低业务量",
+        "reviewed": "每份申请都由团队阅读",
+        "reply": "通过电子邮件回复"
+      },
+      "founderNote": "在 {date} 之前收到的申请也会被考虑成为创始合作伙伴：从第一天起 {percent}%。",
+      "signInNote": "现在就可以填写：发送时我们会请您登录或创建免费账户，并保留您填写的内容。",
+      "sentTitle": "申请已发送",
+      "sentBody": "我们会进行审核并通过电子邮件回复。您可以在合作伙伴页面跟进进度。",
+      "openDashboard": "打开我的合作伙伴页面",
+      "alreadyPartnerTitle": "您已经是合作伙伴",
+      "alreadyPartnerBody": "您的链接、等级和收益都在合作伙伴页面上。"
+    }
+  },
   "avatarPicker": {
     "customize": "自定义",
     "toolLabel": "工具徽章",
@@ -98,6 +499,45 @@
     "shortcutKeysMac": "⌘K"
   },
   "reward": {
+    "personalOffer": {
+      "applied": "个人优惠已应用",
+      "appliedUntil": "个人优惠已应用。请在 {date} 前选择。",
+      "reservedUntil": "本次结账的优惠已保留至 {date}。",
+      "reviewRequired": "您的首次付款需要核查，尚未添加奖励。请在再次结账前联系支持团队。",
+      "usedWithoutOffer": "您的首次付费订阅未使用此优惠，但已用尽优惠资格。未添加奖励。",
+      "granted": "已添加 {credits} 个 PAYG 奖励积分。",
+      "usedWithoutBonus": "您的首次付费订阅已完成，此积分包没有奖励积分。",
+      "reversed": "付款状态变更后，此优惠的奖励积分已撤销。",
+      "selectedPlan": "已选套餐",
+      "returnToWork": "返回您的工作",
+      "attachFailed": "无法将此优惠关联到本次付款。请重试。",
+      "paymentPending": "付款尚未完成，奖励积分还未添加。",
+      "processing": "付款后正在核实您的奖励。",
+      "changeCode": "更换代码",
+      "checking": "正在核实您的个人优惠...",
+      "signIn": "登录后查看您的个人优惠。",
+      "bonus": "付款后一次性赠送 {credits} 个 PAYG 积分（PAYG 价值：{value}）。",
+      "annualTotal": "年度应付总额：{amount}，未含税。",
+      "noBonus": "此积分包的奖励：0 积分。",
+      "nextEligible": "每月购买 {credits} 积分起可获得奖励。",
+      "firstPurchaseUsed": "首次付费订阅会用掉这次优惠资格，即使此积分包没有奖励。",
+      "planUnavailable": "此方案和积分包没有可用奖励。",
+      "verifyUnavailable": "无法核实您的奖励。请在付款前重试。",
+      "continueWithout": "不使用优惠继续",
+      "useOffer": "使用我的优惠",
+      "errors": {
+        "generic": "无法核实此个人优惠，请重试。",
+        "expired": "此个人优惠已过期。",
+        "alreadyUsed": "此个人优惠已使用。",
+        "conflict": "此账户已关联其他首次付费权益。",
+        "notEligible": "此个人优惠不适用于此账户。",
+        "checkoutActive": "使用此优惠的付款正在进行中。",
+        "unavailable": "此个人优惠暂时不可用。",
+        "firstPaymentRequired": "此次结账的首次付款金额不大于零，因此无法应用奖励。请选择付费套餐或联系支持团队。",
+        "paymentPreviewUnavailable": "无法核实首次付款金额。尚未发起付款。请重试或联系支持团队。",
+        "reviewRequired": "您的首次付款需要核查，尚未添加奖励。请在再次结账前联系支持团队。"
+      }
+    },
     "page": {
       "title": "推荐有奖",
       "subtitle": "邀请好友，当他们订阅时你们都能获得积分，也可以兑换收到的代码。"
@@ -124,9 +564,11 @@
     "inline": {
       "toggle": "有代码吗？",
       "pending": "代码 {code} 待使用：立即应用",
-      "apply": "应用"
+      "apply": "应用",
+      "close": "关闭"
     },
     "redeem": {
+      "personalOfferReady": "已选择个人优惠。奖励将在首次付费订阅完成后添加。",
       "title": "兑换代码",
       "subtitle": "有推荐码或促销码？在此输入。",
       "placeholder": "输入你的代码",
@@ -144,6 +586,12 @@
       "signedOutBodyWithCode": "登录或创建免费账户。登录后代码 {code} 将自动生效。",
       "signedOutCta": "登录或创建账户",
       "errors": {
+        "offerUnavailable": "此优惠不适用于此账户。",
+        "offerExpired": "此优惠已过期。",
+        "offerAlreadyUsed": "此优惠已使用。",
+        "offerNotEligible": "此账户不符合优惠条件。",
+        "offerConflict": "已关联其他首次付费权益。",
+        "offerCheckoutActive": "使用此优惠的付款正在进行中。",
         "invalidCode": "该代码不存在。",
         "notRedeemable": "该代码当前不可用。",
         "alreadyRedeemed": "你已经兑换过代码。",
@@ -158,6 +606,13 @@
         "cloudLinkRequired": "连接你的云账户以兑换代码。",
         "generic": "无法兑换该代码。"
       }
+    },
+    "partnerProgram": {
+      "title": "合作伙伴计划",
+      "subtitle": "面向为客户构建方案的代理机构和自由职业者",
+      "body": "这与邀请好友不同：合作伙伴在 {months} 个月内从客户支付的每张账单中获得最高 {percent}% 的分成，并获得官方徽章。",
+      "bodyGeneric": "这与邀请好友不同：合作伙伴从客户支付的每张账单中获得分成，并获得官方徽章。",
+      "cta": "了解合作伙伴计划"
     }
   },
   "interfaceLinkGate": {
@@ -912,6 +1367,7 @@
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# 个低额度桥接} other {# 个低额度桥接}}",
           "ORG_INVITATION_PENDING": "{count, plural, one {# 个组织邀请} other {# 个组织邀请}}",
           "BADGE_UNLOCKED": "{count, plural, other {# 项新成就}}",
+          "CREATOR_PUBLISHED": "{count, plural, other {你关注的创作者发布了 # 个新应用}}",
           "BUDGET_REACHED": "{count, plural, other {# 个工作流因支出上限而停止}}",
           "CREDIT_LOW": "{count, plural, one {点数即将用完} other {点数即将用完 (#)}}",
           "CREDIT_EXHAUSTED": "{count, plural, one {点数已用完} other {点数已用完 (#)}}",
@@ -1121,6 +1577,9 @@
       "sendMessageTrigger": "发送消息以触发工作流",
       "waitingMessage": "等待消息...",
       "loadingDetails": "正在加载运行详情...",
+      "headerRunning": "运行 {id}...",
+      "headerDone": "运行 {id} {status}",
+      "headerDoneIn": "运行 {id} {status}，用时 {duration}",
       "waitingWorkflow": "正在等待工作流……"
     },
     "compactionDivider": "先前的上下文已总结",
@@ -1637,6 +2096,7 @@
     "noModelMatchesFilters": "没有模型符合这些筛选条件",
     "clearModelFilters": "清除筛选",
     "resetModelMenu": "重置",
+    "unlistedModels": "隐藏的模型",
     "reasoningEffort": "推理强度"
   },
   "versionHistory": {
@@ -1701,6 +2161,7 @@
     "showcaseRunHint": "以实时演示的形式展示过去运行的结果",
     "privateNoShowcaseHint": "私密分享--展示为可选项。您可以不附带运行记录直接分享。",
     "workflowTriggerWarning": "此版本包含工作流触发器，无法分享。请先移除工作流触发器节点。",
+    "customApiCannotShare": "自定义 API 无法分享。此版本使用了 {apis}，它只存在于您自己的账户中，因此安装此应用的人会得到无法运行的节点。请移除这些节点，或改为私密分享。",
     "noInterfaceCannotShare": "此版本没有界面，因此暂时无法分享。请先为您的工作流添加至少一个界面--访客将把它作为应用打开。",
     "previewInterface": "界面",
     "selectInterface": "选择界面",
@@ -1921,6 +2382,9 @@
       "familyInterfaces": "界面",
       "familyAgents": "智能体",
       "familyApplications": "应用",
+      "customApiErrorTitle": "发布被阻止：此智能体使用了自定义 API",
+      "customApiErrorIntro": "自定义 API 只在您自己的账户中定义，因此无法分享：安装此智能体的人会得到无法运行的工具。下列 API 由该智能体本身、它可以运行的工作流，或它的某个子智能体使用。",
+      "customApiErrorFix": "请从智能体的工具选择中移除这些工具（通常可用目录中的集成替代），或以“私密”可见性发布，这样智能体会留在您自己的账户中，自定义 API 仍可正常使用。",
       "snapshotTooLargeTitle": "发布内容过大",
       "snapshotTooLargeMessage": "发布内容超过最大大小（{size} MB，上限 {max} MB）。",
       "snapshotTooLargeRowsMessage": "表格 {name} 包含 {items} 行（每个发布表格上限 {max} 行）。",
@@ -1966,6 +2430,7 @@
     "emptyWorkflowsHint": "成为第一个分享工作流的人！",
     "filterAgents": "代理",
     "filterByType": "按类型筛选",
+    "filterByCategory": "按类别筛选",
     "sortBy": "排序方式",
     "sortPopular": "最受喜爱",
     "sortRating": "评分最高",
@@ -2891,6 +3356,7 @@
       "backlogEnabled": "共享待办池参与",
       "backlogEnabledHelp": "启用后，该代理在唤醒时会获得共享待办池中的未分配任务，并可领取它们。对专职代理请保持关闭，使其只处理直接分配给它的任务。",
       "duplicateName": "已存在名为“{name}”的智能体。请选择其他名称。",
+      "useSuggestedName": "使用“{name}”",
       "memoryAccessLabel": "长期记忆",
       "memoryAccessInfo": "该智能体保存的内容会加入工作区中所有智能体的上下文。若希望智能体只使用而不修改这些事实，请选择仅调用。",
       "memoryAccessWrite": "可保存和删除",
@@ -3804,8 +4270,22 @@
       "allTiers": "所有档位",
       "filterByState": "状态",
       "allStates": "所有状态",
-      "stateOn": "已启用",
+      "stateOn": "已列出",
       "stateOff": "已关闭",
+      "stateUnlisted": "未列出",
+      "listing": {
+        "unlist": "取消列出：模型仍可使用，但不再在选择器中提供",
+        "list": "重新列出",
+        "unlistFromOff": "重新启用但不列出：使用它的内容继续在其上运行，选择器不提供它",
+        "unlistedTooltip": "未列出：仍可使用，因此使用它的智能体、工作流和对话会继续在其上运行。选择器中不再提供它（消息输入框将其显示在隐藏的模型中），它也永远不会成为默认模型。其替代模型已暂停。"
+      },
+      "replacementPaused": "（已暂停）",
+      "replacementPausedTooltip": "模型未列出期间不生效：使用它的内容继续在其上运行。如果您关闭该模型，替代会重新生效。",
+      "newBadge": "新",
+      "newBadgeTooltip": "于 {date} 加入目录",
+      "filterNew": "新模型（{count}）",
+      "filterNewTooltip": "最近 14 天加入目录的模型",
+      "bulkUnlist": "取消列出",
       "clearFilters": "清除筛选",
       "providerEnabled": "启用该提供商",
       "providerSwitchUnavailable": "无法读取提供商开关，因此已隐藏。下方的模型列表不受影响。",
@@ -4264,6 +4744,10 @@
       }
     },
     "wizard": {
+      "securityNote": {
+        "title": "传输和存储全程加密",
+        "body": "您的凭据通过 TLS 传输，并使用 AES-256 加密存储，仅用于运行您的自动化流程。"
+      },
       "title": "连接 {name}",
       "description": "连接您的账户以继续。",
       "successTitle": "连接成功！",
@@ -5533,6 +6017,11 @@
         "supportSla": "优先 + SLA"
       }
     },
+    "planGrid": {
+      "previous": "上一组方案",
+      "next": "下一组方案",
+      "goTo": "从第 {n} 个位置显示方案（共 {total} 个）"
+    },
     "businessPlans": {
       "title": "面向团队和组织",
       "subtitle": "与您的团队共同扩展--协作、安全与控制"
@@ -6777,25 +7266,19 @@
       "retryCountLabel": "失败时重试",
       "retryCountHelp": "失败后的额外尝试次数（0-10）。0 表示不重试。",
       "retryBackoffLabel": "重试间隔（毫秒）",
-      "retryBackoffHelp": "两次尝试之间的延迟，单位为毫秒。",
+      "retryBackoffHelp": "两次尝试之间的延迟，单位为毫秒（最多 60000）。当服务提供方要求等待更久时，按其要求等待；若其要求等待超过 60 秒，则停止重试。",
+      "retryOnLabel": "重试条件",
+      "retryOnDefault": "除永久拒绝外的任何失败",
+      "retryOnRateLimit": "仅当服务提供方表明触发了速率限制时（429、503，或带有 Retry-After 或速率限制提示的 4xx）",
+      "retryOnHelp": "服务提供方以无效、未授权或未找到为由拒绝的请求不会重试，除非该拒绝属于速率限制；平台因额度不足或预算已用尽而拒绝的请求同样不会重试。第二个选项对发布或写入数据的节点更安全：在超时或大多数服务器错误之后不会重新发送，但写入已生效后仍可能收到 503。",
       "continueOnFailureLabel": "失败时继续",
-      "continueOnFailureHelp": "当所有尝试都失败时，继续执行后续节点而不是跳过它们。",
-      "continueOnFailureBlockedTooltip": "分支节点不可用：失败的决策、Switch 或选项节点未选中任何分支，继续执行会同时运行所有分支。",
+      "continueOnFailureHelp": "当所有尝试都失败时，后续节点仍会执行，而不会被跳过，除非失败原因是额度不足或预算已用尽而被拒绝。该节点仍为 FAILED，运行的最终结果与未启用此设置时相同。在 split 中，失败的条目会继续进入后续节点。",
+      "continueOnFailureBlockedTooltip": "分支节点不可用：失败的决策、Switch、选项、循环、classify 或 guardrail 节点未选中任何分支，继续执行会同时运行所有分支。",
       "timeoutLabel": "超时（毫秒）",
       "timeoutHelp": "尽力而为，按每次尝试生效。0 表示禁用。",
       "executeOnceLabel": "仅执行一次",
       "executeOnceHelp": "在 Split 中仅对第一个条目执行。",
-      "executeOnceBlockedTooltip": "Split、Aggregate、Merge 或 Loop 节点不可用：它们需要协调所有 Split 条目，跳过条目会破坏其逻辑。",
-      "providerRetryLabel": "供应商重试时间预算（秒）",
-      "providerRetryPlaceholder": "由平台决定",
-      "providerRetryHelp": "留空则由平台消化供应商的频率限制。若此工作流已自行控制节奏，请填 0。",
-      "providerRetryHelpCededToNode": "该节点已自行重试，因此平台不会在其下方重发调用。填入数值可改变这一行为。",
-      "providerRetryHelpBoundedByTimeout": "该节点的超时时间只给平台 {seconds} 秒来消化频率限制。填入数值可更改。",
-      "providerRetryHelpCappedByTimeout": "该节点的超时时间将其上限压到 {seconds} 秒。请调高超时时间或调低此值，使两者一致。",
-      "providerRetryInfoDefault": "留空：当供应商回复“请求过多”时，平台会按它要求的时长等待并重发该调用，且不超出平台自己的时间预算。",
-      "providerRetryInfoZero": "0：调用永不重发。当你的工作流已通过循环或该节点的重试控制节奏时请使用，否则两者会成倍放大请求量。",
-      "providerRetryInfoCap": "超过平台预算的等待时长会被降到该预算：该步骤是在单次调用内部等待，等得更久会让步骤失败，即使调用已经成功。",
-      "providerRetryInfoRunning": "等待期间节点保持运行状态，结束后会显示调用被重发了多少次。"
+      "executeOnceBlockedTooltip": "Split、Aggregate、Merge 或 Loop 节点不可用：它们需要协调所有 Split 条目，跳过条目会破坏其逻辑。"
     },
     "mock": {
       "title": "模拟输出",
@@ -10137,6 +10620,59 @@
     }
   },
   "adminCredits": {
+    "personalOffers": {
+      "title": "个人优惠",
+      "subtitle": "配置首次付费订阅奖励。草稿修改仅适用于未来发放的优惠。",
+      "loading": "正在加载优惠...",
+      "loadFailed": "无法加载优惠。",
+      "retry": "重试",
+      "version": "规则版本",
+      "versionOption": "版本 {version}（{state}）",
+      "newDraft": "新建草稿",
+      "newDraftFromVersion": "复制为新草稿",
+      "activate": "启用",
+      "resume": "恢复",
+      "pause": "暂停",
+      "label": "内部名称",
+      "waitHours": "积分用尽后等待（小时）",
+      "validityHours": "优惠有效期（小时）",
+      "checkoutHoldMinutes": "付款保留时间（分钟）",
+      "reminderHours": "到期前提醒（小时）",
+      "paygCreditsPerUsd": "每美元 PAYG 积分",
+      "reminderEnabled": "发送一次提醒",
+      "noStacking": "个人优惠不能与推荐或合作伙伴的首次付费权益叠加。",
+      "matrixTitle": "奖励矩阵",
+      "matrixHelp": "为每种方案和每月积分包输入奖励积分。留空表示不提供该组合；填 0 表示可购买但没有奖励。",
+      "monthlyCredits": "每月积分",
+      "cellLabel": "{plan} 方案每月 {credits} 积分的奖励积分",
+      "notAvailable": "不可用",
+      "saveDraft": "保存草稿",
+      "saving": "正在保存...",
+      "invalid": "请输入名称，以及有效且非负的金额和期限。",
+      "saved": "草稿已保存。",
+      "saveFailed": "无法保存草稿。",
+      "activateConfirm": "为未来优惠启用此规则？已发放优惠保留原有条件。",
+      "pauseConfirm": "暂停新优惠和后续邮件？已发放优惠仍然有效。",
+      "activated": "规则已启用。",
+      "paused": "规则已暂停。",
+      "stateFailed": "无法更改规则或代码状态。",
+      "issuedTitle": "已发放优惠",
+      "recipient": "接收账户",
+      "issuedAt": "发放时间",
+      "expiresAt": "到期时间",
+      "status": "状态",
+      "action": "操作",
+      "disable": "停用",
+      "disableConfirm": "停用此已发放优惠？此操作会被审计记录。",
+      "disabled": "优惠已停用。",
+      "noCodes": "尚未发放优惠。",
+      "codeStatuses": { "available": "可用", "disabled": "已停用", "expired": "已过期", "checkout_open": "结账已开启", "pending_payment": "等待付款", "processing": "处理中", "review_required": "需要核查", "granted": "已发放", "clawed_back": "已撤销", "no_bonus": "已使用，无奖励", "already_used": "已使用", "conflict": "权益冲突", "none": "无" },
+      "states": {
+        "draft": "草稿",
+        "active": "已启用",
+        "paused": "已暂停"
+      }
+    },
     "adminOnlyBadge": "仅限管理员",
     "confirmLargeGrant": "您即将向 {target} 授予 {amount} 个积分。如不进行反向授予则无法撤销。是否继续？",
     "errors": {
@@ -11044,15 +11580,23 @@
     }
   },
   "profile": {
+    "partnerAccount": "官方合作伙伴",
     "verifiedAccount": "已认证账号",
     "metaTitle": "个人资料",
     "metaDescription": "查看该创作者的公开资料及其发布的应用。",
     "notFoundTitle": "未找到资料",
     "notFoundSubtitle": "该资料不存在或为私密。",
     "message": "私信",
+    "follow": "订阅",
+    "following": "已订阅",
+    "followHint": "该创作者发布新应用时通知我",
+    "unfollowHint": "取消订阅：不再接收该创作者新应用的通知",
+    "followError": "无法更新订阅，请重试。",
     "messageComingSoon": "私信功能即将推出",
     "appsLabel": "个应用",
+    "followerCount": "{count, plural, other {<strong>#</strong> 位订阅者}}",
     "memberSince": "加入于",
+    "founderMemberSince": "创始成员，加入于",
     "publishedApps": "已发布的应用",
     "noApps": "暂无已发布的应用",
     "noAppsHint": "发布到市场的应用将显示在这里。",
@@ -11075,7 +11619,12 @@
     "cancel": "取消",
     "saving": "保存中…",
     "saved": "已保存",
-    "viewPublicProfile": "查看公开主页"
+    "viewPublicProfile": "查看公开主页",
+    "partnerTier": {
+      "silver": "Silver 合作伙伴",
+      "gold": "Gold 合作伙伴",
+      "platinum": "Platinum 合作伙伴"
+    }
   },
   "dm": {
     "sidebarTitle": "私信",
@@ -11321,8 +11870,8 @@
             "text": "这里有两个互不相干的超时。HTTP 步骤自己有一个传输超时（5000 毫秒），而 nodePolicy.timeoutMs（15000 毫秒）限制的是这次调用本身的每一次尝试。请让步骤级的这个值大于传输超时，否则外层会先触发，把真正的错误盖住。另外要留意超时的真正含义：你停止的只是等待回答，而远端服务器很可能已经收到并处理了你的请求。对于任何会写入数据的调用，请把它设计成可以安全重复执行。"
           },
           "continueOnFailure": {
-            "label": "continueOnFailure 让运行继续存活",
-            "text": "没有它，一个失败的步骤会把它之后的一切都标记为跳过。有了它，运行会继续下去，但这个步骤本身仍然显示为 FAILED。发生硬性失败时，这个步骤不会产生你期待的那些字段（success 和 data 都不存在），所以指向它们的表达式会解析为空，下面的 decision 会落到 else 分支。continueOnFailure 在 decision、switch 或 option 上会被拒绝：一个失败的分支步骤根本没有选中任何端口。"
+            "label": "continueOnFailure 让运行继续进行",
+            "text": "不启用此设置时，失败的步骤会把其后的所有步骤标记为已跳过。启用后，无论运行由什么启动（execute、触发器、定时计划或“运行”按钮），后续步骤仍会执行，但该步骤本身仍显示为 FAILED，运行的最终结果与未启用此设置时相同。发生硬性失败（主机不可达、超时、URL 无效）时，该步骤不会产生你期待的字段（success 和 data 都不存在），所以指向它们的表达式会解析为空，下方的判断会落到 else 分支。HTTP 4xx 或 5xx 响应则不同：步骤会成功，success 为 false，下方的判断会将其导向 else。在判断、开关、选项、循环、classify 或 guardrail 节点上不允许使用 continueOnFailure：失败的分支步骤没有选择任何端口。"
           },
           "stopOnError": {
             "label": "主动让它失败",
@@ -11333,7 +11882,7 @@
           "succeeded": "调用成功",
           "failed": "调用失败"
         },
-        "stopMessage": "重试全部用尽后，API 调用仍然失败。"
+        "stopMessage": "API 调用返回了错误。"
       },
       "errorHandler": {
         "title": "对失败作出响应",
@@ -11818,7 +12367,9 @@
       "generic": "出了点问题。",
       "notTheNextOccurrence": "只有下一次运行可以单独移动。移动更晚的一次会取消它之前的所有运行。请改用“全部”，或移动下一次。",
       "viewerRole": "你在该工作区的角色不允许修改定时。",
-      "scheduleRejected": "无法修改该定时，它可能已被归档。"
+      "scheduleRejected": "无法修改该定时，它可能已被归档。",
+      "agentNameTaken": "另一个活跃的智能体已命名为“{name}”。请先将此智能体重命名（例如改为“{suggestion}”），然后再恢复它。",
+      "agentNameTakenNoSuggestion": "另一个活跃的智能体已命名为“{name}”。请先将此智能体重命名，然后再恢复它。"
     },
     "toasts": {
       "movedTitle": "已移动",
@@ -11853,6 +12404,7 @@
     "publicHeading": "成就",
     "publicEmpty": "暂无成就。",
     "showAll": "显示全部",
+    "showMore": "再显示 {count} 个奖杯",
     "showLess": "收起",
     "detail": {
       "requirementLabel": "如何获得",
@@ -12339,6 +12891,7 @@
     "about": "关于我们",
     "careers": "招聘",
     "soon": "即将推出",
+    "partners": "合作伙伴",
     "contact": "联系我们",
     "privacy": "隐私政策",
     "terms": "服务条款",
@@ -15522,7 +16075,7 @@
       "findChats": "查找我的聊天",
       "findChatsHint": {
         "telegram": "列出最近给您的机器人发过消息的聊天。仅在机器人连接之前有效：连接后请在下方填写 ID。",
-        "slack": "列出邀请了该应用的频道以及您的私信。",
+        "slack": "列出工作区的公开频道、已邀请应用加入的私有频道以及您的私信。",
         "discord": "列出您的机器人所在服务器的频道。",
         "teams": "列出您的 Teams 聊天。"
       },
@@ -15543,13 +16096,13 @@
       "typeChatLabel": "或输入聊天 ID",
       "typeChatHint": {
         "telegram": "发给群组：填写群组 ID，以 -100 开头。发给公开频道：@名称。切勿填写您自己机器人的 @名称。",
-        "slack": "用于列表中没有的频道：它的 ID（右键点击频道，查看频道详情，在最底部）。",
+        "slack": "列表中没有的频道：输入频道名称（如 #general）或频道 ID（右键点击频道，查看频道详情，在最底部）。应用会自动加入公开频道。",
         "discord": "用于列表中没有的频道：它的 ID（开启开发者模式，右键点击频道，复制频道 ID）。",
         "teams": "用于列表中没有的聊天：它的会话 ID。"
       },
       "chatIdPlaceholder": {
         "telegram": "123456789、-1001234567890 或 @mychannel",
-        "slack": "C0123456789",
+        "slack": "#general 或 C0123456789",
         "discord": "123456789012345678",
         "whatsapp": "+8613812345678",
         "teams": "19:abc123@thread.v2"
@@ -15580,7 +16133,7 @@
         },
         "slack": {
           "1": "在下方连接 Slack，并在您的工作区中批准该应用。",
-          "2": "对于频道，在频道中输入 /invite 加应用名称。私信无需任何操作。",
+          "2": "私有频道：在频道中输入 /invite 加上应用名称。公开频道或私信无需任何操作：应用会自动加入公开频道。",
           "3": "通过“查找我的聊天”选择频道或会话。"
         },
         "discord": {
@@ -15718,6 +16271,42 @@
     }
   },
   "partnerProgram": {
+    "applications": {
+      "invalidPercent": "佣金：请输入 0 到 100 之间的数字，或留空以使用默认比例。",
+      "title": "申请",
+      "subtitle": "通过合作伙伴页面提交申请的用户。批准后会按默认条款创建其合作伙伴代码，并通过邮件通知对方。",
+      "showDecided": "同时显示已处理",
+      "showPending": "仅显示待处理",
+      "loading": "正在加载申请...",
+      "error": "无法加载申请。",
+      "empty": "没有待处理的申请。",
+      "emptyAll": "暂无申请。",
+      "submitted": "提交于 {date}",
+      "noEmail": "该账号没有邮箱",
+      "audience": "服务对象",
+      "message": "留言",
+      "note": "已发送的说明",
+      "codeOverride": "代码（可选）",
+      "percentOverride": "佣金比例 %（可选）",
+      "approve": "批准",
+      "reject": "拒绝",
+      "notePlaceholder": "给申请人的说明（可选）",
+      "confirmReject": "发送拒绝",
+      "cancel": "取消",
+      "status": {
+        "pending": "待处理",
+        "approved": "已批准",
+        "rejected": "已拒绝"
+      },
+      "toasts": {
+        "approvedTitle": "合作伙伴已批准",
+        "approvedCode": "已创建代码 {code}。",
+        "rejectedTitle": "申请已拒绝",
+        "mailed": "已通过邮件通知申请人。",
+        "notMailed": "无法发送邮件：请自行通知申请人。"
+      },
+      "founder": "创始合作伙伴（终身 Platinum）"
+    },
     "title": "合作伙伴计划",
     "subtitle": "创作者代码让创作者试用产品，合作伙伴代码为其受众提供福利并与合作伙伴分成。",
     "selfHosted": {
@@ -15754,7 +16343,8 @@
       "holdDays": "可支付前的等待期（天）",
       "holdDaysHint": "覆盖退款期：退款的付款会取消对应的佣金。",
       "partnerMaxUses": "最多注册人数（可选）",
-      "partnerMaxUsesHint": "留空 = 不限制。限制公开链接可发放的数量。"
+      "partnerMaxUsesHint": "留空 = 不限制。限制公开链接可发放的数量。",
+      "commissionTierHint": "合作伙伴按此比例与其等级比例中较高者获得分成。"
     },
     "list": {
       "title": "代码",
@@ -15780,16 +16370,38 @@
       "copyLink": "复制链接",
       "activate": "启用",
       "deactivate": "停用",
-      "markPaid": "标记为已支付"
+      "markPaid": "标记为已支付",
+      "tiers": {
+        "silver": "Silver",
+        "gold": "Gold",
+        "platinum": "Platinum"
+      },
+      "founder": "创始",
+      "makeFounder": "设为创始合作伙伴",
+      "endFounder": "终止创始身份",
+      "confirmEndFounder": "确认：恢复为已达成的等级",
+      "confirmFounder": "确认：终身 Platinum",
+      "termsAccepted": "已于 {date} 接受条款 {version}",
+      "termsOutdated": "已于 {date} 接受条款 {version}，并非当前版本",
+      "termsMissing": "未接受条款：无法付款"
     },
     "toasts": {
       "createdTitle": "代码已创建",
       "failureTitle": "操作失败",
       "copied": "链接已复制",
       "paidTitle": "佣金已结算",
-      "paidMessage": "已将 {lines} 条记录标记为已支付（{amount}）。"
+      "paidMessage": "已将 {lines} 条记录标记为已支付（{amount}）。",
+      "founderEndedTitle": "创始身份已终止",
+      "founderEndedMessage": "从下一笔佣金起，该合作伙伴恢复为其收入已达成的等级。",
+      "founderTitle": "创始合作伙伴",
+      "founderMessage": "终身 Platinum，从下一笔佣金起生效。"
     },
     "errors": {
+      "existing_code_inactive": "该申请人已有合作伙伴代码，但已停用或过期。请先在下方列表中重新启用，再批准申请。",
+      "too_long": "说明过长（最多 500 个字符）。",
+      "invalid_percent": "请输入 0 到 100 之间的百分比，例如 40 或 12.5。",
+      "not_pending": "该申请已处理。",
+      "application_not_found": "该申请已不存在。",
       "adminOnly": "只有平台管理员可以管理合作伙伴计划。",
       "generic": "出了点问题，请重试。",
       "code_taken": "该代码已被使用。",
@@ -15802,7 +16414,19 @@
       "missing_partner": "请输入合作伙伴账户邮箱。",
       "not_available_in_ce": "自托管安装不提供合作伙伴计划。",
       "code_generation_failed": "无法生成可用代码，请重试。",
-      "missing_body": "请求为空。"
+      "missing_body": "请求为空。",
+      "not_founder": "该合作伙伴不是创始合作伙伴。",
+      "founder_closed": "创始合作伙伴阶段已结束：无法再任命创始合作伙伴。",
+      "partner_code_not_found": "此代码不是合作伙伴代码。",
+      "terms_not_accepted": "该合作伙伴尚未接受合作伙伴计划条款：在其接受之前无法付款。"
     }
+  },
+  "realtime": {
+    "reconnecting": "实时更新已中断，正在重新连接...",
+    "reconnectingHint": "连接恢复前，显示的内容可能不是最新的。",
+    "reload": "重新加载",
+    "dismiss": "关闭",
+    "unavailable": "实时更新无法到达此页面。",
+    "unavailableHint": "页面仍可使用，但其他地方的更改只有在重新加载后才会显示。如果一直如此，可能是代理或防火墙阻止了实时连接。"
   }
 }

@@ -41,6 +41,47 @@ class PublicationClientTest {
     }
 
     @Nested
+    @DisplayName("publishWorkflow - a 400 is an input error, everything else keeps the generic wrap")
+    class PublishWorkflowErrorMapping {
+
+        private static final String URL = BASE_URL + "/api/internal/publications/publish";
+
+        private void stubError(org.springframework.http.HttpStatus status, String body) {
+            when(restTemplate.exchange(eq(URL), eq(HttpMethod.POST), any(HttpEntity.class),
+                    any(ParameterizedTypeReference.class)))
+                    .thenThrow(org.springframework.web.client.HttpClientErrorException.create(
+                            status, status.getReasonPhrase(), new org.springframework.http.HttpHeaders(),
+                            body.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            java.nio.charset.StandardCharsets.UTF_8));
+        }
+
+        @Test
+        @DisplayName("Bug A7: a 400 becomes an IllegalArgumentException carrying the service's own sentence")
+        void badRequestBecomesIllegalArgument() {
+            stubError(org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "{\"error\":\"Showcase epoch 7 does not exist in run run-1. Choose an epoch this run has.\"}");
+
+            Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() ->
+                    publicationClient.publishWorkflow(Map.of("workflowId", "w"), TENANT_ID, null));
+
+            assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Showcase epoch 7 does not exist in run run-1. Choose an epoch this run has.");
+        }
+
+        @Test
+        @DisplayName("A 409 (pending review) keeps the generic RuntimeException, not an input error")
+        void conflictKeepsGenericWrap() {
+            stubError(org.springframework.http.HttpStatus.CONFLICT, "{\"error\":\"pending review\"}");
+
+            Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() ->
+                    publicationClient.publishWorkflow(Map.of("workflowId", "w"), TENANT_ID, null));
+
+            assertThat(thrown).isNotInstanceOf(IllegalArgumentException.class)
+                    .hasMessageStartingWith("Failed to publish workflow: ");
+        }
+    }
+
+    @Nested
     @DisplayName("publishAgent - structured 422 refusal mapping")
     class PublishAgentValidationMapping {
 

@@ -1047,6 +1047,31 @@ class ApplicationCrudModuleTest {
             assertThat(captor.getValue()).doesNotContainKey("showcaseEpoch");
         }
 
+        @Test
+        @DisplayName("Bug A7: a showcase epoch the run does not have comes back as an input error, not EXECUTION_FAILED")
+        void missingShowcaseEpochIsAnInputError() {
+            WorkflowEntity wf = stubWorkflowWithInterface();
+            when(wf.getName()).thenReturn("Search WF");
+            when(wf.getDescription()).thenReturn("desc");
+            WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            when(run.getStatus()).thenReturn(RunStatus.COMPLETED);
+            when(run.isStepByStepMode()).thenReturn(false);
+            when(run.getRunIdPublic()).thenReturn("run-public-1");
+            when(workflowRunRepository.findByWorkflowIdOrderByStartedAtDescPageable(eq(workflowId), any()))
+                    .thenReturn(new PageImpl<>(List.of(run)));
+            // What PublicationClient now throws for publication-service's 400.
+            when(publicationClient.publishWorkflow(any(), eq(TENANT_ID), eq(CALLER_ORG_ID)))
+                    .thenThrow(new IllegalArgumentException(
+                            "Showcase epoch 7 does not exist in run run-public-1. Choose an epoch this run has."));
+
+            var result = module.execute("create", Map.of("workflow_id", workflowId.toString(), "epoch", 7),
+                    TENANT_ID, createCtxMutableCreds()).orElseThrow();
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.errorCode()).isEqualTo(ToolErrorCode.INVALID_PARAMETER_VALUE);
+            assertThat(result.error()).contains("Showcase epoch 7 does not exist");
+        }
+
         /** Everything a successful create needs stubbed, minus the parameters under test. */
         private ArgumentCaptor<Map<String, Object>> createAndCapture(Map<String, Object> params) {
             WorkflowEntity wf = stubWorkflowWithInterface();
@@ -1484,6 +1509,152 @@ class ApplicationCrudModuleTest {
 
             assertThat(data).containsEntry("node_id", "core:x").containsKey("plan_note");
             verify(lazyWorkflow, never()).getPlan();
+        }
+
+        @Test
+        @DisplayName("regression: get_node_output without epoch reads the node's latest epoch and says so (was 'epoch is required')")
+        void nodeOutputWithoutEpochDefaultsToLatest() {
+            when(agentWorkflowFireService.latestEpochForNode("run-pruned", "core:x")).thenReturn(4);
+            when(agentWorkflowFireService.buildNodeOutputReport(eq(run), any(), eq(4), eq("core:x"), eq(TENANT_ID),
+                    any(), any(), any(), any(), any(), any())).thenReturn(Map.of("node_id", "core:x", "epoch", 4));
+
+            Map<String, Object> data = dataOf(module.execute("get_node_output",
+                    Map.of("run_id", "run-pruned", "node_id", "core:x"), TENANT_ID, contextWithOrg()));
+
+            assertThat(data).containsEntry("epoch", 4);
+            assertThat((String) data.get("epoch_note")).contains("epoch 4");
+        }
+
+        @Test
+        @DisplayName("get_node_output with an unparseable epoch is refused, never defaulted to another fire")
+        void nodeOutputUnparseableEpochRefused() {
+            ToolExecutionResult result = module.execute("get_node_output",
+                    Map.of("run_id", "run-pruned", "epoch", "last", "node_id", "core:x"), TENANT_ID, contextWithOrg()).get();
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.errorCode()).isEqualTo(ToolErrorCode.INVALID_PARAMETER_VALUE);
+            org.mockito.Mockito.verifyNoInteractions(agentWorkflowFireService);
+        }
+
+        private ToolExecutionContext restrictedTo(String appId) {
+            return new ToolExecutionContext(TENANT_ID,
+                    Map.of("allowedApplicationIds", List.of(appId)), Map.of(), Set.of(),
+                    null, null, CALLER_ORG_ID, null);
+        }
+
+        @Test
+        @DisplayName("regression: a restricted agent cannot read get_run / get_node_output of a run whose application is not on its list (was unchecked)")
+        void restrictedAgent_runOfOtherApplication_denied() {
+            WorkflowEntity loaded = mock(WorkflowEntity.class);
+            when(loaded.getSourcePublicationId()).thenReturn(UUID.randomUUID());
+            when(workflowRepository.findById(workflowId)).thenReturn(Optional.of(loaded));
+
+            ToolExecutionResult getRun = module.execute("get_run",
+                    Map.of("run_id", "run-pruned"), TENANT_ID, restrictedTo(APP_PUB_ID.toString())).get();
+            ToolExecutionResult nodeOutput = module.execute("get_node_output",
+                    Map.of("run_id", "run-pruned", "node_id", "core:x"), TENANT_ID, restrictedTo(APP_PUB_ID.toString())).get();
+
+            assertThat(getRun.errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
+            assertThat(nodeOutput.errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
+            org.mockito.Mockito.verifyNoInteractions(agentWorkflowFireService);
+            verify(lazyWorkflow, never()).getPlan();
+        }
+
+        @Test
+        @DisplayName("get_node_output with an explicit epoch reads that epoch and never calls the latest-epoch lookup (no epoch_note)")
+        void nodeOutputExplicitEpoch_noLookup() {
+            when(agentWorkflowFireService.buildNodeOutputReport(eq(run), any(), eq(2), eq("core:x"), eq(TENANT_ID),
+                    any(), any(), any(), any(), any(), any())).thenReturn(Map.of("node_id", "core:x", "epoch", 2));
+
+            Map<String, Object> data = dataOf(module.execute("get_node_output",
+                    Map.of("run_id", "run-pruned", "epoch", 2, "node_id", "core:x"), TENANT_ID, contextWithOrg()));
+
+            assertThat(data).containsEntry("epoch", 2).doesNotContainKey("epoch_note");
+            verify(agentWorkflowFireService, never()).latestEpochForNode(any(), any());
+        }
+
+        @Test
+        @DisplayName("an EMPTY application list ([] = none granted) refuses run reads")
+        void emptyApplicationList_denied() {
+            ToolExecutionContext none = new ToolExecutionContext(TENANT_ID,
+                    Map.of("allowedApplicationIds", List.of()), Map.of(), Set.of(), null, null, CALLER_ORG_ID, null);
+
+            ToolExecutionResult result = module.execute("get_run", Map.of("run_id", "run-pruned"), TENANT_ID, none).get();
+
+            assertThat(result.errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
+            org.mockito.Mockito.verifyNoInteractions(agentWorkflowFireService);
+        }
+
+        @Test
+        @DisplayName("a restricted agent is refused a run of a plain (non-application) workflow, like stop_run")
+        void runOfNonApplicationWorkflow_denied() {
+            WorkflowEntity plain = mock(WorkflowEntity.class);
+            when(plain.getSourcePublicationId()).thenReturn(null);
+            when(workflowRepository.findById(workflowId)).thenReturn(Optional.of(plain));
+
+            ToolExecutionResult result = module.execute("get_node_output",
+                    Map.of("run_id", "run-pruned", "epoch", 1, "node_id", "core:x"), TENANT_ID,
+                    restrictedTo(APP_PUB_ID.toString())).get();
+
+            assertThat(result.errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
+        }
+
+        @Test
+        @DisplayName("an agent executing INSIDE the run reads it even when its application is not on the list (own-run rule, as stop_run)")
+        void ownRun_readableDespiteList() {
+            when(agentWorkflowFireService.buildRunMacroReport(eq(run), any(), eq(TENANT_ID)))
+                    .thenReturn(Map.of("run_id", "run-pruned"));
+            ToolExecutionContext insideTheRun = new ToolExecutionContext(TENANT_ID,
+                    Map.of("allowedApplicationIds", List.of(UUID.randomUUID().toString()),
+                            "__workflowRunId__", "run-pruned"),
+                    Map.of(), Set.of(), null, null, CALLER_ORG_ID, null);
+
+            Map<String, Object> data = dataOf(module.execute("get_run", Map.of("run_id", "run-pruned"), TENANT_ID, insideTheRun));
+
+            assertThat(data).containsEntry("run_id", "run-pruned");
+            verify(workflowRepository, never()).findById(any());
+        }
+
+        @Test
+        @DisplayName("latest-epoch lookup failing is reported as such (EXECUTION_FAILED, pass epoch=N), not as 'never ran'")
+        void latestEpochLookupFailure_distinct() {
+            when(agentWorkflowFireService.latestEpochForNode("run-pruned", "core:x"))
+                    .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("db down"));
+
+            ToolExecutionResult result = module.execute("get_node_output",
+                    Map.of("run_id", "run-pruned", "node_id", "core:x"), TENANT_ID, contextWithOrg()).get();
+
+            assertThat(result.errorCode()).isEqualTo(ToolErrorCode.EXECUTION_FAILED);
+            assertThat(result.error()).contains("Could not resolve the latest epoch").contains("epoch=N");
+        }
+
+        @Test
+        @DisplayName("a restricted agent reads a run of an application on its list (latest epoch defaulting included)")
+        void restrictedAgent_runOfListedApplication_allowed() {
+            WorkflowEntity loaded = mock(WorkflowEntity.class);
+            when(loaded.getSourcePublicationId()).thenReturn(APP_PUB_ID);
+            when(workflowRepository.findById(workflowId)).thenReturn(Optional.of(loaded));
+            when(agentWorkflowFireService.latestEpochForNode("run-pruned", "core:x")).thenReturn(1);
+            when(agentWorkflowFireService.buildNodeOutputReport(eq(run), any(), eq(1), eq("core:x"), eq(TENANT_ID),
+                    any(), any(), any(), any(), any(), any())).thenReturn(Map.of("node_id", "core:x"));
+
+            Map<String, Object> data = dataOf(module.execute("get_node_output",
+                    Map.of("run_id", "run-pruned", "node_id", "core:x"), TENANT_ID, restrictedTo(APP_PUB_ID.toString())));
+
+            assertThat(data).containsEntry("node_id", "core:x").containsKey("epoch_note");
+        }
+
+        @Test
+        @DisplayName("get_node_output without epoch for a node that never ran: not found, points at application get_run")
+        void nodeOutputWithoutEpochNodeNeverRan() {
+            when(agentWorkflowFireService.latestEpochForNode("run-pruned", "core:ghost")).thenReturn(null);
+
+            ToolExecutionResult result = module.execute("get_node_output",
+                    Map.of("run_id", "run-pruned", "node_id", "core:ghost"), TENANT_ID, contextWithOrg()).get();
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.errorCode()).isEqualTo(ToolErrorCode.RESOURCE_NOT_FOUND);
+            assertThat(result.error()).contains("application(action='get_run'");
         }
 
         private void stubAcquiredApp() {

@@ -68,7 +68,7 @@ class HttpExecutionServiceTypedPathTest {
         lenient().when(encryptionService.decrypt(any())).thenAnswer(inv -> inv.getArgument(0));
         service = new HttpExecutionService(
                 apiToolParameterRepository, userCredentialService, encryptionService,
-                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine(2, 10_000L));
+                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine());
     }
 
     /** Inject the streamingResponseHandler field via reflection (it's @Autowired(required=false)). */

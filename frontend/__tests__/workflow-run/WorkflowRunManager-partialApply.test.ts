@@ -34,7 +34,7 @@ vi.mock('@/components/billing/InsufficientStorageModal', () => ({
   showInsufficientStorageModal: vi.fn(),
 }));
 vi.mock('@/lib/websocket', () => ({
-  wsClient: { connect: vi.fn(), disconnect: vi.fn() },
+  wsClient: { onReconnected: () => () => {}, connect: vi.fn(), disconnect: vi.fn() },
 }));
 
 import { orchestratorApi } from '@/lib/api';

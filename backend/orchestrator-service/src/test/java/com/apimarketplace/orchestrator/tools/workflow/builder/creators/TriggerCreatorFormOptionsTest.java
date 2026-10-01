@@ -291,4 +291,50 @@ class TriggerCreatorFormOptionsTest {
             assertThat(persistedFields(s).get(1)).containsEntry("id", "field-1");
         }
     }
+
+    /**
+     * 2026-09-29, a Gemini chat wrote {@code default: 'Innovation & Futur'} on a field. It was
+     * stored as is and read by nothing: the public form pre-fills from {@code defaultValue}.
+     */
+    @Nested
+    @DisplayName("field default spelling")
+    class FieldDefaultSpelling {
+
+        private Map<String, Object> field(String name, String key, Object value) {
+            Map<String, Object> f = new LinkedHashMap<>();
+            f.put("name", name);
+            f.put("type", "text");
+            f.put("required", true);
+            if (key != null) f.put(key, value);
+            return f;
+        }
+
+        @Test
+        @DisplayName("`default` and `default_value` are stored as defaultValue, the alias key removed")
+        void aliasesAreStoredAsDefaultValue() {
+            WorkflowBuilderSession s = session();
+            ToolExecutionResult result = creator.executeAddTrigger(s, formParams(List.of(
+                    field("theme", "default", "Innovation & Futur"),
+                    field("auteur", "default_value", "Ada Lovelace"))), "tenant-1");
+
+            assertThat(result.success()).isTrue();
+            List<Map<String, Object>> fields = persistedFields(s);
+            assertThat(fields.get(0)).containsEntry("defaultValue", "Innovation & Futur").doesNotContainKey("default");
+            assertThat(fields.get(1)).containsEntry("defaultValue", "Ada Lovelace").doesNotContainKey("default_value");
+        }
+
+        @Test
+        @DisplayName("An explicit defaultValue wins over an alias; a field with no default gets none")
+        void explicitDefaultValueWins() {
+            WorkflowBuilderSession s = session();
+            Map<String, Object> both = field("theme", "defaultValue", "kept");
+            both.put("default", "dropped");
+
+            creator.executeAddTrigger(s, formParams(List.of(both, field("plain", null, null))), "tenant-1");
+
+            List<Map<String, Object>> fields = persistedFields(s);
+            assertThat(fields.get(0)).containsEntry("defaultValue", "kept").doesNotContainKey("default");
+            assertThat(fields.get(1)).doesNotContainKeys("defaultValue", "default");
+        }
+    }
 }

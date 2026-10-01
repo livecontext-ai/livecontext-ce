@@ -68,6 +68,11 @@ services:
   interface-url: ${INTERFACE_SERVICE_URL:http://localhost:8089}
   datasource-url: ${DATASOURCE_SERVICE_URL:http://localhost:8088}
   storage-url: ${STORAGE_SERVICE_URL:http://localhost:8082}
+  # CustomApiPublishGuard: is a tool referenced by the snapshot backed by a CUSTOM (tenant-private) API?
+  catalog-url: ${CATALOG_SERVICE_URL:http://localhost:8081}
+  # SharedLinkResourceGuard: who owns the chat / form endpoint or the conversation a share link names.
+  trigger-url: ${TRIGGER_SERVICE_URL:http://localhost:8091}
+  conversation-url: ${CONVERSATION_SERVICE_URL:http://localhost:8087}
   auth-service:
     url: ${AUTH_SERVICE_URL:http://localhost:8083}
 

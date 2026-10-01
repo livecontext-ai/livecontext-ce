@@ -15,5 +15,6 @@ package com.apimarketplace.auth.domain;
 public enum RewardProgram {
     PROMO,
     REFERRAL,
-    PARTNER
+    PARTNER,
+    PERSONAL_UPGRADE
 }

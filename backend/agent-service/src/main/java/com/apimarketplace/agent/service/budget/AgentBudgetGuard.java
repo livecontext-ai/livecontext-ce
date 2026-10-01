@@ -68,8 +68,9 @@ public final class AgentBudgetGuard implements PreIterationGuard {
             return GuardResult.allow();
         }
 
-        BigDecimal runCostSoFar = costCalculator.computeCost(
-            ctx.promptTokensSoFar(), ctx.completionTokensSoFar());
+        // Cache-aware: a cache read is priced at its cache price, as the ledger debits it.
+        BigDecimal runCostSoFar = costCalculator.computeCost(ctx.provider(),
+            ctx.promptTokensSoFar(), ctx.completionTokensSoFar(), ctx.cacheTokensSoFar());
 
         // V162: projection = max(growth, lastDelta × safety, worstCaseSingleIter).
         // See TenantBudgetGuard for rationale. **Skip projection until iter 3 (≥ 2
@@ -85,15 +86,22 @@ public final class AgentBudgetGuard implements PreIterationGuard {
         BigDecimal nextProjected = BigDecimal.ZERO;
         BigDecimal growthProj = BigDecimal.ZERO;
         BigDecimal lastDeltaProj = BigDecimal.ZERO;
+        BigDecimal cacheMissProj = BigDecimal.ZERO;
         BigDecimal worstCase = null;
         if (ctx.iterationsCompleted() >= 2) {
             long avgPrompt = ctx.avgPromptTokensPerIteration();
             long avgCompletion = ctx.avgCompletionTokensPerIteration();
-            growthProj = costCalculator.computeCost(avgPrompt, avgCompletion);
-            lastDeltaProj = costCalculator.computeCost(
-                ctx.lastIterationPromptTokens(), ctx.lastIterationCompletionTokens()
+            growthProj = costCalculator.computeCost(ctx.provider(),
+                avgPrompt, avgCompletion, ctx.avgCacheTokensPerIteration());
+            lastDeltaProj = costCalculator.computeCost(ctx.provider(),
+                ctx.lastIterationPromptTokens(), ctx.lastIterationCompletionTokens(),
+                ctx.lastIterationCacheTokens()
             ).multiply(LAST_DELTA_SAFETY_FACTOR);
-            nextProjected = growthProj.max(lastDeltaProj);
+            // The last call again on a cache miss: see TenantBudgetGuard.
+            cacheMissProj = costCalculator.cacheMissReserve(ctx.provider(),
+                ctx.lastIterationPromptTokens(), ctx.lastIterationCompletionTokens(),
+                ctx.lastIterationCacheTokens());
+            nextProjected = growthProj.max(lastDeltaProj).max(cacheMissProj);
             worstCase = costCalculator.worstCaseSingleIter();
             if (worstCase != null) {
                 nextProjected = nextProjected.max(worstCase);
@@ -104,7 +112,7 @@ public final class AgentBudgetGuard implements PreIterationGuard {
 
         if (totalProjected.compareTo(totalBudget) >= 0) {
             String detail = String.format(
-                "agent budget %s exceeded (consumed=%s + reserved=%s + run=%s + next=%s [growth=%s, lastDelta=%s, worstCase=%s] = %s)",
+                "agent budget %s exceeded (consumed=%s + reserved=%s + run=%s + next=%s [growth=%s, lastDelta=%s, cacheMiss=%s, worstCase=%s] = %s)",
                 totalBudget.toPlainString(),
                 consumedBeforeRun.toPlainString(),
                 creditsReserved.toPlainString(),
@@ -112,6 +120,7 @@ public final class AgentBudgetGuard implements PreIterationGuard {
                 nextProjected.toPlainString(),
                 growthProj.toPlainString(),
                 lastDeltaProj.toPlainString(),
+                cacheMissProj.toPlainString(),
                 worstCase != null ? worstCase.toPlainString() : "unknown",
                 totalProjected.toPlainString());
             return GuardResult.deny(AgentStopReason.BUDGET_EXHAUSTED, "agent", detail);

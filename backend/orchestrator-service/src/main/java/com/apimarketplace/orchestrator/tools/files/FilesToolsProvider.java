@@ -262,8 +262,14 @@ public class FilesToolsProvider implements ToolsProvider {
         String query = trimToNull(ToolParamUtils.getStringParam(params, "query"));
         String runId = trimToNull(ToolParamUtils.getStringParam(params, "run_id"));
         String workflowId = trimToNull(ToolParamUtils.getStringParam(params, "workflow_id"));
-        Instant dateFrom = parseInstant(ToolParamUtils.getStringParam(params, "date_from"));
-        Instant dateTo = parseInstant(ToolParamUtils.getStringParam(params, "date_to"));
+        Instant dateFrom;
+        Instant dateTo;
+        try {
+            dateFrom = parseInstant(ToolParamUtils.getStringParam(params, "date_from"));
+            dateTo = parseInstant(ToolParamUtils.getStringParam(params, "date_to"));
+        } catch (IllegalArgumentException e) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, e.getMessage());
+        }
 
         Set<String> activeFilters = new LinkedHashSet<>();
         if (query != null) activeFilters.add("query");
@@ -1123,9 +1129,20 @@ public class FilesToolsProvider implements ToolsProvider {
         return t.isEmpty() ? null : t;
     }
 
-    /** Accept an ISO-8601 instant ({@code 2026-05-01T00:00:00Z}) or a plain date
-     *  ({@code 2026-05-01}, treated as UTC midnight). Unparseable → null (filter ignored). */
-    private static Instant parseInstant(String s) {
+    /** Below this a whole-number date is epoch SECONDS (up to year 5138), from here on epoch MILLIS. */
+    private static final long EPOCH_MILLIS_THRESHOLD = 100_000_000_000L;
+
+    /**
+     * Accept an ISO-8601 instant ({@code 2026-05-01T00:00:00Z}), a plain date ({@code 2026-05-01},
+     * treated as UTC midnight), or a Unix timestamp in seconds or milliseconds. Blank = no filter.
+     *
+     * <p>Anything else is REFUSED (IllegalArgumentException, turned into INVALID_PARAMETER_VALUE),
+     * no longer dropped: an ignored date filter answers with the whole unfiltered list, which reads
+     * as "these are the files of that period". The timestamp form matters since whole numbers sent
+     * for a string parameter reach the tool as text ("1727600000"), where they used to be refused
+     * as a type error before the tool ran.
+     */
+    static Instant parseInstant(String s) {
         if (s == null || s.isBlank()) return null;
         String t = s.trim();
         try {
@@ -1136,8 +1153,19 @@ public class FilesToolsProvider implements ToolsProvider {
         try {
             return LocalDate.parse(t).atStartOfDay(ZoneOffset.UTC).toInstant();
         } catch (Exception ignore) {
-            return null;
+            // fall through
         }
+        if (t.matches("-?\\d{1,19}")) {
+            try {
+                long n = Long.parseLong(t);
+                return Math.abs(n) < EPOCH_MILLIS_THRESHOLD ? Instant.ofEpochSecond(n) : Instant.ofEpochMilli(n);
+            } catch (RuntimeException ignore) {
+                // out of range: refused below
+            }
+        }
+        throw new IllegalArgumentException("Unrecognised date '" + t + "'. Use an ISO-8601 date "
+                + "(2026-05-01) or instant (2026-05-01T00:00:00Z), or a Unix timestamp in seconds or "
+                + "milliseconds.");
     }
 
     /** Agent-friendly file category derived from the MIME type (display only). */
@@ -1231,8 +1259,8 @@ public class FilesToolsProvider implements ToolsProvider {
             stringParam("title", "Optional panel title for present (default: the file name)", false),
             stringParam("run_id", "Only files produced by this run (list)", false),
             stringParam("workflow_id", "Only files produced by this workflow (list)", false),
-            stringParam("date_from", "ISO-8601 date/instant lower bound on created_at (list)", false),
-            stringParam("date_to", "ISO-8601 date/instant upper bound on created_at (list)", false),
+            stringParam("date_from", "Lower bound on created_at (list): ISO-8601 date or instant, or a Unix timestamp in seconds or milliseconds. Anything else is refused.", false),
+            stringParam("date_to", "Upper bound on created_at (list): ISO-8601 date or instant, or a Unix timestamp in seconds or milliseconds. Anything else is refused.", false),
             stringParam("folder", "Folder to list inside: 'root' for the top level, a folder_ref from a previous "
                 + "list (a folder id, or a workflow folder token like wf:<id>/e0). Omit for a flat newest-first "
                 + "listing of every file. Also the parent for create_folder / the target for move_to_folder "
@@ -1331,7 +1359,7 @@ public class FilesToolsProvider implements ToolsProvider {
                 "query", "optional - match file name (flat list only)",
                 "run_id", "optional - only files a given run produced",
                 "workflow_id", "optional - only files a given workflow produced",
-                "date_from / date_to", "optional - ISO-8601 bounds on created_at",
+                "date_from / date_to", "optional - bounds on created_at: ISO-8601 date or instant, or a Unix timestamp in seconds or milliseconds; anything else is refused",
                 "limit", "optional, default 25, max 50",
                 "offset", "optional, default 0"),
             "returns", "flat (no folder): envelope {files:[{file_id, name, mime_type, size_bytes, size, kind, url (opaque absolute link), "

@@ -5,7 +5,7 @@ import { marketplacePath } from '@/lib/marketplace/indexability';
 import { IS_CE } from '@/lib/edition';
 import { WorkflowNodeIcons } from '@/components/WorkflowNodeIcons';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
-import { VerifiedBadgeIcon } from '@/components/profile/VerifiedBadgeIcon';
+import { IdentityBadgeIcon } from '@/components/profile/IdentityBadgeIcon';
 import { PREVIEW_MESSAGES } from '@/lib/marketplace/previewMessages';
 import MarketplaceCardPreview from './MarketplaceCardPreview';
 
@@ -39,14 +39,26 @@ export default function PublicationCardSsr({
   publication,
   headingLevel = 'h2',
   publisherVerified = false,
+  publisherPartner = false,
+  publisherAvatarSrc,
+  badgeLabel,
 }: {
   publication: PublicPublicationSummary;
+  /**
+   * An explicit publisher image, for the illustrative cards of the /partners page (their
+   * authors have no account, so no avatar endpoint). Real listings leave it out.
+   */
+  publisherAvatarSrc?: string | null;
+  /** Translated accessible name of the partner badge, when the caller has a translator. */
+  badgeLabel?: string;
   /**
    * Whether this listing's author carries the verified badge. Passed in rather
    * than resolved here: the page already knows every author it is about to
    * render, so one lookup covers the whole grid instead of one per card.
    */
   publisherVerified?: boolean;
+  /** Whether the author carries the official-partner badge, resolved by the same lookup. */
+  publisherPartner?: boolean;
   /**
    * Where the card's title sits in the page's outline. `h2` under the
    * marketplace index's `h1`; `h3` on the publisher profile, where the grid is
@@ -148,11 +160,11 @@ export default function PublicationCardSsr({
 
   const publisherChip = (
     <span className="inline-flex items-center gap-1.5 min-w-0">
-      <PublisherAvatar userId={publisherId} name={publisherName} />
+      <PublisherAvatar userId={publisherId} name={publisherName} src={publisherAvatarSrc} />
       <span className="truncate text-xs text-[var(--text-secondary)]">{publisherName || 'Anonymous'}</span>
       {/* Outside the [locale] tree there is no translator, so the badge keeps its
           English default label - same rule as the rest of this card's copy. */}
-      <VerifiedBadgeIcon verified={publisherVerified} size="xs" />
+      <IdentityBadgeIcon verified={publisherVerified} partner={publisherPartner} size="xs" partnerLabel={badgeLabel} />
     </span>
   );
 

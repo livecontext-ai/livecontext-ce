@@ -32,6 +32,7 @@ import { panelTabClass } from '@/components/ui/panel-tab';
 import { useTranslations } from 'next-intl';
 import { useWorkflowChat } from '@/hooks/useWorkflowChat';
 import { useVisibleModels, AIModel, SelectedModel, EMPTY_SELECTED_MODEL, modelMatches, selectedModelFromAIModel, selectedModelEquals, getEffectiveDefaultSelectedModel } from '@/hooks/useModels';
+import { isSelectionAvailable } from '@/lib/models/selection';
 import { useUnifiedAppSafe } from '@/contexts/UnifiedAppContext';
 import { useStreaming } from '@/contexts/StreamingContext';
 import { WorkflowModeProvider, useWorkflowMode } from '@/contexts/WorkflowModeContext';
@@ -79,6 +80,8 @@ import {
 import { WorkflowPanelHostProvider } from '@/contexts/WorkflowPanelHostContext';
 import { WORKFLOW_PANEL_TAB_ID } from '@/lib/sidePanel/tabResource';
 import { WORKFLOW_PANEL_CHAT_TAB_ID, rememberWorkflowPanelConversation } from '@/lib/workflow/workflowPanelChat';
+import { markSidePanelConversation } from '@/lib/sidePanel/sidePanelConversations';
+import { useMarkOnScreenAcrossReload, wasOnScreenBeforeReload } from '@/lib/sidePanel/onScreenAcrossReload';
 
 // ── Constants ──
 
@@ -211,12 +214,27 @@ if (typeof window !== 'undefined') {
 
 // ── Inner content (rendered inside WorkflowModeProvider) ──
 
+/**
+ * A catalogue model as the composer dropdown wants it. Spreads the full AIModel so the
+ * dropdown's enriched display (capability icons, context window, deprecation, rate-limit
+ * popover) has the data it needs without a second round-trip. Module scope so the memos that
+ * call it do not depend on a function recreated every render.
+ */
+function toDropdownModel(model: AIModel) {
+  return {
+    ...model,
+    provider: model.provider.charAt(0).toUpperCase() + model.provider.slice(1),
+    providerSlug: model.provider.toLowerCase(),
+    iconSlug: PROVIDER_ICON_MAP[model.provider.toLowerCase()] || model.provider.toLowerCase(),
+  };
+}
+
 function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, isPreviewOnly = false, allowRunHistory: allowRunHistoryProp, runSurfaceId, hostTabId, applicationFirst = false, initialApplicationConfigs, applicationTemplateSource, canEditWorkflow = true }: { workflowId: string; runId?: string; workflowCanvasSlot?: React.ReactNode; isPreviewOnly?: boolean; allowRunHistory?: boolean; runSurfaceId?: string; hostTabId?: string; applicationFirst?: boolean; initialApplicationConfigs?: ApplicationConfig[]; applicationTemplateSource?: ApplicationTemplateSource; canEditWorkflow?: boolean }) {
   const t = useTranslations();
   const pathname = usePathname();
 
   // ── Model selector state ──
-  const { models, defaultModel, isLoading: modelsLoading, error: modelsError } = useVisibleModels();
+  const { models, unlistedModels, defaultModel, isLoading: modelsLoading, error: modelsError } = useVisibleModels();
   // Same gate as ModelPicker: never show the no-provider empty state while the
   // catalog is loading or after a fetch error - only once it RESOLVED empty.
   const modelsResolvedEmpty = !modelsLoading && !modelsError;
@@ -243,7 +261,9 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
     () => (defaultAIModel ? selectedModelFromAIModel(defaultAIModel) : getEffectiveDefaultSelectedModel()),
     [defaultAIModel],
   );
-  const isValidModel = models.length > 0 && !!appSelectedModel.id && models.some(m => modelMatches(m, appSelectedModel));
+  // An UNLISTED model (V554) picked from the composer's hidden group is still a valid choice.
+  const isValidModel = (models.length > 0 || (unlistedModels ?? []).length > 0)
+    && isSelectionAvailable(appSelectedModel, models, unlistedModels);
   const selectedModel: SelectedModel = isValidModel ? appSelectedModel : effectiveDefault;
 
   useEffect(() => {
@@ -265,19 +285,11 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
 
   const [showModelSelector, setShowModelSelector] = useState(false);
 
-  const availableModels = useMemo(() => {
-    // Spread the full AIModel so the dropdown's enriched display
-    // (capability icons, context window, deprecation, rate-limit popover)
-    // has the data it needs without a second round-trip.
-    return models.map((model: AIModel) => ({
-      ...model,
-      provider: model.provider.charAt(0).toUpperCase() + model.provider.slice(1),
-      providerSlug: model.provider.toLowerCase(),
-      iconSlug: PROVIDER_ICON_MAP[model.provider.toLowerCase()] || model.provider.toLowerCase(),
-    }));
-  }, [models]);
+  const availableModels = useMemo(() => models.map(toDropdownModel), [models]);
+  const hiddenModels = useMemo(() => (unlistedModels ?? []).map(toDropdownModel), [unlistedModels]);
 
-  const selectedModelData = availableModels.find(m => modelMatches(m, selectedModel));
+  const selectedModelData = availableModels.find(m => modelMatches(m, selectedModel))
+    ?? hiddenModels.find(m => modelMatches(m, selectedModel));
 
   // Model selector now lives in the composer (left of the mic). ModelSelectorDropdown
   // owns its own outside-click handling, so no effect is needed here.
@@ -288,6 +300,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       selectedModel={selectedModel}
       selectedModelData={selectedModelData}
       availableModels={availableModels}
+      unlistedModels={hiddenModels}
       setSelectedModel={setSelectedModel}
       changeModelTitle={t('actions.changeModel')}
       noModelsLabel={modelsResolvedEmpty ? t('aiProviders.noProviderCta.noModels') : undefined}
@@ -305,6 +318,9 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   // ── Workflow chat ──
   const {
     conversationId,
+    // Whole, for the cards the agent left waiting (a credential to connect...), which ChatCore
+    // rebuilds from it after a reload.
+    conversation: chatConversation,
     messages,
     isLoading,
     sendMessage: sendChatMessage,
@@ -317,6 +333,12 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   useEffect(() => {
     if (hostTabId === WORKFLOW_PANEL_TAB_ID) rememberWorkflowPanelConversation(workflowId, conversationId);
   }, [hostTabId, workflowId, conversationId]);
+
+  // Every host of this panel is a side-panel tab: what this chat's agent builds opens beside it,
+  // never in front of it (sidePanelConversations).
+  useEffect(() => {
+    markSidePanelConversation(conversationId, workflowId);
+  }, [conversationId, workflowId]);
 
   // Streaming state → dispatch to canvas
   const streaming = useStreaming();
@@ -567,7 +589,23 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   const defaultTabId = applicationFirst
     ? APP_TAB_ID
     : (hasWorkflowSlot ? WORKFLOW_TAB_ID : CHAT_TAB_ID);
-  const [activeTabId, setActiveTabId] = useState(defaultTabId);
+  // The workflow page's panel left by a reload while its chat was on screen (an OAuth connect
+  // started from the chat, an F5) comes back ON the chat, and stays there until the reader picks
+  // another sub-tab: the trigger and application auto-selection below would otherwise take the
+  // front on load, hiding the conversation that has to carry on.
+  const keepChatAfterReloadRef = useRef(
+    hostTabId === WORKFLOW_PANEL_TAB_ID && wasOnScreenBeforeReload(CHAT_TAB_ID, pathname),
+  );
+  const [activeTabId, setActiveTabId] = useState(keepChatAfterReloadRef.current ? CHAT_TAB_ID : defaultTabId);
+  // Only this host's body is unmounted when it leaves the screen (the application panel is
+  // keepMounted), so only there does "mounted on the chat" mean "chat on screen".
+  useMarkOnScreenAcrossReload(hostTabId === WORKFLOW_PANEL_TAB_ID && activeTabId === CHAT_TAB_ID ? CHAT_TAB_ID : null);
+  // The hold ends as soon as anything else is shown, whoever showed it (a click, the logs, the
+  // fallback when a tab disappears): past that point the chat is no longer what is on screen.
+  useEffect(() => {
+    if (activeTabId !== CHAT_TAB_ID) keepChatAfterReloadRef.current = false;
+  }, [activeTabId]);
+
   const [logsTarget, setLogsTarget] = useState<WorkflowLogsNavigationTarget | null>(null);
   const showLogsTab = (showRunTab && !!currentRunId) || !!logsTarget;
   // Analysis reads the bound run only: no run, nothing to analyse. Never on a marketplace
@@ -639,7 +677,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   // Skip when hasWorkflowSlot (application mode) - keep Workflow tab focused
   const prevActiveTriggerId = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (hasWorkflowSlot) {
+    if (hasWorkflowSlot || keepChatAfterReloadRef.current) {
       prevActiveTriggerId.current = triggerActiveId;
       return;
     }
@@ -665,7 +703,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       setIsAppTabDismissed(false);
       // ...unless this panel was opened ON the application, where the canvas is
       // the secondary view and the interface is what the user asked for.
-      if (!hasWorkflowSlot || applicationFirst) setActiveTabId(APP_TAB_ID);
+      if ((!hasWorkflowSlot || applicationFirst) && !keepChatAfterReloadRef.current) setActiveTabId(APP_TAB_ID);
     }
     // Counted only while allowed, so a run starting on configs already held in edit
     // mode still reads as "interfaces just became available".
@@ -1319,6 +1357,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       ) : activeTabId === CHAT_TAB_ID ? (
         <ChatCore
           conversationId={conversationId}
+          conversation={chatConversation}
           messages={messages}
           isLoading={isLoading}
           onSendMessage={handleSendMessage}

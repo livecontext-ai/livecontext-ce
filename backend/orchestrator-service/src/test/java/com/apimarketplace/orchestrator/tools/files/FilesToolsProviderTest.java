@@ -170,6 +170,46 @@ class FilesToolsProviderTest {
         }
 
         @Test
+        @DisplayName("regression: a Unix timestamp date filter (seconds or millis, as text once a number is coerced) is applied, not dropped")
+        void listDateFilterAcceptsUnixTimestamps() {
+            when(explorerService.searchFilesSlice(any(), any(), any(), any(), any(), any(), any(),
+                    any(), any(), anyBoolean(), any(), anyInt(), anyInt())).thenReturn(new FilesSlice(List.of(), 0));
+
+            provider.execute("files", Map.of("action", "list", "date_from", "1727600000",
+                    "date_to", "1727686400000"), ctx(TENANT, ORG));
+
+            ArgumentCaptor<java.time.Instant> from = ArgumentCaptor.forClass(java.time.Instant.class);
+            ArgumentCaptor<java.time.Instant> to = ArgumentCaptor.forClass(java.time.Instant.class);
+            verify(explorerService).searchFilesSlice(any(), any(), any(), any(), any(), any(), any(),
+                    from.capture(), to.capture(), anyBoolean(), any(), anyInt(), anyInt());
+            assertThat(from.getValue()).isEqualTo(java.time.Instant.ofEpochSecond(1727600000L));
+            assertThat(to.getValue()).isEqualTo(java.time.Instant.ofEpochMilli(1727686400000L));
+        }
+
+        @Test
+        @DisplayName("ISO date and instant still parse (UTC midnight for a plain date)")
+        void listDateFilterIsoStillParses() {
+            assertThat(FilesToolsProvider.parseInstant("2026-05-01"))
+                    .isEqualTo(java.time.Instant.parse("2026-05-01T00:00:00Z"));
+            assertThat(FilesToolsProvider.parseInstant("2026-05-01T10:00:00Z"))
+                    .isEqualTo(java.time.Instant.parse("2026-05-01T10:00:00Z"));
+            assertThat(FilesToolsProvider.parseInstant("  ")).isNull();
+        }
+
+        @Test
+        @DisplayName("an unparseable date is refused (INVALID_PARAMETER_VALUE), never silently dropped into an unfiltered list")
+        void listDateFilterUnparseableRefused() {
+            ToolExecutionResult result = provider.execute("files",
+                    Map.of("action", "list", "date_from", "last tuesday"), ctx(TENANT, ORG));
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.errorCode()).isEqualTo(com.apimarketplace.agent.tools.ToolErrorCode.INVALID_PARAMETER_VALUE);
+            assertThat(result.error()).contains("last tuesday").contains("Unix timestamp");
+            verify(explorerService, never()).searchFilesSlice(any(), any(), any(), any(), any(), any(), any(),
+                    any(), any(), anyBoolean(), any(), anyInt(), anyInt());
+        }
+
+        @Test
         @DisplayName("restricts to real files (filesOnly=true) so step-output JSON is excluded")
         void listRequestsFilesOnly() {
             when(explorerService.searchFilesSlice(any(), any(), any(), any(), any(), any(), any(),

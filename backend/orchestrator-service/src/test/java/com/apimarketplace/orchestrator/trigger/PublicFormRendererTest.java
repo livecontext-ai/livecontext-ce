@@ -442,4 +442,105 @@ class PublicFormRendererTest {
             assertThat(html).contains("payload[realKey] = [payload[realKey]];");
         }
     }
+
+    /**
+     * 2026-09-29: the builder promises that a form field's default "pre-fills the public form", but
+     * this page (the formUrl every form endpoint hands out) rendered no value at all, whatever the
+     * key was spelled. The Next /f and /s pages did; this one never had.
+     */
+    @Nested
+    @DisplayName("Field defaults are pre-filled")
+    class DefaultPrefill {
+
+        private String render(Map<String, Object> field) {
+            return renderer.renderPage("tok", Map.of("name", "F", "isActive", true, "formConfig", List.of(field)));
+        }
+
+        private Map<String, Object> field(Object... kv) {
+            Map<String, Object> f = new LinkedHashMap<>();
+            for (int i = 0; i < kv.length; i += 2) f.put((String) kv[i], kv[i + 1]);
+            return f;
+        }
+
+        @Test
+        @DisplayName("text, number and date inputs carry the default as their value, HTML-escaped")
+        void inputsCarryTheDefault() {
+            assertThat(render(field("name", "theme", "type", "text", "defaultValue", "Innovation & \"Futur\"")))
+                    .contains("name=\"theme\" type=\"text\" value=\"Innovation &amp; &quot;Futur&quot;\"");
+            assertThat(render(field("name", "n", "type", "number", "defaultValue", 2000)))
+                    .contains("type=\"number\" value=\"2000\"");
+            assertThat(render(field("name", "d", "type", "date", "defaultValue", "2026-09-29")))
+                    .contains("type=\"date\" value=\"2026-09-29\"");
+        }
+
+        @Test
+        @DisplayName("the `default` alias an older plan carries is honoured the same way")
+        void aliasIsHonoured() {
+            assertThat(render(field("name", "theme", "type", "text", "default", "Innovation")))
+                    .contains("value=\"Innovation\"");
+        }
+
+        @Test
+        @DisplayName("a textarea holds the default as its content, escaped")
+        void textareaContent() {
+            assertThat(render(field("name", "bio", "type", "textarea", "defaultValue", "<b>hi</b>")))
+                    .contains("rows=\"4\">&lt;b&gt;hi&lt;/b&gt;</textarea>");
+        }
+
+        @Test
+        @DisplayName("a select marks the default option selected, and the required placeholder is no longer selected")
+        void selectMarksTheDefault() {
+            String html = render(field("name", "tier", "type", "select", "required", true, "defaultValue", "pro",
+                    "options", List.of(Map.of("label", "Free", "value", "free"), Map.of("label", "Pro", "value", "pro"))));
+
+            assertThat(html).contains("<option value=\"\" disabled>");
+            assertThat(html).contains("<option value=\"pro\" selected>Pro</option>");
+            assertThat(html).contains("<option value=\"free\">Free</option>");
+        }
+
+        @Test
+        @DisplayName("a default that matches no option leaves the required placeholder selected")
+        void unmatchedDefaultKeepsThePlaceholder() {
+            String html = render(field("name", "tier", "type", "select", "required", true, "defaultValue", "gold",
+                    "options", List.of("free", "pro")));
+
+            assertThat(html).contains("<option value=\"\" disabled selected>");
+            assertThat(html).doesNotContain("\" selected>free").doesNotContain("\" selected>pro");
+        }
+
+        @Test
+        @DisplayName("a multiselect and a checkbox group select every value of a list default")
+        void listDefaults() {
+            String multi = render(field("name", "tags", "type", "multiselect", "defaultValue", List.of("a", "c"),
+                    "options", List.of("a", "b", "c")));
+            assertThat(multi).contains("<option value=\"a\" selected>").contains("<option value=\"b\">")
+                    .contains("<option value=\"c\" selected>");
+
+            String group = render(field("name", "days", "type", "checkboxGroup", "defaultValue", List.of("mon"),
+                    "options", List.of("mon", "tue")));
+            assertThat(group).contains("value=\"mon\" checked").doesNotContain("value=\"tue\" checked");
+        }
+
+        @Test
+        @DisplayName("a radio group checks the default; a checkbox is checked by a true default only")
+        void radioAndCheckbox() {
+            assertThat(render(field("name", "size", "type", "radio", "defaultValue", "m", "options", List.of("s", "m"))))
+                    .contains("value=\"m\" checked").doesNotContain("value=\"s\" checked");
+            assertThat(render(field("name", "ok", "type", "checkbox", "defaultValue", true)))
+                    .contains("type=\"checkbox\" value=\"true\" checked");
+            assertThat(render(field("name", "ok", "type", "checkbox", "defaultValue", false)))
+                    .doesNotContain("checked");
+        }
+
+        @Test
+        @DisplayName("a file input never carries a value, and a field with no default renders as before")
+        void fileAndNoDefault() {
+            assertThat(render(field("name", "doc", "type", "file", "defaultValue", "x.pdf")))
+                    .doesNotContain("value=\"x.pdf\"");
+            assertThat(render(field("name", "theme", "type", "text")))
+                    .contains("name=\"theme\" type=\"text\" />")
+                    .doesNotContain("value=");
+        }
+    }
 }
+

@@ -41,6 +41,18 @@ public record PublicProfileDto(
          * feature. Not to be confused with e-mail verification, which is never
          * exposed here.
          */
-        boolean verified
+        boolean verified,
+        /**
+         * Whether this account carries the official-partner badge (the gold seal),
+         * resolved live by {@code PartnerBadgeService}: the owner has a live PARTNER
+         * code. Always false on a self-hosted deployment.
+         */
+        boolean partner,
+        /**
+         * The tier of that partner ({@code silver}, {@code gold} or {@code platinum}), null when
+         * {@link #partner} is false. The badge is the same for every tier: the profile page is
+         * the only place that names the tier.
+         */
+        String partnerTier
 ) {
 }

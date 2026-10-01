@@ -35,6 +35,44 @@ class ApiScopedSearchParserTest {
             assertThat(parsed.query()).isEqualTo("send message");
             assertThat(parsed.apiFilters()).containsExactly("gmail", "slack", "google sheets");
         }
+
+        @Test
+        @DisplayName("Bug B8: api given with no query lists the API (keyword = scope names) instead of an empty query")
+        void apiWithoutQueryListsTheApiInsteadOfEmptyQuery() {
+            ApiScopedSearchParser.ParsedSearch parsed =
+                ApiScopedSearchParser.parse("", "composio", null);
+
+            assertThat(parsed.query()).isEqualTo("composio");
+            assertThat(parsed.apiFilters()).containsExactly("composio");
+            assertThat(parsed.keywordFromScope()).isTrue();
+            assertThat(parsed.inlineScope()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Bug B8: a blank query with several apis joins their names")
+        void blankQueryWithSeveralApisJoinsTheirNames() {
+            ApiScopedSearchParser.ParsedSearch parsed =
+                ApiScopedSearchParser.parse("   ", null, List.of("telegram", "Ghost CMS"));
+
+            assertThat(parsed.query()).isEqualTo("telegram Ghost CMS");
+            assertThat(parsed.keywordFromScope()).isTrue();
+        }
+
+        @Test
+        @DisplayName("A real keyword with an api is not flagged as scope-derived")
+        void realKeywordIsNotScopeDerived() {
+            assertThat(ApiScopedSearchParser.parse("list messages", "gmail", null).keywordFromScope()).isFalse();
+        }
+
+        @Test
+        @DisplayName("No api and no query stays an empty query (the caller still refuses it)")
+        void noApiNoQueryStaysEmpty() {
+            ApiScopedSearchParser.ParsedSearch parsed = ApiScopedSearchParser.parse("", null, null);
+
+            assertThat(parsed.query()).isEmpty();
+            assertThat(parsed.apiFilters()).isEmpty();
+            assertThat(parsed.keywordFromScope()).isFalse();
+        }
     }
 
     @Nested
@@ -50,6 +88,18 @@ class ApiScopedSearchParserTest {
             assertThat(parsed.query()).isEqualTo("send message");
             assertThat(parsed.apiFilters()).containsExactly("gmail", "slack");
             assertThat(parsed.inlineScope()).isTrue();
+            assertThat(parsed.keywordFromScope()).isFalse();
+        }
+
+        @Test
+        @DisplayName("A bare bracket scope searches by the scope names and is flagged as scope-derived")
+        void bareBracketScopeIsScopeDerived() {
+            ApiScopedSearchParser.ParsedSearch parsed =
+                ApiScopedSearchParser.parse("[composio]", null, null);
+
+            assertThat(parsed.query()).isEqualTo("composio");
+            assertThat(parsed.apiFilters()).containsExactly("composio");
+            assertThat(parsed.keywordFromScope()).isTrue();
         }
 
         @Test

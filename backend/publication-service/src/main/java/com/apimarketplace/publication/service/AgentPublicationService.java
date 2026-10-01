@@ -110,6 +110,15 @@ public class AgentPublicationService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private CeExclusiveAcquisitionGuard ceExclusiveGuard;
 
+    /**
+     * Refuses a SHARED agent publication (PUBLIC / UNLISTED) whose tool grants, embedded
+     * workflows or sub-agents reach a tenant-private custom API. Field-injected and
+     * optional like the helpers above; package-private so tests in this package can
+     * install a stub. Null means "no gate", matching every pre-existing test.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    CustomApiPublishGuard customApiPublishGuard;
+
     public AgentPublicationService(WorkflowPublicationRepository publicationRepository,
                                     PublicationReceiptRepository receiptRepository,
                                     AgentClient agentClient,
@@ -334,6 +343,14 @@ public class AgentPublicationService {
             agentSnapshot.put("landingInterface",
                     landingInterfaceSnapshotter.buildSnapshot(landingInterfaceId, tenantId, organizationId));
         }
+        // A custom API is private to its owner's tenant: an acquirer's catalog has no such
+        // API, so every granted tool (on this agent, a sub-agent, or an embedded workflow
+        // plan) would fail at run time. Refused here, on the assembled snapshot and BEFORE
+        // anything is persisted. PRIVATE publications are exempt (same tenant, still resolves).
+        if (customApiPublishGuard != null) {
+            customApiPublishGuard.assertPublishable(publication.getVisibility(), agentSnapshot, tenantId, organizationId);
+        }
+
         // Size guard AFTER the full snapshot (incl. landing interface) is assembled,
         // BEFORE anything is persisted - a refused publish must leave no state behind.
         enforceSnapshotSizeCap(agentSnapshot);

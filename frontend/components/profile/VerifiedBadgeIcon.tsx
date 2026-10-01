@@ -19,8 +19,14 @@ export type VerifiedBadgeSize = keyof typeof SIZE_PX;
  * badge colour and the check is STROKED in white on top of it. An icon component
  * paints every path the same way, which turns the open check path into a filled
  * wedge.
+ *
+ * <p>Shared with the gold partner seal ({@code PartnerBadgeIcon}): the two badges are one
+ * family, the same seal and the same check in two colours.
  */
-const SEAL_PATH =
+/** The check drawn inside the seal, shared with the partner badge. */
+export const CHECK_PATH = 'm9 12 2 2 4-4';
+
+export const SEAL_PATH =
   'M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 '
   + '4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z';
 
@@ -72,7 +78,7 @@ export function VerifiedBadgeIcon({
       <title>{label}</title>
       <path d={SEAL_PATH} fill="currentColor" />
       <path
-        d="m9 12 2 2 4-4"
+        d={CHECK_PATH}
         fill="none"
         stroke="#fff"
         strokeWidth="2.5"

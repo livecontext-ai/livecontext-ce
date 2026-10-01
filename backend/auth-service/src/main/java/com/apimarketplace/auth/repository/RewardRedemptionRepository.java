@@ -16,6 +16,10 @@ public interface RewardRedemptionRepository extends JpaRepository<RewardRedempti
 
     Optional<RewardRedemption> findByRedeemerUserIdAndRewardCodeId(Long redeemerUserId, Long rewardCodeId);
 
+    Optional<RewardRedemption> findByRedeemerUserIdAndCampaignKey(Long redeemerUserId, String campaignKey);
+
+    Optional<RewardRedemption> findByQualifyingInvoiceIdAndProgram(String qualifyingInvoiceId, RewardProgram program);
+
     /** One REFERRAL redemption per redeemer (partial unique index, see V366). */
     Optional<RewardRedemption> findByRedeemerUserIdAndProgram(Long redeemerUserId, RewardProgram program);
 

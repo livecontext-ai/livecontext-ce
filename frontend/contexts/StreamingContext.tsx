@@ -14,6 +14,7 @@
 
 import React, { createContext, useContext, useReducer, useRef, useCallback, useMemo, useEffect, useState, ReactNode } from 'react';
 import { unifiedApiService } from '@/lib/api';
+import { conversationApi } from '@/lib/api/conversationApi';
 import { is402Error, is413StorageError, isPlanLimitError, isAuthError } from '@/lib/api/error-utils';
 import { isInactiveAccountError } from '@/lib/api/api-client';
 
@@ -41,12 +42,15 @@ import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { getModelsCache, getEffectiveDefaultModel, getEffectiveDefaultProvider } from '@/hooks/useModels';
 import { wsClient } from '@/lib/websocket';
 import { useChannel } from '@/lib/websocket/use-channel';
+import { useWsReconnected } from '@/lib/websocket/use-ws-reconnected';
 import { selectLiveChannelIds, PLACEHOLDER_CONVERSATION_PREFIX } from './streamingChannels';
 import {
   markPendingToolsAsSuccess,
   markThinkingAsSuccess,
   detectStreamEventType,
   mapV2EventToV1,
+  isServerStreamLive,
+  threadEndsWithReply,
   streamLogger,
 } from '@/lib/streaming/streamHelpers';
 import {
@@ -62,6 +66,11 @@ import {
 // Debounce timer for workflow plan modified events
 let workflowPlanModifiedDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const ACTIVE_STREAMS_BOOT_DELAY_MS = 1500;
+/**
+ * How long after a stream reports an error, or revives after one, the server is asked where the
+ * turn really stands (see the provider's re-check).
+ */
+export const ERRORED_STREAM_RECHECK_MS = 5000;
 
 // Counter for generating unique IDs (prevents duplicates when Date.now() returns same value)
 let uniqueIdCounter = 0;
@@ -429,6 +438,10 @@ export interface SingleStreamState {
   pendingAskUserQuestions: PendingAskUserQuestion[];
   // Timestamp when pending_action_cancelled was last received (for detecting when to clear conversation.pendingAction)
   lastPendingActionCancelledAt?: number;
+  // An 'error' the server has confirmed as the end of the turn. Until then an errored entry keeps
+  // its channel (the turn may go on under the same stream); once confirmed there is nothing left
+  // to hear, so the channel and the reconnect re-reads are released.
+  errorSettled?: boolean;
 }
 
 /**
@@ -547,7 +560,12 @@ export interface StreamingCallbacks {
     summarizerModel: string,
     generatedAt: string,
   ) => void;
-  onError?: (error: StreamError) => void;
+  /**
+   * `conversationId` is set when a LIVE stream reported the error (absent when the send itself
+   * was refused). Such a turn may have saved a reply anyway, or may still go on under the same
+   * stream, so the caller re-reads the conversation rather than treat the error as its end.
+   */
+  onError?: (error: StreamError, conversationId?: string) => void;
 }
 
 interface StreamingContextType {
@@ -600,6 +618,7 @@ type StreamingAction =
   | { type: 'STOPPED'; conversationId: string; streamId?: string }
   | { type: 'PENDING_ACTION_CANCELLED'; conversationId: string }
   | { type: 'ERROR'; conversationId: string; error: StreamError; streamId?: string }
+  | { type: 'ERROR_SETTLED'; conversationId: string; streamId: string }
   | { type: 'CLEAR'; conversationId: string }
   | { type: 'CLEAR_ALL' }
   | { type: 'SET_SERVER_ACTIVE_STREAMS'; conversationIds: string[] }
@@ -638,6 +657,30 @@ export function isStaleTerminal(
     currentStream?.streamId &&
     actionStreamId !== currentStream.streamId
   );
+}
+
+/**
+ * An `error` does not always end the turn. When a model's execution link fails, the bridge
+ * publishes `error` and the turn is retried on the direct API under the SAME stream; a
+ * non-fatal bridge adapter error goes on streaming too. So reply TEXT (or the `done`) of that
+ * stream landing after the error means the turn is alive: the entry goes back to streaming and
+ * drops the error with its marker (the feed would otherwise keep saying "Error" over a reply
+ * that worked). Only content and `done` revive: a real failure can still be followed by a stray
+ * tool or thinking event of the dying loop (agent-service's shutdown interruption publishes
+ * `error` while the loop may emit one more), and reviving on that left the chat "streaming"
+ * forever. Even a revival is re-checked against the server shortly after (see the provider).
+ * Cross-stream events never get here: the WS handler discards them first. Any status other
+ * than 'error' is returned untouched.
+ */
+function resumeErroredStream(stream: SingleStreamState): SingleStreamState {
+  if (stream.status !== 'error') return stream;
+  return {
+    ...stream,
+    status: 'streaming',
+    error: null,
+    errorSettled: undefined,
+    toolActivities: stream.toolActivities.filter(a => a.toolName !== '_system_error'),
+  };
 }
 
 function streamingReducer(state: StreamingState, action: StreamingAction): StreamingState {
@@ -699,20 +742,22 @@ function streamingReducer(state: StreamingState, action: StreamingAction): Strea
 
     case 'CONTENT_RECEIVED': {
       if (!currentStream) return state;
+      const live = resumeErroredStream(currentStream);
       newStreams.set(conversationId, {
-        ...currentStream,
+        ...live,
         content: action.content,
-        toolActivities: markPendingToolsAsSuccess(currentStream.toolActivities),
+        toolActivities: markPendingToolsAsSuccess(live.toolActivities),
       });
       break;
     }
 
     case 'APPEND_CONTENT': {
       if (!currentStream) return state;
+      const live = resumeErroredStream(currentStream);
       newStreams.set(conversationId, {
-        ...currentStream,
-        content: currentStream.content + action.chunk,
-        toolActivities: markPendingToolsAsSuccess(currentStream.toolActivities),
+        ...live,
+        content: live.content + action.chunk,
+        toolActivities: markPendingToolsAsSuccess(live.toolActivities),
       });
       break;
     }
@@ -1110,11 +1155,13 @@ function streamingReducer(state: StreamingState, action: StreamingAction): Strea
       // authoritative content is supplied (terminal/reconnect paths omit it).
       const reconciledContent =
         action.content && action.content.length > 0 ? action.content : currentStream.content;
+      // A `done` after an `error` of the same stream: the turn recovered, so its error goes.
+      const finished = resumeErroredStream(currentStream);
       newStreams.set(conversationId, {
-        ...currentStream,
+        ...finished,
         status: 'completed',
         content: reconciledContent,
-        toolActivities: markPendingToolsAsSuccess(currentStream.toolActivities),
+        toolActivities: markPendingToolsAsSuccess(finished.toolActivities),
       });
       break;
     }
@@ -1179,8 +1226,10 @@ function streamingReducer(state: StreamingState, action: StreamingAction): Strea
         });
         return state;
       }
-      // Add _system_error marker tool so ActivityFeed shows "Error" indicator
-      const toolsWithError: ToolActivity[] = [
+      // Add _system_error marker tool so ActivityFeed shows "Error" indicator. Once only: the
+      // entry keeps its channel after an error, so the failure's replay on a resubscribe
+      // (SNAPSHOT_REPLAY) lands here again and must not stack a second marker.
+      const toolsWithError: ToolActivity[] = currentStream.status === 'error' ? currentStream.toolActivities : [
         ...currentStream.toolActivities,
         {
           id: `system-error-${Date.now()}`,
@@ -1197,6 +1246,13 @@ function streamingReducer(state: StreamingState, action: StreamingAction): Strea
         error: action.error,
         toolActivities: toolsWithError,
       });
+      break;
+    }
+
+    case 'ERROR_SETTLED': {
+      // Only the errored entry of THAT stream: a newer send or a revival owns the entry otherwise.
+      if (!currentStream || currentStream.status !== 'error' || currentStream.streamId !== action.streamId) return state;
+      newStreams.set(conversationId, { ...currentStream, errorSettled: true });
       break;
     }
 
@@ -1554,6 +1610,9 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
               id: stableId,
               title: currentUrl || 'Browser Agent',
               liveCoords: { sessionId, cdpToken, cdpWsUrl, currentUrl, runId, nodeId },
+              // Which chat's agent is browsing: beside a side-panel chat the live view opens
+              // without taking the reader off the conversation (AppHeader handleAutoOpen).
+              conversationId,
             });
           }
           break;
@@ -1730,14 +1789,14 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
             }
           }
 
+          // Not the end of the page's interest in this stream: the entry keeps its channel
+          // (selectLiveChannelIds), so a later content / `done` of the same stream still lands
+          // and revives it (see resumeErroredStream), and the caller re-reads the conversation
+          // in case the reply was saved regardless. Tearing the channel down here is what used
+          // to throw a finished reply away.
           dispatch({ type: 'ERROR', conversationId, error, streamId: eventStreamId || boundStreamId || undefined });
           if (callbacks?.onError) {
-            callbacks.onError(error);
-          }
-
-          if (refs.wsUnsubscribe) {
-            refs.wsUnsubscribe();
-            refs.wsUnsubscribe = null;
+            callbacks.onError(error, conversationId);
           }
           break;
         }
@@ -2050,6 +2109,128 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'REMOVE_SERVER_ACTIVE_STREAM', conversationId });
   }, [state.streams]);
 
+  // ============== BUFFERED TOOL EVENTS ==============
+  /**
+   * Re-apply the tool events the server buffered for a stream (its REST reconnection state).
+   * 'all' rebuilds the tool activity as well as the cards: a page reload reconnecting to a live
+   * stream starts from an empty entry. 'cards' only brings back the approval, authorization and
+   * question cards the turn is holding, for an entry that already shows its activity (a resync
+   * of a turn parked on an approval): replaying its tool results there would re-run their side
+   * effects and auto-open panels for work the reader already saw.
+   */
+  const replayBufferedToolEvents = useCallback((
+    conversationId: string,
+    toolEvents: string[] | undefined,
+    scope: 'all' | 'cards',
+  ) => {
+    for (const toolJson of toolEvents ?? []) {
+      try {
+        const parsed = JSON.parse(toolJson);
+        const eventType = detectStreamEventType(parsed as Record<string, unknown>);
+        const mapped = mapV2EventToV1(parsed as Record<string, unknown>, eventType, null);
+
+        if (mapped.type === 'tool_call') {
+          if (scope !== 'all') continue;
+          let thinkingMessage: string | undefined;
+          let rawArgs: string | undefined;
+          if (mapped.arguments) {
+            try {
+              const args = typeof mapped.arguments === 'string'
+                ? JSON.parse(mapped.arguments)
+                : mapped.arguments;
+              thinkingMessage = args.thinking;
+              rawArgs = args.raw;
+            } catch { /* ignore */ }
+          }
+          dispatch({
+            type: 'TOOL_CALL',
+            conversationId,
+            toolName: mapped.toolName || 'unknown',
+            toolId: mapped.toolId || `tool-${crypto.randomUUID()}`,
+            arguments: rawArgs || (typeof mapped.arguments === 'string' ? mapped.arguments : JSON.stringify(mapped.arguments)),
+            thinkingMessage,
+          });
+        } else if (mapped.type === 'tool_result') {
+          if (scope !== 'all') continue;
+          dispatch({
+            type: 'TOOL_RESULT',
+            conversationId,
+            toolId: mapped.toolId || '',
+            success: mapped.success ?? true,
+            result: typeof mapped.result === 'string' ? mapped.result : undefined,
+            resultId: mapped.resultId,
+            durationMs: mapped.durationMs,
+            error: mapped.error,
+            visualization: mapped.visualization,
+            iconSlug: mapped.iconSlug,
+            displayToolName: mapped.displayToolName,
+            tasksData: mapped.tasksData,
+            credentialRequired: mapped.credentialRequired,
+            serviceApproval: mapped.serviceApproval,
+            diff: mapped.diff,
+            gitStatus: mapped.gitStatus,
+          });
+
+          if ((mapped.success ?? true) && mapped.toolName) {
+            dispatchWorkflowPlanModified(mapped.toolName);
+            dispatchDataSourceModified(mapped.toolName);
+            dispatchInterfaceModified(mapped.toolName);
+            dispatchWebSearchModified(mapped.toolName);
+          }
+          if ((mapped.success ?? true) && mapped.visualization
+              && mapped.visualization.type !== 'agent_browse') {
+            // A replay after a reconnect is history, not something the agent just did: no
+            // conversation stamp, so the workflow page never leaves the run a user just
+            // reopened because of an edit made before the reload.
+            dispatchSidePanelAutoOpen(mapped.visualization);
+          }
+        } else if (mapped.type === 'service_approval_required' && mapped.serviceApprovalRequired) {
+          // A card the agent is HOLDING outlives a page reload, so it has to come back
+          // with it. Without this the user returns to a tool spinning for minutes with
+          // nothing to click, and the held call can only ever time out. Both reducers
+          // dedup by card key, so a card that ALSO arrived from the database collapses
+          // into one instead of showing twice.
+          dispatch({
+            type: 'SERVICE_APPROVAL_REQUIRED',
+            conversationId,
+            services: mapped.serviceApprovalRequired.services,
+            reason: mapped.serviceApprovalRequired.reason,
+            needsAttention: mapped.serviceApprovalRequired.needsAttention,
+            blocking: mapped.serviceApprovalRequired.blocking,
+            gateKey: mapped.serviceApprovalRequired.gateKey,
+          });
+        } else if (mapped.type === 'tool_authorization_required' && mapped.toolAuthorization) {
+          dispatch({
+            type: 'TOOL_AUTHORIZATION_REQUIRED',
+            conversationId,
+            rule: mapped.toolAuthorization.rule,
+            toolName: mapped.toolAuthorization.toolName,
+            action: mapped.toolAuthorization.action,
+            toolCallId: mapped.toolAuthorization.toolCallId,
+            argsSummary: mapped.toolAuthorization.argsSummary,
+            applicationId: mapped.toolAuthorization.applicationId,
+            subject: mapped.toolAuthorization.subject,
+            blocking: mapped.toolAuthorization.blocking,
+            gateKey: mapped.toolAuthorization.gateKey,
+          });
+        } else if (mapped.type === 'ask_user_required' && mapped.askUser?.toolCallId) {
+          // A held question card outlives a reload for the same reason as the two above.
+          dispatch({
+            type: 'ASK_USER_REQUIRED',
+            conversationId,
+            toolCallId: mapped.askUser.toolCallId,
+            questions: mapped.askUser.questions || [],
+            blocking: mapped.askUser.blocking,
+            gateKey: mapped.askUser.gateKey,
+            streamId: mapped.streamId ?? null,
+          });
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+  }, []);
+
   // ============== CHECK AND RECONNECT ==============
   const checkAndReconnect = useCallback(async (
     conversationId: string,
@@ -2114,112 +2295,7 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
       }
 
       // Apply buffered tool events
-      if (reconnState.toolEvents?.length > 0) {
-        for (const toolJson of reconnState.toolEvents) {
-          try {
-            const parsed = JSON.parse(toolJson);
-            const eventType = detectStreamEventType(parsed as Record<string, unknown>);
-            const mapped = mapV2EventToV1(parsed as Record<string, unknown>, eventType, null);
-
-            if (mapped.type === 'tool_call') {
-              let thinkingMessage: string | undefined;
-              let rawArgs: string | undefined;
-              if (mapped.arguments) {
-                try {
-                  const args = typeof mapped.arguments === 'string'
-                    ? JSON.parse(mapped.arguments)
-                    : mapped.arguments;
-                  thinkingMessage = args.thinking;
-                  rawArgs = args.raw;
-                } catch { /* ignore */ }
-              }
-              dispatch({
-                type: 'TOOL_CALL',
-                conversationId,
-                toolName: mapped.toolName || 'unknown',
-                toolId: mapped.toolId || `tool-${crypto.randomUUID()}`,
-                arguments: rawArgs || (typeof mapped.arguments === 'string' ? mapped.arguments : JSON.stringify(mapped.arguments)),
-                thinkingMessage,
-              });
-            } else if (mapped.type === 'tool_result') {
-              dispatch({
-                type: 'TOOL_RESULT',
-                conversationId,
-                toolId: mapped.toolId || '',
-                success: mapped.success ?? true,
-                result: typeof mapped.result === 'string' ? mapped.result : undefined,
-                resultId: mapped.resultId,
-                durationMs: mapped.durationMs,
-                error: mapped.error,
-                visualization: mapped.visualization,
-                iconSlug: mapped.iconSlug,
-                displayToolName: mapped.displayToolName,
-                tasksData: mapped.tasksData,
-                credentialRequired: mapped.credentialRequired,
-                serviceApproval: mapped.serviceApproval,
-                diff: mapped.diff,
-                gitStatus: mapped.gitStatus,
-              });
-
-              if ((mapped.success ?? true) && mapped.toolName) {
-                dispatchWorkflowPlanModified(mapped.toolName);
-                dispatchDataSourceModified(mapped.toolName);
-                dispatchInterfaceModified(mapped.toolName);
-                dispatchWebSearchModified(mapped.toolName);
-              }
-              if ((mapped.success ?? true) && mapped.visualization
-                  && mapped.visualization.type !== 'agent_browse') {
-                // A replay after a reconnect is history, not something the agent just did: no
-                // conversation stamp, so the workflow page never leaves the run a user just
-                // reopened because of an edit made before the reload.
-                dispatchSidePanelAutoOpen(mapped.visualization);
-              }
-            } else if (mapped.type === 'service_approval_required' && mapped.serviceApprovalRequired) {
-              // A card the agent is HOLDING outlives a page reload, so it has to come back
-              // with it. Without this the user returns to a tool spinning for minutes with
-              // nothing to click, and the held call can only ever time out. Both reducers
-              // dedup by card key, so a card that ALSO arrived from the database collapses
-              // into one instead of showing twice.
-              dispatch({
-                type: 'SERVICE_APPROVAL_REQUIRED',
-                conversationId,
-                services: mapped.serviceApprovalRequired.services,
-                reason: mapped.serviceApprovalRequired.reason,
-                needsAttention: mapped.serviceApprovalRequired.needsAttention,
-                blocking: mapped.serviceApprovalRequired.blocking,
-                gateKey: mapped.serviceApprovalRequired.gateKey,
-              });
-            } else if (mapped.type === 'tool_authorization_required' && mapped.toolAuthorization) {
-              dispatch({
-                type: 'TOOL_AUTHORIZATION_REQUIRED',
-                conversationId,
-                rule: mapped.toolAuthorization.rule,
-                toolName: mapped.toolAuthorization.toolName,
-                action: mapped.toolAuthorization.action,
-                toolCallId: mapped.toolAuthorization.toolCallId,
-                argsSummary: mapped.toolAuthorization.argsSummary,
-                applicationId: mapped.toolAuthorization.applicationId,
-                subject: mapped.toolAuthorization.subject,
-                blocking: mapped.toolAuthorization.blocking,
-                gateKey: mapped.toolAuthorization.gateKey,
-              });
-            } else if (mapped.type === 'ask_user_required' && mapped.askUser?.toolCallId) {
-              // A held question card outlives a reload for the same reason as the two above.
-              dispatch({
-                type: 'ASK_USER_REQUIRED',
-                conversationId,
-                toolCallId: mapped.askUser.toolCallId,
-                questions: mapped.askUser.questions || [],
-                blocking: mapped.askUser.blocking,
-                gateKey: mapped.askUser.gateKey,
-                streamId: mapped.streamId ?? null,
-              });
-            }
-          } catch {
-            // Ignore parse errors
-          }
-        }
-      }
+      replayBufferedToolEvents(conversationId, reconnState.toolEvents, 'all');
 
       // Handle terminal states from reconnection. Each terminal carries the stream id
       // it belongs to, so the reducer drops it if the conversation's live entry is a
@@ -2264,7 +2340,7 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
 
       return false;
     }
-  }, [state.streams, getStreamRefs, createWsEventHandler]);
+  }, [state.streams, getStreamRefs, createWsEventHandler, replayBufferedToolEvents]);
 
   // ============== CLEAR STREAM ==============
   const clearStream = useCallback((conversationId: string) => {
@@ -2279,6 +2355,177 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
     }
     streamRefsMap.current.delete(conversationId);
     streamCompletionTimestamps.current.delete(conversationId);
+  }, []);
+
+  // ============== RESYNC AFTER A WS RECONNECT ==============
+  // Whatever was published while the tab had no session is gone (the gateway keeps no
+  // backlog), and that includes the `done` that settles a turn: the page then streamed forever
+  // over a reply that was saved long ago. The resubscribe asks the server for a snapshot, but
+  // that is best-effort (nothing is sent once the stream's metadata has expired), so every
+  // stream this tab still treats as live - streaming, or errored and still listening - is
+  // re-read from REST. The answer goes through the SAME handler a live event takes, shaped as
+  // the server's own snapshot shapes it (InternalAccessController.triggerSnapshot), so a settle
+  // from here and one from the snapshot mean the same thing. A resync landing after the
+  // snapshot finds the entry settled and stands down; a snapshot landing after it repeats a
+  // `done`, as it already does for any completed entry on every resubscribe.
+  const streamsRef = useRef(state.streams);
+  streamsRef.current = state.streams;
+
+  const resyncLiveStream = useCallback(async (conversationId: string, streamId: string) => {
+    const refs = streamRefsMap.current.get(conversationId);
+    if (!refs) return;
+    // Read, never bumped: a resync only settles what the tab already follows, so any send or
+    // reconnect that takes the conversation over while the request is out wins.
+    const generation = refs.generation;
+
+    let server: Awaited<ReturnType<typeof unifiedApiService.getStreamReconnectionState>> | null;
+    try {
+      server = await unifiedApiService.getStreamReconnectionState(conversationId);
+    } catch (error) {
+      streamLogger.warn('Resync after reconnect failed, keeping the live state', { conversationId, error });
+      return;
+    }
+
+    // Still the stream this resync was asked about, untouched by a newer operation meanwhile.
+    const stillFollowed = () => {
+      const entry = streamsRef.current.get(conversationId);
+      return isMountedRef.current &&
+        refs.generation === generation &&
+        entry?.streamId === streamId &&
+        (entry.status === 'streaming' || entry.status === 'error');
+    };
+    if (!stillFollowed()) return;
+    const current = streamsRef.current.get(conversationId)!;
+
+    // Settle an errored entry: the failure is final, so its channel and reconnect re-reads are
+    // released (nothing more can come), and the caller is told the turn is over, exactly as for
+    // a stopped one, which re-reads the thread and, for a first message, moves the route to the
+    // conversation for real.
+    const settleError = () => {
+      if (streamsRef.current.get(conversationId)?.errorSettled) return;
+      dispatch({ type: 'ERROR_SETTLED', conversationId, streamId });
+      streamCompletionTimestamps.current.set(conversationId, Date.now());
+      refs.callbacks.onStreamComplete?.(conversationId, refs.content, refs.model);
+    };
+
+    if (server?.streamId !== streamId) {
+      // The server names no such stream: its metadata expired while the tab was away (it is
+      // dropped 30 s after the stream ends), or the conversation moved on to another stream.
+      // But "no stream" is also what the endpoint answers for a conversation outside the strict
+      // workspace scope, so it is not proof the turn is over. The saved thread is: settle only
+      // when it holds an assistant reply for this turn, i.e. its last message is the reply.
+      // Then the partial on screen must not pose as the reply beside the saved one, so the
+      // entry is dropped and the caller re-reads. Otherwise a live entry is left alone (the
+      // channel may deliver), but an entry this tab already heard FAIL is settled: the server
+      // has forgotten a stream whose failure was seen here, so nothing more will come of it.
+      let thread: Array<{ role?: string }> | null = null;
+      try {
+        thread = await conversationApi.getRecentMessagesAsc(conversationId, 5);
+      } catch (error) {
+        streamLogger.warn('Resync could not read the thread', { conversationId, error });
+      }
+      if (!stillFollowed()) return;
+      if (threadEndsWithReply(thread)) {
+        const { onStreamComplete } = refs.callbacks;
+        const partial = refs.content;
+        const model = refs.model;
+        clearStream(conversationId);
+        onStreamComplete?.(conversationId, partial, model);
+      } else if (streamsRef.current.get(conversationId)?.status === 'error') {
+        // Read after the thread fetch: a revival while it was out makes the turn live again.
+        settleError();
+      }
+      return;
+    }
+
+    const handle = createWsEventHandler(conversationId, refs.callbacks, refs);
+    const content = server.content ?? '';
+    if (isServerStreamLive(server, streamId)) {
+      // Still running (CREATED: started, nothing sent yet). The buffered text is the WHOLE
+      // reply so far, but as of one round-trip ago: chunks that arrived while the request was
+      // out are already on screen and NOT in it. So it is taken only when it is longer than,
+      // and extends, what the bubble shows (as ConversationPanelContent's reducer does);
+      // replacing blindly cut those chunks out, and the next ones appended after the hole.
+      // Taken, it replaces rather than appends, and brings an errored entry back to streaming.
+      if (content.length > refs.content.length && content.startsWith(refs.content)) {
+        handle({ streamId, content, replay: true });
+      }
+      return;
+    }
+    if (server.state === 'ERROR') {
+      // The turn failed for good. An entry that missed the error hears it now, through the
+      // modal's once-per-stream guard. Either way the failure is now CONFIRMED: settle it.
+      if (current.status !== 'error') {
+        handle({ streamId, error: 'Stream ended with error', errorCode: SNAPSHOT_REPLAY_ERROR_CODE, retryable: false });
+      }
+      settleError();
+      return;
+    }
+    if (server.state === 'STOPPED_BY_USER' || server.state === 'INTERRUPTED' || server.state === 'AWAITING_APPROVAL') {
+      // Stopped, interrupted, or parked on an approval card. All three end the turn with its
+      // partial text and keep the tools that never finished as they were, which is the shape
+      // the live events take (the live `awaiting_approval` event carries `partialContent`, so it
+      // lands on the stopped path too): settling a parked turn as `done` drew the tool held for
+      // approval as succeeded. A parked turn also brings back the cards it is waiting on.
+      handle({ streamId, partialContent: content });
+      if (server.state === 'AWAITING_APPROVAL') {
+        replayBufferedToolEvents(conversationId, server.toolEvents, 'cards');
+      }
+      return;
+    }
+    // Completed while the tab was away: settle it as done, so the bubble takes the saved text
+    // and the caller re-reads the conversation.
+    handle({ streamId, fullContent: content, totalTokens: 0 });
+  }, [createWsEventHandler, clearStream, replayBufferedToolEvents]);
+
+  useWsReconnected(() => {
+    streamsRef.current.forEach((stream, conversationId) => {
+      if (conversationId.startsWith(PLACEHOLDER_CONVERSATION_PREFIX)) return;
+      // No stream id yet means the send POST is still out: that send owns the entry.
+      if (!stream.streamId || (stream.status !== 'streaming' && stream.status !== 'error')) return;
+      // A confirmed error has nothing left to hear.
+      if (stream.errorSettled) return;
+      void resyncLiveStream(conversationId, stream.streamId);
+    });
+  });
+
+  // Where an errored turn really stands is asked of the server once more, shortly after it
+  // changes, through the same resync:
+  //  - a stream that just REPORTED an error, including ANOTHER error on an entry already in
+  //    error (the first re-check may have found the turn still running, and the real failure
+  //    lands later): when the server confirms it (ERROR), or has forgotten the stream, the
+  //    entry is settled (channel released, the caller told the turn is over); when it says the
+  //    turn goes on, the entry keeps listening;
+  //  - a stream REVIVED after an error (see resumeErroredStream): when the error was real and
+  //    the revival a stray chunk of the dying loop, no `done` will ever come, and nothing else
+  //    would settle the entry: it would read "streaming" forever.
+  // Both are transitions of the SAME stream; a new send from an errored entry starts another
+  // stream and is neither.
+  const previousStreamsRef = useRef(state.streams);
+  const recheckTimersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    const previous = previousStreamsRef.current;
+    previousStreamsRef.current = state.streams;
+    state.streams.forEach((stream, conversationId) => {
+      const before = previous.get(conversationId);
+      const streamId = stream.streamId;
+      if (!streamId || before?.streamId !== streamId) return;
+      // A new error object is a new `error` event (the reducer sets one per event, and every
+      // other action on an errored entry keeps it); a settled entry has no channel left to hear one.
+      const errored = stream.status === 'error' && !stream.errorSettled
+        && (before.status !== 'error' || before.error !== stream.error);
+      const revived = before.status === 'error' && stream.status === 'streaming';
+      if (!errored && !revived) return;
+      const timer = setTimeout(() => {
+        recheckTimersRef.current.delete(timer);
+        void resyncLiveStream(conversationId, streamId);
+      }, ERRORED_STREAM_RECHECK_MS);
+      recheckTimersRef.current.add(timer);
+    });
+  }, [state.streams, resyncLiveStream]);
+  useEffect(() => {
+    const timers = recheckTimersRef.current;
+    return () => timers.forEach(clearTimeout);
   }, []);
 
   // ============== GET STREAM CONTENT ==============

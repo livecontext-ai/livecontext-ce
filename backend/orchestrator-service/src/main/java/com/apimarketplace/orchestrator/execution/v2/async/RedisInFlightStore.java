@@ -521,6 +521,9 @@ public class RedisInFlightStore {
         m.put("resolvedUserPrompt", agent.resolvedUserPrompt());
         m.put("startedAtEpochMs", agent.startedAt() != null ? agent.startedAt().toEpochMilli() : null);
         m.put("organizationId", agent.organizationId());
+        m.put("loopIteration", agent.loopIteration());
+        m.put("attempt", agent.attempt());
+        m.put("timeoutMs", agent.timeoutMs());
         // AgentResultMessage payload
         m.put("resultPayload", result.result());
         m.put("resultSuccess", result.success());
@@ -559,7 +562,12 @@ public class RedisInFlightStore {
             (String) m.get("resolvedSystemPrompt"),
             (String) m.get("resolvedUserPrompt"),
             startedAt,
-            (String) m.get("organizationId")
+            (String) m.get("organizationId"),
+            // A replayed loop-body delivery must land on its own iteration, not iteration 0.
+            m.get("loopIteration") instanceof Number ln ? ln.intValue() : null,
+            // Absent on an entry staged before the fields existed: a first attempt, no timeout.
+            m.get("attempt") instanceof Number an ? an.intValue() : 1,
+            m.get("timeoutMs") instanceof Number tn ? tn.longValue() : 0L
         );
         Object completedAtObj = m.get("resultCompletedAtEpochMs");
         Instant completedAt = completedAtObj instanceof Number cn

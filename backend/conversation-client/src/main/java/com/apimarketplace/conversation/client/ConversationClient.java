@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.*;
+import com.apimarketplace.common.web.LogSafePath;
 import com.apimarketplace.common.web.OrgContextHeaderForwarder;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import com.apimarketplace.common.credit.ChatCreditRefusal;
@@ -438,6 +439,43 @@ public class ConversationClient {
         } catch (Exception e) {
             log.warn("Failed to enable sharing for conversation {}: {}", conversationId, e.getMessage());
             return Map.of("error", e.getMessage());
+        }
+    }
+
+    /** A share token sent as a path segment must be exactly one plain segment. */
+    private static final java.util.regex.Pattern PATH_SAFE_SHARE_TOKEN =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9_-]{1,128}$");
+
+    /**
+     * The id of the conversation a share token ({@code cs_...}) opens, when sharing is on and that
+     * conversation is in the given workspace; null when it opens none there (a 404, or a 200
+     * without an id). A token that is not one plain path segment ({@code [A-Za-z0-9_-]}) opens
+     * nothing either and is never sent: it would steer this internal request to another path.
+     *
+     * @throws IllegalStateException when the lookup itself fails (conversation-service down, a
+     *         5xx, a timeout). The one caller, publication-service registering a CONVERSATION
+     *         share link, must then refuse, and must say the check could not run rather than
+     *         "not yours": a null here would tell a legitimate owner their conversation is not
+     *         theirs.
+     */
+    @SuppressWarnings("unchecked")
+    public String findSharedConversationIdInScope(String shareToken, String tenantId, String organizationId) {
+        if (shareToken == null || !PATH_SAFE_SHARE_TOKEN.matcher(shareToken).matches()) {
+            return null;
+        }
+        String url = baseUrl + "/api/internal/share/validate/" + shareToken + "/in-scope";
+        try {
+            ResponseEntity<Map> resp = restTemplate.exchange(
+                    url, HttpMethod.GET, createEntity(null, tenantId, organizationId), Map.class);
+            Object conversationId = resp.getBody() != null ? resp.getBody().get("conversationId") : null;
+            return resp.getStatusCode().is2xxSuccessful() && conversationId != null
+                    ? conversationId.toString() : null;
+        } catch (HttpClientErrorException.NotFound e) {
+            return null;
+        } catch (Exception e) {
+            String detail = LogSafePath.withoutToken(e.getMessage(), shareToken);
+            log.warn("Could not check a conversation share token {}: {}", LogSafePath.tokenPreview(shareToken), detail);
+            throw new IllegalStateException("Could not check the conversation share token: " + detail, e);
         }
     }
 

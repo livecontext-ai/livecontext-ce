@@ -30,6 +30,16 @@ import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { cloudLinkService, type CloudLinkStatus, CLOUD_NO_SUBSCRIPTION } from '@/lib/api/cloud-link.service';
 import { track } from '@/lib/analytics/analytics';
 import { RewardCodeInline } from '@/components/reward/RewardCodeInline';
+import { usePersonalOffer } from '@/lib/hooks/usePersonalOffer';
+import { readPendingPersonalOffer } from '@/lib/lifecycle/pendingPersonalOffer';
+import {
+  buildPersonalOfferSignInReturn,
+  clearPersonalOfferJourney,
+  readPersonalOfferJourney,
+  savePersonalOfferJourney,
+} from '@/lib/lifecycle/personalOfferJourney';
+import { ApiError } from '@/lib/api/api-client';
+import { hasAttachedPersonalOfferCheckout, personalOfferCheckoutApiError, personalOfferCheckoutBlock } from '@/lib/billing/personal-offer-checkout';
 
 // CE installs manage billing on the LINKED LiveContext Cloud account; the cloud web app lives
 // here (matches the hardcoded cloud host used elsewhere in CE, e.g. marketplace CategoryFilter).
@@ -40,8 +50,15 @@ export default function PricingPage() {
   const t = useTranslations('pricing');
   const tCards = useTranslations('pricing.planCards');
   const locale = useLocale();
+  const tOffer = useTranslations('reward.personalOffer');
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('yearly');
   const [creditTierIndex, setCreditTierIndex] = useState(0);
+  const personalOffer = usePersonalOffer(creditTierIndex, billingCycle, !isCeMode);
+  const [selectedPlanCode, setSelectedPlanCode] = useState<string | null>(null);
+  const [returnToWork, setReturnToWork] = useState<string | null>(null);
+  const [continueWithoutOffer, setContinueWithoutOffer] = useState(false);
+  const selectionRestored = useRef(false);
+  const previousUserKey = useRef<string | null>(null);
   // Window resolved server-side, shared by every plan card below.
   const { event: pricingEvent } = usePricingEvent();
   // Hidden tiers (5M / 10M) are revealed via ?tiers=full (persisted in localStorage).
@@ -148,6 +165,52 @@ export default function PricingPage() {
   // Router and search params for Stripe return handling
   const searchParams = useSearchParams();
   const router = useRouter();
+
+  // A campaign link's monthly cadence and any choices made before sign-in or Stripe take
+  // precedence over the ordinary yearly default. Restore once to avoid resetting later edits.
+  useEffect(() => {
+    if (selectionRestored.current) return;
+    selectionRestored.current = true;
+    const saved = readPersonalOfferJourney(window, user?.sub);
+    const cadence = searchParams.get('billingCycle');
+    const tier = Number(searchParams.get('creditTierIndex'));
+    const plan = searchParams.get('planCode');
+    if (cadence === 'monthly' || cadence === 'yearly') setBillingCycle(cadence);
+    else if (saved) setBillingCycle(saved.billingCycle);
+    if (searchParams.has('creditTierIndex') && Number.isInteger(tier) && tier >= 0 && tier < CREDIT_TIERS.length) setCreditTierIndex(tier);
+    else if (saved && saved.creditTierIndex < CREDIT_TIERS.length) setCreditTierIndex(saved.creditTierIndex);
+    setSelectedPlanCode(plan || saved?.planCode || null);
+    if (searchParams.get('pricingMode') === 'subscription' || readPendingPersonalOffer(window)) setPricingMode('subscription');
+  }, [searchParams, user?.sub]);
+
+  useEffect(() => {
+    const userKey = user?.sub ?? null;
+    if (previousUserKey.current && previousUserKey.current !== userKey) {
+      clearPersonalOfferJourney(window);
+      setSelectedPlanCode(null);
+      setCreditTierIndex(0);
+      setBillingCycle('yearly');
+      setContinueWithoutOffer(false);
+    }
+    previousUserKey.current = userKey;
+  }, [user?.sub]);
+
+  useEffect(() => {
+    if (!selectionRestored.current || isCeMode || !personalOffer.current?.offerId && !personalOffer.candidateCode) return;
+    const prior = readPersonalOfferJourney(window, user?.sub);
+    savePersonalOfferJourney(window, {
+      planCode: selectedPlanCode ?? undefined,
+      creditTierIndex,
+      billingCycle,
+      returnToWork: prior?.returnToWork ?? `/${locale}/app/chat`,
+      userKey: user?.sub,
+    });
+  }, [billingCycle, creditTierIndex, selectedPlanCode, personalOffer.current?.offerId, personalOffer.candidateCode, user?.sub, locale]);
+
+  useEffect(() => {
+    if (!['GRANTED', 'NO_BONUS'].includes(personalOffer.current?.status ?? '')) return;
+    setReturnToWork(readPersonalOfferJourney(window, user?.sub)?.returnToWork ?? `/${locale}/app/chat`);
+  }, [personalOffer.current?.status, user?.sub, locale]);
 
   // Hidden-tier unlock: ?tiers=full reveals 5M/10M and is remembered in localStorage so a
   // shared link keeps working on later visits; ?tiers=default (or =hidden) re-hides them.
@@ -378,9 +441,13 @@ export default function PricingPage() {
       setUpgradeModalState('processing');
       // Status + plan only: the Stripe session id never leaves the browser.
       track('checkout_returned', { status: 'success', from_plan: currentPlan });
+      void personalOffer.refresh();
 
-      // Clean up URL immediately (stay on same page, just remove query params)
-      window.history.replaceState({}, '', window.location.pathname);
+      // Keep the chosen cadence and pack while removing only Stripe's return markers.
+      const url = new URL(window.location.href);
+      url.searchParams.delete('checkout');
+      url.searchParams.delete('session_id');
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     } else if (checkoutStatus === 'cancelled') {
       // User cancelled checkout
       showToast('Checkout cancelled', 'info');
@@ -388,8 +455,11 @@ export default function PricingPage() {
         status: 'cancelled',
         from_plan: typedSubscription?.subscription?.planCode || 'FREE',
       });
-      // Clean up URL (stay on same page, just remove query params)
-      window.history.replaceState({}, '', window.location.pathname);
+      void personalOffer.refresh();
+      const url = new URL(window.location.href);
+      url.searchParams.delete('checkout');
+      url.searchParams.delete('session_id');
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     }
   }, [searchParams, showToast, isPollingWebhook, typedSubscription?.subscription?.planCode]);
 
@@ -561,6 +631,7 @@ export default function PricingPage() {
   // Fonction pour proceder avec la selection du plan
   const proceedWithPlanSelection = React.useCallback(async (planId: string, billingCycle: 'monthly' | 'yearly'): Promise<{ success: boolean; message?: string; error?: string }> => {
     setIsProcessing(true);
+    setSelectedPlanCode(planId.toUpperCase());
 
     // One checkout_started per outcome branch; codes + indexes only. The plan
     // code is resolved inside the try (as before), so a mapping failure still
@@ -579,12 +650,35 @@ export default function PricingPage() {
       // Mapper l'ID du plan vers le code de plan backend de maniere dynamique
       const planMapping = getPlanMapping();
       backendPlanCode = planMapping[planId] || planId.toUpperCase();
+      const offerBlock = personalOffer.current?.offerId && (!continueWithoutOffer || personalOffer.current.status === 'REVIEW_REQUIRED')
+        ? personalOfferCheckoutBlock(personalOffer.current.status) : null;
+      if (offerBlock) return { success: false, error: tOffer(offerBlock) };
+      const offerIntent = !continueWithoutOffer &&
+        (!!personalOffer.candidateCode || !!personalOffer.current?.offerId &&
+          ['AVAILABLE', 'CHECKOUT_OPEN'].includes(personalOffer.current.status));
+      const offerPlan = personalOffer.preview?.plans.find((candidate) => candidate.planCode === backendPlanCode);
+      if (!continueWithoutOffer && (personalOffer.isLoading || personalOffer.isError)) {
+        return { success: false, error: tOffer('verifyUnavailable') };
+      }
+      if (offerIntent && (personalOffer.isLoading || personalOffer.isError || !personalOffer.preview)) {
+        return { success: false, error: tOffer('verifyUnavailable') };
+      }
+      if (offerIntent && (!offerPlan || offerPlan.status === 'UNAVAILABLE')) {
+        return { success: false, error: tOffer('planUnavailable') };
+      }
       // Create Stripe checkout session or handle free plan
       const result = await createSubscription({
         planCode: backendPlanCode,
         billingCycle: billingCycle,
-        creditTierIndex: String(creditTierIndex)
+        creditTierIndex: String(creditTierIndex),
+        ...(offerIntent ? {
+          personalOfferId: personalOffer.preview?.offerId,
+          offerVersion: personalOffer.preview?.offerVersion,
+        } : {}),
       });
+      if (offerIntent && !hasAttachedPersonalOfferCheckout(result)) {
+        throw new Error(tOffer('attachFailed'));
+      }
 
       if (result) {
         // Check if it's the free plan
@@ -661,10 +755,16 @@ export default function PricingPage() {
       }
     } catch (error) {
       trackCheckout('error');
+      if (error instanceof ApiError && ['OFFER_PREVIEW_STALE', 'OFFER_EXPIRED', 'OFFER_CONFLICT', 'OFFER_REVIEW_REQUIRED'].includes(error.code ?? '')) {
+        void personalOffer.refresh();
+      }
+      const offerPaymentError = error instanceof ApiError ? personalOfferCheckoutApiError(error.code) : null;
       // Show a user-friendly error
       let errorMessage = 'Error creating subscription';
 
-      if (error instanceof Error) {
+      if (offerPaymentError) {
+        errorMessage = tOffer(offerPaymentError);
+      } else if (error instanceof Error) {
         if (error.message.includes('Plan non valide')) {
           errorMessage = 'Plan not available at the moment';
         } else if (error.message.includes('authenticated')) {
@@ -686,7 +786,7 @@ export default function PricingPage() {
     } finally {
       setIsProcessing(false);
     }
-  }, [createSubscription, forceLoadSubscription, showToast, getPlanMapping, creditTierIndex, showUpgradeModal]);
+  }, [createSubscription, forceLoadSubscription, showToast, getPlanMapping, creditTierIndex, showUpgradeModal, personalOffer, continueWithoutOffer, tOffer]);
 
   // Fonction unifiee pour la selection des plans (simple et enterprise)
   const handlePlanSelect = React.useCallback(async (planId: string, billingCycle: 'monthly' | 'yearly'): Promise<{ success: boolean; message?: string; error?: string }> => {
@@ -705,7 +805,16 @@ export default function PricingPage() {
       // Verifier l'authentification
       if (!isAuthenticated) {
         trackPlanClick('unauthenticated');
-        await loginWithRedirect();
+        setSelectedPlanCode(planId.toUpperCase());
+        savePersonalOfferJourney(window, {
+          planCode: planId.toUpperCase(),
+          creditTierIndex,
+          billingCycle,
+          returnToWork: readPersonalOfferJourney(window)?.returnToWork ?? `/${locale}/app/chat`,
+        });
+        await loginWithRedirect({
+          appState: { returnTo: buildPersonalOfferSignInReturn(window, { planCode: planId.toUpperCase(), creditTierIndex, billingCycle }) },
+        });
         return { success: false, error: 'Authentication required' };
       }
 
@@ -1011,8 +1120,22 @@ export default function PricingPage() {
       {/* <UserDebugger /> */}
 
       {/* A partner / creator code is applied here, BEFORE Stripe (see RewardCodeInline). The
-          self-hosted edition sells no plan here (it opens the cloud pricing page), so it has none. */}
-      {!isCeMode && <RewardCodeInline className="flex justify-center" />}
+          self-hosted edition sells no plan here (it opens the cloud pricing page), so it has none.
+          pt-4: this is the first thing in the page's scroll container, which clipped the top
+          border (and focus ring) of the opened field when it sat flush against the edge. */}
+      {!isCeMode && <RewardCodeInline className="flex justify-center pt-4" subscriptionCheckout creditTierIndex={creditTierIndex} billingCycle={billingCycle} />}
+      {!isCeMode && returnToWork && ['GRANTED', 'NO_BONUS'].includes(personalOffer.current?.status ?? '') && (
+        <div className="mt-2 text-center text-sm"><Link className="underline underline-offset-2 text-theme-primary" href={returnToWork}>{tOffer('returnToWork')}</Link></div>
+      )}
+      {!isCeMode && (personalOffer.isError || !!personalOffer.current?.offerId &&
+        !['GRANTED', 'NO_BONUS', 'CLAWED_BACK', 'ALREADY_USED', 'REVIEW_REQUIRED'].includes(personalOffer.current.status)) && (
+          <div className="mx-auto mt-2 max-w-2xl px-4 text-center text-sm text-theme-secondary">
+            {continueWithoutOffer && <p role="alert">{tOffer('firstPurchaseUsed')}</p>}
+            <button type="button" className="underline underline-offset-2" onClick={() => setContinueWithoutOffer((value) => !value)}>
+              {continueWithoutOffer ? tOffer('useOffer') : tOffer('continueWithout')}
+            </button>
+          </div>
+        )}
 
       {/* Mode toggle - Subscription vs Pay-as-you-go. Hidden in CE
           (no Stripe wiring, PAYG checkout endpoint returns 503). */}
@@ -1176,6 +1299,11 @@ export default function PricingPage() {
                 onBillingCycleChange={setBillingCycle}
                 pricingEvent={pricingEvent}
                 creditTierIndex={creditTierIndex}
+                personalOfferActive={!continueWithoutOffer && !!personalOffer.current?.offerId &&
+                  ['AVAILABLE', 'CHECKOUT_OPEN'].includes(personalOffer.current.status)}
+                personalOffer={personalOffer.preview?.plans.find((entry) => entry.planCode === plan.id.toUpperCase())}
+                nextEligibleMonthlyCredits={personalOffer.preview?.nextEligibleMonthlyCredits}
+                selectedPlanCode={selectedPlanCode}
               />
             ))}
           </div>
@@ -1204,6 +1332,11 @@ export default function PricingPage() {
                 onBillingCycleChange={setBillingCycle}
                 pricingEvent={pricingEvent}
                 creditTierIndex={creditTierIndex}
+                personalOfferActive={!continueWithoutOffer && !!personalOffer.current?.offerId &&
+                  ['AVAILABLE', 'CHECKOUT_OPEN'].includes(personalOffer.current.status)}
+                personalOffer={personalOffer.preview?.plans.find((entry) => entry.planCode === plan.id.toUpperCase())}
+                nextEligibleMonthlyCredits={personalOffer.preview?.nextEligibleMonthlyCredits}
+                selectedPlanCode={selectedPlanCode}
               />
             ))}
           </div>

@@ -91,6 +91,48 @@ class WorkflowPublicationControllerShareTokenTest {
     }
 
     @Test
+    @DisplayName("A share-link visitor never receives publisherEmail, although the token authenticates them AS the owner")
+    void shareVisitorNeverReceivesPublisherEmail() {
+        WorkflowPublicationEntity pub = privateOrgApplication();
+        pub.setPublisherName("Owner Display Name");
+        when(publicationService.getPublicationById(PUBLICATION_ID)).thenReturn(Optional.of(pub));
+        // The edge injects the link owner's identity, so the owner-scope check passes.
+        when(publicationService.isCallerInOwnerScope(pub, OWNER_ID, ORG_ID)).thenReturn(true);
+
+        ResponseEntity<?> response = controller.getPublicationById(
+                PUBLICATION_ID.toString(),
+                OWNER_ID,
+                ORG_ID,
+                "true",
+                "APPLICATION",
+                PUBLICATION_ID.toString());
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertThat(body).containsEntry("ownedByMe", true);
+        // The public display name stays (the viewer header shows it); only the address goes.
+        assertThat(body).containsEntry("publisherName", "Owner Display Name");
+        assertThat(body).doesNotContainKey("publisherEmail");
+    }
+
+    @Test
+    @DisplayName("The owner's own session still receives publisherEmail: the scrub is specific to share visitors")
+    void ownerSessionStillReceivesPublisherEmail() {
+        WorkflowPublicationEntity pub = privateOrgApplication();
+        when(publicationService.getPublicationById(PUBLICATION_ID)).thenReturn(Optional.of(pub));
+        when(publicationService.isCallerInOwnerScope(pub, OWNER_ID, ORG_ID)).thenReturn(true);
+
+        ResponseEntity<?> response = controller.getPublicationById(
+                PUBLICATION_ID.toString(), OWNER_ID, ORG_ID, null, null, null);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertThat(body).containsEntry("publisherEmail", "owner@example.test");
+    }
+
+    @Test
     @DisplayName("Mismatched ShareToken resource cannot read a private ORG-owned publication")
     void mismatchedShareTokenCannotReadPrivateOrgPublication() {
         WorkflowPublicationEntity pub = privateOrgApplication();

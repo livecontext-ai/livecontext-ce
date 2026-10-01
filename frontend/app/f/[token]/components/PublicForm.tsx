@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { CheckCircle } from 'lucide-react';
 import PublicHeader from '@/components/sharing/PublicHeader';
 import { useTranslations } from 'next-intl';
+import { normalizeFormField, type FormFieldOption } from '@/lib/forms/formFieldShape';
 
 interface FormFieldConfig {
   name: string;
@@ -11,8 +12,8 @@ interface FormFieldConfig {
   label: string;
   required?: boolean;
   placeholder?: string;
-  options?: string[];
-  defaultValue?: string;
+  options?: FormFieldOption[];
+  defaultValue?: unknown;
 }
 
 interface FormConfig {
@@ -25,6 +26,14 @@ interface FormConfig {
 
 interface PublicFormProps {
   token: string;
+}
+
+/** A field default as the string an input holds: numbers and booleans too, never "undefined". */
+function toInputValue(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
 }
 
 export default function PublicForm({ token }: PublicFormProps) {
@@ -58,13 +67,21 @@ export default function PublicForm({ token }: PublicFormProps) {
           return;
         }
 
-        setConfig(data);
+        // The copy this page reads may hold string-shorthand options or a `default` alias
+        // written before the builder wrote the canonical shape: read it in that shape.
+        const formConfig = data.formConfig
+          ? data.formConfig
+              .map((field, index) => normalizeFormField(field, index) as FormFieldConfig)
+              // An entry that is not a named field cannot become an input: skip it.
+              .filter((field) => field && typeof field === 'object' && typeof field.name === 'string' && field.name !== '')
+          : null;
+        setConfig({ ...data, formConfig });
 
         // Initialize form data with defaults
-        if (data.formConfig) {
+        if (formConfig) {
           const defaults: Record<string, string> = {};
-          for (const field of data.formConfig) {
-            defaults[field.name] = field.defaultValue || '';
+          for (const field of formConfig) {
+            defaults[field.name] = toInputValue(field.defaultValue);
           }
           setFormData(defaults);
         }
@@ -262,8 +279,8 @@ function FormField({
         >
           <option value="">{field.placeholder || t('form.selectPlaceholder')}</option>
           {field.options.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
+            <option key={opt.id} value={opt.value}>
+              {opt.label}
             </option>
           ))}
         </select>

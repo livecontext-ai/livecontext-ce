@@ -159,6 +159,20 @@ class AccountPurgePersistenceTest extends AuthPostgresIntegrationTest {
         jdbc.execute("CREATE TABLE IF NOT EXISTS auth.credentials ("
                 + "id BIGSERIAL PRIMARY KEY, tenant_id VARCHAR(255) NOT NULL, name VARCHAR(255) NOT NULL, "
                 + "type VARCHAR(50) NOT NULL, organization_id VARCHAR(255))");
+        // V552. No entity maps it (PersonalOfferLifecycleRepository is plain JDBC), and the purge
+        // deletes from it: without it every purge rolls back here on a missing relation.
+        jdbc.execute("CREATE TABLE IF NOT EXISTS auth.personal_offer_lifecycle ("
+                + "user_id BIGINT NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE, "
+                + "campaign_key VARCHAR(64) NOT NULL, exhausted_at TIMESTAMPTZ, "
+                + "offer_code_id BIGINT REFERENCES auth.reward_code(id), "
+                + "initial_status VARCHAR(16) NOT NULL DEFAULT 'pending', initial_claimed_at TIMESTAMPTZ, "
+                + "initial_accepted_at TIMESTAMPTZ, reminder_status VARCHAR(16) NOT NULL DEFAULT 'pending', "
+                + "reminder_claimed_at TIMESTAMPTZ, reminder_accepted_at TIMESTAMPTZ, stopped_reason VARCHAR(32), "
+                + "updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (user_id, campaign_key), "
+                + "CONSTRAINT chk_personal_offer_initial_status CHECK "
+                + "(initial_status IN ('pending', 'claimed', 'accepted', 'suppressed', 'unknown')), "
+                + "CONSTRAINT chk_personal_offer_reminder_status CHECK "
+                + "(reminder_status IN ('pending', 'claimed', 'accepted', 'suppressed', 'unknown')))");
         jdbc.execute("ALTER TABLE auth.org_member_quota_limit ALTER COLUMN created_by_user_id DROP NOT NULL");
         addFk("fk_test_ce_link_user", "auth.ce_link", "user_id", "ON DELETE RESTRICT");
         addFk("fk_test_ce_link_revoked_by", "auth.ce_link", "revoked_by_user_id", "");
@@ -221,6 +235,9 @@ class AccountPurgePersistenceTest extends AuthPostgresIntegrationTest {
                     + "(SELECT id FROM auth.billing_customer WHERE user_id = ?)", uid);
             jdbc.update("DELETE FROM auth.billing_customer WHERE user_id = ?", uid);
             jdbc.update("DELETE FROM auth.credentials WHERE tenant_id = ?", uid.toString());
+            jdbc.update("DELETE FROM auth.personal_offer_lifecycle WHERE user_id = ?", uid);
+            jdbc.update("DELETE FROM auth.partner_standing WHERE user_id = ?", uid);
+            jdbc.update("DELETE FROM auth.partner_terms_acceptance WHERE user_id = ?", uid);
             jdbc.update("DELETE FROM auth.user_roles WHERE user_id = ?", uid);
         }
         for (Long uid : seededUsers) {
@@ -247,6 +264,10 @@ class AccountPurgePersistenceTest extends AuthPostgresIntegrationTest {
                 Map.entry("user_onboarding.user_id", "bigint"),
                 Map.entry("user_changelog_seen.user_id", "bigint"),
                 Map.entry("user_acquisition.user_id", "bigint"),
+                Map.entry("partner_application.user_id", "bigint"),
+                Map.entry("partner_application.reviewed_by", "bigint"),
+                Map.entry("partner_standing.user_id", "bigint"),
+                Map.entry("partner_standing.updated_by_user_id", "bigint"),
                 Map.entry("refresh_tokens.user_id", "bigint"),
                 Map.entry("email_verification_codes.user_id", "bigint"),
                 Map.entry("credit_ledger.user_id", "bigint"),
@@ -269,6 +290,21 @@ class AccountPurgePersistenceTest extends AuthPostgresIntegrationTest {
     }
 
     @Test
+    @DisplayName("V557: the evidence of an accepted Partner Program Terms outlives the purged account (privacy policy, terms 13.4)")
+    void partnerTermsAcceptanceSurvivesThePurge() throws Exception {
+        User user = seedDeactivatedUser("partner");
+        Organization org = seedOrg(user, "partner", true);
+        memberRepository.save(new OrganizationMember(org, user, OrganizationRole.OWNER, true));
+        jdbc.update("INSERT INTO auth.partner_terms_acceptance (user_id, terms_version, terms_fingerprint, accepted_at, source) "
+                + "VALUES (?, '2026-10-01', 'sha256:test', now(), 'APPLICATION')", user.getId());
+
+        assertThat(purgeService.purgeUser(user.getId())).isTrue();
+
+        assertThat(count("auth.users WHERE id = ?", user.getId())).as("user row").isZero();
+        assertThat(count("auth.partner_terms_acceptance WHERE user_id = ?", user.getId())).as("acceptance evidence").isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("a deactivated account with a personal workspace is deleted, rows and all")
     void personalAccountIsFullyPurged() throws Exception {
         User user = seedDeactivatedUser("solo");
@@ -285,6 +321,10 @@ class AccountPurgePersistenceTest extends AuthPostgresIntegrationTest {
                 user.getId().toString());
         jdbc.update("INSERT INTO auth.credentials (tenant_id, name, type, organization_id) VALUES ('someone', 'k', 'API_KEY', ?)",
                 org.getId().toString());
+        jdbc.update("INSERT INTO auth.personal_offer_lifecycle (user_id, campaign_key) VALUES (?, 'free-credit-upgrade')",
+                user.getId());
+        jdbc.update("INSERT INTO auth.partner_standing (user_id, tier, founder, reached_at, updated_at) "
+                + "VALUES (?, 'GOLD', false, now(), now())", user.getId());
 
         boolean purged = purgeService.purgeUser(user.getId());
 
@@ -302,6 +342,8 @@ class AccountPurgePersistenceTest extends AuthPostgresIntegrationTest {
         assertThat(count("auth.usage_cycle WHERE subscription_id = ?", subId)).as("usage cycles").isZero();
         assertThat(count("auth.credentials WHERE tenant_id = ?", uid.toString())).as("user credentials").isZero();
         assertThat(count("auth.credentials WHERE organization_id = ?", oid.toString())).as("org credentials").isZero();
+        assertThat(count("auth.personal_offer_lifecycle WHERE user_id = ?", uid)).as("personal offer lifecycle").isZero();
+        assertThat(count("auth.partner_standing WHERE user_id = ?", uid)).as("partner tier").isZero();
         // The outbox promises the other services the same deletion.
         assertThat(count("auth.purge_log WHERE subject_type = 'ORG' AND subject_id = ?", oid.toString())).isEqualTo(1);
         assertThat(count("auth.purge_log WHERE subject_type = 'USER' AND subject_id = ?", uid.toString())).isEqualTo(1);

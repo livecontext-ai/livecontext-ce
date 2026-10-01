@@ -92,6 +92,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const pages: MetadataRoute.Sitemap = [
     { url: `${SITE_URL}/about`, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${SITE_URL}/contact`, changeFrequency: 'monthly', priority: 0.6 },
+    { url: `${SITE_URL}/partners`, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${SITE_URL}/models`, changeFrequency: 'weekly', priority: 0.7 },
     { url: `${SITE_URL}/changelog`, changeFrequency: 'weekly', priority: 0.5 },
     // Status mirrors live monitoring, so it changes far more often than it is
@@ -100,6 +101,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${SITE_URL}/status`, changeFrequency: 'daily', priority: 0.4 },
     { url: `${SITE_URL}/legal/privacy`, changeFrequency: 'yearly', priority: 0.3 },
     { url: `${SITE_URL}/legal/terms`, changeFrequency: 'yearly', priority: 0.3 },
+    { url: `${SITE_URL}/legal/partners`, changeFrequency: 'yearly', priority: 0.3 },
+    { url: `${SITE_URL}/legal/partners/fr`, changeFrequency: 'yearly', priority: 0.3 },
     { url: `${SITE_URL}/legal/mentions`, changeFrequency: 'yearly', priority: 0.3 },
   ];
 

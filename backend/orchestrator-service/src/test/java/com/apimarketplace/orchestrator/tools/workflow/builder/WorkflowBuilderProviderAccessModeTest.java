@@ -336,4 +336,153 @@ class WorkflowBuilderProviderAccessModeTest {
         assertThat(result.success()).isTrue();
         verify(planExporter).executeSetPlan(any(), any());
     }
+
+    // ── the update_node alias goes through modify's gates, not around them ──────
+
+    @Test
+    @DisplayName("regression: update_node (hallucinated name, now an alias) is a WRITE: a read-mode agent is denied as for modify")
+    void updateNodeAlias_readMode_deniedAsModify() {
+        Map<String, Object> p = params("update_node");
+        p.put("node", "Fetch");
+        p.put("params", Map.of("limit", 5));
+
+        ToolExecutionResult result = provider.execute("workflow", p, ctxWithMode("read"));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
+        assertThat(result.error()).contains("read-only").contains("modify");
+        verify(sessionManager, never()).getSession(any(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("update_node on a loaded APPLICATION is refused by the same immutability gate as modify (action named 'modify')")
+    void updateNodeAlias_applicationImmutabilityGateApplies() {
+        WorkflowBuilderSession application = new WorkflowBuilderSession();
+        application.setLoadedWorkflowId("wf-app");
+        application.setLoadedWorkflowIsApplication(true);
+        when(sessionManager.getSessionStore()).thenReturn(sessionStore);
+        when(sessionStore.getSessionForConversation(anyString(), any())).thenReturn(java.util.Optional.of(application));
+
+        Map<String, Object> p = params("update_node");
+        p.put("node", "Fetch");
+        p.put("params", Map.of("limit", 5));
+        ToolExecutionResult result = provider.execute("workflow", p, ctxWithMode("write"));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.errorCode()).isEqualTo(ToolErrorCode.RESOURCE_CONFLICT);
+        assertThat(result.error()).startsWith("Cannot modify an APPLICATION workflow");
+        verify(sessionManager, never()).getSession(any(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("write-mode update_node reaches modify (the modifier receives the call with its node and params)")
+    void updateNodeAlias_writeMode_reachesModifier() {
+        WorkflowBuilderSession session = new WorkflowBuilderSession();
+        when(sessionManager.getSessionStore()).thenReturn(sessionStore);
+        when(sessionStore.getSessionForConversation(anyString(), any())).thenReturn(java.util.Optional.empty());
+        when(sessionManager.getSession(any(), anyString(), any()))
+                .thenReturn(new WorkflowBuilderSessionManager.SessionResult(session, null));
+        when(modifier.executeModifyNode(org.mockito.ArgumentMatchers.eq(session), any()))
+                .thenReturn(ToolExecutionResult.success(Map.of("status", "Node modified")));
+        when(resultEnricher.enrichResult(any(), any())).thenAnswer(inv -> inv.getArgument(0));
+        when(resultEnricher.addSessionSnapshot(any(), any(), anyString(), anyString()))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> p = params("update_node");
+        p.put("node", "Fetch");
+        p.put("params", Map.of("limit", 5));
+        ToolExecutionResult result = provider.execute("workflow", p, ctxWithMode("write"));
+
+        assertThat(result.success()).isTrue();
+        org.mockito.ArgumentCaptor<Map<String, Object>> sent = org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(modifier).executeModifyNode(org.mockito.ArgumentMatchers.eq(session), sent.capture());
+        assertThat(sent.getValue()).containsEntry("node", "Fetch").containsEntry("params", Map.of("limit", 5));
+    }
+
+    @Test
+    @DisplayName("list_runs (hallucinated name, now an alias) returns the runs listing of the runs action")
+    void listRunsAlias_returnsRuns() {
+        when(crudModule.execute(org.mockito.ArgumentMatchers.eq("runs"), any(), anyString(), any()))
+                .thenReturn(java.util.Optional.of(ToolExecutionResult.success(Map.of("runs", java.util.List.of(Map.of("run_id", "run-1"))))));
+        when(resultEnricher.addSessionSnapshot(any(), any(), anyString(), anyString()))
+                .thenAnswer(inv -> inv.getArgument(0));
+        Map<String, Object> p = params("list_runs");
+        p.put("workflow_id", "wf-1");
+
+        ToolExecutionResult result = provider.execute("workflow", p, ctxWithMode("read"));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.data()).isEqualTo(Map.of("runs", java.util.List.of(Map.of("run_id", "run-1"))));
+    }
+
+    @Test
+    @DisplayName("a successful delete forgets the workflow as this conversation's remembered one (no reload hint to a deleted workflow)")
+    void deleteForgetsRememberedWorkflow() {
+        when(crudModule.execute(org.mockito.ArgumentMatchers.eq("delete"), any(), anyString(), any()))
+                .thenReturn(java.util.Optional.of(ToolExecutionResult.success(Map.of("id", "wf-1", "status", "DELETED"))));
+        when(sessionManager.getSessionStore()).thenReturn(sessionStore);
+        when(resultEnricher.addSessionSnapshot(any(), any(), anyString(), anyString()))
+                .thenAnswer(inv -> inv.getArgument(0));
+        Map<String, Object> creds = new LinkedHashMap<>();
+        creds.put("conversationId", "conv-9");
+        ToolExecutionContext ctx = new ToolExecutionContext(TENANT, creds, Map.of(), Set.of(), null, null, null, null);
+        Map<String, Object> p = params("delete");
+        p.put("workflow_id", "wf-1");
+
+        ToolExecutionResult result = provider.execute("workflow", p, ctx);
+
+        assertThat(result.success()).isTrue();
+        verify(sessionStore).forgetLastWorkflow(TENANT, "conv-9", "wf-1");
+    }
+
+    private ToolExecutionResult deleteInConversation(String deletedId) {
+        when(crudModule.execute(org.mockito.ArgumentMatchers.eq("delete"), any(), anyString(), any()))
+                .thenReturn(java.util.Optional.of(ToolExecutionResult.success(Map.of("id", deletedId, "status", "DELETED"))));
+        when(sessionManager.getSessionStore()).thenReturn(sessionStore);
+        when(resultEnricher.addSessionSnapshot(any(), any(), anyString(), anyString()))
+                .thenAnswer(inv -> inv.getArgument(0));
+        Map<String, Object> creds = new LinkedHashMap<>();
+        creds.put("conversationId", "conv-9");
+        Map<String, Object> p = params("delete");
+        p.put("workflow_id", deletedId);
+        return provider.execute("workflow", p,
+                new ToolExecutionContext(TENANT, creds, Map.of(), Set.of(), null, null, null, null));
+    }
+
+    @Test
+    @DisplayName("deleting the workflow this conversation's build session is editing closes that session (its next auto-save would write the deleted id back)")
+    void deleteClosesSessionOnDeletedWorkflow() {
+        WorkflowBuilderSession open = new WorkflowBuilderSession();
+        open.setSessionId("wb_open");
+        open.setLoadedWorkflowId("WF-1");
+        when(sessionStore.getSessionForConversation(TENANT, "conv-9")).thenReturn(java.util.Optional.of(open));
+
+        ToolExecutionResult result = deleteInConversation("wf-1");
+
+        assertThat(result.success()).isTrue();
+        verify(sessionStore).delete("wb_open");
+    }
+
+    @Test
+    @DisplayName("deleting ANOTHER workflow leaves the conversation's build session open")
+    void deleteKeepsSessionOnOtherWorkflow() {
+        WorkflowBuilderSession open = new WorkflowBuilderSession();
+        open.setSessionId("wb_open");
+        open.setLoadedWorkflowId("wf-other");
+        when(sessionStore.getSessionForConversation(TENANT, "conv-9")).thenReturn(java.util.Optional.of(open));
+
+        deleteInConversation("wf-1");
+
+        verify(sessionStore, never()).delete(anyString());
+    }
+
+    @Test
+    @DisplayName("regression: an unknown action lists get_run and runs among the allowed actions (they were missing)")
+    void unknownAction_listsDocumentedActions() {
+        ToolExecutionResult result = provider.execute("workflow", params("list_all_the_things"), ctxWithMode(null));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.errorCode()).isEqualTo(ToolErrorCode.INVALID_ENUM_VALUE);
+        assertThat(result.error()).contains("get_run").contains("runs").contains("get_node_output").doesNotContain("create,");
+    }
 }

@@ -1,4 +1,405 @@
 {
+  "partnerDashboard": {
+    "title": "Programa de parceiros",
+    "subtitle": "Ganhe uma parte de cada fatura paga pelos seus clientes e exiba o selo de parceiro oficial.",
+    "learnMore": "Como o programa funciona",
+    "error": "Não foi possível carregar seu programa de parceiros. Tente de novo em instantes.",
+    "selfHosted": {
+      "title": "O programa de parceiros é um recurso da nuvem",
+      "body": "Ele funciona na nuvem da LiveContext. Participe pela sua conta em livecontext.ai."
+    },
+    "terms": {
+      "commission": "{percent}% de cada fatura paga",
+      "duration": "Durante {months} meses por cliente",
+      "credits": "{credits} créditos grátis para cada cliente indicado",
+      "hold": "Paga após um prazo de reembolso de {days} dias",
+      "commissionRange": "De {from}% a {to}% de cada fatura paga, conforme o nível"
+    },
+    "apply": {
+      "title": "Torne-se parceiro",
+      "intro": "Conte sobre o seu negócio. Analisamos cada candidatura e respondemos por e-mail, em geral em poucos dias.",
+      "company": "Empresa ou marca",
+      "companyPlaceholder": "Acme Automação",
+      "website": "Site",
+      "audience": "Para quem você trabalha?",
+      "audiencePlaceholder": "Por exemplo: imobiliárias, marcas de e-commerce, equipes internas de operações",
+      "message": "Algo mais que devemos saber?",
+      "submit": "Enviar minha candidatura",
+      "submitting": "Enviando...",
+      "submitSignIn": "Entrar e enviar",
+      "terms": "Li e aceito os <link>termos do programa de parceiros</link> (versão {version})."
+    },
+    "pending": {
+      "title": "Candidatura recebida",
+      "body": "Estamos analisando a candidatura de {company}. Você receberá um e-mail assim que houver uma decisão, e esta página virará o seu painel de parceiro.",
+      "submittedOn": "Enviada em {date}"
+    },
+    "rejected": {
+      "title": "Sua candidatura anterior não foi aceita",
+      "note": "Nossa observação: {note}",
+      "again": "Você pode se candidatar de novo abaixo."
+    },
+    "errors": {
+      "already_pending": "Você já tem uma candidatura em análise.",
+      "already_partner": "Você já é parceiro.",
+      "missing_company": "Informe o nome da sua empresa ou marca.",
+      "invalid_website": "Informe um endereço completo, começando com https://",
+      "too_long": "Um dos campos é longo demais.",
+      "not_available_in_ce": "O programa de parceiros não está disponível em uma instalação auto-hospedada.",
+      "generic": "Algo deu errado. Tente de novo.",
+      "terms_not_accepted": "Marque a caixa para aceitar os termos do programa de parceiros antes de se candidatar.",
+      "terms_outdated": "Os termos do programa de parceiros acabaram de ser atualizados. Recarregue a página para ler a nova versão e depois aceite-a.",
+      "not_partner": "Somente parceiros e candidatos têm termos a aceitar."
+    },
+    "toasts": {
+      "applied": "Candidatura enviada",
+      "appliedBody": "Responderemos por e-mail.",
+      "copied": "Copiado",
+      "copyFailed": "Não foi possível copiar"
+    },
+    "dashboard": {
+      "inactive": "Seu código de parceiro está inativo, então novos cadastros não são atribuídos a você. Fale conosco se isso não for esperado.",
+      "linkTitle": "Seu link de parceiro",
+      "linkHint": "Compartilhe este link. Novas contas criadas com ele recebem {credits} créditos grátis e são atribuídas a você.",
+      "copyLink": "Copiar link",
+      "validUntil": "Seu código vale para novos cadastros até {date}.",
+      "maxUses": "{count, plural, one {Seu código pode ser usado por # conta nova.} other {Seu código pode ser usado por até # contas novas.}}",
+      "code": "Seu código:",
+      "copyCode": "Copiar código",
+      "yourRate": "Sua taxa: {percent}% de cada fatura paga, durante {months} meses por cliente.",
+      "badgeTitle": "Parceiro oficial",
+      "badgeBody": "Seu selo dourado aparece ao lado do seu nome, no seu perfil e nos templates que você publica.",
+      "badgeInactive": "Seu selo volta a aparecer assim que seu código de parceiro estiver ativo.",
+      "stats": {
+        "signups": "Cadastros",
+        "paying": "Clientes pagantes",
+        "onHold": "Retido",
+        "onHoldHint": "Dentro do prazo de reembolso de {days} dias",
+        "payable": "Pronto para pagar",
+        "paid": "Pago a você"
+      },
+      "lines": {
+        "title": "Histórico de comissões",
+        "empty": "Ainda não há comissões. As linhas aparecem aqui assim que um cliente indicado por você paga uma fatura.",
+        "date": "Data da fatura",
+        "invoice": "Fatura (sem impostos)",
+        "commission": "Sua comissão",
+        "status": "Situação",
+        "statusOnHold": "Retida até {date}",
+        "statusPayable": "Pronta para pagar",
+        "statusPaid": "Paga em {date}",
+        "statusVoid": "Anulada (reembolso ou disputa)"
+      },
+      "payoutTitle": "Como você recebe",
+      "payoutBody": "Uma comissão fica pagável {days} dias após a fatura, quando o prazo de reembolso termina. Pagamos por transferência bancária, todo mês, quando seu saldo pagável atinge 50 USD, e emitimos a nota por você (autofaturamento), a menos que prefira enviar a sua. Envie seu nome ou razão social, endereço, número fiscal e dados bancários (IBAN) para <email></email>.",
+      "tier": {
+        "title": "Seu nível",
+        "names": {
+          "silver": "Silver",
+          "gold": "Gold",
+          "platinum": "Platinum"
+        },
+        "founder": "Parceiro fundador",
+        "rate": "{percent}% sobre cada fatura paga",
+        "progressLabel": "Progresso até {tier}",
+        "progress": "{revenue} de {threshold} para chegar a {tier}",
+        "top": "Você está no nível mais alto.",
+        "topFounder": "Parceiro fundador: Platinum durante toda a sua participação, conforme os termos do programa de parceiros (cláusula 7.5).",
+        "hint": "Uma fatura conta para o seu nível quando tem {days} dias e não foi reembolsada. O volume nunca faz o seu nível descer.",
+        "hintGeneric": "Uma fatura conta para o seu nível quando não pode mais ser reembolsada. O volume nunca faz o seu nível descer."
+      }
+    },
+    "agreement": {
+      "titleFirst": "Aceite os termos do programa de parceiros",
+      "bodyFirst": "Leia e aceite os <link>termos do programa de parceiros</link>, o contrato do programa: enquanto você não os aceitar, nenhuma comissão poderá ser paga a você.",
+      "titleUpdated": "Os termos do programa de parceiros mudaram",
+      "bodyUpdated": "A versão {version} dos <link>termos do programa de parceiros</link> passa a valer. Leia-a e confirme que a aceita.",
+      "accept": "Li e aceito os termos (versão {version})",
+      "accepting": "Salvando...",
+      "accepted": "Você aceitou os <link>termos do programa de parceiros</link> (versão {version}) em {date}."
+    }
+  },
+  "partnersLanding": {
+    "metadata": {
+      "title": "Programa de parceiros para agências e consultores",
+      "description": "Traga seus clientes para a LiveContext e ganhe uma parte recorrente de cada fatura que eles pagam, que cresce com o seu nível de parceiro. Um selo de parceiro oficial e o direito de hospedar a LiveContext para seus clientes."
+    },
+    "hero": {
+      "eyebrow": "Programa de parceiros",
+      "title": "Ganhe até <rate>{max}%</rate> de cada fatura que seus clientes pagam",
+      "titleGeneric": "Ganhe uma parte de cada fatura paga pelos seus clientes",
+      "lead": "Para agências, consultores e freelancers que criam automações para clientes. Traga-os para a LiveContext, entregue os workflows e apps deles e ganhe em cada fatura que pagarem, durante {months, plural, one {# mês} other {# meses}} por cliente.",
+      "leadGeneric": "Para agências, consultores e freelancers que criam automações para clientes. Traga-os para a LiveContext, entregue os workflows e apps deles e ganhe em cada fatura que pagarem.",
+      "apply": "Seja parceiro",
+      "estimate": "Veja quanto você pode ganhar",
+      "note": "Participar é gratuito. Sem volume mínimo. Cada candidatura é analisada pela equipe.",
+      "founder": "Parceiros fundadores: {percent}% desde o primeiro dia, para sempre",
+      "founderDays": "{days, plural, one {falta # dia} other {faltam # dias}}"
+    },
+    "heroCard": {
+      "roleFounder": "Parceiro fundador, Platinum desde o primeiro dia",
+      "role": "Parceiro há um ano",
+      "thisMonth": "Comissão no mês {month}",
+      "perMonth": "/ mês",
+      "fromClients": "com {count} clientes no {plan}, {credits} créditos por mês",
+      "yearTotal": "Ganho no ano",
+      "rate": "Taxa alcançada",
+      "rateValue": "{percent}% ({tier})",
+      "disclosure": "Ilustração: um parceiro fictício. Os ganhos são calculados a partir dos nossos preços públicos e não são uma promessa de resultados.",
+      "chartLabel": "Exemplo: a comissão mensal de um parceiro ao longo de um ano, enquanto seus clientes pagantes passam de {from} para {to}",
+      "month": "Mês {month}"
+    },
+    "stats": {
+      "label": "Condições do programa",
+      "commissionValue": "Até {max}%",
+      "commissionLabel": "de cada fatura paga",
+      "monthsValue": "{months, plural, one {# mês} other {# meses}}",
+      "monthsLabel": "de comissão por cliente",
+      "joinValue": "{zero}",
+      "joinLabel": "para participar, sem volume mínimo",
+      "creditsValue": "{credits}",
+      "creditsLabel": "créditos grátis para cada cliente que você traz"
+    },
+    "earnings": {
+      "eyebrow": "Seus ganhos",
+      "title": "Quanto um parceiro ganha, todo mês",
+      "lead": "Preços reais da tabela, cobrados por mês, na taxa Platinum ({percent}%). Quanto maior a conta, maior a comissão: um único cliente grande já faz diferença.",
+      "upTo": "Até",
+      "perMonth": "/ mês",
+      "perYear": "{amount} por ano",
+      "agency": "Agência",
+      "ownTitle": "Faça suas próprias contas",
+      "ownLead": "Mova os controles: a estimativa segue os níveis reais, mês a mês.",
+      "single": "Um cliente grande",
+      "large": "Agência grande",
+      "clientsOn": "{count, plural, one {Um cliente} other {# clientes}} no {plan}, {credits} créditos",
+      "billEach": "{bill} por mês por cliente"
+    },
+    "tiers": {
+      "eyebrow": "Níveis de parceiro",
+      "title": "Três níveis. Sua taxa sobe conforme seus clientes pagam.",
+      "lead": "Todo parceiro começa no Silver. Quando as faturas pagas pelos seus clientes atingem um limite, você sobe sozinho, e nunca volta a descer.",
+      "perInvoice": "de cada fatura paga, durante {months, plural, one {# mês} other {# meses}} por cliente",
+      "rate": "{percent}%",
+      "equivalent": "{count, plural, one {Cerca de # cliente} other {Cerca de # clientes}} no {plan}, {credits} créditos ({bill} por mês), durante um ano",
+      "founderShortcut": "Fundadores começam aqui",
+      "silver": {
+        "name": "Silver",
+        "when": "A partir do dia da sua aprovação"
+      },
+      "gold": {
+        "name": "Gold",
+        "when": "Quando seus clientes tiverem pago {amount}"
+      },
+      "platinum": {
+        "name": "Platinum",
+        "when": "Quando seus clientes tiverem pago {amount}"
+      },
+      "rules": {
+        "auto": {
+          "title": "Automático",
+          "body": "Você sobe assim que as faturas pagas pelos seus clientes atingem o limite. Não precisa pedir nada."
+        },
+        "never": {
+          "title": "Nunca desce",
+          "body": "Um nível alcançado é seu. A nova taxa vale para cada fatura paga depois da mudança."
+        },
+        "settle": {
+          "title": "Contada após {days, plural, one {# dia} other {# dias}}",
+          "body": "Uma fatura conta para um nível quando tem {days, plural, one {# dia} other {# dias}} e não foi reembolsada."
+        }
+      },
+      "topTier": "Nível máximo"
+    },
+    "founder": {
+      "eyebrow": "Parceiros fundadores, até {date}",
+      "title": "Comece no topo.",
+      "titleRate": "{percent}% desde o primeiro dia, para sempre.",
+      "body": "Até {date}, a equipe nomeia um pequeno grupo de parceiros fundadores entre as candidaturas recebidas. Um parceiro fundador começa direto no Platinum, sem limite a atingir, e o mantém para sempre, conforme os termos do programa de parceiros.",
+      "points": {
+        "first": "A taxa Platinum ({percent}%) desde o seu primeiro cliente",
+        "life": "Platinum para sempre, conforme os termos do programa de parceiros",
+        "badge": "O selo de parceiro, com Platinum no seu perfil"
+      },
+      "cta": "Candidatar-se como parceiro fundador",
+      "daysLeft": "{days, plural, one {dia para se candidatar} other {dias para se candidatar}}",
+      "closes": "Os parceiros fundadores são nomeados até {date}.",
+      "termsLink": "Ler os termos do programa de parceiros",
+      "fine": "A equipe escolhe os parceiros fundadores entre as candidaturas recebidas antes de {date}. Candidatar-se não torna você fundador automaticamente. “Para sempre” significa durante toda a sua participação no programa, salvo se o encerrarmos conforme os termos do programa de parceiros (por exemplo, após 12 meses sem nenhuma comissão).",
+      "plate": "Parceiro fundador"
+    },
+    "calculator": {
+      "clients": "Clientes pagantes que você traz",
+      "founder": "Se a equipe me nomear parceiro fundador (antes de {date})",
+      "founderGeneric": "Se a equipe me nomear parceiro fundador",
+      "byMonth12": "No mês 12, você ganha",
+      "perMonth": "/ mês",
+      "firstMonth": "Mês 1",
+      "yearOne": "Total do primeiro ano",
+      "chartLabel": "Sua comissão mensal no primeiro ano, colorida por nível",
+      "month": "Mês {month}",
+      "legend": "{tier} {percent}%",
+      "pathStays": "Você continua {tier} este ano: traga mais clientes para subir.",
+      "pathReached": "{tier} a partir do mês {month}.",
+      "pathFounder": "{tier} desde o primeiro dia, vitalício.",
+      "disclaimer": "Uma estimativa, não uma promessa: supõe que cada cliente assina desde o início com cobrança mensal e paga todo mês, sem reembolso. As comissões são calculadas sobre faturas sem impostos.",
+      "plan": "Plano dos clientes",
+      "plans": {
+        "starter": "Starter",
+        "pro": "Pro",
+        "team": "Team"
+      },
+      "credits": "Créditos por mês",
+      "bill": "{bill} por mês por cliente",
+      "billHint": "Preço de tabela deste plano e destes créditos, cobrado por mês, sem impostos."
+    },
+    "badge": {
+      "eyebrow": "O selo de parceiro",
+      "title": "Seu app se destaca no marketplace",
+      "body": "Este é o marketplace da LiveContext, onde os clientes procuram apps. Ao lado do seu nome, o selo dourado de parceiro destaca os seus apps entre todos os outros.",
+      "label": "Parceiro oficial LiveContext",
+      "disclosure": "Ilustração: o parceiro, o app e as avaliações mostrados são fictícios. Os apps ao redor são apps reais do marketplace.",
+      "oneBadge": "Um só selo para todos os níveis. Seu perfil mostra Silver, Gold ou Platinum.",
+      "places": {
+        "profile": "No seu perfil público",
+        "apps": "Em cada app que você publica",
+        "search": "Nas páginas e na busca do marketplace"
+      },
+      "you": "Seu app",
+      "appTitle": "Invoice Autopilot",
+      "appDescription": "Lê as faturas de fornecedores no Gmail, extrai os valores e lança tudo no QuickBooks.",
+      "marketplace": "Marketplace da LiveContext",
+      "search": "Buscar apps, workflows, agentes",
+      "profile": "Seu perfil",
+      "profileApps": "{count, plural, one {# app publicado} other {# apps publicados}}",
+      "profileRating": "{rating} ({count, plural, one {# avaliação} other {# avaliações}})"
+    },
+    "how": {
+      "eyebrow": "Como funciona",
+      "title": "Quatro passos, sem volume mínimo",
+      "apply": {
+        "title": "Candidate-se",
+        "body": "Conte sobre o seu negócio e seus clientes. Leva dois minutos."
+      },
+      "link": {
+        "title": "Receba seu link",
+        "body": "Depois da aprovação você recebe um código de parceiro, um link rastreado e o seu painel de parceiro."
+      },
+      "clients": {
+        "title": "Traga seus clientes",
+        "body": "Clientes que se cadastram pelo seu link recebem créditos grátis para começar. Você constrói as automações e apps deles na LiveContext."
+      },
+      "earn": {
+        "title": "Ganhe todo mês",
+        "body": "Você ganha até {platinum}% de cada fatura que pagarem durante {months, plural, one {# mês} other {# meses}}, pagável após um prazo de reembolso de {days, plural, one {# dia} other {# dias}}.",
+        "bodyGeneric": "Você ganha uma parte de cada fatura que eles pagam, paga após um curto prazo de reembolso."
+      }
+    },
+    "benefits": {
+      "eyebrow": "E mais",
+      "title": "Muito mais que uma comissão",
+      "lead": "Tudo o que você precisa para vender, entregar e operar automações para seus clientes.",
+      "credits": {
+        "title": "Créditos grátis para seus clientes",
+        "body": "Clientes que se cadastram pelo seu link começam com créditos grátis, além do que o plano deles inclui."
+      },
+      "hosting": {
+        "title": "Hospede para seus clientes",
+        "body": "A licença da LiveContext permite instalar e operar a plataforma para cada cliente, nos servidores dele ou nos seus, e cobrar por esse trabalho."
+      },
+      "apps": {
+        "title": "Entregue apps, não só workflows",
+        "body": "Dê aos clientes interfaces reais, formulários e painéis sobre as automações deles, e venda um produto pronto."
+      },
+      "tracking": {
+        "title": "Acompanhamento ao vivo",
+        "body": "Acompanhe cadastros, clientes pagantes e ganhos no seu painel de parceiro, linha por linha."
+      },
+      "payout": {
+        "title": "Pago por transferência",
+        "body": "Cada comissão fica disponível após um curto prazo de reembolso e é paga por transferência bancária."
+      },
+      "team": {
+        "title": "Contato direto com a equipe",
+        "body": "Conte o que seus clientes precisam. Os parceiros ajudam a definir o que construímos a seguir."
+      },
+      "visual": {
+        "creditsAmount": "+{credits}",
+        "creditsUnit": "créditos grátis por cliente",
+        "signups": "Cadastros",
+        "paying": "Pagantes",
+        "earned": "Ganho",
+        "payout": "Repasse",
+        "paid": "Pago",
+        "client": "Cliente {letter}",
+        "running": "No ar",
+        "ask": "Meus clientes pedem um gatilho do Shopify.",
+        "reply": "Anotado, obrigado! Vamos analisar.",
+        "team": "Equipe LiveContext"
+      }
+    },
+    "faq": {
+      "eyebrow": "Perguntas",
+      "title": "Perguntas dos parceiros",
+      "cost": {
+        "question": "Quanto custa participar?",
+        "answer": "Nada. Não há taxa nem volume mínimo."
+      },
+      "commission": {
+        "question": "Como as comissões são calculadas?",
+        "answer": "Você ganha uma parte de cada fatura paga, sem impostos, dos clientes que se cadastraram com o seu link, durante {months, plural, one {# mês} other {# meses}} a partir do primeiro pagamento: {silver}% como Silver, até {platinum}% como Platinum. Cada comissão fica retida {days, plural, one {# dia} other {# dias}} em caso de reembolso e depois fica disponível para pagamento.",
+        "answerGeneric": "Você ganha uma parte de cada fatura paga, sem impostos, dos clientes que se cadastraram pelo seu link. Cada comissão fica retida por um curto prazo de reembolso e depois fica pagável."
+      },
+      "payout": {
+        "question": "Como e quando eu recebo?",
+        "answer": "As comissões pagáveis são pagas todo mês por transferência bancária, quando seu saldo pagável atinge 50 USD (termos do programa de parceiros, cláusula 8). Seu painel de parceiro mostra o que está retido, o que está pronto para pagar e o que já foi pago."
+      },
+      "clients": {
+        "question": "Quais clientes contam?",
+        "answer": "Contas novas criadas pelo seu link ou com o seu código. Um cliente é atribuído a um único parceiro, e você não pode indicar a sua própria conta."
+      },
+      "hosting": {
+        "question": "Posso instalar a LiveContext para meus clientes?",
+        "answer": "Sim. A licença da LiveContext permite que um prestador de serviços a instale, hospede e mantenha para cada cliente, uma instalação por cliente. Operá-la como sua própria plataforma multicliente exige uma licença comercial: escreva para nós."
+      },
+      "credits": {
+        "question": "O que meus clientes recebem?",
+        "answer": "{credits} créditos grátis ao se cadastrarem pelo seu link, além do que o plano deles inclui.",
+        "answerGeneric": "Créditos grátis ao se cadastrarem pelo seu link, além do que o plano deles inclui."
+      },
+      "badge": {
+        "question": "Quando recebo o selo?",
+        "answer": "Assim que sua candidatura é aprovada. É o mesmo selo para todos os níveis e aparece enquanto seu código de parceiro estiver ativo."
+      },
+      "tiers": {
+        "question": "Como funcionam os níveis?",
+        "answer": "Todo parceiro começa no Silver ({silver}%). Quando as faturas que geram comissão para você somam {goldAmount}, você passa para Gold ({gold}%); em {platinumAmount}, para Platinum ({platinum}%). Uma fatura conta quando tem {settleDays, plural, one {# dia} other {# dias}} e não foi reembolsada. Um nível nunca desce, e a nova taxa vale para as faturas pagas após a mudança."
+      },
+      "founder": {
+        "question": "O que é um parceiro fundador?",
+        "answer": "Até {date}, a equipe nomeia parceiros fundadores entre as candidaturas recebidas: candidate-se pelo formulário desta página. Um parceiro fundador começa direto no Platinum ({platinum}%), sem limite a atingir, e o mantém para sempre: durante toda a participação, salvo se for encerrado conforme os termos do programa de parceiros (por exemplo, após 12 meses sem nenhuma comissão). Depois de {date}, o Platinum é alcançado pela receita, como os outros níveis."
+      }
+    },
+    "apply": {
+      "eyebrow": "Candidatar-se",
+      "title": "Candidate-se em dois minutos",
+      "body": "Conte sobre o seu negócio e para quem você cria. Analisamos cada candidatura e respondemos por e-mail.",
+      "question": "Uma pergunta antes?",
+      "contact": "Fale conosco",
+      "points": {
+        "free": "Grátis, sem volume mínimo",
+        "reviewed": "A equipe lê cada candidatura",
+        "reply": "Uma resposta por e-mail"
+      },
+      "founderNote": "Candidaturas recebidas antes de {date} também são avaliadas para parceiro fundador: {percent}% desde o primeiro dia.",
+      "signInNote": "Preencha agora: ao enviar, pediremos que você entre ou crie sua conta gratuita, e guardaremos o que você digitou.",
+      "sentTitle": "Candidatura enviada",
+      "sentBody": "Vamos analisá-la e responder por e-mail. Você pode acompanhá-la na sua página de parceiro.",
+      "openDashboard": "Abrir minha página de parceiro",
+      "alreadyPartnerTitle": "Você já é parceiro",
+      "alreadyPartnerBody": "Seu link, seu nível e seus ganhos estão na sua página de parceiro."
+    }
+  },
   "avatarPicker": {
     "customize": "Personalizar",
     "toolLabel": "Emblema de ferramenta",
@@ -98,6 +499,45 @@
     "shortcutKeysMac": "⌘K"
   },
   "reward": {
+    "personalOffer": {
+      "applied": "Oferta pessoal aplicada",
+      "appliedUntil": "Oferta pessoal aplicada. Escolha até {date}.",
+      "reservedUntil": "Sua oferta está reservada para este pagamento até {date}.",
+      "reviewRequired": "Seu primeiro pagamento precisa de análise. Nenhum bônus foi adicionado. Fale com o suporte antes de iniciar outro pagamento.",
+      "usedWithoutOffer": "Sua primeira assinatura paga consumiu esta oferta sem aplicá-la. Nenhum bônus foi adicionado.",
+      "granted": "{credits} créditos PAYG de bônus adicionados.",
+      "usedWithoutBonus": "Sua primeira assinatura paga foi concluída sem créditos de bônus para este pacote.",
+      "reversed": "Os créditos de bônus desta oferta foram revertidos após a mudança no status do pagamento.",
+      "selectedPlan": "Plano selecionado",
+      "returnToWork": "Voltar ao seu trabalho",
+      "attachFailed": "Não foi possível associar a oferta a este pagamento. Tente novamente.",
+      "paymentPending": "O pagamento está pendente. O bônus ainda não foi adicionado.",
+      "processing": "Seu bônus está sendo verificado após o pagamento.",
+      "changeCode": "Alterar código",
+      "checking": "Verificando sua oferta pessoal...",
+      "signIn": "Entre na sua conta para ver sua oferta pessoal.",
+      "bonus": "+{credits} créditos PAYG únicos após o pagamento (valor PAYG: {value}).",
+      "annualTotal": "Total anual cobrado: {amount}, antes dos impostos.",
+      "noBonus": "Bônus deste pacote: 0 créditos.",
+      "nextEligible": "O bônus começa em {credits} créditos por mês.",
+      "firstPurchaseUsed": "Sua primeira assinatura paga esgota o direito a esta oferta, mesmo que este pacote não tenha bônus.",
+      "planUnavailable": "Não há bônus para este plano e pacote.",
+      "verifyUnavailable": "Não foi possível verificar seu bônus. Tente novamente antes de pagar.",
+      "continueWithout": "Continuar sem a oferta",
+      "useOffer": "Usar minha oferta",
+      "errors": {
+        "generic": "Não foi possível verificar esta oferta pessoal. Tente novamente.",
+        "expired": "Esta oferta pessoal expirou.",
+        "alreadyUsed": "Esta oferta pessoal já foi usada.",
+        "conflict": "Outra vantagem de conversão já está vinculada a esta conta.",
+        "notEligible": "Esta oferta pessoal não está disponível para esta conta.",
+        "checkoutActive": "Já existe um pagamento em andamento com esta oferta.",
+        "unavailable": "Esta oferta pessoal está indisponível no momento.",
+        "firstPaymentRequired": "Este pagamento não tem um primeiro valor positivo, então o bônus não pode ser aplicado. Escolha um plano pago ou fale com o suporte.",
+        "paymentPreviewUnavailable": "Não foi possível verificar o valor do primeiro pagamento. Nenhum pagamento foi iniciado. Tente novamente ou fale com o suporte.",
+        "reviewRequired": "Seu primeiro pagamento precisa de análise. Nenhum bônus foi adicionado. Fale com o suporte antes de iniciar outro pagamento."
+      }
+    },
     "page": {
       "title": "Indique e ganhe",
       "subtitle": "Convide amigos e ganhe créditos quando eles assinarem, ou resgate um código que recebeu."
@@ -124,9 +564,11 @@
     "inline": {
       "toggle": "Tem um código?",
       "pending": "Código {code} pendente: aplique-o",
-      "apply": "Aplicar"
+      "apply": "Aplicar",
+      "close": "Fechar"
     },
     "redeem": {
+      "personalOfferReady": "Oferta pessoal selecionada. O bônus será adicionado após sua primeira assinatura paga.",
       "title": "Resgatar um código",
       "subtitle": "Tem um código de indicação ou promocional? Digite-o aqui.",
       "placeholder": "Digite seu código",
@@ -144,6 +586,12 @@
       "signedOutBodyWithCode": "Entre ou crie uma conta gratuita. O código {code} será aplicado automaticamente ao entrar.",
       "signedOutCta": "Entrar ou criar uma conta",
       "errors": {
+        "offerUnavailable": "Esta oferta não está disponível para esta conta.",
+        "offerExpired": "Esta oferta expirou.",
+        "offerAlreadyUsed": "Esta oferta já foi usada.",
+        "offerNotEligible": "Esta conta não está qualificada para a oferta.",
+        "offerConflict": "Outra vantagem de conversão já está vinculada.",
+        "offerCheckoutActive": "Já existe um pagamento em andamento com esta oferta.",
         "invalidCode": "Este código não existe.",
         "notRedeemable": "Este código não está disponível no momento.",
         "alreadyRedeemed": "Você já resgatou um código.",
@@ -158,6 +606,13 @@
         "cloudLinkRequired": "Conecte sua conta cloud para resgatar um código.",
         "generic": "Não foi possível resgatar este código."
       }
+    },
+    "partnerProgram": {
+      "title": "Programa de parceiros",
+      "subtitle": "Para agências e freelancers que criam para clientes",
+      "body": "Não é o mesmo que convidar amigos: os parceiros ganham até {percent}% de cada fatura que seus clientes pagam, durante {months} meses, com um selo oficial.",
+      "bodyGeneric": "Não é o mesmo que convidar amigos: os parceiros ganham uma parte de cada fatura que seus clientes pagam, com um selo oficial.",
+      "cta": "Conhecer o programa de parceiros"
     }
   },
   "interfaceLinkGate": {
@@ -912,6 +1367,7 @@
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# bridge com pouco crédito} other {# bridges com pouco crédito}}",
           "ORG_INVITATION_PENDING": "{count, plural, one {# convite de organização} other {# convites de organização}}",
           "BADGE_UNLOCKED": "{count, plural, one {# novo troféu} other {# novos troféus}}",
+          "CREATOR_PUBLISHED": "{count, plural, one {Novo app de um criador que você segue} other {# novos apps de criadores que você segue}}",
           "BUDGET_REACHED": "{count, plural, one {# fluxo parado pelo limite de gasto} other {# fluxos parados pelo limite de gasto}}",
           "CREDIT_LOW": "{count, plural, one {Créditos acabando} other {Créditos acabando (#)}}",
           "CREDIT_EXHAUSTED": "{count, plural, one {Sem créditos} other {Sem créditos (#)}}",
@@ -1121,6 +1577,9 @@
       "sendMessageTrigger": "Envie uma mensagem para acionar o workflow",
       "waitingMessage": "Aguardando uma mensagem...",
       "loadingDetails": "Carregando os detalhes da execução...",
+      "headerRunning": "Execução {id}...",
+      "headerDone": "Execução {id} {status}",
+      "headerDoneIn": "Execução {id} {status} em {duration}",
       "waitingWorkflow": "Aguardando o fluxo de trabalho..."
     },
     "compactionDivider": "Contexto anterior resumido",
@@ -1637,6 +2096,7 @@
     "noModelMatchesFilters": "Nenhum modelo corresponde a estes filtros",
     "clearModelFilters": "Limpar filtros",
     "resetModelMenu": "Repor",
+    "unlistedModels": "Modelos ocultos",
     "reasoningEffort": "Esforço de raciocínio"
   },
   "versionHistory": {
@@ -1701,6 +2161,7 @@
     "showcaseRunHint": "Exibir resultados de uma execução anterior como demonstração ao vivo",
     "privateNoShowcaseHint": "Compartilhamento privado - vitrine é opcional. Você pode compartilhar sem uma execução.",
     "workflowTriggerWarning": "Esta versão contém um gatilho de workflow e não pode ser compartilhada. Remova o nó de gatilho de workflow primeiro.",
+    "customApiCannotShare": "APIs personalizadas não podem ser compartilhadas. Esta versão usa {apis}, definida apenas na sua própria conta, portanto quem instalar este app receberia nós que não conseguem ser executados. Remova esses nós ou compartilhe em modo privado.",
     "noInterfaceCannotShare": "Esta versão não tem nenhuma interface, por isso ainda não pode ser compartilhada. Adicione primeiro pelo menos uma interface ao seu workflow - será a aplicação que os visitantes abrirão.",
     "previewInterface": "Interface",
     "selectInterface": "Selecionar uma interface",
@@ -1921,6 +2382,9 @@
       "familyInterfaces": "Interfaces",
       "familyAgents": "Agentes",
       "familyApplications": "Aplicações",
+      "customApiErrorTitle": "Publicação bloqueada: este agente usa uma API personalizada",
+      "customApiErrorIntro": "Uma API personalizada está definida apenas na sua própria conta, portanto não pode ser compartilhada: quem instalar este agente receberia ferramentas que não conseguem ser executadas. As APIs abaixo são usadas pelo agente, por um workflow que ele pode executar ou por um dos seus subagentes.",
+      "customApiErrorFix": "Remova essas ferramentas da seleção do agente (muitas vezes uma integração do catálogo pode substituí-las), ou publique com visibilidade Privada, o que mantém o agente na sua conta, onde a API personalizada funciona.",
       "snapshotTooLargeTitle": "Publicação demasiado grande",
       "snapshotTooLargeMessage": "A publicação excede o tamanho máximo ({size} MB, máx. {max} MB).",
       "snapshotTooLargeRowsMessage": "A tabela {name} contém {items} linhas (máx. {max} linhas por tabela publicada).",
@@ -1966,6 +2430,7 @@
     "emptyWorkflowsHint": "Seja o primeiro a compartilhar um fluxo de trabalho!",
     "filterAgents": "Agentes",
     "filterByType": "Filtrar por tipo",
+    "filterByCategory": "Filtrar por categoria",
     "sortBy": "Ordenar por",
     "sortPopular": "Mais populares",
     "sortRating": "Melhor avaliadas",
@@ -2891,6 +3356,7 @@
       "backlogEnabled": "Participação no backlog compartilhado",
       "backlogEnabledHelp": "Quando ativado, este agente recebe tarefas não atribuídas do backlog compartilhado ao despertar e pode reivindicá-las. Deixe desativado para agentes especializados, para que trabalhem apenas as tarefas atribuídas diretamente a eles.",
       "duplicateName": "Já existe um agente chamado \"{name}\". Escolhe outro nome.",
+      "useSuggestedName": "Usar \"{name}\"",
       "memoryAccessLabel": "Memória de longo prazo",
       "memoryAccessInfo": "O que este agente guarda é adicionado ao contexto de todos os agentes do espaço de trabalho. Escolha apenas consulta para um agente que deva usar os factos sem os alterar.",
       "memoryAccessWrite": "Pode guardar e eliminar",
@@ -3804,8 +4270,22 @@
       "allTiers": "Todos os níveis",
       "filterByState": "Estado",
       "allStates": "Todos os estados",
-      "stateOn": "Ativos",
+      "stateOn": "Listados",
       "stateOff": "Inativos",
+      "stateUnlisted": "Não listado",
+      "listing": {
+        "unlist": "Deixar de listar: o modelo continua disponível, mas deixa de ser oferecido nos seletores",
+        "list": "Listar novamente",
+        "unlistFromOff": "Torná-lo disponível novamente, sem listá-lo: o que o usa roda nele, os seletores não o oferecem",
+        "unlistedTooltip": "Não listado: continua disponível, então os agentes, fluxos de trabalho e conversas que o usam continuam rodando nele. Não é oferecido nos seletores (o editor de mensagens o mostra nos modelos ocultos) e nunca é o padrão. Seu substituto está pausado."
+      },
+      "replacementPaused": "(pausado)",
+      "replacementPausedTooltip": "Não é aplicado enquanto o modelo não estiver listado: o que o usa continua rodando nele. Volta a valer se você desativar o modelo.",
+      "newBadge": "Novo",
+      "newBadgeTooltip": "Adicionado ao catálogo em {date}",
+      "filterNew": "Novos ({count})",
+      "filterNewTooltip": "Modelos adicionados ao catálogo nos últimos 14 dias",
+      "bulkUnlist": "Deixar de listar",
       "clearFilters": "Limpar filtros",
       "providerEnabled": "Fornecedor ativo",
       "providerSwitchUnavailable": "Não foi possível ler os interruptores de fornecedor, por isso estão ocultos. A lista de modelos abaixo não é afetada.",
@@ -4264,6 +4744,10 @@
       }
     },
     "wizard": {
+      "securityNote": {
+        "title": "Criptografado em trânsito e em repouso",
+        "body": "Suas credenciais trafegam via TLS e são armazenadas criptografadas com AES-256. Elas são usadas apenas para executar suas automações."
+      },
       "title": "Conectar {name}",
       "description": "Conecte sua conta para continuar.",
       "successTitle": "Conectado!",
@@ -5533,6 +6017,11 @@
         "supportSla": "Prioritário + SLA"
       }
     },
+    "planGrid": {
+      "previous": "Planos anteriores",
+      "next": "Próximos planos",
+      "goTo": "Mostrar planos a partir da posição {n} de {total}"
+    },
     "businessPlans": {
       "title": "Para equipes e organizações",
       "subtitle": "Escale com sua equipe - colaboração, segurança e controle"
@@ -6777,25 +7266,19 @@
       "retryCountLabel": "Repetir em caso de falha",
       "retryCountHelp": "Tentativas adicionais após uma falha (0-10). 0 = sem repetição.",
       "retryBackoffLabel": "Intervalo entre tentativas (ms)",
-      "retryBackoffHelp": "Atraso entre as tentativas, em milissegundos.",
+      "retryBackoffHelp": "Atraso entre as tentativas, em milissegundos (no máximo 60000). Quando o provedor pede para esperar mais, a espera dele é respeitada; se pedir mais de 60 segundos, as tentativas terminam.",
+      "retryOnLabel": "Tentar novamente em",
+      "retryOnDefault": "Qualquer falha exceto uma recusa definitiva",
+      "retryOnRateLimit": "Somente quando o provedor sinaliza um limite de taxa (429, 503, ou um 4xx com um Retry-After ou uma mensagem de limite de taxa)",
+      "retryOnHelp": "Uma solicitação que o provedor recusou como inválida, não autorizada ou não encontrada não é repetida, a menos que a recusa seja um limite de taxa; o mesmo vale para uma recusa da plataforma por falta de créditos ou de orçamento. A segunda opção é mais segura para um nó que publica ou grava: ele não reenvia após um tempo esgotado ou a maioria dos erros do servidor, embora um 503 ainda possa chegar depois de uma gravação aplicada.",
       "continueOnFailureLabel": "Continuar em caso de falha",
-      "continueOnFailureHelp": "Se todas as tentativas falharem, continua executando os próximos nós em vez de ignorá-los.",
-      "continueOnFailureBlockedTooltip": "Indisponível em nós de ramificação: uma decisão, switch ou opção com falha não seleciona nenhum ramo, então continuar executaria todos os ramos de uma vez.",
+      "continueOnFailureHelp": "Se todas as tentativas falharem, os próximos nós são executados mesmo assim em vez de serem ignorados, a menos que a falha seja uma recusa por falta de créditos ou de orçamento. O nó continua FAILED, e a execução termina como terminaria sem esta configuração. Dentro de um split, um item com falha segue para os próximos nós.",
+      "continueOnFailureBlockedTooltip": "Indisponível em nós de ramificação: uma decisão, switch, opção, loop, classify ou guardrail com falha não seleciona nenhum ramo, então continuar executaria todos os ramos de uma vez.",
       "timeoutLabel": "Tempo limite (ms)",
       "timeoutHelp": "Melhor esforço, aplicado por tentativa. 0 = desativado.",
       "executeOnceLabel": "Executar uma única vez",
       "executeOnceHelp": "Em um split, executa apenas para o primeiro item.",
-      "executeOnceBlockedTooltip": "Indisponível em nós split, aggregate, merge ou loop: eles coordenam todos os itens do split e pular itens os quebraria.",
-      "providerRetryLabel": "Orçamento de reenvio ao fornecedor (segundos)",
-      "providerRetryPlaceholder": "A plataforma decide",
-      "providerRetryHelp": "Deixe vazio para a plataforma absorver o limite de pedidos do fornecedor. Coloque 0 se este fluxo já controla o seu próprio ritmo.",
-      "providerRetryHelpCededToNode": "Este nó já tenta de novo sozinho, por isso a plataforma não reenvia a chamada por baixo. Escreva um valor para mudar isso.",
-      "providerRetryHelpBoundedByTimeout": "O tempo limite deste nó deixa {seconds} s à plataforma para absorver um limite de pedidos. Escreva um valor para mudar isso.",
-      "providerRetryHelpCappedByTimeout": "O tempo limite deste nó limita-o a {seconds} s. Aumente o tempo limite, ou baixe este valor, para que os dois concordem.",
-      "providerRetryInfoDefault": "Vazio: quando um fornecedor responde «demasiados pedidos», a plataforma espera o tempo que ele pediu e reenvia a chamada, dentro do seu próprio orçamento de tempo.",
-      "providerRetryInfoZero": "0: a chamada nunca é reenviada. Use quando o seu fluxo já controla o ritmo, com um ciclo ou uma repetição neste nó, porque os dois multiplicariam os pedidos.",
-      "providerRetryInfoCap": "Uma espera maior do que o orçamento da plataforma é reduzida a esse orçamento: o passo espera dentro de uma única chamada, e esperar mais faria o passo falhar apesar de a chamada ter passado.",
-      "providerRetryInfoRunning": "O nó continua em execução enquanto espera e, ao terminar, mostra quantas vezes a chamada foi reenviada."
+      "executeOnceBlockedTooltip": "Indisponível em nós split, aggregate, merge ou loop: eles coordenam todos os itens do split e pular itens os quebraria."
     },
     "mock": {
       "title": "Saída simulada",
@@ -10137,6 +10620,59 @@
     }
   },
   "adminCredits": {
+    "personalOffers": {
+      "title": "Ofertas pessoais",
+      "subtitle": "Configure o bônus da primeira assinatura paga. Alterações no rascunho afetam apenas ofertas futuras.",
+      "loading": "Carregando ofertas...",
+      "loadFailed": "Não foi possível carregar as ofertas.",
+      "retry": "Tentar novamente",
+      "version": "Versão da política",
+      "versionOption": "Versão {version} ({state})",
+      "newDraft": "Novo rascunho",
+      "newDraftFromVersion": "Copiar para novo rascunho",
+      "activate": "Ativar",
+      "resume": "Retomar",
+      "pause": "Pausar",
+      "label": "Nome interno",
+      "waitHours": "Espera após esgotar créditos (horas)",
+      "validityHours": "Validade da oferta (horas)",
+      "checkoutHoldMinutes": "Reserva do pagamento (minutos)",
+      "reminderHours": "Lembrete antes do vencimento (horas)",
+      "paygCreditsPerUsd": "Créditos PAYG por USD",
+      "reminderEnabled": "Enviar um lembrete",
+      "noStacking": "Ofertas pessoais não se acumulam com benefícios de conversão de parceiros ou indicações.",
+      "matrixTitle": "Matriz de bônus",
+      "matrixHelp": "Informe créditos de bônus para cada plano e pacote mensal oferecido. Uma célula vazia exclui a combinação; 0 permite a compra sem bônus.",
+      "monthlyCredits": "Créditos mensais",
+      "cellLabel": "Créditos de bônus para {plan} com {credits} créditos mensais",
+      "notAvailable": "Indisponível",
+      "saveDraft": "Salvar rascunho",
+      "saving": "Salvando...",
+      "invalid": "Informe um nome, valores e prazos válidos e não negativos.",
+      "saved": "Rascunho salvo.",
+      "saveFailed": "Não foi possível salvar o rascunho.",
+      "activateConfirm": "Ativar esta política para ofertas futuras? As ofertas emitidas mantêm suas condições.",
+      "pauseConfirm": "Pausar novas ofertas e envios restantes? As ofertas emitidas continuam válidas.",
+      "activated": "Política ativada.",
+      "paused": "Política pausada.",
+      "stateFailed": "Não foi possível alterar o estado da política ou do código.",
+      "issuedTitle": "Ofertas emitidas",
+      "recipient": "Destinatário",
+      "issuedAt": "Emitida",
+      "expiresAt": "Expira",
+      "status": "Status",
+      "action": "Ação",
+      "disable": "Desativar",
+      "disableConfirm": "Desativar esta oferta emitida? A ação será auditada.",
+      "disabled": "Oferta desativada.",
+      "noCodes": "Nenhuma oferta foi emitida.",
+      "codeStatuses": { "available": "Disponível", "disabled": "Desativada", "expired": "Expirada", "checkout_open": "Pagamento aberto", "pending_payment": "Pagamento pendente", "processing": "Em processamento", "review_required": "Análise necessária", "granted": "Concedida", "clawed_back": "Revertida", "no_bonus": "Usada sem bônus", "already_used": "Já usada", "conflict": "Benefício incompatível", "none": "Nenhuma" },
+      "states": {
+        "draft": "Rascunho",
+        "active": "Ativa",
+        "paused": "Pausada"
+      }
+    },
     "adminOnlyBadge": "Apenas administradores",
     "confirmLargeGrant": "Você está prestes a conceder {amount} créditos a {target}. Isso não pode ser desfeito sem uma concessão inversa. Continuar?",
     "errors": {
@@ -11044,15 +11580,23 @@
     }
   },
   "profile": {
+    "partnerAccount": "Parceiro oficial",
     "verifiedAccount": "Conta verificada",
     "metaTitle": "Perfil",
     "metaDescription": "Veja o perfil público deste criador e os aplicativos que ele publicou.",
     "notFoundTitle": "Perfil não encontrado",
     "notFoundSubtitle": "Este perfil não existe ou é privado.",
     "message": "Mensagem",
+    "follow": "Inscrever-se",
+    "following": "Inscrito",
+    "followHint": "Receba uma notificação quando este criador publicar um novo app",
+    "unfollowHint": "Cancelar inscrição: parar de receber notificações dos novos apps deste criador",
+    "followError": "Não foi possível atualizar sua inscrição. Tente novamente.",
     "messageComingSoon": "As mensagens diretas chegarão em breve",
     "appsLabel": "apps",
+    "followerCount": "{count, plural, one {<strong>#</strong> inscrito} other {<strong>#</strong> inscritos}}",
     "memberSince": "Membro desde",
+    "founderMemberSince": "Membro fundador desde",
     "publishedApps": "Aplicativos publicados",
     "noApps": "Ainda não há aplicativos publicados",
     "noAppsHint": "Os apps publicados no marketplace aparecerão aqui.",
@@ -11075,7 +11619,12 @@
     "cancel": "Cancelar",
     "saving": "Salvando…",
     "saved": "Salvo",
-    "viewPublicProfile": "Ver perfil público"
+    "viewPublicProfile": "Ver perfil público",
+    "partnerTier": {
+      "silver": "Parceiro Silver",
+      "gold": "Parceiro Gold",
+      "platinum": "Parceiro Platinum"
+    }
   },
   "dm": {
     "sidebarTitle": "Mensagens",
@@ -11321,8 +11870,8 @@
             "text": "Há dois timeouts em jogo aqui e eles são independentes. A etapa HTTP tem o próprio timeout de transporte (5000 ms), enquanto nodePolicy.timeoutMs (15000 ms) limita cada tentativa da própria chamada. Mantenha o da etapa acima do de transporte, senão o invólucro dispara primeiro e esconde o erro real. E tenha cuidado com o que um timeout significa: você para de ESPERAR pela resposta, mas o servidor remoto pode muito bem ter recebido e processado a sua requisição. Para qualquer coisa que grave dados, faça com que a chamada possa ser repetida com segurança."
           },
           "continueOnFailure": {
-            "label": "continueOnFailure mantém a execução viva",
-            "text": "Sem ele, uma etapa que falha marca tudo o que vem depois como ignorado. Com ele, a execução prossegue, embora a própria etapa continue aparecendo como FAILED. Em uma falha dura, a etapa NÃO produz os campos que você esperava (success e data não estão lá), portanto uma expressão que aponte para eles é resolvida como vazia e a decision abaixo cai no else. continueOnFailure é recusado em uma decision, em um switch ou em uma option: uma etapa de ramificação que falhou não escolheu nenhuma porta."
+            "label": "continueOnFailure mantém a execução em andamento",
+            "text": "Sem esta configuração, uma etapa com falha marca tudo o que vem depois como ignorado. Com ela, as etapas seguintes são executadas mesmo assim, seja qual for a origem da execução (execute, um gatilho, um agendamento ou o botão Executar), embora a própria etapa continue aparecendo como FAILED e a execução termine como terminaria sem esta configuração. Após uma falha real (host inacessível, tempo esgotado, URL inválida), a etapa NÃO produz os campos que você esperava (success e data não estão lá), então uma expressão que aponte para eles é resolvida como vazia e a decisão abaixo cai no else. Uma resposta HTTP 4xx ou 5xx é diferente: a etapa é bem-sucedida com success em false, e a decisão abaixo a envia para else. continueOnFailure é recusado em uma decisão, um switch, uma opção, um loop, um classify ou um guardrail: uma etapa de ramificação que falhou não escolheu nenhuma porta."
           },
           "stopOnError": {
             "label": "Falhar de propósito",
@@ -11333,7 +11882,7 @@
           "succeeded": "Chamada bem-sucedida",
           "failed": "Chamada com falha"
         },
-        "stopMessage": "A chamada da API falhou após todas as tentativas."
+        "stopMessage": "A chamada à API retornou um erro."
       },
       "errorHandler": {
         "title": "Reagir a uma falha",
@@ -11818,7 +12367,9 @@
       "generic": "Algo correu mal.",
       "notTheNextOccurrence": "Só a próxima execução pode ser movida sozinha. Mover uma posterior cancelaria todas as anteriores. Use \"Todas as ocorrências\", ou mova a próxima.",
       "viewerRole": "O seu papel neste espaço não permite alterar agendamentos.",
-      "scheduleRejected": "Não foi possível alterar o agendamento. Pode ter sido arquivado."
+      "scheduleRejected": "Não foi possível alterar o agendamento. Pode ter sido arquivado.",
+      "agentNameTaken": "Outro agente ativo já se chama \"{name}\". Muda primeiro o nome deste, por exemplo para \"{suggestion}\", e depois retoma-o.",
+      "agentNameTakenNoSuggestion": "Outro agente ativo já se chama \"{name}\". Muda primeiro o nome deste e depois retoma-o."
     },
     "toasts": {
       "movedTitle": "Movido",
@@ -11853,6 +12404,7 @@
     "publicHeading": "Troféus",
     "publicEmpty": "Ainda não há troféus.",
     "showAll": "Mostrar tudo",
+    "showMore": "Mostrar mais {count, plural, one {# troféu} other {# troféus}}",
     "showLess": "Mostrar menos",
     "detail": {
       "requirementLabel": "Como conquistar",
@@ -12339,6 +12891,7 @@
     "about": "Sobre",
     "careers": "Carreiras",
     "soon": "Em breve",
+    "partners": "Parceiros",
     "contact": "Contacto",
     "privacy": "Política de privacidade",
     "terms": "Termos de serviço",
@@ -15522,7 +16075,7 @@
       "findChats": "Encontrar minhas conversas",
       "findChatsHint": {
         "telegram": "Lista as conversas que escreveram recentemente para o seu bot. Só funciona antes de o bot ser conectado: depois, digite o identificador abaixo.",
-        "slack": "Lista os canais para os quais o app foi convidado e suas mensagens diretas.",
+        "slack": "Lista os canais públicos do seu espaço de trabalho, os privados para os quais o aplicativo foi convidado e suas mensagens diretas.",
         "discord": "Lista os canais dos servidores aos quais o seu bot foi adicionado.",
         "teams": "Lista suas conversas do Teams."
       },
@@ -15543,13 +16096,13 @@
       "typeChatLabel": "Ou digite o id do chat",
       "typeChatHint": {
         "telegram": "Para um grupo: o identificador dele, que começa com -100. Para um canal público: @nome. Nunca o @nome do seu próprio bot.",
-        "slack": "Para um canal que não aparece: o id dele (clique direito no canal, Ver detalhes do canal, no final).",
+        "slack": "Para um canal que não aparece: o nome dele, como #general, ou o id dele (clique direito no canal, Ver detalhes do canal, no final). O aplicativo entra sozinho em um canal público.",
         "discord": "Para um canal que não aparece: o id dele (Modo desenvolvedor ativado, clique direito no canal, Copiar ID do canal).",
         "teams": "Para um chat que não aparece: o id da conversa."
       },
       "chatIdPlaceholder": {
         "telegram": "123456789, -1001234567890 ou @meucanal",
-        "slack": "C0123456789",
+        "slack": "#general ou C0123456789",
         "discord": "123456789012345678",
         "whatsapp": "+5511912345678",
         "teams": "19:abc123@thread.v2"
@@ -15580,7 +16133,7 @@
         },
         "slack": {
           "1": "Conecte o Slack abaixo e aprove o app no seu workspace.",
-          "2": "Para um canal, digite nele /invite seguido do nome do app. Uma mensagem direta não precisa de nada.",
+          "2": "Para um canal privado, digite /invite seguido do nome do aplicativo nele. Um canal público ou uma mensagem direta não precisa de nada: o aplicativo entra sozinho em um canal público.",
           "3": "Escolha o canal ou a conversa com Encontrar minhas conversas."
         },
         "discord": {
@@ -15718,6 +16271,42 @@
     }
   },
   "partnerProgram": {
+    "applications": {
+      "invalidPercent": "Comissão: informe um número entre 0 e 100, ou deixe vazio para usar o padrão.",
+      "title": "Candidaturas",
+      "subtitle": "Pessoas que se candidataram pela página de parceiros. Aprovar cria o código de parceiro com as condições padrão e avisa por e-mail.",
+      "showDecided": "Mostrar também as decididas",
+      "showPending": "Mostrar só as pendentes",
+      "loading": "Carregando candidaturas...",
+      "error": "Não foi possível carregar as candidaturas.",
+      "empty": "Nenhuma candidatura pendente.",
+      "emptyAll": "Ainda não há candidaturas.",
+      "submitted": "Enviada em {date}",
+      "noEmail": "A conta não tem e-mail",
+      "audience": "Trabalha para",
+      "message": "Mensagem",
+      "note": "Observação enviada",
+      "codeOverride": "Código (opcional)",
+      "percentOverride": "Comissão % (opcional)",
+      "approve": "Aprovar",
+      "reject": "Recusar",
+      "notePlaceholder": "Observação para o candidato (opcional)",
+      "confirmReject": "Enviar recusa",
+      "cancel": "Cancelar",
+      "status": {
+        "pending": "Pendente",
+        "approved": "Aprovada",
+        "rejected": "Recusada"
+      },
+      "toasts": {
+        "approvedTitle": "Parceiro aprovado",
+        "approvedCode": "Código {code} criado.",
+        "rejectedTitle": "Candidatura recusada",
+        "mailed": "O candidato foi avisado por e-mail.",
+        "notMailed": "Nenhum e-mail pôde ser enviado: avise o candidato você mesmo."
+      },
+      "founder": "Parceiro fundador (Platinum vitalício)"
+    },
     "title": "Programa de parceiros",
     "subtitle": "Códigos de criador para um criador testar o produto, e códigos de parceiro com divisão de receita para o público dele.",
     "selfHosted": {
@@ -15754,7 +16343,8 @@
       "holdDays": "Espera antes do pagamento (dias)",
       "holdDaysHint": "Cobre o prazo de reembolso: um pagamento reembolsado cancela a comissão.",
       "partnerMaxUses": "Cadastros máximos (opcional)",
-      "partnerMaxUsesHint": "Vazio = sem limite. Limita o que um link público pode distribuir."
+      "partnerMaxUsesHint": "Vazio = sem limite. Limita o que um link público pode distribuir.",
+      "commissionTierHint": "O parceiro recebe o maior entre esta taxa e a taxa do seu nível."
     },
     "list": {
       "title": "Códigos",
@@ -15780,16 +16370,38 @@
       "copyLink": "Copiar link",
       "activate": "Ativar",
       "deactivate": "Desativar",
-      "markPaid": "Marcar como pago"
+      "markPaid": "Marcar como pago",
+      "tiers": {
+        "silver": "Silver",
+        "gold": "Gold",
+        "platinum": "Platinum"
+      },
+      "founder": "Fundador",
+      "makeFounder": "Tornar fundador",
+      "endFounder": "Encerrar status de fundador",
+      "confirmEndFounder": "Confirmar: voltar ao nível conquistado",
+      "confirmFounder": "Confirmar: Platinum vitalício",
+      "termsAccepted": "Termos {version} aceitos em {date}",
+      "termsOutdated": "Termos {version} aceitos em {date}, não a versão em vigor",
+      "termsMissing": "Termos não aceitos: nenhum pagamento possível"
     },
     "toasts": {
       "createdTitle": "Código criado",
       "failureTitle": "A ação falhou",
       "copied": "Link copiado",
       "paidTitle": "Comissões liquidadas",
-      "paidMessage": "{lines} linhas marcadas como pagas ({amount})."
+      "paidMessage": "{lines} linhas marcadas como pagas ({amount}).",
+      "founderEndedTitle": "Status de fundador encerrado",
+      "founderEndedMessage": "O parceiro volta ao nível alcançado pela receita, a partir da próxima comissão.",
+      "founderTitle": "Parceiro fundador",
+      "founderMessage": "Platinum vitalício, a partir da próxima comissão."
     },
     "errors": {
+      "existing_code_inactive": "Este candidato já tem um código de parceiro, mas ele está desativado ou expirado. Reative-o na lista abaixo e depois aprove.",
+      "too_long": "A observação é longa demais (no máximo 500 caracteres).",
+      "invalid_percent": "Informe uma porcentagem entre 0 e 100, por exemplo 40 ou 12,5.",
+      "not_pending": "Esta candidatura já foi decidida.",
+      "application_not_found": "Esta candidatura não existe mais.",
       "adminOnly": "Apenas administradores da plataforma podem gerenciar o programa de parceiros.",
       "generic": "Algo deu errado. Tente novamente.",
       "code_taken": "Este código já está em uso.",
@@ -15802,7 +16414,19 @@
       "missing_partner": "Informe o e-mail da conta do parceiro.",
       "not_available_in_ce": "O programa de parceiros não está disponível numa instalação auto-hospedada.",
       "code_generation_failed": "Não foi possível gerar um código livre. Tente novamente.",
-      "missing_body": "A requisição estava vazia."
+      "missing_body": "A requisição estava vazia.",
+      "not_founder": "Este parceiro não é parceiro fundador.",
+      "founder_closed": "O período de fundadores terminou: não é mais possível nomear parceiros fundadores.",
+      "partner_code_not_found": "Este código não é um código de parceiro.",
+      "terms_not_accepted": "Este parceiro ainda não aceitou os termos do programa de parceiros: nenhum pagamento é possível até que o faça."
     }
+  },
+  "realtime": {
+    "reconnecting": "Atualizações em tempo real interrompidas. Reconectando...",
+    "reconnectingHint": "O que você vê pode estar desatualizado até a conexão voltar.",
+    "reload": "Recarregar",
+    "dismiss": "Dispensar",
+    "unavailable": "As atualizações em tempo real não estão chegando a esta página.",
+    "unavailableHint": "As páginas funcionam, mas as mudanças feitas em outro lugar só aparecem após recarregar. Se isso persistir, um proxy ou firewall pode estar bloqueando a conexão em tempo real."
   }
 }

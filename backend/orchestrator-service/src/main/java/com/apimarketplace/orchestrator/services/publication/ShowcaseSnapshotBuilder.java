@@ -110,23 +110,39 @@ public class ShowcaseSnapshotBuilder {
 
     @Transactional(readOnly = true)
     public Optional<Map<String, Object>> capture(String runIdPublic, String tenantId, String organizationId, Integer epochFilter) {
+        return captureWithOutcome(runIdPublic, tenantId, organizationId, epochFilter).snapshot();
+    }
+
+    /**
+     * What a capture produced, and why it produced nothing. {@code epochNotFound} is the one miss the
+     * publisher can correct (they chose an epoch the run does not have), so the internal endpoint names
+     * it instead of letting it look like a missing or out-of-scope run.
+     */
+    public record CaptureOutcome(Optional<Map<String, Object>> snapshot, boolean epochNotFound) {
+        static CaptureOutcome notFound() {
+            return new CaptureOutcome(Optional.empty(), false);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public CaptureOutcome captureWithOutcome(String runIdPublic, String tenantId, String organizationId, Integer epochFilter) {
         Optional<WorkflowRunEntity> runOpt = workflowRunRepository.findByRunIdPublic(runIdPublic);
         if (runOpt.isEmpty()) {
             log.warn("[ShowcaseSnapshot] run not found: {}", runIdPublic);
-            return Optional.empty();
+            return CaptureOutcome.notFound();
         }
         WorkflowRunEntity run = runOpt.get();
         if (tenantId != null && !ScopeGuard.isInStrictScope(
                 tenantId, organizationId, run.getTenantId(), run.getOrganizationId())) {
             log.warn("[ShowcaseSnapshot] scope mismatch for run {} (caller tenant={} org={}, run tenant={} org={})",
                     runIdPublic, tenantId, organizationId, run.getTenantId(), run.getOrganizationId());
-            return Optional.empty();
+            return CaptureOutcome.notFound();
         }
 
         StateSnapshot dbSnapshot = loadStateSnapshot(runIdPublic);
         if (epochFilter != null && !epochExists(runIdPublic, dbSnapshot, epochFilter)) {
             log.warn("[ShowcaseSnapshot] requested epoch {} does not exist for run {}", epochFilter, runIdPublic);
-            return Optional.empty();
+            return new CaptureOutcome(Optional.empty(), true);
         }
 
         Map<String, Object> snapshot = new LinkedHashMap<>();
@@ -158,7 +174,7 @@ public class ShowcaseSnapshotBuilder {
         snapshot.put("interfaceRenders", buildInterfaceRenders(run, runIdPublic, tenantId, organizationId, epochFilter, snapshotEpochKey));
         snapshot.put("stepFiles", buildStepFiles(run, runIdPublic, epochFilter, snapshotEpochKey));
 
-        return Optional.of(snapshot);
+        return new CaptureOutcome(Optional.of(snapshot), false);
     }
 
     private StateSnapshot loadStateSnapshot(String runIdPublic) {
@@ -182,6 +198,10 @@ public class ShowcaseSnapshotBuilder {
                 }
             }
         }
+        // A probe that THREW proves nothing about the epoch. "Not found" is reported only on a
+        // definite answer; otherwise the capture fails as a server error, so the publisher is told
+        // to retry instead of to pick another epoch (EPOCH_NOT_FOUND is a 400-class answer).
+        boolean probeFailed = false;
         try {
             boolean timestampExists = workflowEpochService.listEpochTimestamps(runIdPublic).stream()
                     .anyMatch(row -> row.epoch() == epoch);
@@ -189,6 +209,7 @@ public class ShowcaseSnapshotBuilder {
                 return true;
             }
         } catch (Exception e) {
+            probeFailed = true;
             log.debug("[ShowcaseSnapshot] epoch timestamp probe failed for {} epoch {}: {}",
                     runIdPublic, epoch, e.getMessage());
         }
@@ -197,6 +218,7 @@ public class ShowcaseSnapshotBuilder {
                 return true;
             }
         } catch (Exception e) {
+            probeFailed = true;
             log.debug("[ShowcaseSnapshot] epoch header probe failed for {} epoch {}: {}",
                     runIdPublic, epoch, e.getMessage());
         }
@@ -206,6 +228,7 @@ public class ShowcaseSnapshotBuilder {
                 return true;
             }
         } catch (Exception e) {
+            probeFailed = true;
             log.debug("[ShowcaseSnapshot] epoch state probe failed for {} epoch {}: {}",
                     runIdPublic, epoch, e.getMessage());
         }
@@ -215,10 +238,18 @@ public class ShowcaseSnapshotBuilder {
                 return true;
             }
         } catch (Exception e) {
+            probeFailed = true;
             log.debug("[ShowcaseSnapshot] epoch aggregation probe failed for {} epoch {}: {}",
                     runIdPublic, epoch, e.getMessage());
         }
-        return epoch == 0 && snapshot != null && snapshot.getDags().isEmpty();
+        if (epoch == 0 && snapshot != null && snapshot.getDags().isEmpty()) {
+            return true;
+        }
+        if (probeFailed) {
+            throw new IllegalStateException("Could not tell whether epoch " + epoch + " exists in run "
+                    + runIdPublic + ": an epoch probe failed");
+        }
+        return false;
     }
 
     @SuppressWarnings("unchecked")

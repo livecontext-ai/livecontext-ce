@@ -68,6 +68,13 @@ export interface AIModel {
    * than promising one.
    */
   freeTierEnabled?: boolean;
+  /**
+   * V554: the platform admin stopped offering this model but kept it available. It stays in
+   * the raw catalogue (a stored selection on it must still resolve: its name, its price, its
+   * provider), and {@link useVisibleModels} moves it out of `models` into `unlistedModels`,
+   * which only the chat composer shows, in a collapsed group.
+   */
+  unlisted?: boolean;
   /** ISO-8601 instant. When set, model is end-of-life; UI should warn. */
   deprecatedAt?: string;
   /** ISO date (YYYY-MM-DD) - provider-published EOL date. */
@@ -190,6 +197,13 @@ interface UseModelsResult {
   isLoading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
+  /**
+   * Set by {@link useVisibleModels} only: the models the admin UNLISTED (V554), kept out of
+   * `models` and `providers`. Absent (read it as empty) on the raw {@link useModels}, whose
+   * `models` still carries them. A picker that validates a stored selection against `models`
+   * must accept these too, or it resets a user who picked one from the composer.
+   */
+  unlistedModels?: AIModel[];
 }
 
 // Cache the models data to avoid refetching on every mount
@@ -360,16 +374,26 @@ async function getModelsOnce(force: boolean): Promise<ModelsData> {
  * response: filtering the authenticated one would empty those panels whatever this hook does.
  */
 export function filterVisibleModels(base: UseModelsResult, isAdmin: boolean): UseModelsResult {
-  if (isAdmin) return base;
+  const hasUnlisted = base.models.some(m => m.unlisted === true);
+  if (isAdmin && !hasUnlisted) return base;
+  const roleAllows = (m: AIModel) => isAdmin || !isBridgeModel(m);
+  // Unlisted (V554) is the admin's "keep it running, stop offering it", so it applies to an
+  // admin too: every picker offers the listed models, the composer adds the rest discreetly.
+  const offered = (m: AIModel) => roleAllows(m) && m.unlisted !== true;
   const providers = base.providers
-    .map(p => ({ ...p, models: p.models.filter(m => !isBridgeModel(m)) }))
+    .map(p => ({ ...p, models: p.models.filter(offered) }))
     .filter(p => p.models.length > 0);
-  const models = base.models.filter(m => !isBridgeModel(m));
-  return { ...base, providers, models };
+  const models = base.models.filter(offered);
+  const unlistedModels = base.models.filter(m => roleAllows(m) && m.unlisted === true);
+  return { ...base, providers, models, unlistedModels };
 }
 
 /**
  * Role-aware view of {@link useModels} for the model-PICKER surfaces.
+ *
+ * <p>Also takes the models the admin UNLISTED (V554) out of `models`/`providers` and hands them
+ * back in `unlistedModels`, for the chat composer's collapsed group and for the checks that
+ * must still recognise a stored selection on one.
  *
  * <p>Hides CLI-bridge models (claude-code/codex/gemini-cli/mistral-vibe) from
  * non-admin users on EVERY deployment - they are dispatch-blocked from them anyway
@@ -676,8 +700,11 @@ export function toNonBridgeSelectedModel(
     .sort((a, b) => (a.displayOrder ?? 999) - (b.displayOrder ?? 999));
   for (const p of sorted) {
     if (isBridgeModel({ provider: p.name })) continue;
+    // Never an UNLISTED model (V554) either: this is a fallback the user did not pick, and the
+    // admin stopped offering those.
     const models = p.models.filter(
-      m => !isBridgeModel({ providerKind: m.providerKind, provider: m.provider ?? p.name }),
+      m => !isBridgeModel({ providerKind: m.providerKind, provider: m.provider ?? p.name })
+        && m.unlisted !== true,
     );
     if (models.length === 0) continue;
     const id = models.some(m => m.id === p.defaultModel) ? p.defaultModel : models[0].id;

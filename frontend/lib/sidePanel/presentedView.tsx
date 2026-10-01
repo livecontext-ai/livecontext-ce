@@ -9,7 +9,8 @@ import { openWorkflowBuilderTab } from '@/lib/sidePanel/openWorkflowBuilderTab';
 /**
  * The views action='present' opens in the side panel on ANY page, from the tool that owns each
  * resource (workflow, table, interface, agent, files). The agent chose
- * them, so they are never a side effect of a build step (unlike the chat-only auto-open).
+ * them, so they are never a side effect of a build step (unlike AppHeader's build-marker auto-open,
+ * which only chat pages and side-panel chats get).
  *
  * The two RUN views (present_application, present_run) already have homes: the chat page's
  * run tab (AppHeader auto-open) and the workflow page of that same workflow, which switches in

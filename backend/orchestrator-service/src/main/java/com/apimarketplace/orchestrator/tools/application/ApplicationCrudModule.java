@@ -1286,6 +1286,8 @@ public class ApplicationCrudModule implements ToolModule {
             if (!ScopeGuard.isInStrictScope(tenantId, orgId, run.getTenantId(), run.getOrganizationId())) {
                 return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "Run not found: " + runId);
             }
+            var appDenied = ApplicationRunAllowList.denyIfOutside(run, context, workflowRepository);
+            if (appDenied.isPresent()) return appDenied.get();
 
             WorkflowEntity workflow = run.getWorkflow();
             WorkflowPlanVersionService.RunPlan runPlan =
@@ -1319,10 +1321,14 @@ public class ApplicationCrudModule implements ToolModule {
         if (runId == null || runId.isBlank()) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "run_id is required");
         }
+        // Optional, same contract as workflow(action='get_node_output'): omitted means the most
+        // recent epoch in which this node ran, reported back as epoch_note.
+        Object rawEpoch = parameters.get("epoch");
         Integer epoch = getIntParamNullable(parameters, "epoch");
-        if (epoch == null) {
-            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER,
-                "epoch is required for get_node_output");
+        if (rawEpoch != null && epoch == null) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "epoch must be a number (the epoch as application(action='get_run') reports it), got: "
+                + rawEpoch + ". Omit it to read the most recent epoch in which the node ran.");
         }
         String nodeId = getStringParam(parameters, "node_id");
         if (nodeId == null || nodeId.isBlank()) {
@@ -1350,14 +1356,19 @@ public class ApplicationCrudModule implements ToolModule {
             if (!ScopeGuard.isInStrictScope(tenantId, orgId, run.getTenantId(), run.getOrganizationId())) {
                 return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "Run not found: " + runId);
             }
+            var appDenied = ApplicationRunAllowList.denyIfOutside(run, context, workflowRepository);
+            if (appDenied.isPresent()) return appDenied.get();
 
+            var epochResolution = com.apimarketplace.orchestrator.tools.common.NodeOutputEpoch.resolve(
+                    epoch, run, nodeId, "application", agentWorkflowFireService);
+            if (epochResolution.failed()) return epochResolution.failure();
             WorkflowEntity workflow = run.getWorkflow();
             WorkflowPlanVersionService.RunPlan runPlan =
                     planVersionService.resolvePlanForRun(workflow.getId(), run.getPlanVersion(), tenantId);
 
-            Map<String, Object> result = runPlan.annotate(agentWorkflowFireService.buildNodeOutputReport(
-                    run, runPlan.plan(), epoch, nodeId, tenantId, itemIndex, iteration, spawn,
-                    expandField, fieldOffset, fieldMaxBytes));
+            Map<String, Object> result = epochResolution.annotate(runPlan.annotate(agentWorkflowFireService.buildNodeOutputReport(
+                    run, runPlan.plan(), epochResolution.epoch(), nodeId, tenantId, itemIndex, iteration, spawn,
+                    expandField, fieldOffset, fieldMaxBytes)));
 
             overrideNextHints(result);
             return ToolExecutionResult.success(result);

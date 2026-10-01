@@ -6,18 +6,20 @@ import { useTranslations } from 'next-intl';
 import { ChevronRight } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { InspectorToggleRow } from './InspectorToggleRow';
 import type { BuilderNodeData, NodePolicy } from '../../types';
 import {
+  MAX_RETRY_BACKOFF_MS,
   MAX_RETRY_COUNT,
+  RETRY_ON_RATE_LIMIT,
   isContinueOnFailureBlocked,
   isExecuteOnceBlocked,
-  nodeCallsProvider,
   sanitizeNodePolicy,
+  supportsRetryOn,
 } from '../../utils/nodePolicy';
 import { nodeSupportsMock, sanitizeNodeMock } from '../../utils/nodeMock';
 import { MockOutputSection } from './MockOutputSection';
-import { InfoPopover } from '@/components/ui/info-popover';
 
 interface NodeSettingsSectionProps {
   node: Node<BuilderNodeData>;
@@ -61,17 +63,11 @@ export function NodeSettingsSection({
     const mock = sanitizeNodeMock(data.mock);
     return !!mock && mock.enabled !== false;
   }, [supportsMock, data.mock]);
-  // Counts what this node's controls can actually SHOW. A provider-retry budget stored on a node
-  // that makes no provider call (only reachable from a plan written before the tool actions began
-  // refusing it) renders no input here, so counting it produced a "Settings (1)" badge that
-  // auto-expanded a section where every visible control sat at its default.
-  const visiblePolicyKeys = Object.keys(policy).filter(
-    (key) => key !== 'providerRetryMaxWaitSec' || nodeCallsProvider(node)
-  );
-  const activeCount = visiblePolicyKeys.length + (mockActive ? 1 : 0);
+  const activeCount = Object.keys(policy).length + (mockActive ? 1 : 0);
   const [isOpen, setIsOpen] = React.useState(activeCount > 0);
 
   const continueBlocked = isContinueOnFailureBlocked(node);
+  const retryOnAvailable = supportsRetryOn(node);
   const executeOnceBlocked = isExecuteOnceBlocked(node);
 
   const writePolicy = React.useCallback(
@@ -89,42 +85,6 @@ export function NodeSettingsSection({
     [isRunMode, policy, data, onUpdate]
   );
 
-  const handleProviderRetryChange = React.useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      if (isRunMode) return;
-      const raw = event.target.value;
-      // Empty clears the setting and hands the decision back to the platform. It cannot go
-      // through handleNumberChange, which reads '' as 0 - and 0 here means the opposite:
-      // "never retry". The two states have to stay distinguishable.
-      if (raw === '') {
-        const { providerRetryMaxWaitSec: _dropped, ...rest } = policy;
-        const next = sanitizeNodePolicy(rest);
-        if (next) {
-          onUpdate({ ...data, nodePolicy: next });
-        } else if (data.nodePolicy !== undefined) {
-          const cleared = { ...data };
-          delete cleared.nodePolicy;
-          onUpdate(cleared);
-        }
-        return;
-      }
-      // Whole seconds only, and checked on the RAW text. parseInt('0.5') is 0, and 0 on this field
-      // is not "under a second", it is the switch that turns the platform retry off - the one state
-      // the whole field exists to make explicit. A number input does not stop a fraction, so
-      // anything that is not a plain non-negative integer leaves the setting as it stands rather
-      // than being rounded into a decision nobody made.
-      if (!/^\d+$/.test(raw.trim())) {
-        return;
-      }
-      const parsed = parseInt(raw.trim(), 10);
-      if (isNaN(parsed)) {
-        return;
-      }
-      writePolicy({ providerRetryMaxWaitSec: parsed });
-    },
-    [isRunMode, policy, data, onUpdate, writePolicy]
-  );
-
   const handleNumberChange = React.useCallback(
     (field: 'retryCount' | 'retryBackoffMs' | 'timeoutMs') =>
       (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -133,51 +93,22 @@ export function NodeSettingsSection({
         if (isNaN(value) || value < 0) value = 0;
         if (field === 'retryCount') {
           value = Math.min(value, MAX_RETRY_COUNT);
-          // Backoff is meaningless (and hidden) without retries - drop it too
-          // so no stale value silently survives in the plan.
-          writePolicy(value === 0 ? { retryCount: 0, retryBackoffMs: 0 } : { retryCount: value });
+          // Backoff and retryOn are meaningless (and hidden) without retries - drop
+          // them too so no stale value silently survives in the plan.
+          writePolicy(
+            value === 0
+              ? { retryCount: 0, retryBackoffMs: 0, retryOn: undefined }
+              : { retryCount: value }
+          );
           return;
         }
+        if (field === 'retryBackoffMs') value = Math.min(value, MAX_RETRY_BACKOFF_MS);
         writePolicy({ [field]: value });
       },
     [writePolicy]
   );
 
   const retryCount = policy.retryCount ?? 0;
-
-  /**
-   * What the platform will actually allow when this field is left EMPTY, or null when the answer is
-   * "the platform's own budget".
-   *
-   * Mirrors StepNode.resolveProviderRetryBudget: a node that retries cedes entirely, and a node
-   * that declares a per-attempt timeout gets half that window, because the attempt has to pay for
-   * the requests as well as the wait. Shown because the field would otherwise read "Platform
-   * decides" while a 1s timeout had already reduced it to zero - the very state this control exists
-   * to make explicit, entered without anyone choosing it.
-   */
-  const impliedProviderRetry = React.useMemo(() => {
-    if (policy.providerRetryMaxWaitSec !== undefined) return null;
-    if (retryCount > 0) return 0;
-    const timeoutMs = policy.timeoutMs ?? 0;
-    return timeoutMs > 0 ? Math.floor(timeoutMs / 2000) : null;
-  }, [policy.providerRetryMaxWaitSec, policy.timeoutMs, retryCount]);
-
-  /**
-   * The value the platform will actually use when this field IS set but the node's own timeout
-   * bounds it lower, or null when what is typed is what applies.
-   *
-   * Without this the field showed 45 while the platform applied 1, which is the state the backend
-   * bound exists to prevent: an author who believes a 5s Retry-After will be waited out gets the
-   * attempt abandoned first. Showing the number and saying nothing is the one way to make a
-   * correct guard read as a broken one.
-   */
-  const cappedProviderRetry = React.useMemo(() => {
-    const asked = policy.providerRetryMaxWaitSec;
-    const timeoutMs = policy.timeoutMs ?? 0;
-    if (asked === undefined || timeoutMs <= 0) return null;
-    const ceiling = Math.floor(timeoutMs / 2000);
-    return asked > ceiling ? ceiling : null;
-  }, [policy.providerRetryMaxWaitSec, policy.timeoutMs]);
 
   return (
     <div
@@ -232,6 +163,7 @@ export function NodeSettingsSection({
               <Input
                 type="number"
                 min={0}
+                max={MAX_RETRY_BACKOFF_MS}
                 step={100}
                 value={policy.retryBackoffMs ?? ''}
                 onChange={handleNumberChange('retryBackoffMs')}
@@ -245,53 +177,33 @@ export function NodeSettingsSection({
             </div>
           ) : null}
 
-          {/* Provider retry budget - only where a provider is actually called */}
-          {nodeCallsProvider(node) ? (
+          {/* Which failures are retried - a tool step only (the one node that reports the
+              provider's status), and only with retries enabled */}
+          {retryOnAvailable && retryCount > 0 ? (
             <div className="flex flex-col gap-1.5">
-              <div className="flex items-center gap-1.5">
-                <label className="text-sm font-medium text-slate-500 dark:text-slate-400">
-                  {t('providerRetryLabel')}
-                </label>
-                <InfoPopover label={t('providerRetryLabel')} size="sm" side="right" align="start" contentClassName="w-[300px] p-3" data-testid="node-settings-provider-retry-info">
-                  <p className="text-xs text-slate-600 dark:text-slate-300">
-                    {t('providerRetryInfoDefault')}
-                  </p>
-                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
-                    {t('providerRetryInfoZero')}
-                  </p>
-                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
-                    {t('providerRetryInfoCap')}
-                  </p>
-                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">
-                    {t('providerRetryInfoRunning')}
-                  </p>
-                </InfoPopover>
-              </div>
-              <Input
-                type="number"
-                min={0}
-                step={1}
-                value={policy.providerRetryMaxWaitSec ?? ''}
-                onChange={handleProviderRetryChange}
-                placeholder={impliedProviderRetry !== null
-                  ? String(impliedProviderRetry)
-                  : t('providerRetryPlaceholder')}
-                readOnly={isRunMode}
-                aria-label={t('providerRetryLabel')}
-                data-testid="node-settings-provider-retry"
-                className="w-full"
-              />
-              <p className="text-sm text-slate-400 dark:text-slate-500">
-                {cappedProviderRetry !== null
-                  ? t('providerRetryHelpCappedByTimeout', { seconds: cappedProviderRetry })
-                  : policy.providerRetryMaxWaitSec !== undefined
-                    ? t('providerRetryHelp')
-                    : retryCount > 0
-                      ? t('providerRetryHelpCededToNode')
-                      : impliedProviderRetry !== null
-                        ? t('providerRetryHelpBoundedByTimeout', { seconds: impliedProviderRetry })
-                        : t('providerRetryHelp')}
-              </p>
+              <label className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                {t('retryOnLabel')}
+              </label>
+              <Select
+                value={policy.retryOn ?? 'default'}
+                onValueChange={(value) =>
+                  writePolicy({ retryOn: value === RETRY_ON_RATE_LIMIT ? RETRY_ON_RATE_LIMIT : undefined })
+                }
+                disabled={isRunMode}
+              >
+                <SelectTrigger
+                  className="w-full"
+                  aria-label={t('retryOnLabel')}
+                  data-testid="node-settings-retry-on"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">{t('retryOnDefault')}</SelectItem>
+                  <SelectItem value={RETRY_ON_RATE_LIMIT}>{t('retryOnRateLimit')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-sm text-slate-400 dark:text-slate-500">{t('retryOnHelp')}</p>
             </div>
           ) : null}
 

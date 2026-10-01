@@ -197,9 +197,13 @@ export function useWorkflowEventListeners({
               );
 
               if (importResult.success) {
-                // The importer keeps every stored position and only places the nodes the
-                // agent just added. A forced Dagre pass here re-laid the whole graph after
-                // every agent action and threw away the layout the user had saved.
+                // The importer lays the whole graph out when a node of the STORED plan has
+                // no position (the agent added it and the canvas has not been saved since),
+                // and keeps every stored position otherwise. Until that save, every sync
+                // lays the graph out again, the same way each time; a drag that was never
+                // saved is lost either way, since the canvas is rebuilt from the stored plan.
+                // A LOAD of that plan is laid out the same way but from estimates only (see
+                // the announcement below), so it can differ by a few pixels from this view.
                 let layoutedNodes = importResult.nodes;
 
                 // Resolve agent avatars for nodes with agentConfigId but no agentAvatarUrl
@@ -238,9 +242,9 @@ export function useWorkflowEventListeners({
                 edgesRef.current = importResult.edges;
                 console.log('[WorkflowEventListeners] ✅ Plan refreshed');
 
-                // When the plan had no position at all, the importer just laid the whole
-                // graph out from label ESTIMATES (nothing is measured at import time), and
-                // those estimates decide both where a node is centred and how much room the
+                // When the importer laid the whole graph out (an agent build, or a node
+                // the agent added), it did so from label ESTIMATES (nothing is measured at
+                // import time), and those estimates decide both where a node is centred and how much room the
                 // next rank gets. Say so, and let MeasuredLayoutSync replay the layout on
                 // the real sizes once the browser has painted them. Only then: that replay
                 // recomputes EVERY node, so announcing a plan whose positions were kept

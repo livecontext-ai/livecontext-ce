@@ -27,7 +27,19 @@ class OrgScopePredicateInvariantTest {
     private static final List<String> RULE_1_ALLOWLIST = List.of(
             // Internal share-token resolution: serializes the link owner's ids into the
             // response body for the gateway (upstream-gated). No scope predicate.
-            "InternalSharedLinkController#validate"
+            "InternalSharedLinkController#validate",
+            // Same, for the orchestrator's /app/public: serializes the link owner's ids so it can
+            // bind the link's resourceId to the owner's workspace. No scope predicate.
+            "InternalSharedLinkController#getByToken",
+            // Reads a share link's owner ids to ask whether they still hold the PUBLICATION the
+            // link names. That question is the publication's owner-scope rule
+            // (WorkflowPublicationService.isInOwnerScope: a USER-owned row belongs to its user in
+            // any workspace), which is not the row-vs-active-workspace shape ScopeGuard decides.
+            "SharedLinkResourceGuard#isBoundToOwnedResource",
+            // Hands a link's own creator ids to SharedLinkResourceGuard.mayShare before the link
+            // is switched back on: the ownership rule lives in the guard, not in a scope predicate.
+            // The caller's scope was already checked by ScopeGuard in update().
+            "SharedLinkService#assertMayReactivate"
     );
 
     private final JavaClasses classes = new ClassFileImporter()

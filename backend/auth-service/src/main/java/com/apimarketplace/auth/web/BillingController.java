@@ -98,6 +98,36 @@ public class BillingController {
     @Autowired
     private com.apimarketplace.auth.service.RewardService rewardService;
 
+    @Autowired(required = false)
+    private com.apimarketplace.auth.service.PersonalOfferService personalOffers;
+
+    @GetMapping("/offers/current")
+    public ResponseEntity<?> currentPersonalOffer(HttpServletRequest request) {
+        Long userId = extractUserId(request);
+        if (userId == null) return ResponseEntity.status(401).body(Map.of("code", "NO_USER"));
+        return ResponseEntity.ok(personalOffers.current(userId));
+    }
+
+    public record PersonalOfferPreviewRequest(Long offerId, String code, Integer creditTierIndex,
+                                              String billingCycle) {}
+
+    @PostMapping("/offers/preview")
+    public ResponseEntity<?> previewPersonalOffer(@RequestBody PersonalOfferPreviewRequest body,
+                                                   HttpServletRequest request) {
+        Long userId = extractUserId(request);
+        if (userId == null) return ResponseEntity.status(401).body(Map.of("code", "NO_USER"));
+        if (body == null || body.creditTierIndex() == null)
+            return ResponseEntity.badRequest().body(Map.of("code", "PLAN_PACK_UNSUPPORTED"));
+        try {
+            return ResponseEntity.ok(personalOffers.preview(userId, body.offerId(), body.code(),
+                    body.creditTierIndex(), body.billingCycle()));
+        } catch (com.apimarketplace.auth.service.PersonalOfferService.OfferException e) {
+            return ResponseEntity.status(409).body(Map.of("code", e.code()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(409).body(Map.of("code", "PLAN_PACK_UNSUPPORTED"));
+        }
+    }
+
     /**
      * Extrait l'ID utilisateur depuis les headers du gateway
      * @param request La requete HTTP
@@ -164,6 +194,15 @@ public class BillingController {
         }
         String code = body == null ? null : body.get("code");
         try {
+            if (personalOffers != null) {
+                var personal = personalOffers.recognizePersonalCode(userId, code);
+                if (personal.isPresent()) {
+                    var offer = personal.get();
+                    return ResponseEntity.ok(Map.of("success", true, "code", "OFFER_READY",
+                            "status", "AVAILABLE", "offerId", offer.offerId(),
+                            "offerVersion", offer.policyVersion()));
+                }
+            }
             com.apimarketplace.auth.service.RewardService.RedeemResult result = rewardService.redeem(userId, code);
             switch (result.status()) {
                 case SUCCESS -> {
@@ -225,10 +264,15 @@ public class BillingController {
                 case NOTHING_TO_GRANT -> {
                     return rewardError(409, "NOTHING_TO_GRANT", "Your account already has this plan or a better one.");
                 }
+                case OFFER_CHECKOUT_IN_PROGRESS -> {
+                    return rewardError(409, "OFFER_CONFLICT", "A personal offer checkout is already in progress.");
+                }
                 default -> {
                     return rewardError(400, "REDEEM_FAILED", "Could not redeem this code.");
                 }
             }
+        } catch (com.apimarketplace.auth.service.PersonalOfferService.OfferException personalError) {
+            return rewardError(409, personalError.code(), "This personal offer is unavailable.");
         } catch (org.springframework.dao.DataIntegrityViolationException dup) {
             // Rare concurrent double-redeem by the same user trips a unique constraint. Two partner
             // codes redeemed at once lose on the one-partner-per-customer index instead.
@@ -384,8 +428,22 @@ public class BillingController {
                         }
                     }
 
-                    String checkoutUrl = stripeBillingService.createCheckoutSession(userId, normalizedPlanCode, billingCycle, creditTierIndex);
+                    Long personalOfferId = request.containsKey("personalOfferId")
+                            ? Long.valueOf(request.get("personalOfferId")) : null;
+                    Integer offerVersion = request.containsKey("offerVersion")
+                            ? Integer.valueOf(request.get("offerVersion")) : null;
+                    String checkoutUrl = personalOfferId == null
+                            ? stripeBillingService.createCheckoutSession(userId, normalizedPlanCode, billingCycle, creditTierIndex)
+                            : stripeBillingService.createCheckoutSession(userId, normalizedPlanCode,
+                                    billingCycle, creditTierIndex, personalOfferId, offerVersion);
                     response.put("url", checkoutUrl);
+                    if (personalOfferId != null) {
+                        var attached = personalOffers.current(userId);
+                        response.put("offerStatus", "ATTACHED");
+                        response.put("offerAttemptId", attached.offerAttemptId());
+                        response.put("bonusCredits", attached.reservedBonusCredits());
+                        response.put("sessionExpiresAt", attached.sessionExpiresAt());
+                    }
                     response.put("planCode", planCode);
                     response.put("isFreePlan", false);
                     logger.info("Session de checkout creee pour l'utilisateur {} (plan: {})", userId, planCode);
@@ -420,6 +478,8 @@ public class BillingController {
 
             return ResponseEntity.ok(response);
 
+        } catch (com.apimarketplace.auth.service.PersonalOfferService.OfferException e) {
+            return ResponseEntity.status(409).body(Map.of("code", e.code(), "error", e.code()));
         } catch (IllegalArgumentException e) {
             logger.warn("Erreur de validation lors de la creation du checkout: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));

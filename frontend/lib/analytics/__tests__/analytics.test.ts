@@ -143,6 +143,44 @@ describe('analytics facade (key configured)', () => {
     expect(analytics.isAnalyticsConfigured()).toBe(true);
   });
 
+  it('removes personal codes from automatic pageviews and initial attribution without dropping SDK tokens', () => {
+    grantConsent();
+    analytics.initAnalytics();
+    const sanitize = fake.init.mock.calls[0][1].before_send;
+    const original = {
+      event: '$pageview',
+      properties: {
+        token: 'phc_test',
+        distinct_id: 'viewer-1',
+        $current_url: 'https://livecontext.ai/fr/app/settings/pricing?lc_offer=PRIVATE&billingCycle=monthly',
+        $referrer: 'https://livecontext.ai/?lc_offer=PRIVATE&utm_source=email',
+        $set_once: { $initial_current_url: 'https://livecontext.ai/?lc_offer=PRIVATE', landing_plan: 'PRO' },
+      },
+    };
+
+    const cleaned = sanitize(original);
+
+    expect(JSON.stringify(cleaned)).not.toContain('PRIVATE');
+    expect(cleaned.properties).toMatchObject({
+      token: 'phc_test',
+      distinct_id: 'viewer-1',
+      $current_url: 'https://livecontext.ai/fr/app/settings/pricing?billingCycle=monthly',
+      $referrer: 'https://livecontext.ai/?utm_source=email',
+      $set_once: { $initial_current_url: 'https://livecontext.ai/', landing_plan: 'PRO' },
+    });
+    expect(original.properties.$current_url).toContain('PRIVATE');
+  });
+
+  it('keeps empty analytics envelopes safe and omits malformed personal offer URLs', () => {
+    grantConsent();
+    analytics.initAnalytics();
+    const sanitize = fake.init.mock.calls[0][1].before_send;
+    expect(sanitize(null)).toBeNull();
+    expect(sanitize({ event: 'empty' })).toEqual({ event: 'empty' });
+    expect(sanitize({ properties: { $current_url: 'bad lc_offer=PRIVATE', lc_offer: 'PRIVATE', count: 2 } }))
+      .toEqual({ properties: { count: 2 } });
+  });
+
   it('does NOT initialize without cookie consent', () => {
     analytics.initAnalytics();
     expect(fake.init).not.toHaveBeenCalled();

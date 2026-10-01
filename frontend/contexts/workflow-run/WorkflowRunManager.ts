@@ -99,6 +99,9 @@ const SAFETY_REFRESH_DELAY_MS = 3000;
 /** Delay after workflow completion before refreshing state from DB. */
 const POST_COMPLETION_REFRESH_DELAY_MS = 500;
 
+/** Delay before the single retry of a resync read that failed. */
+const RESYNC_RETRY_DELAY_MS = 3000;
+
 
 // ============================================================================
 // WORKFLOW RUN MANAGER CLASS
@@ -192,9 +195,17 @@ export class WorkflowRunManager {
   // Callbacks for external integrations
   private getCurrentPlan: (() => Record<string, unknown> | null) | null = null;
 
+  /** Unregisters the WS reconnect listener. Called by destroy(). */
+  private disposeReconnected: () => void;
+  /** The resync REST read (reconnect or re-shown run) while it is in flight: they never stack. */
+  private resyncInFlight: Promise<void> | null = null;
+  /** A reconnect landed while a resync read was in flight: read once more when it settles. */
+  private resyncAgain = false;
+
   constructor(runId: string) {
     this.runId = runId;
     this.store = getRunStateStore(runId);
+    this.disposeReconnected = wsClient.onReconnected(() => this.resyncAfterReconnect());
   }
 
   /**
@@ -1174,7 +1185,25 @@ export class WorkflowRunManager {
    * Subscribe to state changes.
    */
   subscribe(listener: StateListener): () => void {
-    return this.store.subscribe(listener);
+    const firstSubscriber = this.store.getSubscriberCount() === 0;
+    const unsubscribe = this.store.subscribe(listener);
+    // The run is being shown again by a manager that already holds a state. Managers live
+    // for the whole session and initialize() is a no-op on this one, so without a read the
+    // surface would show whatever the run was doing when it was last on screen, and nothing
+    // live corrects it: the channel's snapshot is skipped when unchanged and never sent for
+    // a finished run. Same rule as the reconnect resync (see resyncAfterReconnect).
+    if (firstSubscriber && this.store.getState().rawRunState) {
+      this.resyncFromRest(/* queueIfInFlight */ false);
+    }
+    return unsubscribe;
+  }
+
+  /**
+   * Follow state changes without counting as a surface that shows the run (no immediate call,
+   * no effect on the first-subscriber re-read or on the reconnect resync gate).
+   */
+  watch(listener: StateListener): () => void {
+    return this.store.watch(listener);
   }
 
   /**
@@ -1229,6 +1258,9 @@ export class WorkflowRunManager {
    * Full cleanup.
    */
   destroy(): void {
+    this.disposeReconnected();
+    this.resyncAgain = false;
+
     // Clear all pending timers
     for (const timerId of this.pendingTimers) {
       clearTimeout(timerId);
@@ -1305,6 +1337,54 @@ export class WorkflowRunManager {
   async refresh(): Promise<void> {
 
     await this.refreshStateInternal(/* force */ true);
+  }
+
+  /**
+   * The WebSocket session came back after a drop. Whatever the run published meanwhile (an
+   * epoch closing, the run finishing) never reached this tab and the gateway keeps no
+   * backlog, so without this the run stays painted "running" until a reload. Re-read it
+   * through the normal refresh: its seq guard still lets a fresher live event win.
+   *
+   * Only for a run something renders. A manager kept in the registry for a run nobody shows
+   * is re-read when a surface shows it again (see subscribe).
+   *
+   * One rule for both resync paths: the run is re-read WHATEVER its status. A finished run is
+   * not final for a tab that was not listening: it can be reactivated or re-run from a step in
+   * another tab, and a terminal run gets no channel snapshot to say so.
+   */
+  private resyncAfterReconnect(): void {
+    if (this.store.getSubscriberCount() === 0) return;
+    // The read in flight may predate this latest drop: take one more once it settles.
+    this.resyncFromRest(/* queueIfInFlight */ true);
+  }
+
+  /**
+   * One resync read at a time, through the normal refresh path. A read that fails is tried
+   * once more a little later while a surface still shows the run: a reconnect is exactly when
+   * the backend may be answering errors (a rolling deploy, a gateway restart), and giving up
+   * would leave the stale state on screen with nothing left to correct it.
+   */
+  private resyncFromRest(queueIfInFlight: boolean, isRetry: boolean = false): void {
+    if (this.resyncInFlight) {
+      if (queueIfInFlight) this.resyncAgain = true;
+      return;
+    }
+    this.resyncInFlight = this.refreshStateInternal()
+      .catch(err => {
+        streamDebug.warn('WorkflowRunManager', 'Resync read failed:', err);
+        if (!isRetry) {
+          this.scheduleTimer(() => {
+            if (this.store.getSubscriberCount() > 0) this.resyncFromRest(false, /* isRetry */ true);
+          }, RESYNC_RETRY_DELAY_MS);
+        }
+      })
+      .finally(() => {
+        this.resyncInFlight = null;
+        if (this.resyncAgain) {
+          this.resyncAgain = false;
+          this.resyncAfterReconnect();
+        }
+      });
   }
 
   // --------------------------------------------------------------------------

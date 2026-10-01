@@ -8,6 +8,7 @@
 import { existsSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { applyResultMapping } from '../lib/stopReasonMapper.js';
+import { AgentStopReason } from '../lib/agentStopReason.js';
 import { recordCallUsage, dispatchToolCall, dispatchToolResult, incrementTurn } from '../lib/adapterHelpers.mjs';
 import { claudeReasoningEnv } from '../lib/reasoningEffort.mjs';
 
@@ -108,6 +109,9 @@ export class ClaudeAdapter {
       // flags prevent double-publishing when both arrive for the same content.
       streamedContentViaDeltas: false,
       streamedThinkingViaDeltas: false,
+      // A synthetic API error can be followed by subtype=success. Keep its diagnostic
+      // outside visible content so a linked run can use the backend's pre-output fallback.
+      apiError: null,
     };
   }
 
@@ -366,6 +370,20 @@ export class ClaudeAdapter {
     switch (msg.type) {
       case 'assistant': {
         const contentBlocks = msg.message?.content || [];
+        // Claude Code emits quota/auth failures as synthetic assistant text, then a
+        // result with subtype=success AND is_error=true. Never publish that diagnostic
+        // as model content: doing so makes hasNoVisibleOutput() refuse the API fallback.
+        // Use protocol markers, not the wording, token count, or synthetic model name.
+        if (msg.is_api_error_message === true || (typeof msg.error === 'string' && msg.error)) {
+          if (!msg.parent_tool_use_id) {
+            adapterState.apiError = contentBlocks
+              .filter(block => block.type === 'text' && typeof block.text === 'string')
+              .map(block => block.text).join('\n').trim() || msg.error || 'Claude API request failed';
+            applyResultMapping('claude', { is_error: true, error: adapterState.apiError }, ctx);
+          }
+          // A nested subagent's error belongs to its tool result; the parent may recover.
+          break;
+        }
         const stopReason = msg.message?.stop_reason;
         // Tail of msg id helps confirm "snapshot of one API call" vs "new API
         // call" when reading prod logs - same suffix across consecutive events
@@ -546,8 +564,13 @@ export class ClaudeAdapter {
         // canonical AgentStopReason values as the Java backend (COMPLETED,
         // MAX_ITERATIONS, BUDGET_EXHAUSTED, LOOP_DETECTED, ...) instead of just
         // collapsing every non-success result to ERROR.
-        const mapped = applyResultMapping('claude', msg, ctx);
-        if (mapped.success && !ctx.getContent() && msg.result) {
+        const resultMessage = adapterState.apiError
+          ? { ...msg, subtype: 'error', is_error: true, error: adapterState.apiError }
+          : msg;
+        const mapped = applyResultMapping('claude', resultMessage, ctx);
+        if (mapped.success && !adapterState.apiError
+            && (resultMessage.is_error !== true || mapped.reason === AgentStopReason.MAX_ITERATIONS)
+            && !ctx.getContent() && msg.result) {
           ctx.updateState({ fullContent: msg.result });
         }
 
@@ -568,6 +591,15 @@ export class ClaudeAdapter {
         if (msg.model) {
           ctx.updateState({ cliModel: msg.model });
         }
+        break;
+      }
+
+      case 'rate_limit_event': {
+        // Status describes the quota window, not necessarily this request's outcome
+        // (a completed request can exhaust it). Only assistant/result error markers fail
+        // the run. In particular, rejected overage can accompany an allowed request.
+        const info = msg.rate_limit_info || {};
+        console.log(`[BRIDGE:claude:rate-limit] status=${info.status || 'unknown'} window=${info.rateLimitType || 'unknown'} resetsAt=${info.resetsAt ?? 'unknown'}`);
         break;
       }
 

@@ -1304,6 +1304,32 @@ describe('NotificationBell - tabs Inbox/Activity', () => {
     expect(pushMock).toHaveBeenCalledWith('/app/settings/billing');
   });
 
+  it('creatorPublishedRowOpensTheListingPreview (followed creator published, V551)', () => {
+    inboxMock.current = {
+      ...inboxMock.current,
+      items: [
+        {
+          subjectId: 'pub-uuid',
+          subjectName: 'Invoice Bot',
+          subjectType: 'PUBLICATION' as const,
+          runIdPublic: null,
+          category: 'CREATOR_PUBLISHED',
+          severity: 'info' as const,
+          count: 1,
+          firstEventAt: '2026-09-30T07:00:00Z',
+          lastEventAt: '2026-09-30T07:00:00Z',
+          unread: true,
+        },
+      ],
+      unreadCount: 1,
+    };
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Invoice Bot' }));
+
+    expect(pushMock).toHaveBeenCalledWith('/app/marketplace/pub-uuid/preview');
+  });
+
   it('a RUN_FAILED row carries the red failed icon, the way a trophy row carries its trophy', () => {
     render(<NotificationBell />);
     fireEvent.click(screen.getByRole('button', { name: 'title' }));
@@ -1349,6 +1375,7 @@ describe('NotificationBell - tabs Inbox/Activity', () => {
     ['BADGE', 'BADGE_UNLOCKED'],
     ['TRIGGER', 'WEBHOOK_TRIGGER_DISABLED'],
     ['CREDENTIAL', 'CRED_EXPIRED'],
+    ['PUBLICATION', 'CREATOR_PUBLISHED'],
   ] as const)('a %s row draws its subject icon (%s)', (subjectType, category) => {
     inboxMock.current = {
       ...inboxMock.current,

@@ -1,6 +1,7 @@
 package com.apimarketplace.auth.web;
 
 import com.apimarketplace.auth.dto.PublicProfileDto;
+import com.apimarketplace.auth.service.PartnerBadgeService;
 import com.apimarketplace.auth.service.UserService;
 import com.apimarketplace.auth.service.VerifiedAccountService;
 import org.springframework.http.ResponseEntity;
@@ -39,11 +40,14 @@ public class PublicProfileController {
 
     private final UserService userService;
     private final VerifiedAccountService verifiedAccountService;
+    private final PartnerBadgeService partnerBadgeService;
 
     public PublicProfileController(UserService userService,
-                                   VerifiedAccountService verifiedAccountService) {
+                                   VerifiedAccountService verifiedAccountService,
+                                   PartnerBadgeService partnerBadgeService) {
         this.userService = userService;
         this.verifiedAccountService = verifiedAccountService;
+        this.partnerBadgeService = partnerBadgeService;
     }
 
     /** Canonical URL lookup by the public @handle ({@code /app/u/{handle}}). */
@@ -109,7 +113,7 @@ public class PublicProfileController {
             @RequestParam(value = "ids", required = false) String ids,
             @RequestHeader(value = "X-User-ID", required = false) String requesterId) {
         if (requesterId == null || requesterId.isBlank()) {
-            return ResponseEntity.ok(Map.of("verified", List.of()));
+            return ResponseEntity.ok(Map.of("verified", List.of(), "partners", List.of()));
         }
         List<String> raw = splitCsv(ids);
         if (raw.size() > VerifiedAccountService.MAX_BATCH_SIZE) {
@@ -126,7 +130,9 @@ public class PublicProfileController {
                 // value from failing the whole page's badge lookup.
             }
         }
-        return ResponseEntity.ok(Map.of("verified", new ArrayList<>(verifiedAccountService.verifiedAmong(userIds))));
+        return ResponseEntity.ok(Map.of(
+                "verified", new ArrayList<>(verifiedAccountService.verifiedAmong(userIds)),
+                "partners", new ArrayList<>(partnerBadgeService.partnersAmong(userIds))));
     }
 
     /**
@@ -153,7 +159,8 @@ public class PublicProfileController {
                     "message", "At most " + VerifiedAccountService.MAX_BATCH_SIZE + " handles per request"));
         }
         return ResponseEntity.ok(Map.of(
-                "verified", new ArrayList<>(verifiedAccountService.verifiedHandlesAmong(requested))));
+                "verified", new ArrayList<>(verifiedAccountService.verifiedHandlesAmong(requested)),
+                "partners", new ArrayList<>(partnerBadgeService.partnerHandlesAmong(requested))));
     }
 
     /** Split a comma-separated query parameter, dropping blanks. */

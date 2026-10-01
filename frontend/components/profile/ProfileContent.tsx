@@ -5,14 +5,18 @@ import { getClientLocale } from '@/lib/utils/locale';
 import { displayZoneFor, parseUtcAware } from '@/lib/utils/dateFormatters';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { CalendarDays, LayoutGrid, MessageCircle } from 'lucide-react';
+import { CalendarDays, LayoutGrid, MessageCircle, Sparkles } from 'lucide-react';
 import { unifiedApiService } from '@/lib/api/unified-api-service';
 import { orchestratorApi } from '@/lib/api';
 import { dmApi } from '@/lib/api/dm-api';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
 import { VerifiedBadge } from '@/components/profile/VerifiedBadge';
+import { PartnerTierChip } from '@/components/partner/PartnerTierChip';
 import { PublicationCard, PublicationCardSkeleton } from '@/components/marketplace/PublicationCard';
 import { ProfileBadgeStrip } from '@/components/badges/ProfileBadgeStrip';
+import { FollowCreatorButton, useCreatorFollow } from '@/components/profile/FollowCreatorButton';
+import { useUserProfile } from '@/hooks/useUserProfile';
+import { IS_CE } from '@/lib/edition';
 import type { PublicProfile } from '@/lib/api/services/user-api.service';
 
 interface ProfileContentProps {
@@ -43,6 +47,19 @@ function formatJoined(iso: string): string {
   }
 }
 
+/**
+ * Accounts created before this UTC instant are founder members. Mirrors
+ * `BadgeCatalog.JOIN_CUTOFF` (the `founder_2026` trophy), compared on the UTC
+ * calendar day exactly like the backend does.
+ */
+const FOUNDER_CUTOFF_MS = Date.UTC(2027, 0, 1);
+
+export function isFounderMember(joinedAt: string | null | undefined): boolean {
+  if (!joinedAt) return false;
+  const joined = parseUtcAware(joinedAt).getTime();
+  return Number.isFinite(joined) && joined < FOUNDER_CUTOFF_MS;
+}
+
 export default function ProfileContent({ handle }: ProfileContentProps) {
   const t = useTranslations('profile');
   const [opening, setOpening] = React.useState(false);
@@ -58,6 +75,12 @@ export default function ProfileContent({ handle }: ProfileContentProps) {
   });
 
   const profileUserId = profile?.userId;
+  const { profile: me } = useUserProfile();
+  const isSelf = me?.id != null && profileUserId != null && String(me.id) === String(profileUserId);
+  // Product choice: following is a cloud-marketplace feature. A CE install browses the
+  // cloud marketplace remotely, so a local follow would never see those listings go live.
+  const canFollow = !IS_CE && profileUserId != null;
+  const { data: followStatus } = useCreatorFollow(profileUserId ?? '', canFollow);
 
   const { data: appsResponse, isLoading: appsLoading } = useQuery({
     queryKey: ['publicProfileApps', profileUserId],
@@ -110,35 +133,43 @@ export default function ProfileContent({ handle }: ProfileContentProps) {
                 {/* userId as well as the flag: `verified` is optional on the payload,
                     and an older/degraded response that omits it then resolves through
                     the normal lookup instead of silently reading as unverified. */}
-                <VerifiedBadge userId={profile.userId} verified={profile.verified} size="lg" />
+                <VerifiedBadge userId={profile.userId} verified={profile.verified} partner={profile.partner} size="lg" />
+                {profile.partner && profile.partnerTier && (
+                  <PartnerTierChip tier={profile.partnerTier} label={t(`partnerTier.${profile.partnerTier}`)} />
+                )}
               </div>
               {profile.handle && (
                 <p className="truncate text-sm text-theme-muted">@{profile.handle}</p>
               )}
             </div>
 
-            {/* Direct message: open (or get) a 1:1 thread and jump into it. Falls back
-                to login if the viewer isn't authenticated. */}
-            <button
-              type="button"
-              onClick={async () => {
-                if (opening || !profile) return;
-                setOpening(true);
-                try {
-                  const thread = await dmApi.openThread(String(profile.userId));
-                  window.location.href = `/app/messages/${thread.id}`;
-                } catch {
-                  window.location.href = '/login';
-                } finally {
-                  setOpening(false);
-                }
-              }}
-              disabled={opening}
-              className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-theme bg-transparent px-3 py-1.5 text-sm text-theme-primary transition-colors hover:bg-surface-hover disabled:opacity-60"
-            >
-              <MessageCircle className="h-3.5 w-3.5" />
-              {t('message')}
-            </button>
+            <div className="flex flex-shrink-0 items-start gap-2">
+              {/* Subscribe: get a bell notification for each new app this creator publishes. */}
+              {canFollow && !isSelf && <FollowCreatorButton creatorId={profile.userId} />}
+
+              {/* Direct message: open (or get) a 1:1 thread and jump into it. Falls back
+                  to login if the viewer isn't authenticated. */}
+              <button
+                type="button"
+                onClick={async () => {
+                  if (opening || !profile) return;
+                  setOpening(true);
+                  try {
+                    const thread = await dmApi.openThread(String(profile.userId));
+                    window.location.href = `/app/messages/${thread.id}`;
+                  } catch {
+                    window.location.href = '/login';
+                  } finally {
+                    setOpening(false);
+                  }
+                }}
+                disabled={opening}
+                className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-theme bg-transparent px-3 py-1.5 text-sm text-theme-primary transition-colors hover:bg-surface-hover disabled:opacity-60"
+              >
+                <MessageCircle className="h-3.5 w-3.5" />
+                {t('message')}
+              </button>
+            </div>
           </div>
 
           {profile.bio && (
@@ -149,12 +180,26 @@ export default function ProfileContent({ handle }: ProfileContentProps) {
             <span>
               <strong className="text-theme-primary">{appCount}</strong> {t('appsLabel')}
             </span>
-            {profile.joinedAt && (
-              <span className="inline-flex items-center gap-1">
-                <CalendarDays className="h-3 w-3" />
-                {t('memberSince')} {formatJoined(profile.joinedAt)}
+            {canFollow && followStatus && (
+              <span data-testid="profile-follower-count">
+                {t.rich('followerCount', {
+                  count: followStatus.followerCount,
+                  strong: (chunks) => <strong className="text-theme-primary">{chunks}</strong>,
+                })}
               </span>
             )}
+            {profile.joinedAt &&
+              (isFounderMember(profile.joinedAt) ? (
+                <span className="inline-flex items-center gap-1 font-medium text-theme-primary">
+                  <Sparkles className="h-3 w-3 text-[var(--accent-primary)]" aria-hidden="true" />
+                  {t('founderMemberSince')} {formatJoined(profile.joinedAt)}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1">
+                  <CalendarDays className="h-3 w-3" />
+                  {t('memberSince')} {formatJoined(profile.joinedAt)}
+                </span>
+              ))}
           </div>
         </div>
       </header>

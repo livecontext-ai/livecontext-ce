@@ -43,6 +43,7 @@ public class MonolithWsHandler extends TextWebSocketHandler implements SubProtoc
     private static final String TOKEN_SUBPROTOCOL_PREFIX = "lc.jwt.";
     private static final String ORG_SUBPROTOCOL_PREFIX = "lc.org.";
     private static final int HEARTBEAT_MS = 30_000;
+    /** Same bound as the cloud gateway (GatewayConstants.WS_MAX_SUBSCRIPTIONS_PER_CONNECTION). */
     private static final int MAX_SUBSCRIPTIONS = 50;
 
     private final JwtTokenProvider jwtTokenProvider;
@@ -176,7 +177,7 @@ public class MonolithWsHandler extends TextWebSocketHandler implements SubProtoc
         if (state == null) return;
 
         if (state.channels.size() >= MAX_SUBSCRIPTIONS) {
-            sendJson(session, Envelope.error(id, "Max subscriptions reached"));
+            sendJson(session, Envelope.error(id, "Max subscriptions reached", "max_subscriptions"));
             return;
         }
 
@@ -432,6 +433,9 @@ public class MonolithWsHandler extends TextWebSocketHandler implements SubProtoc
         }
         static Envelope error(String ref, String message) {
             return new Envelope(1, "error", UUID.randomUUID().toString(), ref, null, null, System.currentTimeMillis(), Map.of("message", message));
+        }
+        static Envelope error(String ref, String message, String code) {
+            return new Envelope(1, "error", UUID.randomUUID().toString(), ref, null, null, System.currentTimeMillis(), Map.of("message", message, "code", code));
         }
     }
 }

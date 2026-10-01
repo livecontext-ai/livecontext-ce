@@ -67,6 +67,7 @@ class PublicationModerationServiceTest {
     @Mock private InterfaceClient interfaceClient;
     @Mock private DataSourceClient dataSourceClient;
     @Mock private WorkflowPublicationService workflowPublicationService;
+    @Mock private CreatorFollowNotifier creatorFollowNotifier;
 
     private PublicationModerationService service;
     private LandingInterfaceSnapshotter landingInterfaceSnapshotter;
@@ -87,7 +88,8 @@ class PublicationModerationServiceTest {
                 dataSourceClient,
                 workflowPublicationService,
                 landingInterfaceSnapshotter,
-                strategies
+                strategies,
+                creatorFollowNotifier
         );
     }
 
@@ -632,7 +634,7 @@ class PublicationModerationServiceTest {
         PublicationModerationService svc = new PublicationModerationService(
                 publicationRepository, orchestratorClient, agentClient, interfaceClient,
                 dataSourceClient, workflowPublicationService, landingInterfaceSnapshotter,
-                List.of(tableStrategy));
+                List.of(tableStrategy), creatorFollowNotifier);
 
         WorkflowPublicationEntity pub = newOrgPub(publicationId, PublicationType.TABLE);
         pub.setResourceId(resourceId);

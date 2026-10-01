@@ -35,6 +35,10 @@ public class CatalogSearchModule implements ToolModule {
 
     private static final Set<String> HANDLED_ACTIONS = Set.of("search");
 
+    static final String API_LISTING_NOTE =
+        "No query given: these are tools of the requested API, up to 'limit' (default 10, max 25). "
+            + "Add a query (e.g. query='send message') to find a specific operation.";
+
     public CatalogSearchModule(ObjectMapper objectMapper, CredentialClient credentialClient) {
         this.restTemplate = new RestTemplate();
         this.objectMapper = objectMapper;
@@ -66,7 +70,9 @@ public class CatalogSearchModule implements ToolModule {
         ParsedSearch parsedSearch = ApiScopedSearchParser.parse(rawQuery, parameters.get("api"), parameters.get("apis"));
         String query = parsedSearch.query();
         if (query == null || query.isBlank()) {
-            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "query is required");
+            // Only reachable without an API scope: with api/apis and no query the parser lists that API's tools.
+            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER,
+                "query is required (or pass api='<api name>' alone to list that API's tools)");
         }
 
         int limit = 10;
@@ -94,6 +100,11 @@ public class CatalogSearchModule implements ToolModule {
             } else if (allowedToolIds != null) {
                 log.info("Agent restriction: mode=custom, fetching {} allowed tools by ID", allowedToolIds.size());
                 tools = filterFetchedTools(fetchToolsByIds(allowedToolIds, tenantId, context), parsedSearch);
+                if (parsedSearch.keywordFromScope() && limit > 0 && tools.size() > limit) {
+                    // The listing note promises "up to limit", and the search endpoint honours it on
+                    // the other path. Keyword searches here keep their unbounded behaviour.
+                    tools = tools.subList(0, limit);
+                }
             } else {
                 String url = buildSearchUrl(query, limit, parsedSearch.apiFilters());
 
@@ -128,6 +139,9 @@ public class CatalogSearchModule implements ToolModule {
                     resultMap.put("api_filters", parsedSearch.apiFilters());
                     resultMap.put("api_scope_source", parsedSearch.inlineScope() ? "query" : "parameter");
                 }
+                if (parsedSearch.keywordFromScope()) {
+                    resultMap.put("note", API_LISTING_NOTE);
+                }
 
                 addTableOperationsHint(resultMap, query);
                 addCredentialsRequiredInfo(resultMap, servicesRequiringApprovalMap, query);
@@ -143,14 +157,21 @@ public class CatalogSearchModule implements ToolModule {
 
                 return ToolExecutionResult.success(resultMap);
             } else {
-                return ToolExecutionResult.success(Map.of(
-                    "tools", List.of(),
-                    "count", 0,
-                    "query", query,
-                    "api_filters", parsedSearch.apiFilters(),
-                    "status", "OK",
-                    "message", "No tools found for query: " + query
-                ));
+                Map<String, Object> empty = new LinkedHashMap<>();
+                empty.put("tools", List.of());
+                empty.put("count", 0);
+                empty.put("query", query);
+                empty.put("api_filters", parsedSearch.apiFilters());
+                empty.put("status", "OK");
+                empty.put("message", "No tools found for query: " + query);
+                if (parsedSearch.keywordFromScope() && allowedToolIds != null) {
+                    empty.put("note", "None of the tools this agent may use belongs to " + parsedSearch.apiFilters()
+                        + ". Only the tools configured on this agent can be searched here.");
+                } else if (parsedSearch.keywordFromScope()) {
+                    empty.put("note", "No API matched " + parsedSearch.apiFilters() + ". Search without api, e.g. "
+                        + "catalog(action='search', query='" + query + "'), to find the API's exact name, then pass that as api.");
+                }
+                return ToolExecutionResult.success(empty);
             }
 
         } catch (Exception e) {
@@ -275,7 +296,11 @@ public class CatalogSearchModule implements ToolModule {
         if (tools == null || tools.isEmpty()) {
             return List.of();
         }
-        String query = parsedSearch.query() == null ? "" : parsedSearch.query().trim().toLowerCase(Locale.ROOT);
+        // A keyword derived from the API scope itself is not a keyword: the scope filter below already
+        // selects the API, and matching its name again against tool text would drop tools whose text
+        // spells the API differently (e.g. api='google-sheets' vs "Google Sheets").
+        String query = parsedSearch.query() == null || parsedSearch.keywordFromScope()
+            ? "" : parsedSearch.query().trim().toLowerCase(Locale.ROOT);
         List<String> queryTokens = Arrays.stream(query.split("\\s+"))
             .map(String::trim)
             .filter(token -> token.length() >= 2)

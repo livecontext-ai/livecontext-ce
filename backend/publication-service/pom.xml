@@ -46,9 +46,27 @@
             <artifactId>auth-client</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Notification Client: bell notifications to a creator's followers on a new listing -->
+        <dependency>
+            <groupId>com.apimarketplace</groupId>
+            <artifactId>notification-client</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>com.apimarketplace</groupId>
             <artifactId>storage-client</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- SharedLinkResourceGuard: a CHAT / FORM / CONVERSATION share link may only name an
+             endpoint or a conversation its creator holds, and only the owning service knows. -->
+        <dependency>
+            <groupId>com.apimarketplace</groupId>
+            <artifactId>trigger-client</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.apimarketplace</groupId>
+            <artifactId>conversation-client</artifactId>
             <version>${project.version}</version>
         </dependency>
 

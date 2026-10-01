@@ -156,13 +156,16 @@ class PartnerProgramMigrationPostgresTest {
     }
 
     @Test
-    @DisplayName("account purge: a purged partner's codes are disabled and only their lines ON HOLD are voided")
+    @DisplayName("account purge: a purged partner's codes are disabled and only their lines still in the refund window are voided")
     void purgeStatementsOnRealTables() {
         long code = partnerCode("TECHDOX", 99);
         long r = redemption(code, 7, 99);
         commission(r, code, "in_hold");
         commission(r, code, "in_paid");
+        commission(r, code, "in_payable");
         jdbc.update("UPDATE auth.partner_commission SET status = 'PAID' WHERE provider_invoice_id = 'in_paid'");
+        // Past its hold: payable when the account is deleted, so the terms (16.8) still pay it.
+        jdbc.update("UPDATE auth.partner_commission SET due_at = now() - interval '1 day' WHERE provider_invoice_id = 'in_payable'");
 
         jdbc.update(com.apimarketplace.auth.service.AccountPurgeService.DEACTIVATE_OWNED_REWARD_CODES_SQL, 99L);
         jdbc.update(com.apimarketplace.auth.service.AccountPurgeService.VOID_PARTNER_HOLD_COMMISSIONS_SQL, 99L);
@@ -172,5 +175,7 @@ class PartnerProgramMigrationPostgresTest {
                 String.class)).isEqualTo("VOID:PARTNER_PURGED");
         assertThat(jdbc.queryForObject("SELECT status FROM auth.partner_commission WHERE provider_invoice_id = 'in_paid'",
                 String.class)).isEqualTo("PAID");
+        assertThat(jdbc.queryForObject("SELECT status FROM auth.partner_commission WHERE provider_invoice_id = 'in_payable'",
+                String.class)).isEqualTo("HOLD");
     }
 }

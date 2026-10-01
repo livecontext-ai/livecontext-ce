@@ -74,7 +74,21 @@ vi.mock('@/components/ui/select', async () => {
 });
 vi.mock('@/hooks/useModels', () => ({ clearModelsCache: mocks.clearModelsCache }));
 vi.mock('../AddModelDialog', () => ({ default: () => null }));
+// Pass-through spy: the real DndContext still renders, the test only reads the props it got.
+const dndContextProps = vi.hoisted(() => ({ last: null as Record<string, unknown> | null }));
+vi.mock('@dnd-kit/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@dnd-kit/core')>();
+  const React = await import('react');
+  return {
+    ...actual,
+    DndContext: (props: React.ComponentProps<typeof actual.DndContext>) => {
+      dndContextProps.last = props as unknown as Record<string, unknown>;
+      return React.createElement(actual.DndContext, props);
+    },
+  };
+});
 
+import { TraversalOrder } from '@dnd-kit/core';
 import ModelManagementPanel from '../ModelManagementPanel';
 
 const t = (k: string, values?: Record<string, string>) =>
@@ -148,6 +162,25 @@ describe('ModelManagementPanel - virtualised model list', () => {
     expect(await screen.findByTestId('model-row-openai-model-287')).toBeInTheDocument();
     // Its rank is its place in the whole list, not "1" in the filtered view.
     expect(screen.getByTestId('model-rank-openai-model-287')).toHaveTextContent('287');
+  });
+
+  /*
+   * A long drag held at the bottom edge of the list stalled on a tall screen: dnd-kit's
+   * default auto-scroll walks from the OUTERMOST scroll container, the list's bottom edge
+   * also sits in the settings page's edge band, so the page scrolled instead, and the list
+   * took over only if the row under the pointer happened to change after the page's last
+   * scroll step (a few pixels of layout decided it). Innermost-first makes the list scroll,
+   * and the page only once the list is done.
+   * The behaviour itself is proven by the CE e2e "Models tab long drag" test; jsdom has no
+   * layout to scroll.
+   */
+  it('auto-scrolls the list before the page during a drag (innermost container first)', async () => {
+    mocks.getEffectiveModels.mockResolvedValue(catalogue(30));
+
+    render(<ModelManagementPanel t={t} />);
+    await screen.findByTestId('model-row-openai-model-1');
+
+    expect(dndContextProps.last?.autoScroll).toEqual({ order: TraversalOrder.ReversedTreeOrder });
   });
 });
 

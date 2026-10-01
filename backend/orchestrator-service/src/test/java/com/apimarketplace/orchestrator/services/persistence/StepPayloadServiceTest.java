@@ -1,5 +1,7 @@
 package com.apimarketplace.orchestrator.services.persistence;
 
+import com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys;
+
 import com.apimarketplace.common.storage.exception.QuotaExceededException;
 import com.apimarketplace.common.storage.service.StorageService;
 import com.apimarketplace.orchestrator.domain.execution.NodeStatus;
@@ -122,80 +124,104 @@ class StepPayloadServiceTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Provider-retry visibility (_provider_retries)
+    // Execution-policy annotations survive schema transformation
     // ═══════════════════════════════════════════════════════════════════════════
 
     @Nested
-    @DisplayName("A re-sent provider call leaves a trace on the step output")
-    class ProviderRetryVisibilityTests {
+    @DisplayName("Policy annotations (policy_*) survive schema transformation")
+    class PolicyAnnotationPreservationTests {
 
-        /**
-         * The wait happens INSIDE a single tool call, so the node stays RUNNING and emits nothing.
-         * Without this count on the persisted output, a step that silently spent ten extra seconds
-         * being re-sent is indistinguishable from a slow provider, and nobody reading the run can
-         * tell that the provider refused once.
-         */
-        @Test
-        @DisplayName("REGRESSION: the count survives the schema transformation that rebuilds the map")
-        void providerRetriesSurviveTheTransform() {
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> persistedOutputOf(String nodeType, Map<String, Object> rawOutput, NodeStatus status) {
             when(execution.getPlan()).thenReturn(plan);
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any()))
                     .thenReturn(UUID.randomUUID());
-            // A generic mapper builds a NEW map holding only the fields the schema declares, so
-            // metadata.providerRetries is gone by the time the payload is written.
-            when(outputSchemaMapper.hasMapper("MCP")).thenReturn(true);
-            when(outputSchemaMapper.transformToDbSchema(any(), eq("MCP")))
-                    .thenReturn(new HashMap<>(Map.of("data", "value")));
+            // Simulate a generic schema mapper: a NEW map with only the declared fields.
+            when(outputSchemaMapper.hasMapper(nodeType)).thenReturn(true);
+            when(outputSchemaMapper.transformToDbSchema(any(), eq(nodeType)))
+                    .thenReturn(new HashMap<>(Map.of("formatted", "2026-09-29")));
+
+            StepExecutionResult result = new StepExecutionResult(
+                    "core:format_date", status, status == NodeStatus.FAILED ? "Failed" : "Success",
+                    rawOutput, 5L, null);
+            service.persistStepPayload(execution, "core:format_date", "alias", result, Map.of(), 0);
+
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(storageService).saveJsonWithContext(eq("tenant-1"), payloadCaptor.capture(),
+                    anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any());
+            return (Map<String, Object>) payloadCaptor.getValue().get("output");
+        }
+
+        @Test
+        @DisplayName("REGRESSION: a continued failure keeps policy_continue_on_failure (and the attempt report) through a core-node schema mapper")
+        void policyKeysReinjectedAfterTransform() {
+            // Without this the flag lived only in memory: after a context rebuild (every
+            // step-by-step call) the FAILED node read back unflagged and its successors never ran.
+            Map<String, Object> raw = new HashMap<>();
+            raw.put("node_type", "DATE_TIME");
+            raw.put("error", "not a date");
+            raw.put(ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE, true);
+            raw.put(ExecutionMetadataKeys.POLICY_ATTEMPT, 2);
+            raw.put(ExecutionMetadataKeys.POLICY_MAX_ATTEMPTS, 2);
+            raw.put(ExecutionMetadataKeys.POLICY_FINAL_ATTEMPT, true);
+            raw.put(ExecutionMetadataKeys.POLICY_RETRY_STOPPED, "permanent_refusal");
+            raw.put(ExecutionMetadataKeys.POLICY_TIMEOUT, true);
+
+            Map<String, Object> output = persistedOutputOf("DATE_TIME", raw, NodeStatus.FAILED);
+
+            assertEquals(Boolean.TRUE, output.get(ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE));
+            assertEquals(2, output.get(ExecutionMetadataKeys.POLICY_ATTEMPT));
+            assertEquals(2, output.get(ExecutionMetadataKeys.POLICY_MAX_ATTEMPTS));
+            assertEquals(Boolean.TRUE, output.get(ExecutionMetadataKeys.POLICY_FINAL_ATTEMPT));
+            assertEquals("permanent_refusal", output.get(ExecutionMetadataKeys.POLICY_RETRY_STOPPED));
+            assertEquals(Boolean.TRUE, output.get(ExecutionMetadataKeys.POLICY_TIMEOUT));
+            // The mapper's own fields are still there: the keys are ADDED, nothing is replaced.
+            assertEquals("2026-09-29", output.get("formatted"));
+        }
+
+        @Test
+        @DisplayName("an output without policy annotations gets none injected")
+        void noPolicyKeysInjectedWhenAbsent() {
+            Map<String, Object> raw = new HashMap<>();
+            raw.put("node_type", "DATE_TIME");
+            raw.put("formatted", "2026-09-29");
+
+            Map<String, Object> output = persistedOutputOf("DATE_TIME", raw, NodeStatus.COMPLETED);
+
+            for (String key : ExecutionMetadataKeys.POLICY_OUTPUT_KEYS) {
+                assertFalse(output.containsKey(key), key);
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // No provider-retry count: the platform no longer re-sends a refused call
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("The step output carries no provider re-send count")
+    class NoProviderRetryCountTests {
+
+        @Test
+        @DisplayName("a catalog answer still carrying metadata.providerRetries does not surface _provider_retries")
+        void aLegacyRetryCountIsNotSurfaced() {
+            // A catalog pod from before the retry was removed can still answer during a rollout.
+            // The field it reports describes a re-send the platform no longer performs.
+            when(execution.getPlan()).thenReturn(plan);
+            when(plan.getTenantId()).thenReturn("tenant-1");
+            when(plan.findStep(anyString())).thenReturn(Optional.empty());
+            when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any()))
+                    .thenReturn(UUID.randomUUID());
 
             Map<String, Object> raw = new HashMap<>();
-            raw.put("node_type", "MCP");
             raw.put("data", "value");
             raw.put("metadata", new HashMap<>(Map.of("status", 200, "providerRetries", 2)));
             StepExecutionResult result = new StepExecutionResult(
                     "mcp:publish", NodeStatus.COMPLETED, "Success", raw, 12_000L, null);
 
             service.persistStepPayload(execution, "mcp:publish", "alias", result, Map.of(), 0);
-
-            assertEquals(2, persistedOutput().get("_provider_retries"));
-        }
-
-        @Test
-        @DisplayName("a call answered first time carries no key at all")
-        void noKeyWhenNothingWasResent() {
-            when(execution.getPlan()).thenReturn(plan);
-            when(plan.getTenantId()).thenReturn("tenant-1");
-            when(plan.findStep(anyString())).thenReturn(Optional.empty());
-            when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any()))
-                    .thenReturn(UUID.randomUUID());
-
-            Map<String, Object> raw = new HashMap<>();
-            raw.put("data", "value");
-            raw.put("metadata", new HashMap<>(Map.of("status", 200)));
-            StepExecutionResult result = new StepExecutionResult(
-                    "mcp:publish", NodeStatus.COMPLETED, "Success", raw, 100L, null);
-
-            service.persistStepPayload(execution, "mcp:publish", "alias", result, Map.of(), 0);
-
-            assertFalse(persistedOutput().containsKey("_provider_retries"),
-                    "absent, not zero: nothing changes for the overwhelming majority of steps");
-        }
-
-        @Test
-        @DisplayName("a node type that has no metadata at all is untouched")
-        void nodeWithoutMetadataIsUntouched() {
-            when(execution.getPlan()).thenReturn(plan);
-            when(plan.getTenantId()).thenReturn("tenant-1");
-            when(plan.findStep(anyString())).thenReturn(Optional.empty());
-            when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any()))
-                    .thenReturn(UUID.randomUUID());
-
-            StepExecutionResult result = new StepExecutionResult(
-                    "core:transform", NodeStatus.COMPLETED, "Success",
-                    Map.of("result", "x"), 5L, null);
-
-            service.persistStepPayload(execution, "core:transform", "alias", result, Map.of(), 0);
 
             assertFalse(persistedOutput().containsKey("_provider_retries"));
         }

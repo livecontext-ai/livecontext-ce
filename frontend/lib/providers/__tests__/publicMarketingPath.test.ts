@@ -68,6 +68,16 @@ describe('isPublicMarketingPath', () => {
     }
   });
 
+  it('server-renders the partner program page, while the partner settings page keeps its auth gate', () => {
+    for (const path of ['/partners', '/en/partners', '/fr/partners']) {
+      expect(isPublicMarketingPath(path), path).toBe(true);
+    }
+    // The signed-in dashboard and the admin page live under /app and stay gated.
+    expect(isPublicMarketingPath('/app/settings/partner')).toBe(false);
+    expect(isPublicMarketingPath('/fr/app/settings/partners')).toBe(false);
+    expect(isPublicMarketingPath('/partnership')).toBe(false);
+  });
+
   it('never gates /status behind the auth spinner', () => {
     // The page exists for the case where signing in is what is broken: behind
     // the blocking auth UI it would answer an outage with a spinner, and it

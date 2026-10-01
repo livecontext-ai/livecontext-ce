@@ -60,10 +60,10 @@ export function SectionH2({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function SectionLead({ children, wide }: { children: React.ReactNode; wide?: boolean }) {
+export function SectionLead({ children, wide, centered }: { children: React.ReactNode; wide?: boolean; centered?: boolean }) {
   return (
     <p
-      className={`mt-6 text-lg ${wide ? 'max-w-5xl' : 'max-w-3xl'} leading-relaxed`}
+      className={`mt-6 text-lg ${wide ? 'max-w-5xl' : 'max-w-3xl'} leading-relaxed${centered ? ' mx-auto' : ''}`}
       style={{ color: 'var(--text-secondary)' }}
     >
       {children}

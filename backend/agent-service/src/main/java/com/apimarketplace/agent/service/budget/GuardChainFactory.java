@@ -57,7 +57,7 @@ public class GuardChainFactory {
         }
         return pricingSnapshotClient.getRates(provider, model)
             .map(r -> new ModelCostCalculator(r.inputRate(), r.outputRate(), r.fixedCost(),
-                r.contextWindow(), r.maxOutputTokens()))
+                r.contextWindow(), r.maxOutputTokens(), r.cacheReadRate(), r.cacheWriteRate()))
             .orElseGet(() -> {
                 // Bug #1: fallback must be PESSIMISTIC (over-estimate) so an unknown model
                 // fails safe - the guard trips the budget quickly rather than letting a

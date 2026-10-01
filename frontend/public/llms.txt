@@ -51,4 +51,5 @@ Key facts:
 - [Landing page](https://livecontext.ai/): product overview and pricing
 - [Changelog](https://livecontext.ai/changelog): shipped releases with notes
 - [About](https://livecontext.ai/about): company and team
+- [Partner program](https://livecontext.ai/partners): revenue share, official partner badge and client hosting rights for agencies, consultants and freelancers
 - [Self-hosted edition on GitHub](https://github.com/livecontext-ai/livecontext-ce): Community Edition source and releases

@@ -886,6 +886,13 @@ public class InternalPublicationController {
             return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (PublicationValidationException e) {
+            // Structured refusal (e.g. the plan references a tenant-private custom API) -
+            // 422 with the machine-readable body, matching the public controller. Without
+            // this it left through the generic catch as an opaque 500 and the MCP publish
+            // tool reported a platform failure instead of a fixable plan.
+            log.warn("Workflow publish refused ({}): {}", e.getErrorCode(), e.getMessage());
+            return ResponseEntity.unprocessableEntity().body(e.toBody());
         } catch (PublicationPendingReviewException e) {
             // Pending-review guard (re-publish blocked) - 409, matching the
             // public controller. Was an unmapped 500 via the generic catch.

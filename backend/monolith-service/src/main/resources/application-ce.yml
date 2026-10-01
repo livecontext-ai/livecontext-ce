@@ -551,14 +551,6 @@ credentials:
 
 # Catalog seed: import OpenAPI specs from directory at boot
 catalog:
-  # Retry of a provider's rate-limit refusal. Same defaults as the cloud catalog-service, spelled
-  # out rather than inherited from @Value so a self-hosted operator can find and change them, and
-  # so a divergence between the two editions is visible in a diff instead of being latent.
-  error-policy:
-    # 0 disables every retry, built-in and declared. The kill switch.
-    max-retries: ${CATALOG_ERROR_POLICY_MAX_RETRIES:2}
-    # Total time ONE call may spend sleeping, across its retries.
-    max-wait-ms: ${CATALOG_ERROR_POLICY_MAX_WAIT_MS:10000}
   seed:
     enabled: ${CATALOG_SEED_ENABLED:true}
     path: ${CATALOG_SEED_PATH:./catalog-seeds}

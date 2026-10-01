@@ -29,6 +29,11 @@ public final class ApiScopedSearchParser {
         explicitFilters.addAll(extractFilters(apis));
         explicitFilters = normalizeFilters(explicitFilters);
         if (!explicitFilters.isEmpty()) {
+            if (rawQuery.isEmpty()) {
+                // api='composio' with no query means "show me this API's tools": search the scope by
+                // its own names, exactly as the inline "[composio]" form already does below.
+                return new ParsedSearch(String.join(" ", explicitFilters), explicitFilters, false, true);
+            }
             return new ParsedSearch(rawQuery, explicitFilters, false);
         }
 
@@ -45,7 +50,15 @@ public final class ApiScopedSearchParser {
         return new ParsedSearch(rawQuery, List.of(), false);
     }
 
-    public record ParsedSearch(String query, List<String> apiFilters, boolean inlineScope) {
+    /**
+     * @param keywordFromScope true when the caller gave an API scope but no keyword: {@code query} is then
+     *                         the scope's own names and the search really means "list this API's tools".
+     */
+    public record ParsedSearch(String query, List<String> apiFilters, boolean inlineScope, boolean keywordFromScope) {
+        public ParsedSearch(String query, List<String> apiFilters, boolean inlineScope) {
+            this(query, apiFilters, inlineScope, false);
+        }
+
         public boolean hasApiFilters() {
             return apiFilters != null && !apiFilters.isEmpty();
         }
@@ -64,7 +77,7 @@ public final class ApiScopedSearchParser {
 
         String keywordQuery = Objects.toString(matcher.group(2), "").trim();
         if (keywordQuery.isEmpty()) {
-            keywordQuery = String.join(" ", filters);
+            return new ParsedSearch(String.join(" ", filters), filters, true, true);
         }
         return new ParsedSearch(keywordQuery, filters, true);
     }

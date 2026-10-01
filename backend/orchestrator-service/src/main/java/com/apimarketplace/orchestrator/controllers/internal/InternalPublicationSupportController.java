@@ -32,6 +32,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
@@ -49,6 +50,9 @@ import java.util.stream.Collectors;
 public class InternalPublicationSupportController {
 
     private static final Logger log = LoggerFactory.getLogger(InternalPublicationSupportController.class);
+
+    /** Error code of the full-snapshot 404 when the requested epoch is not in the run (read by publication-service). */
+    public static final String EPOCH_NOT_FOUND = com.apimarketplace.common.publication.ShowcaseCaptureContract.EPOCH_NOT_FOUND;
 
     /** Lifecycle emails: installing a marketplace app is an activation. Optional, best-effort. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -142,9 +146,20 @@ public class InternalPublicationSupportController {
             @RequestParam(value = "organizationId", required = false) String organizationId,
             @RequestParam(value = "epochFilter", required = false) Integer epochFilter) {
         try {
-            return showcaseSnapshotBuilder.capture(runIdPublic, tenantId, organizationId, epochFilter)
-                    .<ResponseEntity<?>>map(ResponseEntity::ok)
-                    .orElseGet(() -> ResponseEntity.notFound().build());
+            ShowcaseSnapshotBuilder.CaptureOutcome outcome =
+                    showcaseSnapshotBuilder.captureWithOutcome(runIdPublic, tenantId, organizationId, epochFilter);
+            if (outcome.snapshot().isPresent()) {
+                return ResponseEntity.ok(outcome.snapshot().get());
+            }
+            if (outcome.epochNotFound()) {
+                // Still a 404 (older publication clients read any 404 as "nothing to capture"),
+                // but with a body that names the cause, so the publisher can be told to pick
+                // another epoch instead of seeing a server error.
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("error", EPOCH_NOT_FOUND, "epoch", epochFilter));
+            }
+            // Run missing or out of scope: unchanged, bodiless 404 (no existence oracle).
+            return ResponseEntity.notFound().build();
         } catch (Exception e) {
             log.error("[FullSnapshot] capture failed for run={} tenant={} org={} epoch={}: {}",
                     runIdPublic, tenantId, organizationId, epochFilter, e.getMessage(), e);

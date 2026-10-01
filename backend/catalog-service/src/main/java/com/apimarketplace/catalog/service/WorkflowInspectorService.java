@@ -1081,4 +1081,271 @@ public class WorkflowInspectorService {
 
         return result;
     }
+
+    /**
+     * Resolve which of the given workflow tool identifiers belong to a CUSTOM API
+     * ({@code apis.source = 'custom'}), restricted to the APIs the given scope OWNS.
+     *
+     * <p>Used by the caller-facing endpoint so a publish surface can warn about its own
+     * plan without becoming a way to probe slugs and learn other tenants' private API
+     * names. The publish gate uses {@link #findCustomApiRefs} instead.
+     *
+     * @param identifiers    tool identifiers collected from a plan
+     * @param tenantId       the caller
+     * @param organizationId the caller's active workspace, or null/blank for personal scope
+     */
+    @Transactional(readOnly = true)
+    public List<CustomApiRefDTO> findCustomApiRefsInScope(List<String> identifiers,
+                                                         String tenantId,
+                                                         String organizationId) {
+        return resolveCustomApiRefs(identifiers, tenantId, organizationId, true);
+    }
+
+    /**
+     * Resolve which of the given workflow tool identifiers belong to a CUSTOM API, for the
+     * PUBLISH GATE: a custom API is unpublishable whoever owns it, because an acquirer's
+     * catalog has no such API and the node fails at run time. An acquired workflow can
+     * legitimately carry a node built on its ORIGINAL publisher's custom API, so the gate
+     * cannot be limited to the publisher's own APIs.
+     *
+     * <p>How a reference is matched, and why it differs by owner:
+     * <ul>
+     *   <li><b>the publisher's OWN custom APIs</b> match on the {@code apiSlug} prefix
+     *       alone, so the API is still caught when its tool rows were renamed or deleted
+     *       after the node was created;</li>
+     *   <li><b>any other tenant's</b> custom API must match an EXACT row: the
+     *       {@code (apiSlug, toolSlug)} pair, a bare {@code tool_slug}, or an
+     *       {@code api_tools.id}. Prefix-matching them would be a cross-tenant hazard,
+     *       because {@code apis.api_slug} carries no global uniqueness constraint (only
+     *       {@code idx_apis_api_slug} and a per-creator uniqueness pass in
+     *       {@code ApiSlugService}): one tenant registering a custom API whose slug
+     *       collides with a SHIPPED integration would otherwise permanently refuse every
+     *       other tenant's publication built on that shipped integration, and leak the
+     *       colliding API's name in the refusal.</li>
+     *   <li><b>no slug-based match at all</b> when a SHIPPED tool already answers to the
+     *       reference ({@link #SHIPPED_TOOL_EXISTS}): the reference is then ambiguous and the
+     *       shipped reading is the right one. Note this is keyed on the REFERENCE, so a
+     *       custom API that merely shares a slug with a shipped integration keeps being
+     *       gated on its own tools.</li>
+     * </ul>
+     *
+     * <p>Identifiers are accepted in the four forms that actually occur: an mcp node's
+     * {@code apiSlug/toolSlug}, an agent tool grant's {@code apiSlug:toolSlug}, a bare
+     * {@code tool_slug}, or an {@code api_tools.id} UUID (the legacy grant shape).
+     *
+     * <p>Caveat on the colon form: the agent surfaces write TWO conventions and nothing
+     * normalises them, {@code apiSlug:toolSlug} (the fleet tool picker) and
+     * {@code apiSlug:toolName} (the create-agent modal). Only the first can satisfy the
+     * exact-pair predicate, so a {@code toolName}-shaped grant is caught by the api-slug
+     * prefix match, i.e. for the PUBLISHER's own APIs only.
+     *
+     * <p><b>No {@code is_active} filter</b>, deliberately, unlike {@link #getToolsBatch}:
+     * a node pointing at a DEACTIVATED custom API is just as unpublishable as one pointing
+     * at a live one, and hiding it here would let the publication through.
+     *
+     * @param identifiers      tool identifiers collected from a plan or an agent snapshot
+     * @param publisherId      the publishing tenant, whose own custom APIs match on prefix
+     *                         (null/blank simply disables that broader match)
+     * @param publisherOrgId   the publishing workspace, or null/blank for personal scope
+     */
+    @Transactional(readOnly = true)
+    public List<CustomApiRefDTO> findCustomApiRefs(List<String> identifiers,
+                                                  String publisherId,
+                                                  String publisherOrgId) {
+        return resolveCustomApiRefs(identifiers, publisherId, publisherOrgId, false);
+    }
+
+    private List<CustomApiRefDTO> resolveCustomApiRefs(List<String> identifiers,
+                                                      String tenantId,
+                                                      String organizationId,
+                                                      boolean ownedOnly) {
+        if (identifiers == null || identifiers.isEmpty()) {
+            return List.of();
+        }
+
+        // Route each identifier to the column(s) it can match.
+        Map<String, List<String>> bySlugPrefix = new LinkedHashMap<>();
+        Map<ApiToolSlugPair, List<String>> byPair = new LinkedHashMap<>();
+        Map<String, List<String>> byToolSlug = new LinkedHashMap<>();
+        Map<UUID, List<String>> byToolId = new LinkedHashMap<>();
+        for (String raw : identifiers) {
+            if (raw == null || raw.trim().isEmpty()) continue;
+            String id = raw.trim();
+            if (UUID_PATTERN.matcher(id).matches()) {
+                byToolId.computeIfAbsent(UUID.fromString(id), k -> new ArrayList<>()).add(id);
+                continue;
+            }
+            // '/' = mcp node id, ':' = agent tool grant. Both are "<apiSlug><sep><toolSlug>",
+            // and neither character can appear inside a slug, so the first one wins.
+            int sep = firstSeparator(id);
+            if (sep > 0 && sep < id.length() - 1) {
+                String apiSlug = id.substring(0, sep);
+                String toolSlug = id.substring(sep + 1);
+                bySlugPrefix.computeIfAbsent(apiSlug, k -> new ArrayList<>()).add(id);
+                byPair.computeIfAbsent(new ApiToolSlugPair(apiSlug, toolSlug), k -> new ArrayList<>()).add(id);
+            } else if (sep < 0) {
+                byToolSlug.computeIfAbsent(id, k -> new ArrayList<>()).add(id);
+            }
+            // A separator with nothing on one side carries neither slug: nothing to match.
+        }
+
+        if (bySlugPrefix.isEmpty() && byToolSlug.isEmpty() && byToolId.isEmpty()) {
+            return List.of();
+        }
+
+        // Owner-restricted mode with no owner to restrict to would answer about EVERY tenant's
+        // custom APIs, i.e. the exact disclosure this variant exists to prevent. Refuse by
+        // construction rather than relying on the caller to have checked.
+        if (ownedOnly && (tenantId == null || tenantId.isBlank())) {
+            log.warn("Owner-scoped custom API lookup called with no tenant - answering empty");
+            return List.of();
+        }
+
+        // Owner scope, mirroring ApiRepository.findCustomApisInScope: an org workspace owns
+        // its custom APIs, a personal one keys on created_by.
+        String ownerScope = null;
+        List<Object> ownerParams = new ArrayList<>();
+        if (tenantId != null && !tenantId.isBlank()) {
+            if (organizationId != null && !organizationId.isBlank()) {
+                ownerScope = "a.organization_id = ?";
+                ownerParams.add(organizationId);
+            } else {
+                ownerScope = "(a.created_by = ? AND a.organization_id IS NULL)";
+                ownerParams.add(tenantId);
+            }
+        }
+
+        List<Object> params = new ArrayList<>();
+        List<String> predicates = new ArrayList<>();
+
+        // One clause per PREFIXED reference. The exemption is keyed on the REFERENCE, not on
+        // the candidate row: "does a SHIPPED tool answer to this exact apiSlug/toolSlug?".
+        // Keying it on the candidate's slug alone would ungate a publisher's own custom API
+        // that merely happens to share a slug with a shipped integration - an ordinary naming
+        // accident ("Slack", "Notion"), and the feature's main path.
+        for (Map.Entry<ApiToolSlugPair, List<String>> entry : byPair.entrySet()) {
+            ApiToolSlugPair pair = entry.getKey();
+            StringBuilder clause = new StringBuilder("(NOT " + SHIPPED_TOOL_EXISTS + " AND a.api_slug = ?");
+            params.add(pair.apiSlug());
+            params.add(pair.toolSlug());
+            params.add(pair.apiSlug());
+            if (ownedOnly) {
+                // The whole query is owner-restricted below, so the slug is enough here: that
+                // is what keeps catching an API whose tool rows were renamed or deleted.
+                clause.append(')');
+            } else if (ownerScope != null) {
+                // Anyone's custom API needs the exact tool row; the publisher's own also
+                // matches on the slug alone (renamed / deleted tool rows).
+                clause.append(" AND (at.tool_slug = ? OR ").append(ownerScope).append("))");
+                params.add(pair.toolSlug());
+                params.addAll(ownerParams);
+            } else {
+                // No publisher known: exact row only.
+                clause.append(" AND at.tool_slug = ?)");
+                params.add(pair.toolSlug());
+            }
+            predicates.add(clause.toString());
+        }
+
+        // A bare tool slug names a row by slug alone, so it is ambiguous on the same grounds.
+        for (String toolSlug : byToolSlug.keySet()) {
+            predicates.add("(NOT EXISTS (SELECT 1 FROM apis shipped"
+                    + " JOIN api_tools shipped_tool ON shipped_tool.api_id = shipped.id"
+                    + " WHERE shipped.source IS DISTINCT FROM 'custom'"
+                    + " AND shipped_tool.tool_slug = ?) AND at.tool_slug = ?)");
+            params.add(toolSlug);
+            params.add(toolSlug);
+        }
+
+        if (!byToolId.isEmpty()) {
+            // An api_tools.id names exactly one row: no ambiguity, no exemption needed.
+            predicates.add("at.id IN (" + placeholders(byToolId.size()) + ")");
+            params.addAll(byToolId.keySet());
+        }
+        if (predicates.isEmpty()) {
+            return List.of();
+        }
+
+        // LEFT JOIN so an api_slug prefix still matches an API left with no tool rows.
+        String sql = """
+            SELECT DISTINCT a.id AS api_id, a.api_slug, a.api_name, at.tool_slug, at.id AS tool_id
+            FROM apis a
+            LEFT JOIN api_tools at ON at.api_id = a.id
+            WHERE a.source = 'custom' AND (""" + String.join(" OR ", predicates) + ")";
+        if (ownedOnly && ownerScope != null) {
+            sql += " AND " + ownerScope;
+            params.addAll(ownerParams);
+        }
+
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, params.toArray());
+
+        // Group by API IDENTITY, not by slug: `api_slug` is unique only per creator, so two
+        // custom APIs can share one. Keyed on the slug, two rows collapsed into one entry and
+        // the surviving `api_name` was whichever the planner emitted first - the refusal could
+        // name a stranger's private API, or hide the publisher's own and become unactionable.
+        Map<UUID, String[]> apiIdentities = new LinkedHashMap<>();
+        Map<UUID, Set<String>> matchedIdentifiers = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            String apiSlug = convertToString(row.get("api_slug"));
+            if (!(row.get("api_id") instanceof UUID apiId) || apiSlug == null) continue;
+            apiIdentities.putIfAbsent(apiId, new String[] { apiSlug, convertToString(row.get("api_name")) });
+            Set<String> matched = matchedIdentifiers.computeIfAbsent(apiId, k -> new LinkedHashSet<>());
+            matched.addAll(bySlugPrefix.getOrDefault(apiSlug, List.of()));
+            String toolSlug = convertToString(row.get("tool_slug"));
+            if (toolSlug != null) {
+                matched.addAll(byToolSlug.getOrDefault(toolSlug, List.of()));
+                matched.addAll(byPair.getOrDefault(new ApiToolSlugPair(apiSlug, toolSlug), List.of()));
+            }
+            Object toolId = row.get("tool_id");
+            if (toolId instanceof UUID uuid) {
+                matched.addAll(byToolId.getOrDefault(uuid, List.of()));
+            }
+        }
+
+        List<CustomApiRefDTO> result = new ArrayList<>();
+        for (Map.Entry<UUID, String[]> entry : apiIdentities.entrySet()) {
+            String apiSlug = entry.getValue()[0];
+            String apiName = entry.getValue()[1];
+            result.add(new CustomApiRefDTO(
+                apiSlug,
+                apiName != null ? apiName : apiSlug,
+                List.copyOf(matchedIdentifiers.getOrDefault(entry.getKey(), Set.of()))
+            ));
+        }
+        if (!result.isEmpty()) {
+            log.info("Resolved {} custom API(s) among {} workflow tool identifier(s)",
+                    result.size(), identifiers.size());
+        }
+        return result;
+    }
+
+    /**
+     * "A shipped (non-custom) API answers to this exact {@code apiSlug} + {@code toolSlug}".
+     * Binds two parameters, in that order. Mirrors the exemption shape of
+     * {@code ApiRepository.existsSharedIntegrationWithCredentialKey}, for the same reason:
+     * {@code apis.api_slug} is unique only per creator, so a reference that a shipped tool
+     * already answers cannot be attributed to a custom API - doing so would refuse a
+     * publication built on the shipped integration and name a stranger's API while at it.
+     */
+    private static final String SHIPPED_TOOL_EXISTS = """
+            EXISTS (SELECT 1 FROM apis shipped
+                      JOIN api_tools shipped_tool ON shipped_tool.api_id = shipped.id
+                     WHERE shipped.source IS DISTINCT FROM 'custom'
+                       AND shipped.api_slug = ? AND shipped_tool.tool_slug = ?)""";
+
+    /** First '/' or ':' in a tool identifier, or -1 when it carries neither. */
+    private static int firstSeparator(String identifier) {
+        int slash = identifier.indexOf('/');
+        int colon = identifier.indexOf(':');
+        if (slash < 0) return colon;
+        if (colon < 0) return slash;
+        return Math.min(slash, colon);
+    }
+
+    /** An exact {@code (apis.api_slug, api_tools.tool_slug)} coordinate. */
+    private record ApiToolSlugPair(String apiSlug, String toolSlug) {}
+
+    private static String placeholders(int count) {
+        return String.join(",", Collections.nCopies(count, "?"));
+    }
 }

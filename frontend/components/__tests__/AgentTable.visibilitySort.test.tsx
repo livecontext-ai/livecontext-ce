@@ -173,8 +173,13 @@ describe('AgentTable - visibility filter + sort re-query the server', () => {
     expect(screen.getByText('Private Agent')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('common.filterByVisibility'), { target: { value: 'public' } });
-    await waitFor(() => expect(screen.queryByText('Private Agent')).not.toBeInTheDocument());
-    expect(screen.getByText('Shared Agent')).toBeInTheDocument();
+    // One wait for the whole filtered state: the rows are replaced by the loading skeleton while
+    // the new page loads, so "Private Agent is gone" alone already holds mid-reload,
+    // before Shared Agent is back.
+    await waitFor(() => {
+      expect(screen.queryByText('Private Agent')).not.toBeInTheDocument();
+      expect(screen.getByText('Shared Agent')).toBeInTheDocument();
+    });
     expect(mocks.getAgentsPage).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'public' }));
 
     fireEvent.change(screen.getByLabelText('common.filterByVisibility'), { target: { value: 'private' } });

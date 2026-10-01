@@ -7,6 +7,8 @@ import com.apimarketplace.auth.repository.UserRepository;
 import com.apimarketplace.auth.service.PartnerProgramAdminService;
 import com.apimarketplace.auth.service.PartnerProgramAdminService.PartnerCodeRequest;
 import com.apimarketplace.auth.service.PartnerProgramAdminService.Result;
+import com.apimarketplace.auth.service.PartnerTierService;
+import com.apimarketplace.auth.domain.PartnerTier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -27,6 +29,7 @@ import static org.mockito.Mockito.*;
 class AdminPartnerControllerTest {
 
     private PartnerProgramAdminService service;
+    private PartnerTierService tierService;
     private UserRepository userRepository;
     private com.apimarketplace.auth.audit.AuditLogger auditLogger;
     private AdminPartnerController controller;
@@ -34,9 +37,12 @@ class AdminPartnerControllerTest {
     @BeforeEach
     void setUp() {
         service = mock(PartnerProgramAdminService.class);
+        tierService = mock(PartnerTierService.class);
+        when(tierService.founderUntil()).thenReturn(java.time.Instant.parse("2027-01-01T00:00:00Z"));
+        when(tierService.currency()).thenReturn("usd");
         userRepository = mock(UserRepository.class);
         auditLogger = mock(com.apimarketplace.auth.audit.AuditLogger.class, RETURNS_DEEP_STUBS);
-        controller = new AdminPartnerController(service, userRepository, auditLogger, false);
+        controller = new AdminPartnerController(service, tierService, userRepository, auditLogger, false);
     }
 
     private static RewardCode code(String value) {
@@ -65,7 +71,7 @@ class AdminPartnerControllerTest {
     @Test
     @DisplayName("self-hosted (credits unlimited): refused with 503, even for an admin")
     void refusedInCe() {
-        AdminPartnerController ce = new AdminPartnerController(service, userRepository, auditLogger, true);
+        AdminPartnerController ce = new AdminPartnerController(service, tierService, userRepository, auditLogger, true);
 
         assertThat(ce.list("ADMIN").getStatusCode().value()).isEqualTo(503);
         verifyNoInteractions(service);
@@ -118,7 +124,107 @@ class AdminPartnerControllerTest {
 
         var body = controller.list("ADMIN").getBody();
 
-        assertThat(body).containsKeys("codes", "defaults");
+        assertThat(body).containsKeys("codes", "defaults", "tiers", "founder_until", "founder_open");
+    }
+
+    @Test
+    @DisplayName("V556: each partner code carries its owner's tier, refreshed, and the rate it earns now")
+    void listCarriesEachPartnerTier() {
+        RewardCode partner = code("AGENCY");
+        partner.setOwnerUserId(42L);
+        partner.setPayoutBps(3000);
+        RewardCode creator = code("CREATOR");
+        creator.setId(2L);
+        creator.setProgram(RewardProgram.PROMO);
+        var emptyAmounts = new PartnerProgramAdminService.Amounts(java.util.Map.of(), java.util.Map.of(),
+                java.util.Map.of(), java.util.Map.of());
+        when(service.report()).thenReturn(List.of(
+                new PartnerProgramAdminService.CodeReport(partner, "p@x.io", 3, 2, emptyAmounts, null),
+                new PartnerProgramAdminService.CodeReport(creator, null, 1, 0, emptyAmounts, null)));
+        when(tierService.forCodes(List.of(partner, creator))).thenReturn(java.util.Map.of(partner.getId(),
+                new PartnerTierService.CodeStanding(new PartnerTierService.Standing(PartnerTier.GOLD, false, 600_000L,
+                        "usd", PartnerTier.PLATINUM, 2_500_000L, 4000), 4000)));
+
+        @SuppressWarnings("unchecked")
+        var codes = (List<java.util.Map<String, Object>>) controller.list("ADMIN").getBody().get("codes");
+
+        @SuppressWarnings("unchecked")
+        var standing = (java.util.Map<String, Object>) codes.get(0).get("standing");
+        assertThat(standing).containsEntry("tier", "gold").containsEntry("revenue_minor", 600_000L)
+                .containsEntry("next_tier", "platinum");
+        assertThat(codes.get(0)).containsEntry("effective_commission_percent", 40.0);
+        // A creator code has no owner and no tier.
+        assertThat(codes.get(1)).doesNotContainKey("standing");
+    }
+
+    @Test
+    @DisplayName("V556 founder grant: admin only, a partner code only (404 otherwise), 409 once the window has closed")
+    void founderGrant() {
+        assertThat(controller.grantFounder("USER", 1L, 5L).getStatusCode().value()).isEqualTo(403);
+
+        when(service.partnerOwnerOf(5L)).thenReturn(Optional.empty());
+        assertThat(controller.grantFounder("ADMIN", 1L, 5L).getStatusCode().value()).isEqualTo(404);
+
+        when(service.partnerOwnerOf(6L)).thenReturn(Optional.of(42L));
+        when(tierService.grantFounder(42L, 1L)).thenReturn(new PartnerTierService.Result(null, "founder_closed"));
+        var closed = controller.grantFounder("ADMIN", 1L, 6L);
+        assertThat(closed.getStatusCode().value()).isEqualTo(409);
+        assertThat(closed.getBody()).containsEntry("error", "founder_closed");
+
+        when(service.partnerOwnerOf(7L)).thenReturn(Optional.of(43L));
+        when(tierService.grantFounder(43L, 1L)).thenReturn(new PartnerTierService.Result(
+                new PartnerTierService.Standing(PartnerTier.PLATINUM, true, 0L, "usd", null, null, 5000), null));
+        var granted = controller.grantFounder("ADMIN", 1L, 7L);
+        assertThat(granted.getStatusCode().value()).isEqualTo(200);
+        @SuppressWarnings("unchecked")
+        var standing = (java.util.Map<String, Object>) granted.getBody().get("standing");
+        assertThat(standing).containsEntry("tier", "platinum").containsEntry("founder", true);
+        // Granting a lifetime rate is a money decision: audited with who granted it to whom.
+        verify(auditLogger.event(com.apimarketplace.auth.audit.AuditEventTypes.PARTNER_FOUNDER_GRANTED)
+                .user(1L).detail("code_id", 7L)).detail("partner_user_id", 43L);
+        // The refused attempt is on the same trail, as a failure.
+        verify(auditLogger.event(com.apimarketplace.auth.audit.AuditEventTypes.PARTNER_FOUNDER_GRANTED)
+                .user(1L).detail("code_id", 6L).detail("partner_user_id", 42L)).failure("founder_closed");
+    }
+
+    @Test
+    @DisplayName("V557 end founder: admin only, a partner code only (404), 409 not_founder, and the earned tier comes back, audited")
+    void endFounder() {
+        assertThat(controller.endFounder("USER", 1L, 5L).getStatusCode().value()).isEqualTo(403);
+
+        when(service.partnerOwnerOf(5L)).thenReturn(Optional.empty());
+        assertThat(controller.endFounder("ADMIN", 1L, 5L).getStatusCode().value()).isEqualTo(404);
+
+        when(service.partnerOwnerOf(6L)).thenReturn(Optional.of(42L));
+        when(tierService.endFounder(42L, 1L)).thenReturn(new PartnerTierService.Result(null, "not_founder"));
+        var refused = controller.endFounder("ADMIN", 1L, 6L);
+        assertThat(refused.getStatusCode().value()).isEqualTo(409);
+        assertThat(refused.getBody()).containsEntry("error", "not_founder");
+
+        when(service.partnerOwnerOf(7L)).thenReturn(Optional.of(43L));
+        when(tierService.endFounder(43L, 1L)).thenReturn(new PartnerTierService.Result(
+                new PartnerTierService.Standing(PartnerTier.GOLD, false, 600_000L, "usd", PartnerTier.PLATINUM, 2_500_000L, 4000), null));
+        var ended = controller.endFounder("ADMIN", 1L, 7L);
+        assertThat(ended.getStatusCode().value()).isEqualTo(200);
+        @SuppressWarnings("unchecked")
+        var standing = (java.util.Map<String, Object>) ended.getBody().get("standing");
+        assertThat(standing).containsEntry("tier", "gold").containsEntry("founder", false);
+        // Lowering a partner's rate is a money decision: audited, with the tier they land on.
+        verify(auditLogger.event(com.apimarketplace.auth.audit.AuditEventTypes.PARTNER_FOUNDER_ENDED)
+                .user(1L).detail("code_id", 7L).detail("partner_user_id", 43L)).detail("tier", "GOLD");
+        verify(auditLogger.event(com.apimarketplace.auth.audit.AuditEventTypes.PARTNER_FOUNDER_ENDED)
+                .user(1L).detail("code_id", 6L).detail("partner_user_id", 42L)).failure("not_founder");
+    }
+
+    @Test
+    @DisplayName("V556 founder grant on a self-hosted install: 503, nothing granted")
+    void founderGrantRefusedInCe() {
+        AdminPartnerController ce = new AdminPartnerController(service, tierService, userRepository, auditLogger, true);
+
+        assertThat(ce.grantFounder("ADMIN", 1L, 7L).getStatusCode().value()).isEqualTo(503);
+        // Ending it is refused the same way: the program does not exist on a self-hosted install.
+        assertThat(ce.endFounder("ADMIN", 1L, 7L).getStatusCode().value()).isEqualTo(503);
+        verifyNoInteractions(tierService);
     }
 
     @Test
@@ -129,6 +235,46 @@ class AdminPartnerControllerTest {
 
         assertThat(controller.setActive("ADMIN", 1L, 5L, new AdminPartnerController.ActiveBody(false)).getStatusCode().value()).isEqualTo(404);
         assertThat(controller.markPaid("ADMIN", 1L, 5L).getBody().get("lines")).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("V557 mark-paid for a partner who never accepted the terms: 409 terms_not_accepted, and no payout is audited")
+    void markPaidRefusedWithoutTheTerms() {
+        when(service.markPayablePaid(5L, 42L)).thenThrow(new com.apimarketplace.auth.service.PartnerTermsNotAcceptedException());
+
+        var response = controller.markPaid("ADMIN", 42L, 5L);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(409);
+        assertThat(response.getBody()).containsEntry("error", "terms_not_accepted");
+        verify(auditLogger, never()).event(com.apimarketplace.auth.audit.AuditEventTypes.PARTNER_COMMISSIONS_PAID);
+    }
+
+    @Test
+    @DisplayName("V557 list: each code shows its owner's latest acceptance of the terms, null when they never accepted")
+    void listShowsTheTermsAcceptance() {
+        RewardCode partner = code("ACME");
+        partner.setId(7L);
+        partner.setProgram(RewardProgram.PARTNER);
+        partner.setOwnerUserId(99L);
+        RewardCode unbound = code("BETA");
+        unbound.setId(8L);
+        unbound.setProgram(RewardProgram.PARTNER);
+        unbound.setOwnerUserId(98L);
+        var empty = new PartnerProgramAdminService.Amounts(java.util.Map.of(), java.util.Map.of(),
+                java.util.Map.of(), java.util.Map.of());
+        when(service.report()).thenReturn(List.of(
+                new PartnerProgramAdminService.CodeReport(partner, "p@x.io", 0, 0, empty,
+                        new com.apimarketplace.auth.service.PartnerTermsService.Acceptance("2026-10-01",
+                                java.time.Instant.parse("2026-10-02T09:00:00Z"))),
+                new PartnerProgramAdminService.CodeReport(unbound, "b@x.io", 0, 0, empty, null)));
+        when(tierService.forCodes(any())).thenReturn(java.util.Map.of());
+
+        @SuppressWarnings("unchecked")
+        var codes = (List<java.util.Map<String, Object>>) controller.list("ADMIN").getBody().get("codes");
+
+        assertThat(codes.get(0)).containsEntry("terms_accepted_version", "2026-10-01")
+                .containsEntry("terms_accepted_at", "2026-10-02T09:00:00Z");
+        assertThat(codes.get(1)).containsEntry("terms_accepted_version", null).containsEntry("terms_accepted_at", null);
     }
 
     @Test

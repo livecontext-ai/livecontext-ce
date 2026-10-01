@@ -9,8 +9,10 @@ import com.apimarketplace.conversation.mapper.ConversationMapper;
 import com.apimarketplace.conversation.repository.ConversationRepository;
 import com.apimarketplace.conversation.repository.MessageRepository;
 import com.apimarketplace.conversation.service.ai.WorkflowContextProvider;
+import com.apimarketplace.conversation.service.approval.ToolApprovalGateResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -39,6 +41,13 @@ public class ConversationCommandService {
     // and the inner REQUIRES_NEW propagation is silently ignored - the whole point of the
     // retry-on-conflict path. {@code @Lazy} breaks the constructor self-reference cycle.
     private final ConversationCommandService self;
+
+    /**
+     * Drops the running-turn "don't ask again" grant when the setting is switched off.
+     * Optional so the direct constructions in unit tests stay valid without a Redis.
+     */
+    @Autowired(required = false)
+    private ToolApprovalGateResolver toolApprovalGateResolver;
 
     public ConversationCommandService(ConversationRepository conversationRepository,
                                       MessageRepository messageRepository,
@@ -355,6 +364,14 @@ public class ConversationCommandService {
 
         conversationMapper.updateEntity(conversationDto, conversation);
         Conversation savedConversation = conversationRepository.save(conversation);
+
+        // Auto-authorize switched off (or never on) in this write: the grant a card's "don't
+        // ask again" gave the turn still running must go too, or that turn keeps running
+        // sensitive actions without a card until it ends.
+        if (conversationDto.getChatConfig() != null && toolApprovalGateResolver != null
+                && !Boolean.TRUE.equals(conversationDto.getChatConfig().get("autoAuthorizeTools"))) {
+            toolApprovalGateResolver.clearConversationWideForRunningTurn(conversationId);
+        }
 
         return conversationMapper.toDto(savedConversation);
     }

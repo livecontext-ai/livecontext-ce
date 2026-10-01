@@ -14,6 +14,7 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 @DisplayName("PublicationPurgeFollower")
 class PublicationPurgeFollowerTest {
@@ -48,7 +49,7 @@ class PublicationPurgeFollowerTest {
      * for the same FK reason.
      */
     @Test
-    @DisplayName("A USER purge deletes screening decisions BEFORE the account's USER-owned publications, and nothing else")
+    @DisplayName("A USER purge deletes screening decisions BEFORE the account's USER-owned publications, then its follows both ways")
     void userPurge() {
         follower.purgeUser("42");
 
@@ -56,7 +57,8 @@ class PublicationPurgeFollowerTest {
         order.verify(jdbc).update("DELETE FROM publication.image_screening_decisions WHERE publication_id IN "
                 + "(SELECT id FROM publication.workflow_publications WHERE owner_type = 'USER' AND owner_id = ?)", "42");
         order.verify(jdbc).update("DELETE FROM publication.workflow_publications WHERE owner_type = 'USER' AND owner_id = ?", "42");
-        verify(jdbc, times(2)).update(anyString(), eq("42"));
+        order.verify(jdbc).update("DELETE FROM publication.creator_follows WHERE follower_id = ? OR creator_id = ?", "42", "42");
+        verifyNoMoreInteractions(jdbc);
     }
 
     @Test

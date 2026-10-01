@@ -606,6 +606,11 @@ public class SubAgentExecutionHandler {
                     // Restricted "API mode" on a linked CLI bridge run: platform MCP tools
                     // only, empty cwd, no CLI leak - same contract as a linked agent run.
                     subCredentials.put(ExecutionLinkRouter.RESTRICTED_TOOLSET_KEY, Boolean.TRUE);
+                    // A linked bridge failure is re-run on the billed pair's direct API on the
+                    // SAME sub-agent stream (fallback below), and this handler always publishes
+                    // the stream's terminal event itself (baseCallback): the bridge's own
+                    // `error` would end the turn in the UI before the retry streams anything.
+                    subCredentials.put(AgentExecutionRequestDto.CALLER_PUBLISHES_FAILURE_KEY, Boolean.TRUE);
                 }
             }
 
@@ -760,6 +765,7 @@ public class SubAgentExecutionHandler {
                         entity.getName(), execProvider, execModel, bridgeResponse.error(), provider, model);
                     Map<String, Object> fallbackCredentials = new HashMap<>(subCredentials);
                     fallbackCredentials.remove(ExecutionLinkRouter.RESTRICTED_TOOLSET_KEY);
+                    fallbackCredentials.remove(AgentExecutionRequestDto.CALLER_PUBLISHES_FAILURE_KEY);
                     // Rebuilt via the SAME buildSubAgentContext(...) as the primary attempt, on the
                     // BILLED pair: maxTokens/contextWindow/reasoningEffort all describe "the model
                     // that actually runs the turn" (see linkedSubAgentResolvesModelLimitsOnTheExecution

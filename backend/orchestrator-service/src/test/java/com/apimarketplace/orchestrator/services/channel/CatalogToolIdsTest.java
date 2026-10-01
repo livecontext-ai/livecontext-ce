@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -55,6 +56,70 @@ class CatalogToolIdsTest {
 
         assertThat(used).as("the channel classes call catalog tools").hasSizeGreaterThan(15);
         assertThat(catalog).containsAll(used);
+    }
+
+    @Test
+    @DisplayName("regression: every Slack endpoint declares error, or a refusal reaches the connector with no reason")
+    void everySlackEndpointKeepsSlacksErrorCode() throws Exception {
+        // Slack refuses on HTTP 200 with {"ok": false, "error": "<code>"}, and the catalog's
+        // projection drops every key the outputSchema does not declare. Undeclared, the code never
+        // reached SlackChannelConnector.explain, so every refusal read "Slack refused the call."
+        // (prod 2026-09-30, a channel typed by name). The mocked connector tests could not see it:
+        // they hand the connector a body the real catalog never returned.
+        List<String> missing = new ArrayList<>();
+        for (JsonNode endpoint : slackSeed().get("endpoints")) {
+            if (!declaredPaths(endpoint).contains("error")) {
+                missing.add(endpoint.get("name").asText());
+            }
+        }
+
+        assertThat(missing).as("Slack endpoints whose outputSchema drops Slack's error code").isEmpty();
+    }
+
+    @Test
+    @DisplayName("every field SlackChannelConnector reads is declared, or the projection hands it null")
+    void everyFieldTheSlackConnectorReadsIsDeclared() throws Exception {
+        // Same class as the error code: a DM's `user` was undeclared, so every discovered direct
+        // message came back without its person, and nothing failed.
+        Map<String, List<String>> read = Map.of(
+                "auth_test", List.of("ok", "user_id", "user", "team"),
+                "list_conversations", List.of("ok", "channels[].id", "channels[].name", "channels[].name_normalized",
+                        "channels[].is_im", "channels[].is_member", "channels[].is_private", "channels[].user",
+                        "response_metadata.next_cursor"),
+                "post_message", List.of("ok", "ts"),
+                "update_message", List.of("ok"),
+                "join_conversation", List.of("ok"),
+                "open_conversation", List.of("ok", "channel.id"));
+        Map<String, Set<String>> declared = new java.util.HashMap<>();
+        for (JsonNode endpoint : slackSeed().get("endpoints")) {
+            declared.put(endpoint.get("name").asText(), declaredPaths(endpoint));
+        }
+
+        List<String> missing = new ArrayList<>();
+        read.forEach((endpoint, paths) -> paths.stream()
+                .filter(path -> !declared.getOrDefault(endpoint, Set.of()).contains(path))
+                .forEach(path -> missing.add(endpoint + ": " + path)));
+        assertThat(missing).as("fields the connector reads that the Slack seed does not declare").isEmpty();
+    }
+
+    private static JsonNode slackSeed() throws Exception {
+        return new ObjectMapper().readTree(Files.readString(seedDirectory().resolve("slack.json")));
+    }
+
+    /** Every declared output path of an endpoint: "ok", "channel.id", "channels[].user". */
+    private static Set<String> declaredPaths(JsonNode endpoint) {
+        Set<String> paths = new TreeSet<>();
+        collectPaths(endpoint.path("outputSchema"), "", paths);
+        return paths;
+    }
+
+    private static void collectPaths(JsonNode fields, String prefix, Set<String> paths) {
+        for (JsonNode field : fields) {
+            String path = prefix + field.path("key").asText();
+            paths.add(path);
+            String nested = "array".equals(field.path("type").asText()) ? path + "[]." : path + ".";
+            collectPaths(field.path("children"), nested, paths);
+        }
     }
 
     @Test

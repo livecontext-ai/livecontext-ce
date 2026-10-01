@@ -33,9 +33,10 @@ interface ResyncSite {
 
 const RESYNC_CALL_SITES: Record<string, ResyncSite> = {
   // Own their message state, so they reconcile explicitly.
-  // ChatPanelContent and useWorkflowChat each reload on reconnect AND after a send.
-  'components/app/ChatPanelContent.tsx': { shape: 'reconcileMessageIdentity', count: 2 },
-  'hooks/useWorkflowChat.ts': { shape: 'reconcileMessageIdentity', count: 2 },
+  // ChatPanelContent and useWorkflowChat each re-read through ONE function, which
+  // useConversationResync calls on every moment it names (reconnect, stream end, stream error).
+  'components/app/ChatPanelContent.tsx': { shape: 'reconcileMessageIdentity', count: 1 },
+  'hooks/useWorkflowChat.ts': { shape: 'reconcileMessageIdentity', count: 1 },
   'app/workflows/builder/components/TriggerPanel.tsx': { shape: 'reconcileMessageIdentity', count: 1 },
   // Go through useMessages, which reconciles for them once the load is silent.
   // useMessageHandlersV2 loads silently before a send, and twice more in the post-stream

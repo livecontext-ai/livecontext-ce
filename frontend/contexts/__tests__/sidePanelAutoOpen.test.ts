@@ -81,7 +81,7 @@ describe('enqueueAutoOpen', () => {
   it('ignores non-auto-open visualization types', () => {
     const pending = new Map<string, AutoOpenVisualization>();
     enqueueAutoOpen(pending, { type: 'web_search', id: 'q' });
-    enqueueAutoOpen(pending, { type: 'interface', id: 'i' });
+    enqueueAutoOpen(pending, { type: 'credential', id: 'c' });
     expect(pending.size).toBe(0);
   });
 
@@ -127,10 +127,13 @@ describe('flushAutoOpen', () => {
 });
 
 describe('AUTO_OPEN_TYPES', () => {
-  it('includes application but excludes interface and web_search', () => {
+  it('includes application but excludes web_search', () => {
     expect(AUTO_OPEN_TYPES).toContain('application');
-    expect(AUTO_OPEN_TYPES).not.toContain('interface');
     expect(AUTO_OPEN_TYPES).not.toContain('web_search');
+  });
+
+  it('carries interface, which only a side-panel chat opens (AppHeader keeps it click-only on chat pages)', () => {
+    expect(AUTO_OPEN_TYPES).toContain('interface');
   });
 });
 

@@ -94,6 +94,13 @@ public class AgentRecoveryService {
     private final Duration hardTimeout;
 
     /**
+     * nodePolicy of a queued agent: a scheduled retry whose timer was lost, or a timeout whose
+     * timer was lost, is acted on by this scan instead. Absent in focused unit tests.
+     */
+    @Autowired(required = false)
+    private AgentAttemptScheduler attemptScheduler;
+
+    /**
      * Discriminates "stopped via stopWorkflow" from "alive between fires" when the run
      * status is WAITING_TRIGGER. Field-injected (vs constructor) to keep the existing
      * test fixtures' constructor signatures stable. Optional in tests - when null the
@@ -553,6 +560,9 @@ public class AgentRecoveryService {
                 if (tryDeliverResult(agent)) {
                     delivered++;
                     continue;
+                }
+                if (attemptScheduler != null) {
+                    attemptScheduler.recover(agent);
                 }
                 if (agent.startedAt() != null && agent.startedAt().isBefore(cutoff)) {
                     deliverSyntheticFailure(agent, "Hard timeout reached after " + hardTimeout);

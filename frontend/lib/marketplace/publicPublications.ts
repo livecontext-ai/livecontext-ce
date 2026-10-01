@@ -256,8 +256,15 @@ async function getJson(path: string, revalidateSeconds: number): Promise<unknown
  */
 export const VERIFIED_HANDLES_PER_REQUEST = 100;
 
+/** The authors of one lookup that carry each public badge, as LOWERCASED @handles. */
+export interface PublisherBadgeHandles {
+  verified: Set<string>;
+  partners: Set<string>;
+}
+
 /**
- * Which of these authors carry the verified badge, as a set of LOWERCASED @handles.
+ * Which of these authors carry a public badge (the blue verified check, the gold
+ * official-partner seal), as sets of LOWERCASED @handles. One request per chunk answers both.
  *
  * Keyed by handle rather than by user id on purpose: this runs for anonymous
  * visitors, and the id-keyed lookup is authenticated precisely because sequential
@@ -268,12 +275,14 @@ export const VERIFIED_HANDLES_PER_REQUEST = 100;
  * Returns an empty set without issuing a request on a self-hosted deployment, and on
  * any failure: a badge lookup must never take a public page down.
  */
-export async function fetchVerifiedPublisherHandles(
+export async function fetchPublisherBadgeHandles(
   handles: Array<string | null | undefined>,
   revalidateSeconds = PUBLIC_MARKETPLACE_REVALIDATE_SECONDS,
-): Promise<Set<string>> {
+): Promise<PublisherBadgeHandles> {
   const verified = new Set<string>();
-  if (!IS_MANAGED_CLOUD) return verified;
+  const partners = new Set<string>();
+  const answer = { verified, partners };
+  if (!IS_MANAGED_CLOUD) return answer;
 
   const distinct = Array.from(
     new Set(
@@ -282,7 +291,7 @@ export async function fetchVerifiedPublisherHandles(
         .map((h) => h.trim().toLowerCase()),
     ),
   );
-  if (distinct.length === 0) return verified;
+  if (distinct.length === 0) return answer;
 
   const chunks: string[][] = [];
   for (let i = 0; i < distinct.length; i += VERIFIED_HANDLES_PER_REQUEST) {
@@ -297,13 +306,23 @@ export async function fetchVerifiedPublisherHandles(
   );
   for (const payload of answers) {
     if (typeof payload !== 'object' || payload === null) continue;
-    const list = (payload as Record<string, unknown>).verified;
-    if (!Array.isArray(list)) continue;
-    for (const handle of list) {
-      if (typeof handle === 'string') verified.add(handle.toLowerCase());
+    const row = payload as Record<string, unknown>;
+    for (const [list, into] of [[row.verified, verified], [row.partners, partners]] as const) {
+      if (!Array.isArray(list)) continue;
+      for (const handle of list) {
+        if (typeof handle === 'string') into.add(handle.toLowerCase());
+      }
     }
   }
-  return verified;
+  return answer;
+}
+
+/** The verified half of {@link fetchPublisherBadgeHandles}. */
+export async function fetchVerifiedPublisherHandles(
+  handles: Array<string | null | undefined>,
+  revalidateSeconds = PUBLIC_MARKETPLACE_REVALIDATE_SECONDS,
+): Promise<Set<string>> {
+  return (await fetchPublisherBadgeHandles(handles, revalidateSeconds)).verified;
 }
 
 /**

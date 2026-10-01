@@ -791,3 +791,50 @@ describe('NodeCreationService - extract_from_file chunkUnit round-trip', () => {
     expect(node.data.extractChunkUnit).toBe('char');
   });
 });
+
+/**
+ * The editor's real load path (2026-09-29): a stored form trigger reaches the inspector through
+ * createTriggerNodesInline. Its fields were copied as stored, so string-shorthand options, a
+ * missing id or a `default` an agent wrote reached an inspector that keys on the canonical shape.
+ */
+describe('NodeCreationService - form trigger fields on load', () => {
+  it('reads every stored field in the canonical shape: id, [{id, label, value}] options, defaultValue', async () => {
+    const result = await (NodeCreationService as any).createTriggerNodesInline(
+      [
+        {
+          type: 'form',
+          label: 'Demande',
+          params: {
+            fields: [
+              { name: 'theme', type: 'text', default: 'Innovation' },
+              { name: 'tier', type: 'select', options: ['free', 'pro'] },
+            ],
+          },
+        },
+      ],
+      'tenant-1',
+      100,
+      100,
+    );
+
+    const fields = result.nodes[0].data.formTriggerData.fields;
+    expect(fields[0]).toMatchObject({ id: 'field-0', name: 'theme', defaultValue: 'Innovation' });
+    expect(fields[0]).not.toHaveProperty('default');
+    expect(fields[1].options).toEqual([
+      { id: 'opt-0', label: 'free', value: 'free' },
+      { id: 'opt-1', label: 'pro', value: 'pro' },
+    ]);
+  });
+
+  it('keeps a form trigger with no fields empty', async () => {
+    const result = await (NodeCreationService as any).createTriggerNodesInline(
+      [{ type: 'form', label: 'Empty', params: { formTitle: 'T' } }],
+      'tenant-1',
+      100,
+      100,
+    );
+
+    expect(result.nodes[0].data.formTriggerData.fields).toEqual([]);
+  });
+});
+

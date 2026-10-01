@@ -19,7 +19,7 @@ describe('public landing footer social links', () => {
     // while the publisher was posting to it daily, so the one place on the site
     // that lists where LiveContext speaks did not list where it films.
     'https://www.youtube.com/@livecontext-ai',
-    'https://discord.gg/5gTuUwhkJ',
+    'https://discord.gg/ySUXvs7vq2',
   ];
 
   for (const href of expectedHrefs) {
@@ -32,7 +32,7 @@ describe('public landing footer social links', () => {
     // The Discord entry must ship an aria-label so it is reachable by name,
     // mirroring the other footer social icons.
     expect(shellSrc).toMatch(
-      /href="https:\/\/discord\.gg\/5gTuUwhkJ"[\s\S]*?aria-label="Discord"/,
+      /href="https:\/\/discord\.gg\/ySUXvs7vq2"[\s\S]*?aria-label="Discord"/,
     );
   });
 });

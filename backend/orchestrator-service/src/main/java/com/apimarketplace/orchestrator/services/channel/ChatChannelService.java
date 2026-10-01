@@ -470,6 +470,18 @@ public class ChatChannelService {
                     + "@userinfobot bot sends back when they write to it), or a group or channel the bot "
                     + "was added to.");
         }
+        // What the person typed, as the provider names it ("#ops" is "C0123..." on Slack). Refused
+        // here, before anything is stored: a name that matches nothing would otherwise leave a
+        // dead row whose only error is the provider's refusal of a destination it never knew.
+        Outcome<ChatCandidate> destination = connector.resolveDestination(tenantId, resolvedCredentialId, chatId);
+        if (!destination.ok()) {
+            throw new ChatChannelException(destination.error());
+        }
+        chatId = destination.value().chatId();
+        String chatTitle = request.chatTitle() != null && !request.chatTitle().isBlank()
+                ? request.chatTitle() : destination.value().title();
+        String chatType = request.chatType() != null && !request.chatType().isBlank()
+                ? request.chatType() : destination.value().type();
 
         ChatChannelBotEntity bot = upsertBot(tenantId, organizationId, connector.channelId(),
                 resolvedCredentialId, identity.value());
@@ -482,7 +494,7 @@ public class ChatChannelService {
         WebhookOutcome webhook = ensureWebhook(tenantId, connector, bot);
 
         UpsertedLink upserted = upsertLink(tenantId, organizationId, bot, chatId.trim(),
-                request.chatTitle(), request.chatType(), request.allowedUserIds());
+                chatTitle, chatType, request.allowedUserIds());
         ChatChannelLinkEntity link = upserted.link();
 
         // The one proof that matters. A bot that answers getMe says nothing about

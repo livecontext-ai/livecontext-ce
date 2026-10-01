@@ -51,6 +51,24 @@ class CatalogHelpModuleTest {
                 .doesNotContain("oauth2' is rejected");
     }
 
+    @Test
+    @DisplayName("static_headers help: a declared Accept is sent (the MCP value is named), and the list form is accepted")
+    @SuppressWarnings("unchecked")
+    void staticHeadersHelpDocumentsTheDeclaredAccept() {
+        Optional<ToolExecutionResult> result =
+                module.execute("help", Map.of("topics", List.of("register")), "tenant-1", null);
+        Map<String, Object> register = (Map<String, Object>) ((Map<String, Object>) result.orElseThrow().data())
+                .get("register");
+        Map<String, Object> staticHeaders = (Map<String, Object>) register.get("static_headers");
+
+        assertThat(String.valueOf(staticHeaders.get("accept")))
+                .contains("a declared Accept replaces it")
+                .contains("application/json, text/event-stream");
+        assertThat(String.valueOf(staticHeaders.get("accepted_values")))
+                .contains("one space after a ';' or a ','");
+        assertThat(String.valueOf(staticHeaders.get("never_sent"))).doesNotContain("Accept,");
+    }
+
     @Nested
     @DisplayName("canHandle")
     class CanHandle {

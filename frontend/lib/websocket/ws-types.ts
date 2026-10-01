@@ -50,10 +50,14 @@ export interface HelloPayload {
 export interface GoawayPayload {
   reason: string;
   limit?: number;
+  /** How long the server asks the client to wait before trying again. */
+  retryAfterMs?: number;
 }
 
 export interface ErrorPayload {
   message: string;
+  /** Machine-readable reason, e.g. `max_subscriptions` for a subscribe refused for capacity. */
+  code?: string;
 }
 
 // ── Channel event payloads ──

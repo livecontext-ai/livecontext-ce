@@ -692,15 +692,16 @@ class StepCompletionOrchestratorTest {
             when(execution.getWorkflowRunId()).thenReturn(UUID.randomUUID());
             when(persistenceService.recordStep(any(), any(), any(), any(), any(), anyInt(), any()))
                     .thenReturn(StepPersistenceResult.success(UUID.randomUUID()));
-            when(stateSnapshotService.incrementNodeCountsOnly(RUN_ID, NODE_ID, "COMPLETED", 1))
+            when(stateSnapshotService.incrementNodeCountsOnly(RUN_ID, NODE_ID, "COMPLETED", 1, 100L))
                     .thenReturn(ONE_COMPLETED);
 
             boolean persisted = orchestrator.completeStep(
                     execution, NODE_ID, NODE_LABEL, result, 0, null, 3, "trigger:start", true);
 
             assertThat(persisted).isTrue();
-            // Per-item NodeCounts still increment (frontend statusCounts stay live) ...
-            verify(stateSnapshotService).incrementNodeCountsOnly(RUN_ID, NODE_ID, "COMPLETED", 1);
+            // Per-item NodeCounts still increment (frontend statusCounts stay live), with the
+            // item's duration: the node's time in the run view is the sum of these increments ...
+            verify(stateSnapshotService).incrementNodeCountsOnly(RUN_ID, NODE_ID, "COMPLETED", 1, 100L);
             // ... but the node-level EpochState mark is deferred to the seal
             // (recordSplitAggregateIfMissing) - never written here.
             verify(stateSnapshotService, never()).recordNodeCompletionAndGetCounts(
@@ -729,6 +730,7 @@ class StepCompletionOrchestratorTest {
             verify(stateSnapshotService).recordNodeCompletionAndGetCounts(
                     RUN_ID, NODE_ID, "COMPLETED", "trigger:start", 3, 100L);
             verify(stateSnapshotService, never()).incrementNodeCountsOnly(any(), any(), any(), anyInt());
+            verify(stateSnapshotService, never()).incrementNodeCountsOnly(any(), any(), any(), anyInt(), anyLong());
         }
 
         @Test
@@ -747,6 +749,7 @@ class StepCompletionOrchestratorTest {
 
             assertThat(persisted).isTrue();
             verify(stateSnapshotService, never()).incrementNodeCountsOnly(any(), any(), any(), anyInt());
+            verify(stateSnapshotService, never()).incrementNodeCountsOnly(any(), any(), any(), anyInt(), anyLong());
         }
     }
 
@@ -1308,7 +1311,7 @@ class StepCompletionOrchestratorTest {
             when(persistenceService.recordStep(eq(execution), eq(CLASSIFY_NODE_ID), eq(CLASSIFY_LABEL),
                     eq(CLASSIFY_NODE_ID), any(StepExecutionResult.class), anyInt(), any()))
                     .thenReturn(StepPersistenceResult.success(UUID.randomUUID()));
-            when(stateSnapshotService.incrementNodeCountsOnly(RUN_ID, CLASSIFY_NODE_ID, "COMPLETED", 1))
+            when(stateSnapshotService.incrementNodeCountsOnly(RUN_ID, CLASSIFY_NODE_ID, "COMPLETED", 1, 1500L))
                     .thenReturn(ONE_COMPLETED);
             UUID workflowRunId = UUID.randomUUID();
             when(execution.getWorkflowRunId()).thenReturn(workflowRunId);
@@ -1326,7 +1329,7 @@ class StepCompletionOrchestratorTest {
             // accidentally drag the suppression away.
             verify(stateSnapshotService, never()).recordNodeCompletionAndGetCounts(
                     anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong());
-            verify(stateSnapshotService).incrementNodeCountsOnly(RUN_ID, CLASSIFY_NODE_ID, "COMPLETED", 1);
+            verify(stateSnapshotService).incrementNodeCountsOnly(RUN_ID, CLASSIFY_NODE_ID, "COMPLETED", 1, 1500L);
         }
 
         /**
@@ -1346,7 +1349,7 @@ class StepCompletionOrchestratorTest {
             when(persistenceService.recordStep(eq(execution), eq(CLASSIFY_NODE_ID), eq(CLASSIFY_LABEL),
                     eq(CLASSIFY_NODE_ID), any(StepExecutionResult.class), anyInt(), any()))
                     .thenReturn(StepPersistenceResult.success(UUID.randomUUID()));
-            when(stateSnapshotService.incrementNodeCountsOnly(RUN_ID, CLASSIFY_NODE_ID, "FAILED", 1))
+            when(stateSnapshotService.incrementNodeCountsOnly(RUN_ID, CLASSIFY_NODE_ID, "FAILED", 1, 800L))
                     .thenReturn(ONE_FAILED);
             UUID workflowRunId = UUID.randomUUID();
             when(execution.getWorkflowRunId()).thenReturn(workflowRunId);
@@ -1373,7 +1376,7 @@ class StepCompletionOrchestratorTest {
             when(persistenceService.recordStep(eq(execution), eq(CLASSIFY_NODE_ID), eq(CLASSIFY_LABEL),
                     eq(CLASSIFY_NODE_ID), any(StepExecutionResult.class), anyInt(), any()))
                     .thenReturn(StepPersistenceResult.success(UUID.randomUUID()));
-            when(stateSnapshotService.incrementNodeCountsOnly(eq(RUN_ID), eq(CLASSIFY_NODE_ID), anyString(), eq(1)))
+            when(stateSnapshotService.incrementNodeCountsOnly(eq(RUN_ID), eq(CLASSIFY_NODE_ID), anyString(), eq(1), anyLong()))
                     .thenReturn(ONE_COMPLETED);
 
             // 4 successful items
@@ -1477,14 +1480,14 @@ class StepCompletionOrchestratorTest {
 
             when(persistenceService.recordStep(any(), any(), any(), any(), any(), anyInt(), any()))
                     .thenReturn(StepPersistenceResult.success(UUID.randomUUID()));
-            when(stateSnapshotService.incrementNodeCountsOnly(RUN_ID, NODE, "COMPLETED", 1))
+            when(stateSnapshotService.incrementNodeCountsOnly(RUN_ID, NODE, "COMPLETED", 1, 100L))
                     .thenReturn(ONE_COMPLETED);
             when(execution.getWorkflowRunId()).thenReturn(UUID.randomUUID());
 
             orchestrator.complete(ctx, TRIGGER);
 
             // Both stores must move together - invariant.
-            verify(stateSnapshotService).incrementNodeCountsOnly(RUN_ID, NODE, "COMPLETED", 1);
+            verify(stateSnapshotService).incrementNodeCountsOnly(RUN_ID, NODE, "COMPLETED", 1, 100L);
             verify(workflowEpochService).recordNodeCount(RUN_ID, EPOCH, NODE, "COMPLETED", TRIGGER);
 
             // 2026-05-21 CRITICAL 2 regression guard: pin that triggerId is threaded
@@ -1550,7 +1553,7 @@ class StepCompletionOrchestratorTest {
             StepCompletionContext ctx = StepCompletionContext.of(execution, NODE_ID, NODE_LABEL,
                     StepExecutionResult.failure(NODE_ID, "boom", new RuntimeException("boom"), 5), 0, 0);
 
-            orchestrator.complete(ctx, null, CompletionKind.TERMINAL, true);
+            orchestrator.complete(ctx, null, CompletionKind.TERMINAL);
 
             verify(emitter, times(1)).nodeFailed(any(StepCompletionContext.class));
         }
@@ -1561,7 +1564,7 @@ class StepCompletionOrchestratorTest {
             StepCompletionContext ctx = StepCompletionContext.of(execution, NODE_ID, NODE_LABEL,
                     StepExecutionResult.failure(NODE_ID, "boom", new RuntimeException("boom"), 5), 0, 0);
 
-            orchestrator.complete(ctx, null, CompletionKind.NON_FINAL_ATTEMPT, false);
+            orchestrator.complete(ctx, null, CompletionKind.NON_FINAL_ATTEMPT);
 
             verify(emitter, never()).nodeFailed(any());
         }

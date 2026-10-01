@@ -8,7 +8,9 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -21,6 +23,8 @@ import java.util.Set;
  * Redis Key Structure:
  * - orchestrator:wb-session:{sessionId} -> WorkflowBuilderSession (JSON)
  * - orchestrator:wb-tenant:{tenantId}   -> Set of session IDs
+ * - orchestrator:wb-conv-last:{tenantId}:{conversationId} -> last workflow worked on
+ *   (outlives the session, so "no active session" can name the workflow to reload)
  *
  * Benefits:
  * - Survives server restart
@@ -36,6 +40,21 @@ public class WorkflowBuilderSessionStore {
 
     @Value("${orchestrator.workflow-builder.session-ttl:PT30M}")
     private Duration sessionTtl;
+
+    /**
+     * How long a conversation remembers the last workflow its builder session worked on,
+     * after the session itself is gone. Only feeds the "no active session" hint.
+     */
+    @Value("${orchestrator.workflow-builder.last-workflow-ttl:PT24H}")
+    private Duration lastWorkflowTtl = Duration.ofHours(24);
+
+    /** Idle time after which a session expires (for messages that explain why one is gone). */
+    public Duration getSessionTtl() {
+        return sessionTtl != null ? sessionTtl : Duration.ofMinutes(30);
+    }
+
+    /** The workflow a conversation's builder session last worked on (name may be null). */
+    public record LastWorkflow(String workflowId, String workflowName) {}
 
     public WorkflowBuilderSessionStore(RedisTemplate<String, Object> redisTemplate, ObjectMapper objectMapper) {
         this.redisTemplate = redisTemplate;
@@ -74,6 +93,72 @@ public class WorkflowBuilderSessionStore {
             log.error("Failed to save session to Redis: sessionId={}", session.getSessionId(), e);
             throw new WorkflowBuilderSessionException("Failed to save session", e);
         }
+        rememberLastWorkflow(session);
+    }
+
+    /**
+     * Remember which workflow this conversation's session works on, under a key that
+     * {@link #delete} deliberately leaves in place. Best-effort: it only improves the
+     * "no active session" message, so a failure here must never fail the save.
+     */
+    private void rememberLastWorkflow(WorkflowBuilderSession session) {
+        String workflowId = session.getLoadedWorkflowId();
+        if (session.getConversationId() == null || workflowId == null || workflowId.isBlank()) {
+            return;
+        }
+        try {
+            Map<String, Object> value = new HashMap<>();
+            value.put("workflow_id", workflowId);
+            if (session.getWorkflowName() != null) {
+                value.put("workflow_name", session.getWorkflowName());
+            }
+            redisTemplate.opsForValue().set(
+                RedisCacheKeys.workflowBuilderConversationLastWorkflow(session.getTenantId(), session.getConversationId()),
+                value, lastWorkflowTtl != null ? lastWorkflowTtl : Duration.ofHours(24));
+        } catch (Exception e) {
+            log.debug("Could not remember last workflow for conversation {}: {}",
+                session.getConversationId(), e.getMessage());
+        }
+    }
+
+    /**
+     * Forget the remembered workflow of this conversation if it is {@code workflowId} (called
+     * after this conversation deleted it). Best-effort, like the write. A delete made elsewhere
+     * (another conversation, the UI) is not seen here, which is why the hint says "if it still
+     * exists".
+     */
+    public void forgetLastWorkflow(String tenantId, String conversationId, String workflowId) {
+        if (workflowId == null) return;
+        Optional<LastWorkflow> last = getLastWorkflowForConversation(tenantId, conversationId);
+        // Same UUID whatever its spelling: the id the agent passed to delete may differ in case
+        // from the one the session stored.
+        if (last.isEmpty() || !workflowId.trim().equalsIgnoreCase(last.get().workflowId().trim())) return;
+        try {
+            redisTemplate.delete(RedisCacheKeys.workflowBuilderConversationLastWorkflow(tenantId, conversationId));
+        } catch (Exception e) {
+            log.debug("Could not forget last workflow for conversation {}: {}", conversationId, e.getMessage());
+        }
+    }
+
+    /**
+     * The workflow this conversation's builder session last worked on, still known after
+     * the session closed (finish/discard) or expired. Empty when unknown or unreadable.
+     */
+    public Optional<LastWorkflow> getLastWorkflowForConversation(String tenantId, String conversationId) {
+        if (tenantId == null || conversationId == null || conversationId.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            Object value = redisTemplate.opsForValue().get(
+                RedisCacheKeys.workflowBuilderConversationLastWorkflow(tenantId, conversationId));
+            if (value instanceof Map<?, ?> map && map.get("workflow_id") instanceof String id && !id.isBlank()) {
+                Object name = map.get("workflow_name");
+                return Optional.of(new LastWorkflow(id, name instanceof String n && !n.isBlank() ? n : null));
+            }
+        } catch (Exception e) {
+            log.debug("Could not read last workflow for conversation {}: {}", conversationId, e.getMessage());
+        }
+        return Optional.empty();
     }
 
     /**

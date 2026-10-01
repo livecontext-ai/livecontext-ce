@@ -147,15 +147,14 @@ public class StepCompletionOrchestrator {
      * Complete a step execution with optional triggerId for epoch-scoped snapshot updates.
      */
     public StepCompletionResult complete(StepCompletionContext ctx, String triggerId) {
-        return complete(ctx, triggerId, CompletionKind.TERMINAL, /*persistRow*/ true);
+        return complete(ctx, triggerId, CompletionKind.TERMINAL);
     }
 
     /**
      * SINGLE parameterized completion pipeline - used by BOTH the terminal path
-     * ({@link #complete(StepCompletionContext, String)} → {@code TERMINAL},
-     * {@code persistRow=true}) and the non-final NodePolicy retry-attempt path
-     * ({@link #completeAttempt(StepCompletionContext, String, boolean)} →
-     * {@code NON_FINAL_ATTEMPT}). Every divergence between the two dispositions
+     * ({@link #complete(StepCompletionContext, String)} → {@code TERMINAL}) and the
+     * non-final NodePolicy retry-attempt path
+     * ({@link #completeAttempt(StepCompletionContext, String)} → {@code NON_FINAL_ATTEMPT}). Every divergence between the two dispositions
      * branches on an explicit {@link CompletionKind} accessor at the line where it
      * is decided, so there are no mirror methods to keep in sync.
      *
@@ -163,15 +162,11 @@ public class StepCompletionOrchestrator {
      *                   failed attempt, stamped {@code policy_attempt}/{@code policy_max_attempts})
      * @param triggerId  DAG trigger id (row placement; snapshot writes happen only
      *                   for {@code TERMINAL})
-     * @param kind       disposition - see {@link CompletionKind} for the per-branch contract
-     * @param persistRow when true, insert the step_data row. {@code TERMINAL} always
-     *                   passes true; attempts pass false in loop contexts (see
-     *                   {@link CompletionKind#persistsRowInLoopContext()}). Subject to
-     *                   the v6 unique index: only the FIRST failed attempt of a logical
-     *                   execution actually lands; later ones dedupe.
+     * @param kind       disposition - see {@link CompletionKind} for the per-branch contract;
+     *                   only {@code TERMINAL} persists a step_data row
+     *                   ({@link CompletionKind#persistsRow()})
      */
-    public StepCompletionResult complete(StepCompletionContext ctx, String triggerId,
-            CompletionKind kind, boolean persistRow) {
+    public StepCompletionResult complete(StepCompletionContext ctx, String triggerId, CompletionKind kind) {
         if (kind == CompletionKind.TERMINAL) {
             logger.info("[StepCompletion] Completing: runId={}, nodeId={}, nodeLabel={}, item={}, iter={}, status={}, epoch={}, triggerId={}, durationMs={}, outputKeys={}, errorMessage={}",
                 ctx.runId(), ctx.nodeId(), ctx.nodeLabel(), ctx.itemIndex(), ctx.iteration(),
@@ -179,9 +174,9 @@ public class StepCompletionOrchestrator {
                 ctx.result().output() != null ? ctx.result().output().keySet() : "null",
                 ctx.result().error() != null ? ctx.result().error().getMessage() : "none");
         } else {
-            logger.info("[StepCompletion] Non-final attempt: runId={}, nodeId={}, item={}, iter={}, status={}, epoch={}, triggerId={}, persistRow={}",
+            logger.info("[StepCompletion] Non-final attempt: runId={}, nodeId={}, item={}, iter={}, status={}, epoch={}, triggerId={}",
                 ctx.runId(), ctx.nodeId(), ctx.itemIndex(), ctx.iteration(),
-                ctx.result().status(), ctx.epoch(), triggerId, persistRow);
+                ctx.result().status(), ctx.epoch(), triggerId);
         }
 
         // Product analytics: a TERMINAL failure is the "which node kinds break" signal.
@@ -201,13 +196,12 @@ public class StepCompletionOrchestrator {
         // for correct epoch isolation AND explicit triggerId so workflow_step_data
         // rows land under the right DAG instead of drifting to "trigger:default"
         // - CRITICAL 2 fix, 2026-05-21 e2e audit).
-        // persistRow=false → loop-context non-final attempts are WS-only: an attempt
-        // row would claim the iteration's single FAILED slot in the v6 unique index
-        // and silently drop the iteration's TERMINAL row - see
-        // CompletionKind.persistsRowInLoopContext for the full rationale.
+        // Non-final attempts are WS-only: an attempt row would claim the single FAILED slot
+        // of the v6 unique index and silently drop the TERMINAL row - see
+        // CompletionKind.persistsRow for the full rationale.
         boolean persisted = false;
         StepPersistenceResult persistenceResult = null;
-        if (persistRow) {
+        if (kind.persistsRow()) {
             persistenceResult = persistenceService.recordStep(
                 completionCtx.execution(), completionCtx.nodeId(), completionCtx.nodeLabel(), completionCtx.nodeId(),
                 completionCtx.result(), completionCtx.epoch(), triggerId);
@@ -269,8 +263,11 @@ public class StepCompletionOrchestrator {
         StateSnapshot.NodeCounts snapshotCounts;
         if (kind.mutatesSnapshotCounts()) {
             if (ctx.suppressGlobalMark()) {
+                // With the item's duration: every item of a split is counted here, one by one,
+                // so the node's time in the run view comes from these increments.
                 snapshotCounts = stateSnapshotService.incrementNodeCountsOnly(
-                    completionCtx.runId(), completionCtx.nodeId(), completionCtx.result().status().name(), 1);
+                    completionCtx.runId(), completionCtx.nodeId(), completionCtx.result().status().name(), 1,
+                    completionCtx.result().executionTime());
                 // Per-epoch counter row - additive, status-keyed, mirrors the in-memory
                 // increment above. Without this, split-async COMPLETED/FAILED items never
                 // reach workflow_epochs and the per-epoch inspector shows completed=0.
@@ -364,37 +361,13 @@ public class StepCompletionOrchestrator {
                 ? completionCtx
                 : withResult(ctx, stripInternalCompletionMetadata(ctx.result())));
         } else if (kind.bills()) {
+            // A duplicate is a re-delivery of an outcome already recorded (and billed). A
+            // retried node's terminal row is never one: non-final attempts persist no row
+            // (CompletionKind.persistsRow), so the ONE platform credit of a logical
+            // execution is charged by the persisted branch above.
             logger.info("[StepCompletion] Duplicate (DB skipped, NodeCounts updated): runId={}, nodeId={}, item={}, iter={}, status={}",
                 completionCtx.runId(), completionCtx.nodeId(), completionCtx.itemIndex(), completionCtx.iteration(),
                 completionCtx.result().status());
-
-            // Node-policy billing invariant: ONE platform credit per LOGICAL node execution,
-            // regardless of retry attempts (non-final attempts are never billed - they route
-            // through completeAttempt which has no billing call). A TERMINAL failure after
-            // retries is `persisted=false` by construction in non-loop contexts: the first
-            // failed attempt already occupies the single FAILED slot of the v6 unique index
-            // (workflow_run_id, step_alias, trigger_id, iteration, item_index, epoch, spawn,
-            // status), so the terminal FAILED INSERT dedupes. Without this branch the whole
-            // logical execution would be billed ZERO credits. Detection is exact: only
-            // NodePolicyRunner stamps POLICY_ATTEMPT/POLICY_MAX_ATTEMPTS, and only a
-            // terminal failure arrives here with attempt == maxAttempts > 1 (non-final
-            // attempts never enter complete()).
-            //
-            // TRADE-OFF (accepted): this branch flips duplicate handling from at-most-once
-            // to AT-LEAST-ONCE billing for retried terminal failures - a crash-recovery
-            // re-delivery of the SAME terminal FAILED result re-enters here (persisted=false
-            // again) and bills a second credit. Pre-policy behavior silently absorbed such
-            // duplicates unbilled; we prefer a rare double-billed failure over systematically
-            // billing retried failures zero. Aggregation note: in non-loop contexts the
-            // attempt-1 FAILED row coexists with a COMPLETED terminal row after a
-            // retry-then-success, so DB-sourced views (StepAggregationService) may show
-            // partial_success for a logically-successful node; the WS NodeCounts stay clean.
-            if (completionCtx.result().isFailure()
-                    && isRetriedTerminalAttempt(completionCtx.result())) {
-                logger.info("[StepCompletion] Billing deduped terminal failure (retried node): runId={}, nodeId={}, item={}, iter={}",
-                    completionCtx.runId(), completionCtx.nodeId(), completionCtx.itemIndex(), completionCtx.iteration());
-                consumeCreditForNode(completionCtx);
-            }
         }
 
         // 4. Build statusCounts map (counts already retrieved from write or fallback read)
@@ -441,27 +414,20 @@ public class StepCompletionOrchestrator {
      * {@code retryCount > 0}. The terminal attempt (success or exhausted failure)
      * goes through {@link #complete(StepCompletionContext, String)} as usual.
      *
-     * <p>Thin back-compat shim over the SINGLE parameterized pipeline,
-     * {@link #complete(StepCompletionContext, String, CompletionKind, boolean)} with
-     * {@code NON_FINAL_ATTEMPT}. What an attempt does (persist its row outside loops,
-     * always emit the annotated FAILURE step event) and does NOT do (no StateSnapshot /
-     * workflow_epochs mutation, no billing, no merge recording - and callers skip the
-     * edge tail) is decided inside that pipeline at the {@link CompletionKind} branch
-     * points; see the {@code CompletionKind} accessor javadocs for the rationale of
-     * each skip.
+     * <p>Thin shim over the SINGLE parameterized pipeline,
+     * {@link #complete(StepCompletionContext, String, CompletionKind)} with
+     * {@code NON_FINAL_ATTEMPT}. What an attempt does (emit the annotated FAILURE step
+     * event) and does NOT do (no step_data row, no StateSnapshot / workflow_epochs
+     * mutation, no billing, no merge recording - and callers skip the edge tail) is
+     * decided inside that pipeline at the {@link CompletionKind} branch points; see the
+     * {@code CompletionKind} accessor javadocs for the rationale of each skip.
      *
      * @param ctx        completion context carrying the ANNOTATED failed attempt
-     * @param triggerId  DAG trigger id (row placement only; no snapshot writes)
-     * @param persistRow when true, insert the attempt's step_data row (subject to
-     *                   the v6 unique index: only the FIRST failed attempt of a
-     *                   logical execution actually lands; later ones dedupe).
-     *                   False in loop contexts - see
-     *                   {@link CompletionKind#persistsRowInLoopContext()}.
-     * @return completion result with read-only statusCounts (persisted flag reflects
-     *         the row insert when {@code persistRow}, else always duplicate)
+     * @param triggerId  DAG trigger id (event placement only; no snapshot writes)
+     * @return completion result with read-only statusCounts (never persisted)
      */
-    public StepCompletionResult completeAttempt(StepCompletionContext ctx, String triggerId, boolean persistRow) {
-        return complete(ctx, triggerId, CompletionKind.NON_FINAL_ATTEMPT, persistRow);
+    public StepCompletionResult completeAttempt(StepCompletionContext ctx, String triggerId) {
+        return complete(ctx, triggerId, CompletionKind.NON_FINAL_ATTEMPT);
     }
 
     /**
@@ -476,34 +442,10 @@ public class StepCompletionOrchestrator {
             Integer itemIndex,
             Integer iteration,
             int epoch,
-            String triggerId,
-            boolean persistRow) {
+            String triggerId) {
         StepCompletionContext ctx = StepCompletionContext.of(
             execution, nodeId, nodeLabel, result, itemIndex, iteration, epoch);
-        return completeAttempt(ctx, triggerId, persistRow);
-    }
-
-    /**
-     * True when this result is the TERMINAL attempt of a retried execution:
-     * {@code policy_attempt == policy_max_attempts > 1} (stamped by
-     * NodePolicyRunner.annotate). Non-final attempts never reach
-     * {@link #complete} - they go through {@link #completeAttempt} - so within
-     * complete() this identifies "a retried node's last attempt" exactly.
-     */
-    private boolean isRetriedTerminalAttempt(StepExecutionResult result) {
-        if (result.output() == null) return false;
-        Integer attempt = asInteger(result.output().get(ExecutionMetadataKeys.POLICY_ATTEMPT));
-        Integer maxAttempts = asInteger(result.output().get(ExecutionMetadataKeys.POLICY_MAX_ATTEMPTS));
-        return attempt != null && maxAttempts != null
-            && maxAttempts > 1 && attempt.intValue() == maxAttempts.intValue();
-    }
-
-    private static Integer asInteger(Object value) {
-        if (value instanceof Number n) return n.intValue();
-        if (value instanceof String s) {
-            try { return Integer.parseInt(s.trim()); } catch (NumberFormatException ignored) { }
-        }
-        return null;
+        return completeAttempt(ctx, triggerId);
     }
 
     /**
@@ -1331,6 +1273,29 @@ public class StepCompletionOrchestrator {
                 runId, normalizedKey);
             return;
         }
+        recordSplitAggregate(runId, triggerId, normalizedKey, epoch, "seal", cappedKey -> new long[] {
+            stepDataRepository.countByRunIdAndNormalizedKeyAndEpochAndStatus(runId, cappedKey, epoch, "COMPLETED"),
+            stepDataRepository.countByRunIdAndNormalizedKeyAndEpochAndStatus(runId, cappedKey, epoch, "FAILED")});
+    }
+
+    /**
+     * The same node-level mark for a STEP_BY_STEP split fan-out, taken from the outcome of THIS
+     * fan-out (its items' final statuses, counted by the executor) instead of the epoch's rows.
+     * The rows of an epoch span every spawn: a rerun of the node in the same epoch would be judged
+     * with the previous spawn's items too (prod run_<id>: 2 COMPLETED items in
+     * spawn 0, 1 FAILED in spawn 1, read as a partial success).
+     *
+     * @param completed items whose final result is COMPLETED
+     * @param failed    items whose final result is FAILED
+     */
+    public void recordSplitOutcome(String runId, String triggerId, String normalizedKey, int epoch,
+                                   long completed, long failed) {
+        recordSplitAggregate(runId, triggerId, normalizedKey, epoch, "fan-out end",
+            cappedKey -> new long[] {completed, failed});
+    }
+
+    private void recordSplitAggregate(String runId, String triggerId, String normalizedKey, int epoch, String when,
+                                      java.util.function.Function<String, long[]> countsForKey) {
 
         // Phase 2.F (2026-04-29): when triggerId is null (recovery scan path), resolve
         // from the snapshot's default DAG. Falls back gracefully if no DAG can be resolved.
@@ -1377,8 +1342,9 @@ public class StepCompletionOrchestrator {
             }
         }
 
-        long completed = stepDataRepository.countByRunIdAndNormalizedKeyAndEpochAndStatus(runId, cappedKey, epoch, "COMPLETED");
-        long failed = stepDataRepository.countByRunIdAndNormalizedKeyAndEpochAndStatus(runId, cappedKey, epoch, "FAILED");
+        long[] counts = countsForKey.apply(cappedKey);
+        long completed = counts[0];
+        long failed = counts[1];
 
         if (completed == 0 && failed == 0) {
             logger.debug("[StepCompletion] recordSplitAggregateIfMissing - no items persisted yet: runId={}, nodeId={}, epoch={}",
@@ -1393,17 +1359,17 @@ public class StepCompletionOrchestrator {
         // statusCounts). See StateSnapshot.markNodeCompletedEpochOnly for context.
         if (completed > 0 && failed == 0) {
             stateSnapshotService.markNodeCompletedEpochOnly(runId, resolvedTriggerId, epoch, cappedKey);
-            logger.info("[StepCompletion] Aggregate at seal - all completed: runId={}, nodeId={}, epoch={}, completed={}",
-                runId, cappedKey, epoch, completed);
+            logger.info("[StepCompletion] Aggregate at {} - all completed: runId={}, nodeId={}, epoch={}, completed={}",
+                when, runId, cappedKey, epoch, completed);
         } else if (failed > 0 && completed == 0) {
             stateSnapshotService.markNodeFailedEpochOnly(runId, resolvedTriggerId, epoch, cappedKey);
-            logger.info("[StepCompletion] Aggregate at seal - all failed: runId={}, nodeId={}, epoch={}, failed={}",
-                runId, cappedKey, epoch, failed);
+            logger.info("[StepCompletion] Aggregate at {} - all failed: runId={}, nodeId={}, epoch={}, failed={}",
+                when, runId, cappedKey, epoch, failed);
         } else {
             stateSnapshotService.markNodeCompletedEpochOnly(runId, resolvedTriggerId, epoch, cappedKey);
             stateSnapshotService.markNodePartialFailure(runId, resolvedTriggerId, epoch, cappedKey);
-            logger.info("[StepCompletion] Aggregate at seal - partial: runId={}, nodeId={}, epoch={}, completed={}, failed={}",
-                runId, cappedKey, epoch, completed, failed);
+            logger.info("[StepCompletion] Aggregate at {} - partial: runId={}, nodeId={}, epoch={}, completed={}, failed={}",
+                when, runId, cappedKey, epoch, completed, failed);
         }
     }
 

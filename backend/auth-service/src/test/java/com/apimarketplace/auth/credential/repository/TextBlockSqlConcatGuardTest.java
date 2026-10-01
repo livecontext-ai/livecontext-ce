@@ -1,5 +1,6 @@
 package com.apimarketplace.auth.credential.repository;
 
+import com.apimarketplace.testsupport.SourceTrees;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -13,7 +14,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -32,7 +32,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * becomes {@code ... AND(tenant_id...} - a syntax error.
  *
- * <p>This test walks every {@code *Repository.java} under {@code backend/} and
+ * <p>This test reads every {@code *Repository.java} in the main sources of every
+ * {@code backend/} module and
  * fails the build if the anti-pattern is present. New core-tool repositories
  * written in the future are automatically covered.
  *
@@ -60,13 +61,21 @@ class TextBlockSqlConcatGuardTest {
     void noTextBlockIdentConcatInAnyRepository() throws IOException {
         Path backendRoot = locateBackendRoot();
 
-        List<String> offences = new ArrayList<>();
-        try (Stream<Path> walk = Files.walk(backendRoot)) {
-            walk.filter(Files::isRegularFile)
+        // Main sources only, never a module's target/: the ce-auth shard runs another Maven
+        // lane at the same time, whose surefire deletes files there while a walk is inside.
+        List<Path> repositories = SourceTrees.mainJavaSources(backendRoot).stream()
                 .filter(p -> p.getFileName().toString().endsWith("Repository.java"))
-                .filter(p -> p.toString().contains("src" + java.io.File.separator + "main"))
-                .forEach(p -> scanForAntiPattern(p, offences));
-        }
+                .toList();
+
+        // A scan that found nothing would pass forever while guarding nothing.
+        assertThat(repositories)
+                .as("the scan must reach the repositories of every service, not just this one")
+                .hasSizeGreaterThan(100)
+                .anyMatch(p -> p.startsWith(backendRoot.resolve("auth-service")))
+                .anyMatch(p -> p.startsWith(backendRoot.resolve("orchestrator-service")));
+
+        List<String> offences = new ArrayList<>();
+        repositories.forEach(p -> scanForAntiPattern(p, offences));
 
         assertThat(offences)
                 .as("Repositories must not use `\"\"\" + IDENT + \"\"\"` concat - "

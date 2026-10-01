@@ -17,6 +17,9 @@ import static jakarta.persistence.LockModeType.PESSIMISTIC_WRITE;
 @Repository
 public interface SubscriptionRepository extends JpaRepository<Subscription, Long> {
 
+    @Query("select count(s) > 0 from Subscription s where s.billingCustomer.user.id = :userId and lower(s.provider) = 'stripe' and upper(s.plan.code) <> 'FREE'")
+    boolean hasStripeHistory(@Param("userId") Long userId);
+
     @Query("""
            SELECT s FROM Subscription s
            WHERE s.billingCustomer.id = :customerId

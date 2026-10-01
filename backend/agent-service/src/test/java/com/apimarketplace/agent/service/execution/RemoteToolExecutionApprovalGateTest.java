@@ -47,6 +47,10 @@ class RemoteToolExecutionApprovalGateTest {
         gate = mock(ToolApprovalGate.class);
         publisher = mock(ApprovalCardPublisher.class);
         when(gate.isEnabled()).thenReturn(true);
+        // The connect-card park waits through awaitAnswer (a permission never answers it);
+        // routing it to the awaitDecision stub lets each test script one verdict per park.
+        org.mockito.Mockito.lenient().when(gate.awaitAnswer(any())).thenAnswer(inv ->
+                ToolApprovalGate.Answer.of(gate.awaitDecision(inv.getArgument(0))));
         when(gate.beginPark(any())).thenReturn(true);
         // A non-null return means "the card reached the user". Publishing failures are their
         // own test (cardThatNeverReachedTheUserIsNotParkedOn); everywhere else the card lands.
@@ -253,6 +257,9 @@ class RemoteToolExecutionApprovalGateTest {
         verify(service, times(1)).dispatch(any(), any(), eq("tenant-1"), any(), anyLong());
         verify(publisher).publishServiceApproval(eq("stream-1"), eq("conv-1"), any(),
                 eq("Credential required for Gmail"), eq(false), eq(true), eq("call-1:credential"));
+        // Waited through awaitAnswer, the variant a "don't ask again" grant does NOT release:
+        // a permission never connects the service the re-run needs.
+        verify(gate).awaitAnswer(any());
     }
 
     @Test

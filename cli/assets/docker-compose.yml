@@ -52,7 +52,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          # 512M, not 256M: default settings (128MB shared_buffers) plus up to 20 app connections
+          # (Hikari maximum-pool-size) outgrow 256M under load. The e2e suite (e2e-measure,
+          # 2026-09-29) saw Postgres OOM-killed 3 times at 256M, then "the database system is in
+          # recovery mode". Keep >= 512M (test_installation_config.py).
+          memory: 512M
 
   redis:
     image: redis:7-alpine

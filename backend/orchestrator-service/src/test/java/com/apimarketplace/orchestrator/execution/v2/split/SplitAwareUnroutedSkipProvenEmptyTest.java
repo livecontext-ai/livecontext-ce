@@ -240,7 +240,7 @@ class SplitAwareUnroutedSkipProvenEmptyTest {
     }
 
     private void noPredecessorCompletedAnyItem() {
-        when(stepDataRepository.findCompletedItemIndicesByEpoch(
+        when(stepDataRepository.findPassedItemIndicesByEpoch(
             org.mockito.ArgumentMatchers.eq(RUN_ID), org.mockito.ArgumentMatchers.anyString(),
             org.mockito.ArgumentMatchers.eq(EPOCH))).thenReturn(List.of());
     }

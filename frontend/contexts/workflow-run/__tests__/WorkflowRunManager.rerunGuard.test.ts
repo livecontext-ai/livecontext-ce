@@ -36,6 +36,7 @@ vi.mock('@/lib/api', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   wsClient: {
+    onReconnected: () => () => {},
     sendAction: vi.fn().mockResolvedValue(undefined),
   },
 }));

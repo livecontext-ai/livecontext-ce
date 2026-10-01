@@ -21,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -156,11 +157,35 @@ public class AskUserToolsProvider implements ToolsProvider {
 
     private ToolExecutionResult ask(Map<String, Object> parameters, ToolExecutionContext context) {
         List<UserQuestion> questions;
+        List<String> droppedOptions = new ArrayList<>();
         try {
-            questions = UserQuestionValidator.parseQuestions(parameters.get("questions"));
+            questions = UserQuestionValidator.parseQuestions(parameters.get("questions"), droppedOptions);
         } catch (UserQuestionValidator.InvalidQuestionsException e) {
             return ToolExecutionResult.failure(ToolErrorCode.VALIDATION_ERROR, e.getMessage());
         }
+        return withDroppedOptionsNote(askValidated(questions, context), droppedOptions);
+    }
+
+    /**
+     * Say which declared "Other" options were left out, on whatever the ask produced, so the agent
+     * learns the rule without the call having failed for it.
+     */
+    static ToolExecutionResult withDroppedOptionsNote(ToolExecutionResult result, List<String> droppedOptions) {
+        if (droppedOptions.isEmpty() || result == null || !result.success()
+                || !(result.data() instanceof Map<?, ?> data)
+                || STATUS_UNAVAILABLE.equals(data.get("status"))) {
+            // Nothing was put to anyone on an unavailable result, so there is no question to
+            // describe; the agent is told to decide alone and the note would only distract.
+            return result;
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        data.forEach((k, v) -> out.put(String.valueOf(k), v));
+        out.put("note", "Left out " + String.join(", ", droppedOptions) + ": the person can always type "
+                + "their own answer, so never declare an 'Other' option.");
+        return new ToolExecutionResult(true, out, result.error(), result.errorCode(), result.metadata());
+    }
+
+    private ToolExecutionResult askValidated(List<UserQuestion> questions, ToolExecutionContext context) {
 
         Map<String, Object> credentials = context != null && context.credentials() != null
                 ? context.credentials() : Map.of();
@@ -564,7 +589,8 @@ public class AskUserToolsProvider implements ToolsProvider {
 
         out.put("constraints", List.of(
                 "At most " + UserQuestionValidator.MAX_QUESTIONS + " questions per call; ask the most important now and the rest later.",
-                "Never add an 'Other' option: the card always offers a free-text answer.",
+                "Never add an 'Other' option: the card always offers a free-text answer. One you declare anyway "
+                        + "is left out of the card and named in the result's 'note'.",
                 "Headers must be unique within a call.",
                 "The call may return before the person answers (pending_user). That is normal: close your turn and wait."));
 

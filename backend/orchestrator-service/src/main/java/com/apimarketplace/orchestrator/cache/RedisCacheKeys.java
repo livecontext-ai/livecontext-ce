@@ -11,7 +11,7 @@ package com.apimarketplace.orchestrator.cache;
  * - orchestrator:evaluated-cores:{runId} - Set of evaluated core nodes
  * - orchestrator:state-manager:{runId} - Serialized WorkflowStateManager
  * - orchestrator:lock:{resource}:{id} - Distributed locks
- * - orchestrator:wb-session:{sessionId} / orchestrator:wb-tenant:{tenantId} / orchestrator:wb-conv:{tenantId}:{conversationId} - Workflow builder sessions
+ * - orchestrator:wb-session:{sessionId} / orchestrator:wb-tenant:{tenantId} / orchestrator:wb-conv:{tenantId}:{conversationId} / orchestrator:wb-conv-last:{tenantId}:{conversationId} - Workflow builder sessions
  * - orchestrator:running:{runId}[:{epoch}] - Per-run / per-(run,epoch) running-node count hashes
  * - orchestrator:running-epochs:{runId} - SET tracker enumerating active per-epoch hash keys (anti redis.keys blocking, 2026-05-09)
  * - orchestrator:split-barrier:{runId}:{nodeId}:{epoch} - Split-async coalesce barrier hashes
@@ -156,6 +156,18 @@ public final class RedisCacheKeys {
      */
     public static String workflowBuilderConversationIndex(String tenantId, String conversationId) {
         return PREFIX + "wb-conv:" + tenantId + ":" + conversationId;
+    }
+
+    /**
+     * Key remembering the LAST workflow a conversation's builder session worked on.
+     * Outlives the session on purpose (the session closes on finish/discard and
+     * expires after its idle TTL), so a later builder call that finds no session
+     * can name the workflow to reload instead of a bare "no session".
+     * @param tenantId The tenant ID
+     * @param conversationId The conversation ID
+     */
+    public static String workflowBuilderConversationLastWorkflow(String tenantId, String conversationId) {
+        return PREFIX + "wb-conv-last:" + tenantId + ":" + conversationId;
     }
 
     /**

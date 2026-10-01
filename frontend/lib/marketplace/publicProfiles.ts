@@ -1,4 +1,5 @@
 import 'server-only';
+import { isTierKey, type PartnerTierKey } from '@/lib/partners/tiers';
 import {
   PUBLIC_MARKETPLACE_REVALIDATE_SECONDS,
   gatewayBaseUrl,
@@ -37,6 +38,10 @@ export interface PublicProfile {
    * true grants it, so a malformed payload can never decorate a profile.
    */
   verified: boolean;
+  /** Whether this account carries the official-partner badge (the gold seal); strict-true like {@link verified}. */
+  partner: boolean;
+  /** The partner tier, only when {@link partner} is true (the badge is the same for every tier). */
+  partnerTier: PartnerTierKey | null;
 }
 
 /**
@@ -72,6 +77,8 @@ export function mapProfile(raw: unknown): PublicProfile | null {
     // would index a profile whose owner never opted in.
     searchIndexable: row.searchIndexable === true,
     verified: row.verified === true,
+    partner: row.partner === true,
+    partnerTier: row.partner === true && isTierKey(row.partnerTier) ? row.partnerTier : null,
   };
 }
 

@@ -31,6 +31,7 @@ import { apiClient } from '@/lib/api/api-client';
 import { getAllowedIds, buildToolsConfigPayload, isGenerationEnabled, getGrant, getFileAccessMode, getMemoryAccessMode, isMailboxEnabled, getMailboxAccessMode, GRANT_FAMILIES, type ResourceGrant } from '@/lib/agents/toolsConfigAccess';
 import { initialTurnLimits, buildChangedTurnLimits } from '@/lib/agents/agentTurnLimits';
 import { initialCompaction, buildChangedCompaction } from '@/lib/agents/agentCompaction';
+import { readAgentNameConflict, type AgentNameConflict } from '@/lib/agents/agentNameConflict';
 import { Switch } from '@/components/ui/switch';
 import { ConfirmDeleteModal } from '@/components/chat/ConfirmDeleteModal';
 import { formatUtcDateTime } from '@/lib/utils/dateFormatters';
@@ -464,6 +465,9 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
   const [name, setName] = useState(agent?.name || (isEditMode ? '' : getPresetDefaultName(defaultAvatar) || ''));
   const [description, setDescription] = useState(agent?.description || '');
   const [avatarUrl, setAvatarUrl] = useState(defaultAvatar);
+  // Set when the last save was refused because another active agent of the workspace holds
+  // this name; cleared as soon as the name changes. Carries the server's first free name.
+  const [nameConflict, setNameConflict] = useState<(AgentNameConflict & { name: string }) | null>(null);
 
   // When avatar changes in create mode, auto-fill name if empty or still a preset default
   const handleAvatarChange = useCallback((newAvatarUrl: string) => {
@@ -1797,15 +1801,23 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
       onClose();
     } catch (err) {
       console.error('Error creating agent:', err);
-      // Surface a clear message for the common duplicate-name case (default preset names
-      // like "Nova" collide) instead of a generic failure - and without the agent-tool
-      // jargon the backend message carries ("Use agent(action='update', ...)").
-      const isDuplicateName = err instanceof Error && /already exists/i.test(err.message);
-      addToast({
-        type: 'error',
-        title: t('error'),
-        message: isDuplicateName ? t('duplicateName', { name: name.trim() }) : t('createFailed'),
-      });
+      // The common duplicate-name case (default preset names like "Nova" collide): the server
+      // refuses with 409 AGENT_NAME_CONFLICT and the first free name. Show it next to the name
+      // field (step 1, wherever the user saved from) with a one-click "Use ..." instead of a
+      // generic failure, and without the agent-tool jargon the backend message carries.
+      const conflict = readAgentNameConflict(err);
+      if (conflict) {
+        setNameConflict({ ...conflict, name: name.trim() });
+        setCurrentStep(1);
+      } else {
+        // A server without the structured answer (mid-rollout) still says "already exists".
+        const isDuplicateName = err instanceof Error && /already exists/i.test(err.message);
+        addToast({
+          type: 'error',
+          title: t('error'),
+          message: isDuplicateName ? t('duplicateName', { name: name.trim() }) : t('createFailed'),
+        });
+      }
     } finally {
       setIsCreating(false);
     }
@@ -2046,7 +2058,26 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                     onChange={(e) => setName(e.target.value)}
                     placeholder={t('namePlaceholder')}
                     className="w-full"
+                    aria-invalid={nameConflict?.name === name.trim() ? true : undefined}
                   />
+                  {nameConflict && nameConflict.name === name.trim() && (
+                    <div role="alert" className="mt-2 flex flex-wrap items-center gap-2 text-sm text-red-500">
+                      <span>{t('duplicateName', { name: nameConflict.name })}</span>
+                      {nameConflict.suggestedName && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setName(nameConflict.suggestedName as string);
+                            setNameConflict(null);
+                          }}
+                        >
+                          {t('useSuggestedName', { name: nameConflict.suggestedName })}
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Description */}

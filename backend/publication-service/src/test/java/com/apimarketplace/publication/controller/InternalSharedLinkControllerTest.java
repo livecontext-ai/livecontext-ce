@@ -52,7 +52,7 @@ class InternalSharedLinkControllerTest {
         @DisplayName("registers new shared link and returns token info")
         void registersNewLink() {
             SharedLinkEntity entity = buildEntity(RESOURCE_TOKEN, ResourceType.CHAT);
-            when(sharedLinkService.register(eq(TENANT_ID), isNull(), isNull(), eq("CHAT"), eq(RESOURCE_TOKEN),
+            when(sharedLinkService.registerForOwningService(eq(TENANT_ID), isNull(), isNull(), eq("CHAT"), eq(RESOURCE_TOKEN),
                     eq(RESOURCE_ID), eq("My Chat"), eq("Description")))
                     .thenReturn(entity);
 
@@ -79,7 +79,7 @@ class InternalSharedLinkControllerTest {
         @DisplayName("registers link without optional resourceId")
         void registersWithoutResourceId() {
             SharedLinkEntity entity = buildEntity(RESOURCE_TOKEN, ResourceType.FORM);
-            when(sharedLinkService.register(eq(TENANT_ID), isNull(), isNull(), eq("FORM"), eq(RESOURCE_TOKEN),
+            when(sharedLinkService.registerForOwningService(eq(TENANT_ID), isNull(), isNull(), eq("FORM"), eq(RESOURCE_TOKEN),
                     isNull(), eq("My Form"), isNull()))
                     .thenReturn(entity);
 
@@ -104,7 +104,7 @@ class InternalSharedLinkControllerTest {
             ResponseEntity<?> response = controller.register(null, body);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-            verify(sharedLinkService, never()).register(any(), any(), any(), any(), any(), any(), any(), any());
+            verify(sharedLinkService, never()).registerForOwningService(any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -122,7 +122,7 @@ class InternalSharedLinkControllerTest {
         @Test
         @DisplayName("returns 500 on service exception")
         void returns500OnException() {
-            when(sharedLinkService.register(any(), any(), any(), any(), any(), any(), any(), any()))
+            when(sharedLinkService.registerForOwningService(any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenThrow(new RuntimeException("DB error"));
 
             Map<String, Object> body = new HashMap<>();
@@ -140,7 +140,7 @@ class InternalSharedLinkControllerTest {
         void handlesIdempotentRegistration() {
             SharedLinkEntity existing = buildEntity(RESOURCE_TOKEN, ResourceType.CHAT);
             // Service returns existing entity on duplicate registration
-            when(sharedLinkService.register(any(), any(), any(), any(), eq(RESOURCE_TOKEN), any(), any(), any()))
+            when(sharedLinkService.registerForOwningService(any(), any(), any(), any(), eq(RESOURCE_TOKEN), any(), any(), any()))
                     .thenReturn(existing);
 
             Map<String, Object> body = new HashMap<>();
@@ -225,6 +225,43 @@ class InternalSharedLinkControllerTest {
             ResponseEntity<?> response = controller.validate("sl_unknown");
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        }
+    }
+
+    @Nested
+    @DisplayName("getByToken")
+    class GetByToken {
+
+        @Test
+        @DisplayName("carries the link owner's workspace, which /app/public binds the link's resourceId to")
+        void carriesOwnerWorkspace() {
+            SharedLinkEntity entity = buildEntity("publication-123", ResourceType.APPLICATION);
+            entity.setOrganizationId(ORG_ID);
+            entity.setResourceId(RESOURCE_ID);
+            when(sharedLinkService.getByToken(entity.getToken())).thenReturn(Optional.of(entity));
+
+            ResponseEntity<?> response = controller.getByToken(entity.getToken());
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> result = (Map<String, Object>) response.getBody();
+            assertThat(result).containsEntry("tenantId", TENANT_ID)
+                    .containsEntry("organizationId", ORG_ID)
+                    .containsEntry("resourceToken", "publication-123")
+                    .containsEntry("resourceId", RESOURCE_ID.toString());
+        }
+
+        @Test
+        @DisplayName("a link with no workspace answers an empty organizationId, never a missing key or a null")
+        void emptyWorkspaceForLegacyLink() {
+            SharedLinkEntity entity = buildEntity("publication-123", ResourceType.APPLICATION);
+            entity.setOrganizationId(null);
+            when(sharedLinkService.getByToken(entity.getToken())).thenReturn(Optional.of(entity));
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> result = (Map<String, Object>) controller.getByToken(entity.getToken()).getBody();
+
+            assertThat(result).containsEntry("organizationId", "").containsEntry("resourceId", "");
         }
     }
 

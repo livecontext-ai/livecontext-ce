@@ -465,4 +465,61 @@ class TokenUsageConventionsTest {
             assertThat(TokenUsageConventions.toBilledConvention(usage, "codex", "openai")).isSameAs(usage);
         }
     }
+    @Nested
+    @DisplayName("inputBreakdown: the three input classes a guard prices (2026-09-30)")
+    class InputBreakdown {
+
+        @Test
+        @DisplayName("claude-code: plain input is the prompt total minus both cache counters")
+        void claudeCodeInclusiveTotal() {
+            TokenUsageConventions.Breakdown b =
+                TokenUsageConventions.inputBreakdown("claude-code", 201_052, 18_971, 182_073, 0);
+
+            assertThat(b).isEqualTo(new TokenUsageConventions.Breakdown(8, 18_971, 182_073));
+        }
+
+        @Test
+        @DisplayName("anthropic API: the prompt is plain input and the cache counters sit beside it")
+        void anthropicExclusivePrompt() {
+            TokenUsageConventions.Breakdown b =
+                TokenUsageConventions.inputBreakdown("anthropic", 8, 18_971, 182_073, 0);
+
+            assertThat(b).isEqualTo(new TokenUsageConventions.Breakdown(8, 18_971, 182_073));
+        }
+
+        @Test
+        @DisplayName("subset providers: the cached part is carved out of the prompt")
+        void subsetCachedIsCarvedOut() {
+            TokenUsageConventions.Breakdown b =
+                TokenUsageConventions.inputBreakdown("codex", 115_668, 0, 0, 87_808);
+
+            assertThat(b).isEqualTo(new TokenUsageConventions.Breakdown(27_860, 0, 87_808));
+        }
+
+        @Test
+        @DisplayName("only the Anthropic API's prompt total leaves its cached tokens out")
+        void promptTotalCarriesCachedTokens() {
+            assertThat(TokenUsageConventions.promptTotalCarriesCachedTokens("claude-code")).isTrue();
+            assertThat(TokenUsageConventions.promptTotalCarriesCachedTokens("codex")).isTrue();
+            assertThat(TokenUsageConventions.promptTotalCarriesCachedTokens("gemini-cli")).isTrue();
+            assertThat(TokenUsageConventions.promptTotalCarriesCachedTokens("anthropic")).isFalse();
+            assertThat(TokenUsageConventions.promptTotalCarriesCachedTokens("claude")).isFalse();
+        }
+
+        @Test
+        @DisplayName("gemini-cli reports its cached subset as a cache read: carved out of the prompt")
+        void geminiCliCacheReadIsASubset() {
+            assertThat(TokenUsageConventions.inputBreakdown("gemini-cli", 1_000, 0, 600, 0))
+                .isEqualTo(new TokenUsageConventions.Breakdown(400, 0, 600));
+        }
+
+        @Test
+        @DisplayName("subset providers: an over-reported cache is clamped to the prompt")
+        void subsetOverReportClamped() {
+            TokenUsageConventions.Breakdown b =
+                TokenUsageConventions.inputBreakdown("openai", 100, 0, 0, 250);
+
+            assertThat(b).isEqualTo(new TokenUsageConventions.Breakdown(0, 0, 100));
+        }
+    }
 }

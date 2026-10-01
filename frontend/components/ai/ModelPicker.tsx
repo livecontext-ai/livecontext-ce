@@ -31,6 +31,7 @@ import {
   toSelectedModel,
   ModelCapability,
   modelHasCapability,
+  modelMatches,
   isBridgeModel,
 } from '@/hooks/useModels';
 import { getProviderIconSlug, getProviderDisplayName } from '@/lib/ai-providers/providerIcons';
@@ -159,14 +160,37 @@ export function ModelPicker({
   costProfile = 'chatConversation',
   unionCategory = null,
 }: ModelPickerProps) {
-  const { providers: chatProviders, defaultModel, defaultProvider, isLoading, error } =
+  const { providers: chatProviders, unlistedModels, defaultModel, defaultProvider, isLoading, error } =
     useVisibleModels();
   // A category the chat catalogue does not carry, merged in for surfaces that run more
   // than one kind of model. Null for every other picker, which then fetches nothing.
   const { data: extraCategoryModels } = useCategoryModels(unionCategory ?? null);
+  // V554: an UNLISTED model is not offered here, but an agent or a node already on one still
+  // runs on it, so the picker must SHOW it rather than display a fallback the run will not
+  // use. Only the value's own model is brought back, never the rest of the unlisted set.
+  const valueIfUnlisted = React.useMemo(() => {
+    if (!value.id) return undefined;
+    const match = (unlistedModels ?? []).find(m => modelMatches(m, value));
+    if (!match) return undefined;
+    return [{
+      name: match.provider,
+      defaultModel: match.id,
+      supportsStreaming: true,
+      supportsToolCalling: true,
+      models: [match],
+    }];
+  }, [unlistedModels, value]);
+  // The extra slice comes from the raw category catalogue, so it still carries unlisted models:
+  // dropped here like the chat slice drops them, the value's own model excepted.
+  const extraOffered = React.useMemo(
+    () => extraCategoryModels?.providers
+      ?.map(p => ({ ...p, models: p.models.filter(m => m.unlisted !== true || modelMatches(m, value)) }))
+      .filter(p => p.models.length > 0),
+    [extraCategoryModels, value],
+  );
   const providers = React.useMemo(
-    () => mergeProviders(chatProviders, extraCategoryModels?.providers),
-    [chatProviders, extraCategoryModels],
+    () => mergeProviders(mergeProviders(chatProviders, extraOffered), valueIfUnlisted),
+    [chatProviders, extraOffered, valueIfUnlisted],
   );
   // Asked ONCE for the whole list: the underlying balance is about the account,
   // and a query observer per option would be a waste of the same cached answer.

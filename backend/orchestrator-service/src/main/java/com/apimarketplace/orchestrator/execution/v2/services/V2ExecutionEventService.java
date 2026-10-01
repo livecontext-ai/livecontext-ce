@@ -69,6 +69,10 @@ public class V2ExecutionEventService {
     @Autowired(required = false)
     private AgentQueueProducer agentQueueProducer;
 
+    /** nodePolicy of a queued agent (retryCount, timeoutMs), applied past the dispatch. Absent without the queue. */
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.execution.v2.async.AgentAttemptScheduler agentAttemptScheduler;
+
     public V2ExecutionEventService(
             WorkflowStreamingService streamingService,
             NodeEventEmitterService nodeEventEmitterService,
@@ -276,6 +280,12 @@ public class V2ExecutionEventService {
         // by the producing node (#65 will populate this in AgentNode.executeAgentAsyncQueue).
         if (agentQueueProducer != null && result.output() != null
                 && result.output().get("queueMessage") instanceof AgentExecutionRequestMessage queueMessage) {
+            if (agentAttemptScheduler != null) {
+                // The node yielded, so NodePolicyRunner will never see this attempt end: keep the
+                // request for a retry and bound the wait for the answer, per the node's policy.
+                // Before the enqueue, so an answer that comes back at once already finds it.
+                agentAttemptScheduler.onDispatched(execution.getPlan(), nodeId, queueMessage);
+            }
             agentQueueProducer.enqueue(queueMessage);
             logger.info("[AsyncRunning] Enqueued agent task to Redis queue: runId={}, nodeId={}, correlationId={}",
                     runId, nodeId, queueMessage.correlationId());

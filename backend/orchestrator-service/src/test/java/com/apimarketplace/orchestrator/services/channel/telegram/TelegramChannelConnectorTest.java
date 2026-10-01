@@ -61,6 +61,56 @@ class TelegramChannelConnectorTest {
     }
 
     @Nested
+    @DisplayName("resolveDestination()")
+    class ResolveDestination {
+
+        @Test
+        @DisplayName("regression: a channel typed as @name is stored under the numeric id every press comes back with")
+        void atNameBecomesTheNumericId() {
+            answers("telegram/telegram-get-chat", ok(Map.of("ok", true,
+                    "result", Map.of("id", -1001234567890L, "title", "Ops room", "type", "channel"))));
+
+            Outcome<ChatCandidate> resolved = connector.resolveDestination(TENANT, 9L, "@opsroom");
+
+            assertThat(resolved.value().chatId()).isEqualTo("-1001234567890");
+            assertThat(resolved.value().title()).isEqualTo("Ops room");
+            assertThat(resolved.value().type()).isEqualTo("channel");
+        }
+
+        @Test
+        @DisplayName("a numeric id is kept as it is, without asking Telegram")
+        void numericIdIsKept() {
+            Outcome<ChatCandidate> resolved = connector.resolveDestination(TENANT, 9L, "-100123");
+
+            assertThat(resolved.value().chatId()).isEqualTo("-100123");
+            org.mockito.Mockito.verify(gateway, org.mockito.Mockito.never())
+                    .executeTool(any(), any(), anyString(), any());
+        }
+
+        @Test
+        @DisplayName("an @name Telegram cannot find is refused with what to do, before anything is stored")
+        void unknownAtNameIsRefused() {
+            answers("telegram/telegram-get-chat", failed("Bad Request: chat not found"));
+
+            Outcome<ChatCandidate> resolved = connector.resolveDestination(TENANT, 9L, "@nowhere");
+
+            assertThat(resolved.ok()).isFalse();
+            assertThat(resolved.error()).contains("chat not found");
+        }
+
+        @Test
+        @DisplayName("an answer without a chat id is refused rather than stored under the @name")
+        void answerWithoutIdIsRefused() {
+            answers("telegram/telegram-get-chat", ok(Map.of("ok", true, "result", Map.of("title", "?"))));
+
+            Outcome<ChatCandidate> resolved = connector.resolveDestination(TENANT, 9L, "@opsroom");
+
+            assertThat(resolved.ok()).isFalse();
+            assertThat(resolved.error()).contains("@opsroom");
+        }
+    }
+
+    @Nested
     @DisplayName("verifyBot()")
     class VerifyBot {
 

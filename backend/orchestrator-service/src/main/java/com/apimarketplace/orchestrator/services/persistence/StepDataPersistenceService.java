@@ -326,6 +326,14 @@ public class StepDataPersistenceService {
             entity.setMetadata(metadata);
         }
 
+        // continueOnFailure: a FAILED row whose traversal continues. Split routing reads it from
+        // this column (WorkflowStepDataRepository.findPassedItemIndicesByEpoch), so a continued item
+        // still reaches the nodes below instead of dropping out of the split.
+        if (com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.isContinueOnFailure(output)) {
+            metadata.put(com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE,
+                    Boolean.TRUE);
+        }
+
         // Common fields
         if (output.get("item_id") != null) entity.setItemId(output.get("item_id").toString());
         if (output.get("trigger_id") != null) entity.setTriggerId(output.get("trigger_id").toString());

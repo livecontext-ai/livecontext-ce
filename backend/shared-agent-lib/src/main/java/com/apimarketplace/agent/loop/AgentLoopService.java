@@ -747,7 +747,10 @@ public class AgentLoopService {
             // by falling back to the avg-only branch.
             state.getLastIterationPromptTokens(),
             state.getLastIterationCompletionTokens(),
-            state.getDuration()
+            state.getDuration(),
+            // Cache counters let the guards price a cache read at its cache price.
+            state.getCacheTokensSoFar(),
+            state.getLastIterationCacheTokens()
         );
         GuardResult result = guard.check(ctx);
         return result != null ? result : GuardResult.allow();

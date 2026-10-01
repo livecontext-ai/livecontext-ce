@@ -295,8 +295,8 @@ class AccountPurgeIdentityTest {
     }
 
     @Test
-    @DisplayName("V549: the purge runs the partner statements (codes disabled, HOLD commissions voided) for this user")
-    void purgeRunsPartnerStatements() throws Exception {
+    @DisplayName("V549/V553 + personal offers: the purge runs the partner statements (codes disabled, HOLD commissions voided, applications deleted, reviewer unlinked) and removes personal offer children before the user")
+    void purgeRunsPartnerAndPersonalOfferStatements() throws Exception {
         keycloakTokenOk();
         when(restTemplate.exchange(anyString(), eq(HttpMethod.DELETE), any(), eq(Void.class)))
                 .thenReturn(ResponseEntity.noContent().build());
@@ -316,6 +316,17 @@ class AccountPurgeIdentityTest {
 
         assertThat(executed).contains(
                 AccountPurgeService.DEACTIVATE_OWNED_REWARD_CODES_SQL + " <- " + USER_ID,
-                AccountPurgeService.VOID_PARTNER_HOLD_COMMISSIONS_SQL + " <- " + USER_ID);
+                AccountPurgeService.VOID_PARTNER_HOLD_COMMISSIONS_SQL + " <- " + USER_ID,
+                AccountPurgeService.DELETE_PARTNER_APPLICATIONS_SQL + " <- " + USER_ID,
+                AccountPurgeService.UNLINK_PARTNER_APPLICATION_REVIEWER_SQL + " <- " + USER_ID,
+                AccountPurgeService.DELETE_PARTNER_STANDING_SQL + " <- " + USER_ID,
+                AccountPurgeService.UNLINK_PARTNER_STANDING_ADMIN_SQL + " <- " + USER_ID);
+        assertThat(executed).containsSubsequence(
+                AccountPurgeService.DEACTIVATE_PERSONAL_REWARD_CODES_SQL + " <- " + USER_ID,
+                "DELETE FROM auth.reward_redemption WHERE redeemer_user_id = ? AND program = 'PERSONAL_UPGRADE' <- " + USER_ID,
+                "DELETE FROM auth.personal_offer_lifecycle WHERE user_id = ? <- " + USER_ID,
+                "DELETE FROM auth.personal_offer_checkout_attempt WHERE recipient_user_id = ? <- " + USER_ID,
+                "DELETE FROM auth.personal_offer_first_paid_purchase WHERE user_id = ? <- " + USER_ID,
+                "DELETE FROM auth.users WHERE id = ? <- " + USER_ID);
     }
 }

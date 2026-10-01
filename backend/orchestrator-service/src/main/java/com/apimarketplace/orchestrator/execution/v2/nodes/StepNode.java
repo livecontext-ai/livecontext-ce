@@ -199,8 +199,6 @@ public class StepNode extends BaseNode {
             // before that class existed. Already resolved above, before the
             // passthrough branch, so a failed selection cannot slip past it.
             selection.applyTo(billingIdentifiers);
-            resolveProviderRetryBudget(context).ifPresent(
-                    seconds -> billingIdentifiers.put("__providerRetryMaxWaitSec__", seconds));
             com.apimarketplace.orchestrator.services.interfaces.ExecutionResult result =
                 toolsGateway.executeTool(toolRef, inputData, tenantId, billingIdentifiers);
 
@@ -506,82 +504,6 @@ public class StepNode extends BaseNode {
         }
         String toolId = stepConfig.id();
         return (toolId == null || toolId.isBlank()) ? null : "tool:" + toolId;
-    }
-
-    /**
-     * How long this call may spend waiting out a provider's rate-limit refusal, in seconds.
-     *
-     * <p>Empty means "say nothing", and the platform's own budget applies. That is the right
-     * default for the overwhelming majority of steps: their author never thought about a 429, and
-     * honouring the delay the provider asked for is the platform's job, not theirs.
-     *
-     * <p>Two things override it, in this order:
-     *
-     * <ol>
-     *   <li><b>The author's own setting</b> ({@code nodePolicy.providerRetryMaxWaitSec}, in
-     *       seconds; {@code 0} disables). Explicit always wins, in both directions: an author who
-     *       wants the platform retry alongside their own node retry can ask for it.</li>
-     *   <li><b>A node that already retries itself</b> ({@link NodePolicy} with
-     *       {@code retryCount > 0}). The platform then stands down, because the two compose
-     *       multiplicatively: a node set to retry twice (three attempts), around a call the
-     *       platform re-sends twice, is up to nine requests to a provider that asked us to slow
-     *       down. The author who
-     *       configured a retry is precisely the one who did not ask for a second one underneath.</li>
-     * </ol>
-     *
-     * <p>A loop that calls, waits and comes back is the same conflict without a NodePolicy, and no
-     * heuristic can see it, which is why the explicit setting exists.
-     */
-    java.util.Optional<Integer> resolveProviderRetryBudget(ExecutionContext context) {
-        if (context == null || context.plan() == null) {
-            return java.util.Optional.empty();
-        }
-        com.apimarketplace.orchestrator.domain.workflow.NodePolicy policy =
-                context.plan().getNodePolicy(nodeId);
-        if (policy == null) {
-            return java.util.Optional.empty();
-        }
-        // The node's own per-attempt window bounds every answer below it, including an explicit
-        // one. An author can raise the budget against the PLATFORM default, but not past the
-        // deadline they gave this attempt: past it the node abandons the attempt while the catalog
-        // sleeps on, re-sends, succeeds, stores the result and commits the charge - a step billed
-        // while the run reports it FAILED. Explicit choice is honoured up to the point where it
-        // stops being a choice about waiting and becomes one about being charged for nothing.
-        Integer ceiling = policy.hasTimeout()
-                ? providerRetryBudgetUnderTimeout(policy.timeoutMs())
-                : null;
-
-        // Explicit wins over both inferences: an author who wants the platform retry alongside
-        // their own node retry can ask for it. Negatives cannot reach here - NodePolicy's
-        // constructor rejects them.
-        if (policy.providerRetryMaxWaitSec() != null) {
-            int asked = policy.providerRetryMaxWaitSec();
-            return java.util.Optional.of(ceiling == null ? asked : Math.min(asked, ceiling));
-        }
-        if (policy.retryCount() > 0) {
-            return java.util.Optional.of(0);
-        }
-        return java.util.Optional.ofNullable(ceiling);
-    }
-
-    /**
-     * The wait a provider call may take when the node has declared its OWN per-attempt window.
-     *
-     * <p>Without this, {@code timeoutMs} reproduced the worst failure this platform has: the node
-     * abandons the attempt at its timeout while the catalog is still sleeping out a
-     * {@code Retry-After}, then re-sends, succeeds, stores the result and commits the charge. The
-     * customer is billed for a step the run reports FAILED, and nothing releases it because from
-     * the catalog's side nothing failed. It is the same incident the orchestrator's own
-     * {@code RestTemplateConfig.generationReadTimeout} is annotated with, and the same reason the
-     * catalog refuses a budget larger than its own.
-     *
-     * <p>HALF the window, not all of it: the attempt also has to pay for the requests themselves,
-     * and the wait is only one part of what happens inside it. Half needs no knowledge of provider
-     * latency and errs towards failing fast, which is the safe direction - the step then fails with
-     * the provider's own refusal, in time for the node's retry or a loop to handle it.
-     */
-    private static int providerRetryBudgetUnderTimeout(long timeoutMs) {
-        return (int) Math.min(Integer.MAX_VALUE, timeoutMs / 2000L);
     }
 
     public Step getStepConfig() {

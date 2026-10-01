@@ -24,12 +24,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p><b>Why this exists.</b> A rule enforced in one of the three doors is a rule an agent walks
  * around by using another, and here the walk-around was silent in the worst way: the plan stored
  * fine, {@code validate} passed, {@code describe} announced the block, and the engine read nothing.
- * The field involved is the one that stops the platform multiplying an author's requests to a
- * provider that has just asked them to slow down, so believing it was set is the whole problem.
  *
- * <p>The refusal lives HERE and not in the parser on purpose: the parser drops the field with a
- * warning instead of throwing, so a plan already stored with one stays openable and repairable.
- * This is the door; the parser is not the wall.
+ * <p>The removed {@code providerRetryMaxWaitSec} is refused HERE and not in the parser on purpose:
+ * the parser ignores it, so a plan already stored with it stays openable, and {@code get_plan}
+ * does not hand it back, so such a plan survives its own round trip. This is the door; the parser
+ * is not the wall.
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("WorkflowBuilderPlanExporter - set_plan validation of nodePolicy")
@@ -85,7 +84,7 @@ class WorkflowBuilderPlanExporterNodePolicyTest {
     }
 
     @Test
-    @DisplayName("a provider-retry budget on a core entry is REFUSED, and the plan is not stored")
+    @DisplayName("the removed provider-retry budget on a core entry is REFUSED, and the plan is not stored")
     void providerBudgetOnACoreEntryIsRefused() {
         WorkflowBuilderSession session = newSession();
 
@@ -93,7 +92,7 @@ class WorkflowBuilderPlanExporterNodePolicyTest {
                 List.of(transformCore(Map.of("providerRetryMaxWaitSec", 0))));
 
         assertThat(result.success()).isFalse();
-        assertThat(result.error()).contains("providerRetryMaxWaitSec").contains("catalog tool step only");
+        assertThat(result.error()).contains("providerRetryMaxWaitSec").contains("no longer exists");
         assertThat(session.getCores())
                 .as("a refused plan must leave the session as it was")
                 .isEmpty();
@@ -102,8 +101,6 @@ class WorkflowBuilderPlanExporterNodePolicyTest {
     @Test
     @DisplayName("the same rule applies to agents, interfaces and tables, not only cores")
     void theRuleCoversEveryNonToolArray() {
-        // An AI node and a generate node DO call providers, and are the entries an author would
-        // reach for first; neither goes through StepNode, so neither reads the field.
         for (String arrayName : List.of("agents", "interfaces", "tables")) {
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("label", "Node " + arrayName);
@@ -113,7 +110,7 @@ class WorkflowBuilderPlanExporterNodePolicyTest {
             ToolExecutionResult result = setPlan(newSession(), arrayName, List.of(entry));
 
             assertThat(result.success()).as("array '%s'", arrayName).isFalse();
-            assertThat(result.error()).as("array '%s'", arrayName).contains("catalog tool step only");
+            assertThat(result.error()).as("array '%s'", arrayName).contains("no longer exists");
         }
     }
 
@@ -167,10 +164,8 @@ class WorkflowBuilderPlanExporterNodePolicyTest {
     }
 
     @Test
-    @DisplayName("an mcps entry ACCEPTS the budget, which is what makes every refusal above narrow")
-    void anMcpsEntryAcceptsTheBudget() {
-        // Without this, set_plan refusing the budget on the one node type the feature exists for
-        // would leave the feature dead through this door with every other test still green.
+    @DisplayName("REGRESSION: an mcps entry REFUSES the removed budget too, since the platform no longer retries")
+    void anMcpsEntryRefusesTheRemovedBudget() {
         WorkflowBuilderSession session = newSession();
         Map<String, Object> step = new LinkedHashMap<>();
         step.put("id", "slack/send-message");
@@ -179,9 +174,9 @@ class WorkflowBuilderPlanExporterNodePolicyTest {
 
         ToolExecutionResult result = setPlan(session, "mcps", List.of(step));
 
-        assertThat(result.success()).as(String.valueOf(result.error())).isTrue();
-        assertThat(session.getMcps().get(0).get(NodePolicy.JSON_KEY))
-                .isEqualTo(Map.of("providerRetryMaxWaitSec", 0));
+        assertThat(result.success()).isFalse();
+        assertThat(result.error()).contains("never retries a provider refusal").contains("retryCount");
+        assertThat(session.getMcps()).as("a refused plan leaves the session as it was").isEmpty();
     }
 
     @Test
@@ -260,6 +255,24 @@ class WorkflowBuilderPlanExporterNodePolicyTest {
     }
 
     @Test
+    @DisplayName("continueOnFailure on a loop is refused here too, although the parser lets a stored one open")
+    void continueOnFailureOnALoopIsRefused() {
+        WorkflowBuilderSession session = newSession();
+        Map<String, Object> loop = new LinkedHashMap<>();
+        loop.put("id", "l1");
+        loop.put("type", "loop");
+        loop.put("label", "Repeat");
+        loop.put("maxIterations", 3);
+        loop.put(NodePolicy.JSON_KEY, new LinkedHashMap<>(Map.of("continueOnFailure", true)));
+
+        ToolExecutionResult result = setPlan(session, "cores", List.of(loop));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.error()).contains("both at once");
+        assertThat(session.getCores()).isEmpty();
+    }
+
+    @Test
     @DisplayName("executeOnce on a loop is refused here for the same reason")
     void executeOnceOnALoopIsRefused() {
         WorkflowBuilderSession session = newSession();
@@ -286,5 +299,105 @@ class WorkflowBuilderPlanExporterNodePolicyTest {
 
         assertThat(result.success()).as(String.valueOf(result.error())).isTrue();
         assertThat(session.getCores().get(0)).doesNotContainKey(NodePolicy.JSON_KEY);
+    }
+
+    @Test
+    @DisplayName("REGRESSION: a plan stored with the removed key survives get_plan then set_plan unchanged")
+    @SuppressWarnings("unchecked")
+    void aStoredLegacyKeyDoesNotBlockTheRoundTrip() {
+        // The key was never written by this caller: it sits in a plan stored before the removal.
+        // get_plan must not hand it back, or the agent's own untouched round trip is refused.
+        WorkflowBuilderSession session = newSession();
+        Map<String, Object> legacyPolicy = new LinkedHashMap<>();
+        legacyPolicy.put("retryCount", 1);
+        legacyPolicy.put("providerRetryMaxWaitSec", 30);
+        session.getCores().add(transformCore(legacyPolicy));
+        Map<String, Object> onlyLegacy = transformCore(Map.of("providerRetryMaxWaitSec", 0));
+        onlyLegacy.put("id", "c2");
+        onlyLegacy.put("label", "Second");
+        session.getCores().add(onlyLegacy);
+
+        ToolExecutionResult got = exporter.executeGetPlan(session);
+        Map<String, Object> plan = (Map<String, Object>) ((Map<String, Object>) got.data()).get("plan");
+        List<Map<String, Object>> cores = (List<Map<String, Object>>) plan.get("cores");
+
+        assertThat((Map<String, Object>) cores.get(0).get(NodePolicy.JSON_KEY))
+                .containsEntry("retryCount", 1)
+                .doesNotContainKey("providerRetryMaxWaitSec");
+        assertThat(cores.get(1))
+                .as("a block left empty by the removal is dropped, not handed back as {}")
+                .doesNotContainKey(NodePolicy.JSON_KEY);
+        assertThat((Map<String, Object>) session.getCores().get(0).get(NodePolicy.JSON_KEY))
+                .as("get_plan reads; it never rewrites the session")
+                .containsKey("providerRetryMaxWaitSec");
+
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("plan", plan);
+        ToolExecutionResult set = exporter.executeSetPlan(session, parameters);
+
+        assertThat(set.success()).as(String.valueOf(set.error())).isTrue();
+    }
+
+    @Test
+    @DisplayName("set_plan refuses a retryCount or a retryBackoffMs above its cap, and an unknown retryOn")
+    void setPlanRefusesValuesAboveCaps() {
+        for (Map<String, Object> policy : List.of(
+                Map.<String, Object>of("retryCount", 11),
+                Map.<String, Object>of("retryCount", 1, "retryBackoffMs", 300_001),
+                Map.<String, Object>of("retryCount", 1, "retryOn", "bogus"))) {
+            WorkflowBuilderSession session = newSession();
+
+            ToolExecutionResult result = setPlan(session, "cores", List.of(transformCore(policy)));
+
+            assertThat(result.success()).as("policy %s", policy).isFalse();
+            assertThat(session.getCores()).as("nothing stored for %s", policy).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("set_plan refuses retryOn on a node that is not a tool step")
+    void setPlanRefusesRetryOnOffToolSteps() {
+        WorkflowBuilderSession session = newSession();
+
+        ToolExecutionResult result = setPlan(session, "cores", List.of(transformCore(
+                Map.of("retryCount", 2, "retryOn", "rate_limit"))));
+
+        assertThat(result.success()).isFalse();
+        assertThat(String.valueOf(result.error()) + result.data()).contains("only available on a tool step");
+        assertThat(session.getCores()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("set_plan does not refuse retryOn on a tool step (mcps entry)")
+    void setPlanAcceptsRetryOnOnToolSteps() {
+        WorkflowBuilderSession session = newSession();
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("id", "slack/send-message");
+        step.put("label", "Publish");
+        step.put(NodePolicy.JSON_KEY, new LinkedHashMap<>(
+                Map.of("retryCount", 2, "retryBackoffMs", 60000, "retryOn", "rate_limit")));
+
+        ToolExecutionResult result = setPlan(session, "mcps", List.of(step));
+
+        assertThat(String.valueOf(result.error()) + result.data())
+                .doesNotContain("only available on a tool step")
+                .doesNotContain("retryOn only applies");
+    }
+
+    @Test
+    @DisplayName("retryOn on a stored tool step is handed back by get_plan")
+    @SuppressWarnings("unchecked")
+    void retryOnIsHandedBackByGetPlan() {
+        WorkflowBuilderSession session = newSession();
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("id", "mcp:publish");
+        step.put("label", "Publish");
+        step.put(NodePolicy.JSON_KEY, new LinkedHashMap<>(Map.of("retryCount", 2, "retryOn", "rate_limit")));
+        session.getMcps().add(step);
+
+        Map<String, Object> plan = (Map<String, Object>) ((Map<String, Object>)
+                exporter.executeGetPlan(session).data()).get("plan");
+        Map<String, Object> mcp = ((List<Map<String, Object>>) plan.get("mcps")).get(0);
+        assertThat((Map<String, Object>) mcp.get(NodePolicy.JSON_KEY)).containsEntry("retryOn", "rate_limit");
     }
 }

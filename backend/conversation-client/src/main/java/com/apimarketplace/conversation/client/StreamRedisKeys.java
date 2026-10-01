@@ -19,6 +19,7 @@ import java.time.Duration;
  *   <li>LIST: {@code stream:{streamId}:tools} - tool event JSONs</li>
  *   <li>STRING: {@code stream:conv:{conversationId}} - index → streamId</li>
  *   <li>STRING: {@code approval:{conversationId}:{gateKey}} - a parked tool call's verdict</li>
+ *   <li>STRING: {@code approval-all:{conversationId}} - "don't ask again" ticked during a running turn</li>
  * </ul>
  */
 public final class StreamRedisKeys {
@@ -46,11 +47,20 @@ public final class StreamRedisKeys {
      */
     public static final Duration APPROVAL_DECISION_TTL = Duration.ofMinutes(6);
 
+    /**
+     * Lifetime of {@link #conversationWideApprovalKey}. It only has to outlive the turn that
+     * was running when the box was ticked: every later turn reads the persisted
+     * {@code chatConfig.autoAuthorizeTools} instead, and the key is deleted when the next
+     * turn starts. The TTL only matters for a turn that never ends cleanly.
+     */
+    public static final Duration CONVERSATION_WIDE_APPROVAL_TTL = Duration.ofHours(3);
+
     private static final String STREAM_KEY_PREFIX = "stream:";
     private static final String CONTENT_KEY_SUFFIX = ":content";
     private static final String TOOLS_KEY_SUFFIX = ":tools";
     private static final String CONV_INDEX_PREFIX = "stream:conv:";
     private static final String APPROVAL_PREFIX = "approval:";
+    private static final String APPROVAL_ALL_PREFIX = "approval-all:";
     private static final String CANCEL_PREFIX = "agent:cancel:";
 
     public static String streamKey(String streamId) {
@@ -84,6 +94,21 @@ public final class StreamRedisKeys {
      */
     public static String approvalDecisionKey(String conversationId, String gateKey) {
         return APPROVAL_PREFIX + conversationId + ":" + gateKey;
+    }
+
+    /**
+     * Set when the user ticks "don't ask again in this conversation" on an authorization card.
+     *
+     * <p>That choice is persisted in {@code chatConfig.autoAuthorizeTools}, but a turn reads
+     * its grants once, when it starts. The card releases a held call INSIDE the turn that is
+     * still running, so without this key every later sensitive call of that same turn raised
+     * a new card right after the user asked never to see one again. agent-service reads it on
+     * each gated call; conversation-service writes it on the approval and deletes it when the
+     * next turn starts (that turn has the persisted setting, and turning the setting off
+     * afterwards must win).
+     */
+    public static String conversationWideApprovalKey(String conversationId) {
+        return APPROVAL_ALL_PREFIX + conversationId;
     }
 
     /**

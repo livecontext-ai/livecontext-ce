@@ -153,10 +153,42 @@ export interface CustomApiDetails {
   rateLimits?: { requestsPerSecond?: number; requestsPerDay?: number };
 }
 
+/**
+ * One custom API referenced by a set of workflow tool identifiers.
+ * A custom API is private to the account that registered it, so anything built on
+ * one cannot be shared: see `findRefs`.
+ */
+export interface CustomApiRef {
+  apiSlug: string;
+  apiName: string;
+  /** The identifiers from the request that resolved to this API. */
+  toolIdentifiers: string[];
+}
+
 class CustomApiService {
 
   async list(): Promise<CustomApiListResponse> {
     return apiClient.get<CustomApiListResponse>('/catalog/custom-apis');
+  }
+
+  /**
+   * Report which of the given tool identifiers are backed by a CUSTOM API.
+   *
+   * Used by the publish surfaces to warn BEFORE submitting: a PUBLIC or UNLISTED
+   * publication built on a custom API is refused by publication-service, because the
+   * acquirer's catalog has no such API and every node on it fails at run time.
+   *
+   * Identifiers accept the forms these fields hold: an mcp node's `apiSlug/toolSlug`, an
+   * agent tool grant's `apiSlug:toolSlug` or its legacy `api_tools.id` UUID, and a bare
+   * tool slug.
+   */
+  async findRefs(toolIdentifiers: string[]): Promise<CustomApiRef[]> {
+    if (!toolIdentifiers || toolIdentifiers.length === 0) return [];
+    const response = await apiClient.post<{ customApis?: CustomApiRef[] }>(
+      '/workflow-inspector/custom-apis',
+      { toolSlugs: toolIdentifiers },
+    );
+    return response?.customApis || [];
   }
 
   async getById(apiId: string): Promise<CustomApiDetails> {

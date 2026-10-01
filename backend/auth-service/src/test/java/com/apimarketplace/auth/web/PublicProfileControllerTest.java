@@ -31,12 +31,15 @@ class PublicProfileControllerTest {
     @Mock
     private VerifiedAccountService verifiedAccountService;
 
+    @Mock
+    private com.apimarketplace.auth.service.PartnerBadgeService partnerBadgeService;
+
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(
-                new PublicProfileController(userService, verifiedAccountService)).build();
+                new PublicProfileController(userService, verifiedAccountService, partnerBadgeService)).build();
     }
 
     private User user() {
@@ -49,7 +52,7 @@ class PublicProfileControllerTest {
 
     private PublicProfileDto sampleProfile() {
         return new PublicProfileDto(7L, "Alice A.", "alice_a", "/api/users/7/avatar",
-                "Builder", LocalDateTime.of(2024, 3, 1, 0, 0), false, false);
+                "Builder", LocalDateTime.of(2024, 3, 1, 0, 0), false, false, false, null);
     }
 
     @Test
@@ -86,6 +89,20 @@ class PublicProfileControllerTest {
                 .andExpect(jsonPath("$.handle").value("alice_a"))
                 .andExpect(jsonPath("$.displayName").value("Alice A."))
                 .andExpect(jsonPath("$.username").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("V556: a partner profile carries partner and its tier under the JSON key the pages read (partnerTier)")
+    void partnerTierJsonKey() throws Exception {
+        User u = user();
+        when(userService.findByHandle("alice_a")).thenReturn(Optional.of(u));
+        when(userService.getPublicProfile(u)).thenReturn(Optional.of(new PublicProfileDto(7L, "Alice A.", "alice_a",
+                "/api/users/7/avatar", "Builder", LocalDateTime.of(2024, 3, 1, 0, 0), false, false, true, "gold")));
+
+        mockMvc.perform(get("/api/users/public/by-handle/alice_a"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.partner").value(true))
+                .andExpect(jsonPath("$.partnerTier").value("gold"));
     }
 
     @Test
@@ -243,5 +260,53 @@ class PublicProfileControllerTest {
         mockMvc.perform(get("/api/users/public/verified-handles").param("handles", "ada,,   "))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.verified.length()").value(0));
+    }
+
+    // ---------------------- official-partner badge (same two lookups) ----------------------
+
+    @Test
+    @DisplayName("GET /verified-badges → also answers which ids carry the partner badge, independently of verified")
+    void verifiedBadgesAlsoReturnsPartners() throws Exception {
+        when(verifiedAccountService.verifiedAmong(java.util.List.of(1L, 2L, 3L))).thenReturn(java.util.Set.of(2L));
+        when(partnerBadgeService.partnersAmong(java.util.List.of(1L, 2L, 3L))).thenReturn(java.util.Set.of(3L));
+
+        mockMvc.perform(get("/api/users/public/verified-badges?ids=1,2,3").header("X-User-ID", "42"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.verified[0]").value(2))
+                .andExpect(jsonPath("$.partners.length()").value(1))
+                .andExpect(jsonPath("$.partners[0]").value(3));
+    }
+
+    @Test
+    @DisplayName("GET /verified-badges → an ANONYMOUS caller gets no partner ids either, and nothing is looked up")
+    void partnersAnonymousAnswersEmpty() throws Exception {
+        mockMvc.perform(get("/api/users/public/verified-badges?ids=1,2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.partners.length()").value(0));
+
+        org.mockito.Mockito.verifyNoInteractions(partnerBadgeService);
+    }
+
+    @Test
+    @DisplayName("GET /verified-handles → also answers which handles carry the partner badge")
+    void verifiedHandlesAlsoReturnsPartners() throws Exception {
+        when(partnerBadgeService.partnerHandlesAmong(java.util.List.of("ada", "linus")))
+                .thenReturn(java.util.Set.of("linus"));
+
+        mockMvc.perform(get("/api/users/public/verified-handles?handles=ada,linus"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.partners.length()").value(1))
+                .andExpect(jsonPath("$.partners[0]").value("linus"));
+    }
+
+    @Test
+    @DisplayName("GET /verified-handles → the batch cap refuses before the partner lookup runs")
+    void partnerLookupRespectsTheCap() throws Exception {
+        String handles = String.join(",", java.util.Collections.nCopies(
+                VerifiedAccountService.MAX_BATCH_SIZE + 1, "h"));
+        mockMvc.perform(get("/api/users/public/verified-handles?handles=" + handles))
+                .andExpect(status().isBadRequest());
+
+        org.mockito.Mockito.verifyNoInteractions(partnerBadgeService);
     }
 }

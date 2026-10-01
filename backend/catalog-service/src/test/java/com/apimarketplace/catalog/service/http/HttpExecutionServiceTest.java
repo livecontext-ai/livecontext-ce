@@ -76,7 +76,7 @@ class HttpExecutionServiceTest {
             objectMapper,
             jdbcTemplate,
             restTemplate
-        , new ErrorPolicyEngine(2, 10_000L));
+        , new ErrorPolicyEngine());
     }
 
     // ========================================================================

@@ -242,6 +242,21 @@ public class AgentNode extends BaseNode {
     }
 
     /**
+     * Whether this node hands its work to the worker queue: its body returns once the request is
+     * sent, and the answer arrives later through {@code AgentAsyncCompletionService}. The node's
+     * {@code nodePolicy.timeoutMs} then bounds that ANSWER ({@code AgentAttemptScheduler}), never
+     * the dispatch. A guardrail whose rules need no model completes inline (see {@link #execute}),
+     * so it does not.
+     */
+    public boolean answersFromWorkerQueue() {
+        if (!asyncQueueEnabled || pendingAgentRegistry == null) {
+            return false;
+        }
+        return agentConfig == null || !"guardrail".equalsIgnoreCase(agentConfig.type())
+            || GuardrailRuleEvaluator.needsModel(guardrailRulesForEvaluation());
+    }
+
+    /**
      * Adds a category target for classify nodes.
      * @param port The port name (e.g., "category_0", "category_1")
      * @param target The target node for this category
@@ -811,6 +826,15 @@ public class AgentNode extends BaseNode {
         }
     }
 
+    /** This node's {@code nodePolicy.timeoutMs} (0 = none), from the plan the run executes. */
+    private long policyTimeoutMs(ExecutionContext context) {
+        if (context == null || context.plan() == null) {
+            return 0L;
+        }
+        com.apimarketplace.orchestrator.domain.workflow.NodePolicy policy = context.plan().getNodePolicy(nodeId);
+        return policy != null ? policy.timeoutMs() : 0L;
+    }
+
     /**
      * Async queue execution path: registers a {@link PendingAgent} entry and yields with
      * {@link NodeExecutionResult#asyncRunning} so the engine stops traversal without
@@ -981,7 +1005,11 @@ public class AgentNode extends BaseNode {
             context.organizationId(),
             // Loop iteration this body execution runs at (null outside a loop / on the first body
             // entry) so the async completion records each iteration's step at a distinct iteration.
-            extractCurrentIteration(context));
+            extractCurrentIteration(context),
+            1,
+            // nodePolicy.timeoutMs bounds the wait for THIS answer (AgentAttemptScheduler); carried
+            // on the entry so the recovery scan still applies it after a restart.
+            policyTimeoutMs(context));
         pendingAgentRegistry.register(pending);
 
         // Build the queue message payload. This must mirror what the inline path

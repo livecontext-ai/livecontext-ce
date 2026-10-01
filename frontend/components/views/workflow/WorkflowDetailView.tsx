@@ -296,9 +296,9 @@ export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }
   // ── Overlay the live run on the main canvas when the agent (chatting in the
   // workflow panel) launches THIS workflow. Every agent-run emits a global
   // `sidePanelAutoOpen` marker (`type:'workflow_run'`, `id`=workflowId, `runId`).
-  // On chat pages AppHeader reacts to it, but that handler is gated to chat pages,
-  // so on the workflow page nothing reacted and the left canvas stayed in edit
-  // mode while the run executed.
+  // AppHeader opens it as a tab on chat pages and beside other side-panel chats, but
+  // never for the workflow the page itself shows: here nothing else reacts, and the
+  // left canvas stayed in edit mode while the run executed.
   //
   // We flip IN PLACE, not by navigating: `setRunId` binds the run without a URL
   // change, and `markRunAsJustExecuted` tells the loader to KEEP the current

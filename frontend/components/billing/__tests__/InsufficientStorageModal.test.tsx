@@ -42,6 +42,10 @@ vi.mock('@/lib/hooks/smart-hooks-complete', () => ({
   useSubscription: () => ({ createSubscription: mocks.createSubscription }),
   usePlans: () => ({ plans: mocks.plans.value }),
 }));
+vi.mock('@/lib/hooks/usePersonalOffer', () => ({
+  usePersonalOffer: () => ({ current: { status: 'NONE' }, preview: null, candidateCode: null,
+    isLoading: false, isError: false, refresh: vi.fn() }),
+}));
 
 vi.mock('@/lib/api/storage-api', () => ({
   storageApi: { getQuota: mocks.getQuota, getBreakdown: mocks.getBreakdown },

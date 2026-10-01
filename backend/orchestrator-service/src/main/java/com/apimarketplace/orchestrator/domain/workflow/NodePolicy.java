@@ -13,20 +13,43 @@ import java.util.Map;
  *
  * <ul>
  *   <li>{@code retryCount} - number of ADDITIONAL attempts after a failed one
- *       (0 = today's behavior, single attempt). Total attempts = retryCount + 1.</li>
+ *       (0 = today's behavior, single attempt). Total attempts = retryCount + 1. An agent
+ *       node on the worker queue yields instead of returning its result, so its attempts are
+ *       run by {@code AgentAttemptScheduler} (the request is sent again after the wait), under
+ *       the same decision, {@code NodePolicyRunner.afterFailedAttempt}.</li>
  *   <li>{@code retryBackoffMs} - delay between attempts. The backoff blocks only the
- *       executing thread (per branch / per split item), never sibling branches.</li>
+ *       executing thread (per branch / per split item), never sibling branches. When the
+ *       failed attempt carries the provider's own {@code Retry-After} (a catalog tool step
+ *       refused with one), the wait is the LONGER of the two.</li>
+ *   <li>{@code retryOn} - which failures are worth another attempt. Absent (the default):
+ *       every failure EXCEPT a definite refusal, by the provider (an HTTP 4xx other than
+ *       408, 425 and 429 that carries no rate-limit signal) or by the platform (no credits
+ *       left, a credit budget reached, an agent stopped by a person), because re-sending a
+ *       request that was refused as invalid, unauthorized, not found or unfunded only repeats
+ *       the same answer.
+ *       {@code "rate_limit"}: only a rate limit (a 429, a 503, a Retry-After, or the provider's
+ *       rate-limit wording on another status). Safer for a node that WRITES: it does not re-send
+ *       after a timeout or most 5xx, which the provider may already have applied, although a 503
+ *       can still arrive after a write was applied. Tool steps only (the builder refuses it
+ *       elsewhere).</li>
+ *   <li>Caps: at most {@link #MAX_RETRY_COUNT} retries and {@link #MAX_RETRY_BACKOFF_MS}
+ *       of waiting before one attempt. Refused by the builder tools on write; a stored plan
+ *       above them still parses and is clamped at run time.</li>
  *   <li>{@code continueOnFailure} - when ALL attempts fail, the node is still marked
  *       FAILED (same WS event + DB persistence as any failure today) but the engine
- *       continues traversal to its successors instead of cascading SKIPPED to them.
+ *       continues traversal to its successors instead of cascading SKIPPED to them, on
+ *       BOTH dispatch paths (AUTO traversal, and STEP_BY_STEP: execute, trigger fires, cron,
+ *       the Run button, where ReadyNodeCalculator walks past the flagged FAILED node).
  *       This reuses the existing "SKIPPED-with-error" continuation semantic: the
  *       default {@code BaseNode.getNextNodes} exposes successors for any non-FAILED
  *       result and {@code ExecutionContext.isCompleted} already treats FAILED as a
  *       resolved state (merge readiness = all predecessors resolved), so successors
  *       execute exactly as they do after a terminal SKIPPED node - with the failed
  *       node resolved-but-without-output. Run-level statuses derive from the
- *       UNCHANGED existing semantics (a failed step still counts as failed →
- *       FAILED / PARTIAL_SUCCESS as today's finalizers dictate).</li>
+ *       UNCHANGED existing semantics: the run ends as it would without the setting (a
+ *       failed node ends it FAILED; a failed split item makes its node a partial failure).
+ *       A refusal for missing credits or a budget is never continued, and neither is a
+ *       classify or guardrail agent (a failed one selected no branch).</li>
  *   <li>{@code timeoutMs} - PER-ATTEMPT execution timeout (0 = disabled, the default).
  *       The node body runs under a bounded wait ({@code NodePolicyRunner.callWithTimeout});
  *       when the bound expires the attempt is converted to a FAILED result flagged
@@ -37,10 +60,13 @@ import java.util.Map;
  *       <b>Best-effort semantics (n8n-honest):</b> the abandoned node body is interrupted
  *       but may keep running on its worker thread - side effects (emails, API writes,
  *       CRUD inserts) are NOT cancelled or rolled back. The timeout bounds the NODE BODY
- *       only: signal yields (AWAITING_SIGNAL) and async dispatches return immediately, so
- *       the subsequent signal wait / async work is never subject to {@code timeoutMs};
- *       split fan-out coordination and summaries are never bounded either - in a split
- *       the timeout applies PER ITEM, per attempt.</li>
+ *       only: a signal yield (AWAITING_SIGNAL) returns immediately and its signal wait is
+ *       never subject to {@code timeoutMs}. An agent node on the worker queue is the
+ *       exception that keeps the promise: its dispatch returns at once too, so
+ *       {@code AgentAttemptScheduler} bounds the wait for its ANSWER instead (the agent may
+ *       keep running; a late answer is billed, never delivered). Split fan-out coordination
+ *       and summaries are never bounded - in a split the timeout applies PER ITEM, per
+ *       attempt.</li>
  *   <li>{@code executeOnce} - in a SPLIT item context, execute the node ONLY for split
  *       item index 0 and mark every other item SKIPPED with an explicit executeOnce
  *       reason (the same per-item skip pipeline as branch-unrouted items, so counts,
@@ -67,9 +93,9 @@ import java.util.Map;
  * how many retry attempts it consumed. Non-final attempts are never billed (they are
  * surfaced through the attempt-aware pipeline, {@code completeAttempt}, which has no
  * billing call); the credit is charged exactly once on the TERMINAL attempt - whether
- * it succeeds or exhausts the budget ({@code StepCompletionOrchestrator.complete}
- * bills persisted terminal rows, plus the deduped-terminal-failure branch for retried
- * nodes whose FAILED slot was already claimed by the first attempt's row). Rationale:
+ * it succeeds or exhausts the budget ({@code StepCompletionOrchestrator.complete} bills the
+ * persisted terminal row, the execution's only row since non-final attempts write none).
+ * Rationale:
  * retries are the platform recovering from transient faults - charging per attempt
  * would bill users for failures they configured the policy to absorb. Agent nodes'
  * token-based LLM costs remain per-call (each attempt that reaches the LLM pays its
@@ -78,13 +104,16 @@ import java.util.Map;
  * <p><b>Attempt visibility vs terminal state:</b> every failed attempt is WS-emitted
  * (annotated {@code policy_attempt}/{@code policy_max_attempts}); StateSnapshot counts,
  * {@code EpochState.failedNodeIds}, edge counts and {@code workflow_epochs} record ONLY
- * the terminal outcome. Attempt step_data rows persist in non-loop contexts only - see
- * {@code NodeCompletionService.emitNodeFailedAttempt} for the loop/non-loop asymmetry.
+ * the terminal outcome, and so does {@code workflow_step_data}: a non-final attempt writes
+ * no row (see {@code CompletionKind.persistsRow}).
  *
- * <p><b>Branching-node restriction:</b> {@code continueOnFailure=true} is rejected at
- * parse time on single-port branching cores (decision / switch / option): a failed
- * branching node selected no port, so continuing would fan out ALL ports at once.
- * {@code retryCount} stays allowed there. See {@code WorkflowPlanParser}.
+ * <p><b>Branching-node restriction:</b> a node that picks where the run goes never continues
+ * past its own failure: it selected no port, so continuing would fan out ALL of them at once.
+ * {@code continueOnFailure=true} is rejected at parse time on decision / switch / option cores;
+ * on a loop core and on a classify / guardrail agent the builder tools refuse it and the run
+ * ignores it ({@code NodePolicyRunner.effectivePolicy}, {@link #withoutContinueOnFailure}), so
+ * a plan stored before that refusal keeps opening. {@code retryCount} stays allowed on all of
+ * them. See {@code WorkflowPlanParser}.
  *
  * <p><b>Extensibility:</b> future knobs (e.g. {@code fallbackValue}) are added as new
  * record components with a widening canonical constructor plus a back-compat overload
@@ -105,29 +134,33 @@ public record NodePolicy(
         boolean continueOnFailure,
         long timeoutMs,
         boolean executeOnce,
-        /**
-         * How long ONE provider call made by this node may spend waiting out a rate-limit refusal,
-         * in SECONDS. Catalog tool steps only ({@code StepNode} is what carries it), and refused
-         * elsewhere by the builder tools.
-         *
-         * <p>{@code null} is the norm and means "the platform decides": a 429 carries a delay the
-         * provider asked for, and honouring it is the platform's job, not something every author
-         * should have to think about. {@code 0} hands the retrying back to the author, and is what
-         * a node that paces itself needs, because the two layers compose by MULTIPLYING: a node set
-         * to retry twice (three attempts) around a call the platform re-sends twice is up to nine
-         * requests to a provider that asked us to slow down.
-         *
-         * <p>{@link #retryCount} {@code > 0} implies {@code 0} without anyone setting it, and
-         * {@link #timeoutMs} bounds it, both applied by {@code StepNode}. This field exists because
-         * the other way an author paces a workflow (a loop with a wait and a back-edge) is invisible
-         * to any heuristic. It can only TIGHTEN the platform's budget: catalog caps it, because the
-         * step is waiting inside ONE HTTP call.
-         */
-        Integer providerRetryMaxWaitSec
+        /** {@code null} (default classification) or {@link #RETRY_ON_RATE_LIMIT}. */
+        String retryOn
 ) {
 
     /** No policy = exact current behavior: single attempt, no backoff, no timeout, failure cascades SKIPPED. */
     public static final NodePolicy DEFAULT = new NodePolicy(0, 0L, false, 0L, false, null);
+
+    /** {@code retryOn} value: retry only a rate limit (429, 503, or a 4xx with a Retry-After or rate-limit wording). */
+    public static final String RETRY_ON_RATE_LIMIT = "rate_limit";
+
+    /** Most retries a node may ask for. */
+    public static final int MAX_RETRY_COUNT = 10;
+
+    /**
+     * Longest wait before one attempt, in ms (60 seconds): the wait holds the executing thread. On the
+     * STEP_BY_STEP path that thread can come from a small pool (the signal-resume executor has 4) and sit
+     * inside the per-run async-completion lock, so a long wait blocks unrelated runs. Prod peak: 1000 ms.
+     */
+    public static final long MAX_RETRY_BACKOFF_MS = 60_000L;
+
+    /**
+     * Longest wait a PROVIDER may impose through Retry-After (1 minute) beyond the node's own
+     * backoff: a Retry-After is honoured up to the longer of the two, and a longer one ends the
+     * retries. A provider window measured in hours must not hold a worker thread, it belongs to
+     * a schedule.
+     */
+    public static final long MAX_PROVIDER_WAIT_MS = 60_000L;
 
     /** JSON key of the policy block on a plan node entry. */
     public static final String JSON_KEY = "nodePolicy";
@@ -142,10 +175,19 @@ public record NodePolicy(
         if (timeoutMs < 0) {
             throw new IllegalArgumentException("nodePolicy.timeoutMs must be >= 0 (got " + timeoutMs + ")");
         }
-        if (providerRetryMaxWaitSec != null && providerRetryMaxWaitSec < 0) {
-            throw new IllegalArgumentException(
-                    "nodePolicy.providerRetryMaxWaitSec must be >= 0 (got " + providerRetryMaxWaitSec + ")");
+        if (retryOn != null && !RETRY_ON_RATE_LIMIT.equals(retryOn)) {
+            throw new IllegalArgumentException("nodePolicy.retryOn must be '" + RETRY_ON_RATE_LIMIT
+                    + "' or absent (got '" + retryOn + "')");
         }
+    }
+
+    /**
+     * Back-compat overload of the shape before {@code retryOn}: the default failure
+     * classification, exactly what those callers had.
+     */
+    public NodePolicy(int retryCount, long retryBackoffMs, boolean continueOnFailure,
+                      long timeoutMs, boolean executeOnce) {
+        this(retryCount, retryBackoffMs, continueOnFailure, timeoutMs, executeOnce, null);
     }
 
     /**
@@ -157,24 +199,51 @@ public record NodePolicy(
         this(retryCount, retryBackoffMs, continueOnFailure, 0L, false, null);
     }
 
-    /**
-     * Back-compat overload of the shape before {@code providerRetryMaxWaitSec}: a node that says
-     * nothing about the provider retry leaves the platform's own budget in place, which is what
-     * every existing plan means.
-     */
-    public NodePolicy(int retryCount, long retryBackoffMs, boolean continueOnFailure,
-                      long timeoutMs, boolean executeOnce) {
-        this(retryCount, retryBackoffMs, continueOnFailure, timeoutMs, executeOnce, null);
-    }
-
     /** True when a per-attempt timeout is configured (timeoutMs > 0). */
     public boolean hasTimeout() {
         return timeoutMs > 0;
     }
 
-    /** Total attempt budget: the initial attempt plus {@link #retryCount} retries. */
+    /**
+     * Total attempt budget: the initial attempt plus {@link #retryCount} retries, the retries
+     * clamped to {@link #MAX_RETRY_COUNT} (a stored plan written before the cap still runs, bounded).
+     */
     public int maxAttempts() {
-        return retryCount + 1;
+        return Math.min(retryCount, MAX_RETRY_COUNT) + 1;
+    }
+
+    /** True when only a rate limit (429, 503, or a 4xx rate-limit signal) is retried. */
+    public boolean retriesOnlyRateLimits() {
+        return RETRY_ON_RATE_LIMIT.equals(retryOn);
+    }
+
+    /**
+     * The builder-side refusal of a policy no tool may WRITE, as an agent-facing message, or
+     * {@code null} when it is acceptable: a value above a cap, or a {@code retryOn} with nothing
+     * to retry. Not applied by the parser, so a stored plan keeps opening (and is clamped when
+     * it runs).
+     */
+    public String writeViolation(String nodeKey) {
+        if (retryOn != null && retryCount == 0) {
+            return "Invalid nodePolicy for node '" + nodeKey + "': retryOn only applies when "
+                    + "retryCount > 0. Set retryCount, or leave retryOn out.";
+        }
+        if (retryCount > MAX_RETRY_COUNT) {
+            return "Invalid nodePolicy for node '" + nodeKey + "': retryCount is at most "
+                    + MAX_RETRY_COUNT + " (got " + retryCount + ").";
+        }
+        if (retryBackoffMs > MAX_RETRY_BACKOFF_MS) {
+            return "Invalid nodePolicy for node '" + nodeKey + "': retryBackoffMs is at most "
+                    + MAX_RETRY_BACKOFF_MS + " (60 seconds, got " + retryBackoffMs + ").";
+        }
+        return null;
+    }
+
+    /** This policy without {@code continueOnFailure}: every other field unchanged. */
+    public NodePolicy withoutContinueOnFailure() {
+        return continueOnFailure
+            ? new NodePolicy(retryCount, retryBackoffMs, false, timeoutMs, executeOnce, retryOn)
+            : this;
     }
 
     /** True when this policy is behaviorally identical to having no policy at all. */
@@ -209,15 +278,23 @@ public record NodePolicy(
         boolean continueOnFailure = coerceBoolean(map.get("continueOnFailure"), "continueOnFailure", nodeKey);
         long timeoutMs = requireNonNegativeLong(map.get("timeoutMs"), "timeoutMs", 0L, nodeKey);
         boolean executeOnce = coerceBoolean(map.get("executeOnce"), "executeOnce", nodeKey);
-        // Nullable on purpose: absent and 0 are different statements. Absent leaves the platform's
-        // own budget in place; 0 says the author owns the retrying and the platform must not add
-        // requests underneath them. Collapsing the two would make "off" unexpressible.
-        Integer providerRetryMaxWaitSec = map.get("providerRetryMaxWaitSec") == null
-                ? null
-                : requireNonNegativeInt(map.get("providerRetryMaxWaitSec"),
-                        "providerRetryMaxWaitSec", 0, nodeKey);
-        return new NodePolicy(retryCount, retryBackoffMs, continueOnFailure, timeoutMs, executeOnce,
-                providerRetryMaxWaitSec);
+        String retryOn = parseRetryOn(map.get("retryOn"), nodeKey);
+        // A stored plan may still carry "providerRetryMaxWaitSec", a knob of the provider retry the
+        // platform no longer performs: like any unknown key it is ignored, so those plans keep parsing.
+        return new NodePolicy(retryCount, retryBackoffMs, continueOnFailure, timeoutMs, executeOnce, retryOn);
+    }
+
+    private static String parseRetryOn(Object value, String nodeKey) {
+        if (value == null || (value instanceof String s && s.isBlank())) {
+            return null;
+        }
+        if (value instanceof String s && RETRY_ON_RATE_LIMIT.equals(s.trim())) {
+            return RETRY_ON_RATE_LIMIT;
+        }
+        throw new IllegalArgumentException("Invalid nodePolicy.retryOn for node '" + nodeKey
+                + "': the only value is '" + RETRY_ON_RATE_LIMIT + "' (retry only when the provider "
+                + "signals a rate limit: 429, 503, a Retry-After, or a rate-limit message); leave it out "
+                + "to retry every failure except a permanent refusal (got '" + value + "')");
     }
 
     private static int requireNonNegativeInt(Object value, String field, int defaultValue, String nodeKey) {

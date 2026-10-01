@@ -439,8 +439,8 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
    */
   const describeError = useCallback(
     (error: unknown): string => {
-      const { key, detail } = agendaErrorText(error);
-      return key ? t(key) : (detail as string);
+      const { key, detail, values } = agendaErrorText(error);
+      return key ? t(key, values) : (detail as string);
     },
     [t],
   );

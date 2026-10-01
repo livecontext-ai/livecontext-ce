@@ -251,7 +251,7 @@ describe('ChatCore blocking approval gate', () => {
 
     await waitFor(() => {
       expect(mocks.approveToolAuthorization)
-        .toHaveBeenCalledWith('conversation-1', 'workflow:execute', false, 'call-9');
+        .toHaveBeenCalledWith('conversation-1', 'workflow:execute', false, 'call-9', false);
     });
     expect(useMessageQueueStore.getState().getQueue('conversation-1')).toHaveLength(0);
   });
@@ -268,7 +268,7 @@ describe('ChatCore blocking approval gate', () => {
 
     await waitFor(() => {
       expect(mocks.approveToolAuthorization)
-        .toHaveBeenCalledWith('conversation-1', 'workflow:execute', false, undefined);
+        .toHaveBeenCalledWith('conversation-1', 'workflow:execute', false, undefined, false);
     });
     expect(useMessageQueueStore.getState().getQueue('conversation-1')).toHaveLength(1);
   });

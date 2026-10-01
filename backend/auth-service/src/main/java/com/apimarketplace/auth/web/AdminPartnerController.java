@@ -9,6 +9,7 @@ import com.apimarketplace.auth.service.PartnerProgramAdminService.CodeReport;
 import com.apimarketplace.auth.service.PartnerProgramAdminService.CreatorCodeRequest;
 import com.apimarketplace.auth.service.PartnerProgramAdminService.PartnerCodeRequest;
 import com.apimarketplace.auth.service.PartnerProgramAdminService.Result;
+import com.apimarketplace.auth.service.PartnerTierService;
 import com.apimarketplace.common.web.AdminRoleGuard;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.slf4j.Logger;
@@ -35,7 +36,13 @@ import java.util.Optional;
  *   <li>{@code POST /partners/creator-codes}: a single-use (by default) creator code.</li>
  *   <li>{@code POST /partners/partner-codes}: a partner's audience code and revenue share.</li>
  *   <li>{@code POST /partners/codes/{id}/active}: enable or disable a code.</li>
- *   <li>{@code POST /partners/codes/{id}/mark-paid}: settle the code's payable commissions.</li>
+ *   <li>{@code POST /partners/codes/{id}/mark-paid}: settle the code's payable commissions.
+ *       Refused 409 {@code terms_not_accepted} while the code's owner has not accepted the
+ *       Partner Program Terms (V557).</li>
+ *   <li>{@code POST /partners/codes/{id}/founder}: grant the code's owner the founder tier
+ *       (Platinum for life, V556), only while the founder window is open.</li>
+ *   <li>{@code DELETE /partners/codes/{id}/founder}: end it (terms clause 7.5, V557); the owner
+ *       returns to the tier their settled revenue has earned.</li>
  * </ul>
  */
 @RestController
@@ -45,15 +52,18 @@ public class AdminPartnerController {
     private static final Logger log = LoggerFactory.getLogger(AdminPartnerController.class);
 
     private final PartnerProgramAdminService service;
+    private final PartnerTierService tierService;
     private final UserRepository userRepository;
     private final com.apimarketplace.auth.audit.AuditLogger auditLogger;
     private final boolean unlimited;
 
     public AdminPartnerController(PartnerProgramAdminService service,
+                                  PartnerTierService tierService,
                                   UserRepository userRepository,
                                   com.apimarketplace.auth.audit.AuditLogger auditLogger,
                                   @Value("${credit.unlimited:false}") boolean unlimited) {
         this.service = service;
+        this.tierService = tierService;
         this.userRepository = userRepository;
         this.auditLogger = auditLogger;
         this.unlimited = unlimited;
@@ -95,10 +105,28 @@ public class AdminPartnerController {
             @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles) {
         ResponseEntity<Map<String, Object>> gate = gate(roles);
         if (gate != null) return gate;
-        List<Map<String, Object>> codes = service.report().stream().map(AdminPartnerController::toJson).toList();
+        List<CodeReport> reports = service.report();
+        // Each partner code's owner tier, brought up to date (a threshold crossed since the last
+        // paid invoice shows here at once), with the rate the code earns now.
+        Map<Long, PartnerTierService.CodeStanding> standings = tierService.forCodes(
+                reports.stream().map(CodeReport::code).toList());
+        List<Map<String, Object>> codes = reports.stream().map(r -> {
+            Map<String, Object> m = toJson(r);
+            PartnerTierService.CodeStanding s = standings.get(r.code().getId());
+            if (s != null) {
+                m.put("standing", PartnerProgramController.standingJson(s.standing()));
+                m.put("effective_commission_percent", s.effectiveRateBps() / 100.0);
+            }
+            return m;
+        }).toList();
         Map<String, Object> body = new HashMap<>();
         body.put("codes", codes);
         body.put("defaults", service.defaults());
+        body.put("tiers", tierService.tiers().stream().map(PartnerProgramController::tierJson).toList());
+        body.put("tier_currency", tierService.currency());
+        body.put("tier_settle_days", tierService.settleDays());
+        body.put("founder_until", tierService.founderUntil().toString());
+        body.put("founder_open", tierService.founderOpen());
         return ResponseEntity.ok(body);
     }
 
@@ -182,13 +210,65 @@ public class AdminPartnerController {
             @PathVariable("id") Long id) {
         ResponseEntity<Map<String, Object>> gate = gate(roles);
         if (gate != null) return gate;
-        List<PartnerCommission> settled = service.markPayablePaid(id, adminUserId);
+        List<PartnerCommission> settled;
+        try {
+            settled = service.markPayablePaid(id, adminUserId);
+        } catch (com.apimarketplace.auth.service.PartnerTermsNotAcceptedException notBound) {
+            // The partner never accepted the Partner Program Terms (V557): nothing was settled.
+            return error(HttpStatus.CONFLICT, "terms_not_accepted");
+        }
         Map<String, Long> amounts = new HashMap<>();
         settled.forEach(c -> amounts.merge(c.getCurrency(), c.getCommissionMinor(), Long::sum));
         audit(com.apimarketplace.auth.audit.AuditEventTypes.PARTNER_COMMISSIONS_PAID, adminUserId, null,
                 java.util.Map.of("code_id", id, "lines", settled.size(), "amounts", amounts.toString()));
         log.info("Admin {} settled {} partner commission lines on code {}", adminUserId, settled.size(), id);
         return ResponseEntity.ok(Map.of("success", true, "lines", settled.size(), "amounts", amounts));
+    }
+
+    @PostMapping("/codes/{id}/founder")
+    public ResponseEntity<Map<String, Object>> grantFounder(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles,
+            @RequestHeader(value = "X-User-ID", required = false) Long adminUserId,
+            @PathVariable("id") Long id) {
+        ResponseEntity<Map<String, Object>> gate = gate(roles);
+        if (gate != null) return gate;
+        Optional<Long> owner = service.partnerOwnerOf(id);
+        if (owner.isEmpty()) return error(HttpStatus.NOT_FOUND, "partner_code_not_found");
+        PartnerTierService.Result result = tierService.grantFounder(owner.get(), adminUserId);
+        var event = auditLogger.event(com.apimarketplace.auth.audit.AuditEventTypes.PARTNER_FOUNDER_GRANTED)
+                .user(adminUserId).detail("code_id", id).detail("partner_user_id", owner.get());
+        if (result.success()) {
+            event.success().write();
+        } else {
+            event.failure(result.error()).write();
+        }
+        if (!result.success()) {
+            return error("founder_closed".equals(result.error()) ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST,
+                    result.error());
+        }
+        log.info("Admin {} granted the founder tier to partner {} (code {})", adminUserId, owner.get(), id);
+        return ResponseEntity.ok(Map.of("success", true, "standing", PartnerProgramController.standingJson(result.standing())));
+    }
+
+    @DeleteMapping("/codes/{id}/founder")
+    public ResponseEntity<Map<String, Object>> endFounder(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles,
+            @RequestHeader(value = "X-User-ID", required = false) Long adminUserId,
+            @PathVariable("id") Long id) {
+        ResponseEntity<Map<String, Object>> gate = gate(roles);
+        if (gate != null) return gate;
+        Optional<Long> owner = service.partnerOwnerOf(id);
+        if (owner.isEmpty()) return error(HttpStatus.NOT_FOUND, "partner_code_not_found");
+        PartnerTierService.Result result = tierService.endFounder(owner.get(), adminUserId);
+        var event = auditLogger.event(com.apimarketplace.auth.audit.AuditEventTypes.PARTNER_FOUNDER_ENDED)
+                .user(adminUserId).detail("code_id", id).detail("partner_user_id", owner.get());
+        if (!result.success()) {
+            event.failure(result.error()).write();
+            return error("not_founder".equals(result.error()) ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST,
+                    result.error());
+        }
+        event.detail("tier", result.standing().tier().name()).success().write();
+        return ResponseEntity.ok(Map.of("success", true, "standing", PartnerProgramController.standingJson(result.standing())));
     }
 
     /** A concurrent create lost on a unique index: which one decides the 409 token. */
@@ -228,6 +308,10 @@ public class AdminPartnerController {
     private static Map<String, Object> toJson(CodeReport r) {
         Map<String, Object> m = codeJson(r.code());
         m.put("owner_email", r.ownerEmail());
+        // The owner's latest acceptance of the Partner Program Terms; null = never accepted, no payout.
+        m.put("terms_accepted_version", r.terms() != null ? r.terms().version() : null);
+        m.put("terms_accepted_at", r.terms() != null && r.terms().acceptedAt() != null
+                ? r.terms().acceptedAt().toString() : null);
         m.put("redemptions", r.redemptions());
         m.put("paying_customers", r.payingCustomers());
         m.put("commissions", Map.of(

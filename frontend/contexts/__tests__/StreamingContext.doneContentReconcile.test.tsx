@@ -85,7 +85,7 @@ vi.mock('@/lib/websocket', () => ({
 // useChannel → wsClient from '@/lib/websocket/ws-client' (relative import inside
 // use-channel) - that module must carry the same spy for `subs` to capture handlers.
 vi.mock('@/lib/websocket/ws-client', () => ({
-  wsClient: { subscribe: (...args: unknown[]) => subscribe(...args) },
+  wsClient: { onReconnected: () => () => {}, subscribe: (...args: unknown[]) => subscribe(...args) },
 }));
 
 // ---------------------------------------------------------------------------

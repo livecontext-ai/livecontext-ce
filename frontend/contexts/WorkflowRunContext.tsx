@@ -114,9 +114,12 @@ export function WorkflowRunProvider({ children }: { children: React.ReactNode })
   // "events temps réel s'arrêtent" because the active tab's run got
   // suspended when ANOTHER tab came back visible.
   //
-  // Right behavior: the browser's own WS-reconnect logic + the manager's
-  // existing seq guard handle stale state correctly. Hard refresh remains
-  // available for users who want a fresh REST fetch after long inactivity.
+  // Right behavior: stale state is recovered by the manager itself, never by
+  // suspending it. Each manager re-reads its run from REST when the WebSocket
+  // session comes back (wsClient.onReconnected: events published while it was
+  // down are lost, the gateway keeps no backlog) and when a surface shows the
+  // run again (first subscriber), and its seq guard lets a fresher live event
+  // win over that read.
   //
   // Aligned with feedback_simplicity_first.md - no speculative abstraction.
 
@@ -307,6 +310,15 @@ export function useWorkflowRunContext() {
     throw new Error('useWorkflowRunContext must be used within WorkflowRunProvider');
   }
   return context;
+}
+
+/**
+ * Like {@link useWorkflowRunContext}, but null outside a WorkflowRunProvider instead of
+ * throwing: for code that also renders where no run provider is mounted (a chat run card
+ * rendered by markdown on a public page).
+ */
+export function useOptionalWorkflowRunContext(): WorkflowRunContextValue | null {
+  return useContext(WorkflowRunContext);
 }
 
 /**

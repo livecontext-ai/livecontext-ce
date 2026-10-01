@@ -78,18 +78,24 @@ public class CatalogRegisterModule implements ToolModule {
                 "Constant request headers: put them in requiredHeaders {name: value} at the top level " +
                 "when they apply to every endpoint (an API version pin), or in headers {name: value} on " +
                 "one endpoint. Both are sent automatically and stay hidden from the tool's parameters. " +
-                "Only short literal values are kept (no spaces, at most 64 characters, no { } placeholder), " +
+                "Only short literal values are kept (at most 64 characters, no { } placeholder, no whitespace " +
+                "except one space after a ';' or a ','), " +
                 "and a header is ignored when the transport owns it (Content-Type, Content-Length, Host, " +
                 "Connection, Transfer-Encoding, Accept-Encoding) or when its name is the one the credential " +
                 "already fills (that header depends on authType and on auth[0].apiKeyConfig - see " +
                 "auth_placement in catalog(action='help', topics=['register'])). " +
-                "Accept registers but is never sent: the platform sets it to application/json first, " +
-                "and a declared header never overrides one that is already present. " +
+                "A declared Accept replaces the platform's default (application/json): an MCP server " +
+                "over HTTP, for one, needs Accept: application/json, text/event-stream. " +
                 "Per-call values belong in params with location 'query', 'path', 'body' or 'header' instead.");
         }
 
         try {
-            JsonNode apiJson = objectMapper.valueToTree(apiDef);
+            JsonNode apiJson = definitionTree(apiDef);
+            if (!apiJson.isObject()) {
+                // Without this the service reads fields off a text node and answers "apiName is
+                // required", which sends the agent looking for a field it did send.
+                return notAnObject("Invalid API definition", apiDef, apiJson);
+            }
 
             ApiResponse response = registrationService.registerCustomApi(apiJson, tenantId);
             Map<String, Object> result = new LinkedHashMap<>();
@@ -135,7 +141,10 @@ public class CatalogRegisterModule implements ToolModule {
         }
 
         try {
-            JsonNode updatesJson = objectMapper.valueToTree(updates);
+            JsonNode updatesJson = definitionTree(updates);
+            if (!updatesJson.isObject()) {
+                return notAnObject("Invalid API update", updates, updatesJson);
+            }
 
             ApiResponse response = registrationService.updateCustomApi(apiId, updatesJson, tenantId);
             Map<String, Object> result = new LinkedHashMap<>();
@@ -176,6 +185,41 @@ public class CatalogRegisterModule implements ToolModule {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
                 "Failed to update API: " + e.getMessage());
         }
+    }
+
+    /**
+     * Turn {@code api_definition} into a JSON tree, accepting the object serialized as a JSON string.
+     *
+     * <p>Agents often send the definition as a string (prod: update_api refused "Updates must be a
+     * JSON object"). Catalog tools are served straight from their provider, so the agent-side
+     * slim-schema coercion that would have parsed it never runs on this path. A string that parses to
+     * an object is used as that object; any other value (a string that is not a JSON object, a list)
+     * comes back as its plain tree, which the callers refuse with {@link #notAnObject}.
+     */
+    JsonNode definitionTree(Object value) {
+        if (value instanceof String text) {
+            try {
+                JsonNode parsed = objectMapper.readTree(text);
+                if (parsed != null && parsed.isObject()) {
+                    return parsed;
+                }
+            } catch (Exception notJson) {
+                // fall through: the caller refuses the plain tree with notAnObject
+            }
+        }
+        return objectMapper.valueToTree(value);
+    }
+
+    /**
+     * The refusal for an {@code api_definition} that is not a JSON object, shared by register_api and
+     * update_api so both name the same fix instead of a field error the agent did not cause.
+     */
+    private static ToolExecutionResult notAnObject(String prefix, Object raw, JsonNode tree) {
+        String got = raw instanceof String ? "text that is not a JSON object"
+                : tree.getNodeType().name().toLowerCase(Locale.ROOT);
+        return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+            prefix + ": api_definition must be a JSON object (or a string holding one), got " + got
+                + ". Send {apiName, baseUrl, endpoints:[...]}.");
     }
 
     /**

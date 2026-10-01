@@ -484,4 +484,62 @@ class TriggerValidatorTest {
                 .count();
         assertThat(missingLabelCount).isEqualTo(2);
     }
+
+    /**
+     * 2026-09-29: set_plan imports a form field add_node would refuse and names it in its
+     * warnings; validate and finish must keep naming it until it is fixed, or an agent that
+     * missed the set_plan warning ships a form that cannot render. A warning, never an error:
+     * a workflow saved long ago with such a field must stay saveable.
+     */
+    @Nested
+    @DisplayName("Form trigger fields (FORM_FIELD_INVALID)")
+    class FormFieldTests {
+
+        private Map<String, Object> formTrigger(List<Map<String, Object>> fields) {
+            return Map.of("label", "Demande", "type", "form", "params", Map.of("fields", fields));
+        }
+
+        private ValidationResult validate(Map<String, Object> trigger) {
+            stubSession(List.of(trigger), List.of(), List.of(),
+                    List.of(Map.of("from", "trigger:demande", "to", "mcp:step")));
+            ValidationResult result = ValidationResult.builder().build();
+            validator.validate(session, result);
+            return result;
+        }
+
+        @Test
+        @DisplayName("a field add_node would refuse is a warning naming it and the fix, never an error")
+        void invalidFieldIsAWarning() {
+            ValidationResult result = validate(formTrigger(List.of(
+                    Map.of("name", "tier", "type", "select", "options", List.of()))));
+
+            assertThat(result.getWarnings()).anySatisfy(w -> {
+                assertThat(w.code()).isEqualTo("FORM_FIELD_INVALID");
+                assertThat(w.message()).contains("Form trigger 'Demande'")
+                        .contains("field 'tier': 'options' is empty")
+                        .contains("workflow(action='modify', node='Demande'");
+            });
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("FORM_FIELD_INVALID"));
+        }
+
+        @Test
+        @DisplayName("valid fields, even in shorthand or with a `default` alias, raise nothing")
+        void validFieldsRaiseNothing() {
+            ValidationResult result = validate(formTrigger(List.of(
+                    Map.of("name", "tier", "type", "select", "options", List.of("free", "pro")),
+                    Map.of("name", "theme", "type", "string", "default", "Innovation"))));
+
+            assertThat(result.getWarnings()).noneMatch(w -> w.code().equals("FORM_FIELD_INVALID"));
+        }
+
+        @Test
+        @DisplayName("a non-form trigger is never checked for form fields")
+        void nonFormTriggerIgnored() {
+            ValidationResult result = validate(Map.of("label", "Demande", "type", "webhook",
+                    "params", Map.of("fields", List.of(Map.of("type", "select")))));
+
+            assertThat(result.getWarnings()).noneMatch(w -> w.code().equals("FORM_FIELD_INVALID"));
+        }
+    }
 }
+

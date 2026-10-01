@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.services.impl;
 
 import com.apimarketplace.orchestrator.domain.ToolRef;
+import com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys;
 import com.apimarketplace.orchestrator.services.interfaces.ExecutionResult;
 import com.apimarketplace.orchestrator.services.interfaces.ToolsGateway;
 import com.apimarketplace.orchestrator.services.TypeCastingService;
@@ -256,17 +257,6 @@ public class CatalogToolsGateway implements ToolsGateway {
                 payload.put("inlineBinaries", Boolean.TRUE);
             }
 
-            // How long this call may spend waiting out a provider's rate-limit refusal, in
-            // seconds, decided by the node. Absent = the platform's own budget applies, which is
-            // what every caller without retry logic of its own wants. 0 = the node paces itself,
-            // so the platform must not add requests underneath it.
-            if (billingIdentifiers != null) {
-                Object retryBudget = billingIdentifiers.get("__providerRetryMaxWaitSec__");
-                if (retryBudget instanceof Number n) {
-                    payload.put("providerRetryMaxWaitSeconds", n.intValue());
-                }
-            }
-
             org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
             headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
             if (tenantId != null && !tenantId.isBlank()) {
@@ -380,7 +370,7 @@ public class CatalogToolsGateway implements ToolsGateway {
             } else {
                 logger.error("Catalog returned 403 for tool {}: {}", toolId, message);
             }
-            return new ExecutionResult(false, Map.of(),
+            return new ExecutionResult(false, isPlanRefusal ? refusedByCatalog("PLAN_UPGRADE_REQUIRED") : Map.of(),
                     List.of(Map.of(
                         "type", isPlanRefusal ? "plan_upgrade_required" : "execution_error",
                         "message", message)),
@@ -405,7 +395,8 @@ public class CatalogToolsGateway implements ToolsGateway {
             } else {
                 logger.error("Catalog returned 422 for tool {}: {}", toolId, message);
             }
-            return new ExecutionResult(false, Map.of(),
+            return new ExecutionResult(false,
+                    isCredentialRefusal ? refusedByCatalog("CREDENTIAL_SELECTION_UNRESOLVED") : Map.of(),
                     List.of(Map.of(
                         "type", isCredentialRefusal ? "credential_selection_error" : "execution_error",
                         "message", message)),
@@ -426,7 +417,7 @@ public class CatalogToolsGateway implements ToolsGateway {
                         + "the tool on this step: search the catalog for the tool that does this job, "
                         + "then update the step's tool id to the one found.";
                 logger.warn("Catalog has no tool {} (stale reference on the step)", toolId);
-                return new ExecutionResult(false, Map.of(),
+                return new ExecutionResult(false, refusedByCatalog("TOOL_NOT_FOUND"),
                         List.of(Map.of("type", "tool_not_found", "message", message)),
                         List.of());
             }
@@ -449,11 +440,21 @@ public class CatalogToolsGateway implements ToolsGateway {
             }
             return new ExecutionResult(
                     false,
-                    Map.of(),
+                    outOfCredits ? refusedByCatalog(ExecutionMetadataKeys.CATALOG_REFUSAL_NO_CREDITS) : Map.of(),
                     List.of(Map.of("type", "execution_error", "message", e.getMessage())),
                     List.of()
             );
         }
+    }
+
+    /**
+     * The output of a refusal the catalog answered itself, carrying its code (see
+     * {@link ExecutionMetadataKeys#CATALOG_REFUSAL}): a node policy reads it to tell a refusal the
+     * same request meets again from a fault. No {@code http_status}: that field is the provider's
+     * answer, and a status here would file a platform refusal as a request the tool built.
+     */
+    private static Map<String, Object> refusedByCatalog(String code) {
+        return Map.of(ExecutionMetadataKeys.CATALOG_REFUSAL, code);
     }
 
     private static class CatalogExecutionResponse {

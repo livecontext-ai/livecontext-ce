@@ -31,3 +31,25 @@ describe('PublisherAvatar - CE-cloud avatar src routing', () => {
     expect(container.querySelector('img')).toBeTruthy();
   });
 });
+
+/**
+ * The illustrative profiles on the /partners page have no account behind them: they show an
+ * explicit image instead of the avatar endpoint, and still fall back to initials if it fails.
+ */
+describe('PublisherAvatar - explicit image', () => {
+  it('shows the given image, without any user id', () => {
+    const { container } = render(<PublisherAvatar userId={null} name="Maya Chen" src="/avatars/avatar-5.svg" />);
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('/avatars/avatar-5.svg');
+  });
+
+  it('the explicit image wins over the user endpoint', () => {
+    const { container } = render(<PublisherAvatar userId="42" name="Maya Chen" src="/partners/examples/maya.webp" />);
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('/partners/examples/maya.webp');
+  });
+
+  it('without an image or an id, the initials are the placeholder', () => {
+    const { container } = render(<PublisherAvatar userId={null} name="Maya Chen" />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.textContent).toBe('MC');
+  });
+});

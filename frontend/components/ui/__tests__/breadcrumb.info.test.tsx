@@ -88,6 +88,18 @@ describe('Breadcrumb info control', () => {
     expect(info.className).toContain('group-hover/crumb:opacity-100');
   });
 
+  it('takes no room while not hovered, so no empty gap follows the name', () => {
+    // Regression: opacity-0 alone kept the control's box (margin + padding + icon), which
+    // left a blank space after every resource name in the header.
+    renderCrumbs({ info: INFO });
+
+    const classes = screen.getByTestId('resource-info-trigger').className.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(['w-0', 'ml-0', 'p-0', 'overflow-hidden']));
+    expect(classes).not.toContain('ml-1');
+    expect(classes).not.toContain('p-0.5');
+    expect(classes).toEqual(expect.arrayContaining(['group-hover/crumb:w-auto', 'group-hover/crumb:ml-1']));
+  });
+
   it('is inside an element that DECLARES the hover group it reveals on', () => {
     // The half that the class assertion above cannot see. `group-hover/crumb:` fires only if
     // some ancestor declares `group/crumb`; delete that from the wrapper and every one of

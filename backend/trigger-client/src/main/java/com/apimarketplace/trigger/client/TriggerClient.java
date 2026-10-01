@@ -1369,6 +1369,40 @@ public class TriggerClient {
     }
 
     /**
+     * Strict variant of {@link #findChatEndpointByToken}: null only when no endpoint has this
+     * token (404); any other failure throws {@link TriggerClientException}. For a caller that
+     * must tell "not yours" from "could not check" (publication-service's share-link ownership
+     * check). The token travels as a path segment: the caller checks it is one plain segment.
+     */
+    public StandaloneChatEndpointDto findChatEndpointByTokenStrict(String token) {
+        return findEndpointByTokenStrict("chat-endpoints", token, StandaloneChatEndpointDto.class);
+    }
+
+    /** Strict variant of {@link #findFormEndpointByToken}, same contract as {@link #findChatEndpointByTokenStrict}. */
+    public StandaloneFormEndpointDto findFormEndpointByTokenStrict(String token) {
+        return findEndpointByTokenStrict("form-endpoints", token, StandaloneFormEndpointDto.class);
+    }
+
+    private <T> T findEndpointByTokenStrict(String collection, String token, Class<T> type) {
+        String url = baseUrl + "/api/internal/trigger/" + collection + "/by-token/" + token;
+        try {
+            return restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(buildHeaders(null)), type).getBody();
+        } catch (org.springframework.web.client.HttpClientErrorException.NotFound e) {
+            return null;
+        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            throw new TriggerClientException(TriggerClientException.Kind.CLIENT_ERROR,
+                    "Client error looking up a " + collection + " token: " + e.getStatusCode(), e);
+        } catch (org.springframework.web.client.HttpServerErrorException e) {
+            throw new TriggerClientException(TriggerClientException.Kind.SERVER_ERROR,
+                    "Server error looking up a " + collection + " token: " + e.getStatusCode(), e);
+        } catch (Exception e) {
+            throw new TriggerClientException(TriggerClientException.Kind.TRANSPORT,
+                    "Transport error looking up a " + collection + " token: "
+                            + LogSafePath.withoutToken(e.getMessage(), token), e);
+        }
+    }
+
+    /**
      * Find a chat endpoint by its public token.
      */
     public StandaloneChatEndpointDto findChatEndpointByToken(String token) {

@@ -111,8 +111,13 @@ public class AdHocNodeExecutionService {
      */
     long batchDeadlineSeconds = TIMEOUT_SECONDS;
 
-    /** Prefix that marks a run id as ad-hoc. Never a UUID, so it cannot be mistaken for a run. */
-    static final String RUN_ID_PREFIX = "adhoc-";
+    /**
+     * Prefix that marks a run id as ad-hoc. Never a UUID, so it cannot be mistaken for a run.
+     * Owned by the storage index, which reads it to file what this path produces at the root of
+     * the Files browser rather than under the synthetic plan id, a workflow that does not exist.
+     */
+    static final String RUN_ID_PREFIX =
+            com.apimarketplace.common.storage.service.WorkflowFileScope.AD_HOC_RUN_ID_PREFIX;
 
     private final CoreNodeBuilder coreNodeBuilder;
     /**

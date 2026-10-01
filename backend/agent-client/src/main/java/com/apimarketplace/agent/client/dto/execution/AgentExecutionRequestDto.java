@@ -267,13 +267,35 @@ public record AgentExecutionRequestDto(
      * {@code restricted} is false (default direct claude-code/codex/... stay unrestricted).
      */
     public AgentExecutionRequestDto withRestrictedToolset(boolean restricted) {
-        if (!restricted) {
-            return this;
-        }
+        return restricted ? withCredentialFlag(RESTRICTED_TOOLSET_KEY) : this;
+    }
+
+    /**
+     * Credentials key telling the bridge server that THIS caller publishes the terminal event
+     * of a failed run on the conversation stream itself, so the bridge must not publish its
+     * own {@code error} there. Matched exactly by {@code mcp/bridge/lib/runFailureEvent.mjs}.
+     */
+    public static final String CALLER_PUBLISHES_FAILURE_KEY = "__callerPublishesFailure__";
+
+    /**
+     * Return a copy telling the bridge not to announce a failed run on the stream, because the
+     * caller does it. Set by a caller that re-runs a failed bridge turn elsewhere on the SAME
+     * stream (the execution-link fallback onto the billed pair's direct API): a chat UI reads
+     * {@code error} as the end of the turn, so a bridge {@code error} published before that
+     * retry made the whole retried reply stream to nobody. The HTTP failure itself still
+     * reaches the caller, which is what triggers its retry. No-op when {@code callerPublishes}
+     * is false: a caller with no fallback keeps the bridge's own failure event.
+     */
+    public AgentExecutionRequestDto withCallerPublishingFailure(boolean callerPublishes) {
+        return callerPublishes ? withCredentialFlag(CALLER_PUBLISHES_FAILURE_KEY) : this;
+    }
+
+    /** A copy whose credentials map carries {@code key=true}; the rest of the request is unchanged. */
+    private AgentExecutionRequestDto withCredentialFlag(String key) {
         java.util.Map<String, Object> creds = credentials == null
             ? new java.util.HashMap<>()
             : new java.util.HashMap<>(credentials);
-        creds.put(RESTRICTED_TOOLSET_KEY, true);
+        creds.put(key, true);
         return new AgentExecutionRequestDto(
             prompt, systemPrompt, provider, model, temperature, maxTokens, tools,
             autoDiscoverTools, maxTools, maxIterations, executionTimeout, conversationHistory,

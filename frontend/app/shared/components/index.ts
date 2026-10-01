@@ -9,6 +9,6 @@ export { SectionTitle } from './SectionTitle';
 export type { SectionTitleProps } from './SectionTitle';
 export { SubsectionTitle } from './SubsectionTitle';
 export type { SubsectionTitleProps } from './SubsectionTitle';
-export { WelcomeTitle } from './WelcomeTitle';
+export { WelcomeTitle, ROTATING_TITLE_SLOT_CLASS } from './WelcomeTitle';
 export type { WelcomeTitleProps } from './WelcomeTitle';
 

@@ -9,6 +9,7 @@ import { menuItemClass, menuSurfaceClass } from '@/components/ui/menu';
 import { agendaService } from '@/lib/api/orchestrator/agenda.service';
 import { useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 import { agendaErrorText } from '@/components/agenda/agendaErrors';
+import { readAgentNameConflict } from '@/lib/agents/agentNameConflict';
 import type { ActiveAutomation } from '@/lib/api/orchestrator/dashboard.service';
 import {
   canControlProductionResource,
@@ -117,8 +118,8 @@ export function TriggerRowActions({ automation, onNavigate, onResult }: TriggerR
       // without detail, SCHEDULE_REJECTED, and every move-specific refusal - so the bell
       // and the agenda gave different answers to the same failure. agendaErrors exists to
       // make these branches testable; a private copy here is untested by construction.
-      const { key, detail } = agendaErrorText(error);
-      onResult('error', key ? tAgenda(key) : (detail ?? t('runFailed')));
+      const { key, detail, values } = agendaErrorText(error);
+      onResult('error', key ? tAgenda(key, values) : (detail ?? t('runFailed')));
     } finally {
       setBusy(false);
     }
@@ -134,8 +135,16 @@ export function TriggerRowActions({ automation, onNavigate, onResult }: TriggerR
         ? t('resourcePaused', { type: resourceKind })
         : t('resourceResumed', { type: resourceKind }));
       refreshAutomations();
-    } catch {
-      onResult('error', t('resourceToggleFailed', { type: resourceKind }));
+    } catch (error) {
+      // Resuming a paused agent can collide with an agent that took its name meanwhile:
+      // name that, and the free name, rather than a generic failure.
+      const nameConflict = readAgentNameConflict(error);
+      if (nameConflict) {
+        const { key, values } = agendaErrorText(error);
+        onResult('error', tAgenda(key as string, values));
+      } else {
+        onResult('error', t('resourceToggleFailed', { type: resourceKind }));
+      }
     } finally {
       setBusy(false);
     }

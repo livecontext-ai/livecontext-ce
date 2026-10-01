@@ -70,8 +70,8 @@
  * against never noticing the page came back, and the first is the cheaper mistake.
  *
  * The blocking is accepted even on a plan that will NOT be laid out (one whose nodes all
- * carry positions, where `needsLayout` is false and the box only feeds the node's own
- * snap). Gating on that would mean predicting `needsLayout` from the plan BEFORE the
+ * carry positions, where the importer keeps them and the box only feeds the node's own
+ * snap). Gating on that would mean predicting the layout decision from the plan BEFORE the
  * nodes exist, and the two disagreeing by one synthesised node is exactly how this defect
  * comes back - silently, on the path with no corrector. A warm cache answers in a tick,
  * a cold one within the deadline, and either is cheaper than that risk.

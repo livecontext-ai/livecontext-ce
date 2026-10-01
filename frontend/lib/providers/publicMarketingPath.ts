@@ -34,7 +34,9 @@ import { isDocsHost } from '@/lib/docs/docsHostRewrite';
 // is the conversion asset), so spinner-only HTML would empty them of the only
 // thing they are for. Measured before this entry: 52 KB and 127 KB of markup with
 // the spinner at the top of the body.
-const PUBLIC_MARKETING_PREFIXES = ['/compare', '/about', '/contact', '/legal', '/changelog', '/docs', '/marketplace', '/u', '/status', '/integrations', '/models', '/videos', '/for'];
+// `/partners` is the partner program page: it is written to be found by the agencies it
+// recruits, so it must server-render its content, not the spinner.
+const PUBLIC_MARKETING_PREFIXES = ['/compare', '/about', '/contact', '/legal', '/changelog', '/docs', '/marketplace', '/u', '/status', '/integrations', '/models', '/videos', '/for', '/partners'];
 
 // `host`: the documentation subdomain serves its pages at CLEAN paths (`/glossary`),
 // rewritten onto the `/docs/*` routes. The server renders those pages under their

@@ -157,9 +157,10 @@ public class InterfaceRenderService implements InterfaceRenderer {
     ) {}
 
     /**
-     * Backend-rendered snapshot of an interface for a specific epoch - the HTML has been
-     * substituted with {@link InterfaceTemplateDefaults#apply} using the first item's resolved
-     * variables, mirroring exactly what the iframe (and the screenshot sidecar) sees. CSS and JS
+     * Backend-rendered snapshot of an interface - the HTML has been substituted with
+     * {@link InterfaceTemplateDefaults#apply} using ONE item's resolved variables: the executing
+     * item for the item-scoped {@code resolveTemplateSnapshot}, the epoch's first listed item for
+     * the epoch-only one. CSS and JS
      * are returned raw - the iframe handles their per-item hydration via {@code __RESOLVED_DATA__}.
      *
      * <p>Single source of truth for "the interface as it would be displayed right now". Consumed by:
@@ -172,7 +173,8 @@ public class InterfaceRenderService implements InterfaceRenderer {
      * @param html   HTML with {@code {{var|default}}} resolved
      * @param css    raw CSS template (may be null when the interface has none)
      * @param js     raw JS template (may be null when the interface has none)
-     * @param vars   the variable map used for substitution (items[0].data()); empty when no items
+     * @param vars   the variable map used for substitution (the executing item's variables for the
+     *               item-scoped overload, items[0].data() for the epoch-only one); empty when none
      */
     /**
      * @param format the interface's display/capture format (preset name or "WxH"), null when the
@@ -1020,6 +1022,9 @@ public class InterfaceRenderService implements InterfaceRenderer {
      * thing the iframe shows. Centralizes the {@code render() + items[0].data() + applyDefaults}
      * sequence so the screenshot path and the InterfaceNode {@code exposeRenderedSource} path stay
      * in lockstep. Returns {@link Optional#empty()} when the interface has no HTML template.
+     *
+     * <p>Epoch-level only: inside a split it does NOT pick the executing item. Callers running
+     * inside one execution use the {@code (epoch, spawn, itemIndex)} overload below.
      */
     @Transactional(readOnly = true)
     public Optional<ResolvedTemplateSnapshot> resolveTemplateSnapshot(UUID interfaceId, String runId, String tenantId, int epoch) {
@@ -1033,6 +1038,47 @@ public class InterfaceRenderService implements InterfaceRenderer {
             : Map.of();
         String resolvedHtml = InterfaceTemplateDefaults.apply(result.htmlTemplate(), vars);
         return Optional.of(new ResolvedTemplateSnapshot(resolvedHtml, result.cssTemplate(), result.jsTemplate(), vars, result.format()));
+    }
+
+    /**
+     * Same snapshot, resolved for ONE execution: the {@code (epoch, spawn, itemIndex)} of the
+     * interface node that asked for it. The screenshot / PDF / video capture and the
+     * {@code rendered_*} outputs are produced DURING that execution, so they must show its data.
+     *
+     * <p>The epoch-only overload cannot: {@link #render} lists every row of the interface node
+     * in the epoch, SKIPPED ones included, newest item first, and it keeps {@code items[0]}. In a
+     * split, each item the interface did not run for still writes a SKIPPED row, so the capture
+     * for item 0 of a 5-item batch was drawn from item 4's data (a reply preview showing another
+     * sender's address and subject). The coordinates used here are the ones
+     * {@code InterfaceNode} already resolves its reported variable mapping with.
+     *
+     * <p>Known limit, shared with that report: a variable that is a whole array reference takes
+     * the SQL pagination path ({@code RunContextService#resolveVariablePaginated}), which reads the
+     * epoch's newest row without an item filter, so inside a split such a variable is not yet
+     * item-scoped. Scalar references and expressions are.
+     *
+     * <p>{@code itemIndex == null} keeps the epoch-only behaviour for callers that carry no item.
+     */
+    @Transactional(readOnly = true)
+    public Optional<ResolvedTemplateSnapshot> resolveTemplateSnapshot(UUID interfaceId, String runId, String tenantId,
+                                                                      int epoch, int spawn, Integer itemIndex) {
+        if (itemIndex == null) {
+            return resolveTemplateSnapshot(interfaceId, runId, tenantId, epoch);
+        }
+        String ownerTenantId = resolveRunOwnerTenantId(runId, tenantId);
+        UUID workflowRunId = findWorkflowRunId(runId);
+        TemplateConfig config = getTemplateConfigForRun(interfaceId, runId, workflowRunId, ownerTenantId);
+        String htmlTemplate = config.htmlTemplate();
+        if (htmlTemplate == null || htmlTemplate.isEmpty()) {
+            // Mirrors render(): no template renders as an empty page, it is not an absent snapshot.
+            return Optional.of(new ResolvedTemplateSnapshot("", config.cssTemplate(), config.jsTemplate(), Map.of(), config.format()));
+        }
+        Map<String, String> mappings = config.variableMappings();
+        Map<String, Object> vars = (mappings == null || mappings.isEmpty())
+            ? Map.of()
+            : resolveVariablesWithPagination(mappings, runId, epoch, spawn, itemIndex, ownerTenantId, Map.of());
+        String resolvedHtml = InterfaceTemplateDefaults.apply(htmlTemplate, vars);
+        return Optional.of(new ResolvedTemplateSnapshot(resolvedHtml, config.cssTemplate(), config.jsTemplate(), vars, config.format()));
     }
 
     /**

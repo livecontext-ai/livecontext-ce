@@ -424,11 +424,15 @@ export function Breadcrumb({
                     variant="breadcrumb"
                     align="start"
                     onOpenChange={(open) => setInfoOpenIndex(open ? index : null)}
+                    // Hidden by COLLAPSING, not by opacity alone: an invisible control that kept
+                    // its box left an empty gap after every resource name. Width, margin and
+                    // padding go to 0 until the crumb is hovered (or the control is focused),
+                    // and the element stays mounted and tabbable so the popover survives.
                     className={cn(
                       "transition-opacity",
                       infoOpenIndex === index
                         ? "opacity-100"
-                        : "opacity-0 pointer-events-none group-hover/crumb:opacity-100 group-hover/crumb:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto",
+                        : "w-0 ml-0 p-0 overflow-hidden opacity-0 pointer-events-none group-hover/crumb:w-auto group-hover/crumb:ml-1 group-hover/crumb:p-0.5 group-hover/crumb:overflow-visible group-hover/crumb:opacity-100 group-hover/crumb:pointer-events-auto focus-visible:w-auto focus-visible:ml-1 focus-visible:p-0.5 focus-visible:overflow-visible focus-visible:opacity-100 focus-visible:pointer-events-auto",
                     )}
                   />
                 )}

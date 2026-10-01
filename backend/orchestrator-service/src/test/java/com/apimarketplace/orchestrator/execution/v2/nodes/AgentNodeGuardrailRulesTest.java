@@ -170,4 +170,31 @@ class AgentNodeGuardrailRulesTest {
         assertThat(result.output()).containsEntry("passed", false);
         verify(mockPendingAgentRegistry, never()).register(any());
     }
+    @Test
+    @DisplayName("REGRESSION: a guardrail its rules decide alone does not answer from the worker queue, so its timeoutMs bounds it")
+    void ruleOnlyGuardrailIsNotAQueuedNode() {
+        // It completes inline (the test above), yet it was reported as a queued node, so the
+        // split executor skipped the bound on its body and its timeoutMs applied nowhere.
+        AgentNode node = new AgentNode("agent:content_guard",
+            guardrail("I want a refund", List.of(keywordRule("block"))));
+        node.acceptServices(ServiceRegistry.builder().agentClient(mockAgentClient)
+            .pendingAgentRegistry(mockPendingAgentRegistry).build());
+        node.setAsyncQueueEnabled(true);
+
+        assertThat(node.answersFromWorkerQueue()).isFalse();
+    }
+
+    @Test
+    @DisplayName("a guardrail with a model rule answers from the worker queue; without the queue, no node does")
+    void modelRuleGuardrailIsAQueuedNode() {
+        AgentNode queued = new AgentNode("agent:content_guard",
+            guardrail("I want a refund", List.of(keywordRule("block"), toxicRule())));
+        queued.acceptServices(ServiceRegistry.builder().agentClient(mockAgentClient)
+            .pendingAgentRegistry(mockPendingAgentRegistry).build());
+        queued.setAsyncQueueEnabled(true);
+        AgentNode inline = inlineNode(guardrail("I want a refund", List.of(keywordRule("block"), toxicRule())));
+
+        assertThat(queued.answersFromWorkerQueue()).isTrue();
+        assertThat(inline.answersFromWorkerQueue()).isFalse();
+    }
 }

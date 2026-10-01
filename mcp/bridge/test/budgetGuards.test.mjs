@@ -9,8 +9,14 @@ import assert from 'node:assert/strict';
 import { AgentBudgetGuard, TenantBudgetGuard, chainBudgetGuards } from '../lib/budgetGuards.js';
 
 // Minimal pricing stub: $1 per 1k prompt + $2 per 1k completion (synthetic).
+// The guards price through costForUsage / cacheMissCostForUsage; this stub ignores cache
+// counters (none are sent here), so a cache miss costs the same as the call itself.
+const fakeUsageCost = (_provider, _model, u) => ((u.promptTokens || 0) / 1000) * 1 + ((u.completionTokens || 0) / 1000) * 2;
 const fakePricing = {
   costFor: (_provider, _model, prompt, completion) => (prompt / 1000) * 1 + (completion / 1000) * 2,
+  costForUsage: fakeUsageCost,
+  cacheMissCostForUsage: fakeUsageCost,
+  cacheMissReserveForUsage: fakeUsageCost,
   contextWindowFor: () => 128000,
   maxOutputTokensFor: () => 4096,
   worstCaseSingleIter: () => Number.NaN,

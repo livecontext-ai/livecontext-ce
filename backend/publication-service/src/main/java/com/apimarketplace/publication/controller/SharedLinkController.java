@@ -7,6 +7,9 @@ import com.apimarketplace.publication.dto.SharedLinkConfigResponse;
 import com.apimarketplace.publication.dto.SharedLinkResponse;
 import com.apimarketplace.publication.service.SharedLinkService;
 import com.apimarketplace.publication.service.SharedLinkService.SharedLinkLimitException;
+import com.apimarketplace.publication.service.SharedLinkService.SharedLinkResourceInUseException;
+import com.apimarketplace.publication.service.SharedLinkService.SharedLinkResourceNotFoundException;
+import com.apimarketplace.publication.service.SharedLinkResourceGuard.ResourceLookupUnavailableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -44,6 +47,17 @@ public class SharedLinkController {
     private static ResponseEntity<Map<String, String>> viewerForbidden() {
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(Map.of("error", "VIEWER role cannot modify shared links"));
+    }
+
+    /**
+     * The ownership check could not reach the service that owns the resource. Refused (the link
+     * is not created or switched on), but as a retryable 503, never as the 404 that means
+     * "this is not yours" (the repo's convention for an upstream it depends on being down).
+     */
+    private ResponseEntity<Map<String, String>> resourceLookupUnavailable(ResourceLookupUnavailableException e) {
+        logger.warn("Shared-link ownership check unavailable: {}", e.getMessage(), e.getCause());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(Map.of("error", "Could not verify the resource right now, try again"));
     }
 
     @GetMapping("/config")
@@ -139,6 +153,13 @@ public class SharedLinkController {
             SharedLinkEntity link = sharedLinkService.register(
                     tenantId, organizationId, userPlan, resourceType, resourceToken, resourceId, title, description);
             return ResponseEntity.ok(SharedLinkResponse.from(link));
+        } catch (SharedLinkResourceNotFoundException e) {
+            // A link may only name a resource the caller holds (SharedLinkResourceGuard). 404
+            // for a foreign resource and a missing one alike, so a probe learns neither.
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "Resource not found"));
+        } catch (ResourceLookupUnavailableException e) {
+            return resourceLookupUnavailable(e);
         } catch (SharedLinkLimitException e) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of("error", "Shared link limit reached"));
@@ -182,6 +203,15 @@ public class SharedLinkController {
 
             SharedLinkEntity updated = sharedLinkService.update(tenantId, organizationId, id, title, description, accessConfig, isActive);
             return ResponseEntity.ok(SharedLinkResponse.from(updated));
+        } catch (SharedLinkResourceNotFoundException e) {
+            // Switching back on a link whose creator does not hold what it names.
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "Resource not found"));
+        } catch (SharedLinkResourceInUseException e) {
+            // Switching back on a link whose resource another active link already holds.
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (ResourceLookupUnavailableException e) {
+            return resourceLookupUnavailable(e);
         } catch (IllegalArgumentException e) {
             // Return 404 for both "not found" and "not authorized" to avoid leaking existence
             return ResponseEntity.notFound().build();

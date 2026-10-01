@@ -178,7 +178,11 @@ describe('isOpenableVisualization', () => {
 describe('toAutoOpenDetail', () => {
   it('projects the side-panel event detail', () => {
     const detail = toAutoOpenDetail({ type: 'workflow_run', id: 'wf1', title: 'Run', runId: 'r9' } as ToolVisualization);
-    expect(detail).toEqual({ type: 'workflow_run', id: 'wf1', title: 'Run', runId: 'r9' });
+    expect(detail).toEqual({ type: 'workflow_run', id: 'wf1', title: 'Run', runId: 'r9', userInitiated: true });
+  });
+
+  it('marks the event as a click, so the panel opens the tab in front on any page', () => {
+    expect(toAutoOpenDetail({ type: 'table', id: 't1' } as ToolVisualization).userInitiated).toBe(true);
   });
 
   it("forwards the run's plan version (the workflow page loads an old or pinned run's own plan)", () => {

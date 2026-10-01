@@ -2,12 +2,14 @@
 
 import React, { useState, useEffect, useCallback, useRef, useReducer } from 'react';
 import { MessageHistory } from '@/components/chat/MessageHistory';
-import { type Message } from '@/lib/api/conversationApi';
+import { type Message, conversationApi } from '@/lib/api/conversationApi';
 import { useMessages } from '@/hooks/conversation/useMessages';
 import { sortMessagesByTime } from '@/lib/utils/messageUtils';
 import { useConversationChannel } from '@/lib/websocket/use-conversation-channel';
+import { useConversationResync } from '@/hooks/chat/useConversationResync';
 import { onConversationMessagesCleared } from '@/lib/chat/conversationMessagesBus';
-import { detectStreamEventType, mapV2EventToV1 } from '@/lib/streaming/streamHelpers';
+import { detectStreamEventType, isServerStreamLive, mapV2EventToV1, threadEndsWithReply } from '@/lib/streaming/streamHelpers';
+import { unifiedApiService } from '@/lib/api';
 import type { ToolActivity } from '@/components/chat/ActivityFeed';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { MessageSquare } from 'lucide-react';
@@ -280,10 +282,10 @@ export function ConversationPanelContent({ conversationId, executionId }: Conver
     loadMessages(conversationId).then(() => scrollToBottom(false));
   }, [conversationId, executionId, loadMessages, scrollToBottom]);
 
-  // Re-read the thread from the DB without disturbing it. Four callers, all reconciliations of
+  // Re-read the thread from the DB without disturbing it. Five callers, all reconciliations of
   // a panel that is already showing this conversation: the stream finishing, the stream being
-  // stopped or erroring, a workflow agent completing, and the delayed catch-up that covers a
-  // missed subscription. SILENT for all four: none of them may raise the spinner, reset the
+  // stopped or erroring, a workflow agent completing, the delayed catch-up that covers a
+  // missed subscription, and a WebSocket reconnect. SILENT for all: none of them may raise the spinner, reset the
   // pagination or - worst of all - clear the transcript when the fetch fails. An unchanged
   // thread reconciles to the same array, so the only visible effect left is the persisted
   // message appearing.
@@ -470,6 +472,44 @@ export function ConversationPanelContent({ conversationId, executionId }: Conver
   }, [scrollToBottom, scrollToBottomOnce, reloadMessages]);
 
   useConversationChannel(conversationId, onWsEvent);
+
+  // A WebSocket reconnect. The thread is re-read silently, which shows whatever was saved while
+  // the socket was down. The live bubble is another matter: it was built from events the dead
+  // session may have lost, the `done` above all, and the resubscribe's snapshot cannot always
+  // replay that (the server drops a stream's state 30 s after it ends). But clearing it on every
+  // reconnect emptied turns still running: the snapshot replays text, not thinking, sub-agent
+  // activity or a card the turn is waiting on, and reconnects come every 20-60 s on a busy
+  // socket. So the bubble goes only on proof the turn is over, and is still the one on screen
+  // when the proof lands:
+  //  - the server names THIS stream, in a finished state;
+  //  - or it names no stream (or another one) AND the saved thread ends with the reply. "No
+  //    stream" alone proves nothing: every run through the bridge (workflow agent nodes,
+  //    sub-agents, CLI models) never registers its stream, so the server answers that while
+  //    the run is very much alive. Same rule as StreamingContext's resync.
+  // An unreadable answer is not proof either: the bubble stays, the channel may still deliver.
+  // Only the reconnect half of the shared hook is used: this panel follows its channel itself,
+  // and its handler above already re-reads on done, stopped and error.
+  const streamingRef = useRef(streaming);
+  streamingRef.current = streaming;
+  useConversationResync(conversationId, async () => {
+    void reloadMessages();
+    const shown = streamingRef.current;
+    if (!shown.isStreaming && !shown.content && shown.toolActivities.length === 0) return;
+    let over: boolean;
+    try {
+      const server = await unifiedApiService.getStreamReconnectionState(conversationId);
+      if (shown.streamId && server?.streamId === shown.streamId) {
+        over = !isServerStreamLive(server, shown.streamId);
+      } else {
+        over = threadEndsWithReply(await conversationApi.getRecentMessagesAsc(conversationId, 5));
+      }
+    } catch (err) {
+      console.warn('[ConversationPanelContent] Could not tell whether the turn is over after a reconnect:', err);
+      return;
+    }
+    if (!over || streamingRef.current.streamId !== shown.streamId) return;
+    dispatchStreaming({ type: 'RESET' });
+  });
 
   // ── Fallback: reload messages when workflow agent completes ──
   // Handles race condition where WS subscription was established after

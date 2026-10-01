@@ -14,6 +14,8 @@ import { formatRelativeDateI18n, formatUtcDateTime, parseUtcAware } from '@/lib/
 import { getRunDisplayStatus } from '@/lib/utils/runStatusUtils';
 import { scrollToAndFlash } from '@/lib/utils/flashHighlight';
 import { formatCompactDuration, RUN_ROW_FLASH_CLASS } from './runFormatting';
+import { useWsReconnected } from '@/lib/websocket';
+import { getWorkflowRunManager, hasWorkflowRunManager } from '@/contexts/workflow-run';
 
 interface RunHistoryListProps {
   workflowId?: string;
@@ -24,6 +26,13 @@ interface RunHistoryListProps {
 }
 
 const LIMIT = 15;
+
+/**
+ * Most rows one in-place refresh re-reads. The endpoint serves at most 200 rows per call and
+ * pages by `offset / limit`, so the re-read stays a whole number of LIMIT pages: the next
+ * load-more then asks for a page that starts exactly where the refreshed rows end.
+ */
+const MAX_REFRESH_ROWS = Math.floor(200 / LIMIT) * LIMIT;
 
 type RunRowStatus =
   | 'pending' | 'waiting_trigger' | 'running' | 'paused' | 'awaiting_signal'
@@ -290,6 +299,63 @@ export function RunHistoryList({ workflowId, currentRunId, onSelectRun }: RunHis
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when the workflow changes
   }, [workflowId]);
 
+  /**
+   * Re-read the rows already on screen, in place.
+   *
+   * Not `fetchRuns(true)`: a reset blanks the list and shows the empty state while it
+   * loads, which would flash "no runs" every time a scheduled run closes an epoch. The pages
+   * loaded so far (up to MAX_REFRESH_ROWS) in one read, same generation discipline as a
+   * reset, and dropped if the paging moved while it was in flight so a load-more is never
+   * undone.
+   *
+   * One read at a time, plus at most one follow-up for the signals that arrive meanwhile
+   * (as the run manager does): two overlapping reads could land in either order, and the
+   * older would overwrite the fresher.
+   */
+  const refreshInFlightRef = useRef(false);
+  const refreshAgainRef = useRef(false);
+  const refreshLatestRef = useRef<() => Promise<void>>(async () => {});
+  const refreshLoadedRuns = useCallback(async () => {
+    if (!workflowId) return;
+    if (refreshInFlightRef.current) {
+      refreshAgainRef.current = true;
+      return;
+    }
+    refreshInFlightRef.current = true;
+    const myGeneration = resetGenerationRef.current;
+    const pinnedGeneration = pinnedGenerationRef.current;
+    const offsetAtStart = offsetRef.current;
+    const requested = Math.min(Math.max(offsetAtStart, LIMIT), MAX_REFRESH_ROWS);
+    try {
+      const pinnedRead = orchestratorApi.getPinnedWorkflowRun(workflowId).catch(() => null);
+      const data = await orchestratorApi.getWorkflowRuns(workflowId, requested, 0);
+      if (myGeneration === resetGenerationRef.current && offsetRef.current === offsetAtStart) {
+        const rows = data || [];
+        setRuns(rows);
+        // Whole pages, like fetchRuns: the endpoint pages by offset / limit, so an offset
+        // that is not a multiple of LIMIT would make the next load-more repeat rows.
+        offsetRef.current = requested;
+        setHasMore(rows.length === requested);
+        setError(null); // the list is readable again: drop the error a failed load left up
+      }
+      const pinned = await pinnedRead;
+      // The pinned-run read answers null for an ERROR too (a 5xx during a rolling deploy), so
+      // null never erases a production run already on screen. An unpin clears it through
+      // its own event.
+      if (pinned && pinnedGeneration === pinnedGenerationRef.current) setPinnedRun(pinned);
+    } catch {
+      // Keep the rows on screen; the next signal re-reads them.
+    } finally {
+      refreshInFlightRef.current = false;
+      if (refreshAgainRef.current) {
+        refreshAgainRef.current = false;
+        // The LATEST callback: the workflow may have changed while this read was in flight.
+        void refreshLatestRef.current();
+      }
+    }
+  }, [workflowId]);
+  refreshLatestRef.current = refreshLoadedRuns;
+
   // Infinite scroll
   useEffect(() => {
     if (!hasMore || loadingMore) return;
@@ -306,6 +372,41 @@ export function RunHistoryList({ workflowId, currentRunId, onSelectRun }: RunHis
 
   // Production run first, then the rest in the order the API returned them.
   const displayRuns = pinnedRun ? [pinnedRun, ...runs.filter(r => r.id !== pinnedRun.id)] : runs;
+
+  // A run this list shows as executing ("running" pulse) is read once, when the list
+  // loads, and nothing moves it afterwards. When a surface follows that run live (its
+  // manager exists), the manager learns first that it stopped running (epoch closed, run
+  // finished): re-read the rows then.
+  //
+  // Only a stop SEEN happening counts: a change to "not running" after the run was running,
+  // starting from what the row itself says (running). The status the manager holds when the
+  // watch starts is not read: it may be left from an earlier visit (the previous epoch's
+  // waiting_trigger) and says nothing about the row. And a list endpoint lagging one read
+  // behind must not turn every later store update of a stopped run into a request.
+  //
+  // The list WATCHES the manager rather than subscribing to it: it does not render the run,
+  // so it must not count as the surface showing it (which would swallow the re-read a
+  // surface showing the run later is owed).
+  const runningRowIds = displayRuns
+    .filter(run => run.runId && mapRunStatus(getRunDisplayStatus(run.status, run.metadata)) === 'running')
+    .map(run => run.runId as string);
+  const runningRowKey = runningRowIds.join(',');
+  useEffect(() => {
+    const unsubscribes = runningRowKey.split(',')
+      .filter(runId => runId && hasWorkflowRunManager(runId))
+      .map(runId => {
+        let wasRunning = true; // the row says so
+        return getWorkflowRunManager(runId).watch((state) => {
+          const running = state.runStatus === 'running';
+          if (wasRunning && !running && state.rawRunState) void refreshLoadedRuns();
+          wasRunning = running;
+        });
+      });
+    return () => unsubscribes.forEach(unsubscribe => unsubscribe());
+  }, [runningRowKey, refreshLoadedRuns]);
+
+  // Status changes published while the socket was down never reached any manager.
+  useWsReconnected(() => { void refreshLoadedRuns(); });
 
   /**
    * Coming back up from a run: scroll to its row and flash it, so the user sees

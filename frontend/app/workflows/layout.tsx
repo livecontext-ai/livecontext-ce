@@ -8,6 +8,7 @@ import CloudLinkPlanRequiredModal from '@/components/billing/CloudLinkPlanRequir
 import AgentErrorModal from '@/components/billing/AgentErrorModal';
 import InsufficientCreditsModal from '@/components/billing/InsufficientCreditsModal';
 import AccountRestoreModal from '@/components/auth/AccountRestoreModal';
+import RealtimeConnectionNotice from '@/components/app/RealtimeConnectionNotice';
 import { WorkflowLayoutDirectionProvider } from '@/contexts/WorkflowLayoutDirectionContext';
 import { InspectorOpenModeProvider } from '@/contexts/InspectorOpenModeContext';
 import DisplayPreferencesGate from '@/components/lifecycle/DisplayPreferencesGate';
@@ -58,6 +59,8 @@ export default async function WorkflowsLayout({
             refused here too, and without this listener the restore interstitial never appears,
             leaving them in an app where nothing loads and no path leads anywhere. */}
         <AccountRestoreModal />
+        {/* The standalone builder watches runs live too: say so when those updates are down. */}
+        <RealtimeConnectionNotice />
         </DisplayPreferencesGate>
         </InspectorOpenModeProvider>
       </WorkflowLayoutDirectionProvider>

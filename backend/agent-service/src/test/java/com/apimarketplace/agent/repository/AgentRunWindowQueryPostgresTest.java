@@ -49,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * dropping an env block.
  *
  * <p><b>It builds its tables in a schema of its OWN</b>, not in {@code agent}. The
- * scratch database is shared by every Postgres test in the {@code backend-targeted} job,
+ * scratch database is shared by every Postgres test in a {@code backend-tests} shard,
  * and two of them also live in the {@code agent} schema. The first version of this class
  * created {@code agent.agents} with {@code tenant_id}/{@code name} NOT NULL, and
  * {@code AgentMemoryQueriesPostgresTest} - which runs later in the same job and does

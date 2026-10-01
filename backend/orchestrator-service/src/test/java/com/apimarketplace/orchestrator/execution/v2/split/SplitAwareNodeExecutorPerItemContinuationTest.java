@@ -29,6 +29,7 @@ import java.util.concurrent.Executors;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -237,6 +238,8 @@ class SplitAwareNodeExecutorPerItemContinuationTest {
                 any(ExecutionContext.class));
             verify(completionService, never()).emitNodeComplete(
                 any(), any(), any(), any(), anyInt(), any());
+            // The node-level mark belongs to the continuation SEAL, never to one walk.
+            verify(completionService, never()).recordSplitOutcome(anyString(), any(), anyString(), anyInt(), anyLong(), anyLong());
         }
     }
 
@@ -397,7 +400,7 @@ class SplitAwareNodeExecutorPerItemContinuationTest {
     class DefaultDispositionRegression {
 
         @Test
-        @DisplayName("NONE never consults findTerminalItemIndicesByEpoch and persists via the plain emitNodeComplete")
+        @DisplayName("NONE never consults findTerminalItemIndicesByEpoch and, on the step-by-step path, writes the node-level mark itself once at the end (a continuation walk leaves it to the seal)")
         void noneDispositionKeepsPlainPersistPathAndNoExclusionQuery() {
             TestNode node = directSplitSuccessor("mcp:step1");
             stubSplitContext("mcp:step1", List.of("a", "b"));
@@ -408,10 +411,13 @@ class SplitAwareNodeExecutorPerItemContinuationTest {
             assertThat(result.status()).isEqualTo(NodeStatus.COMPLETED);
             assertThat(node.getExecuteCount()).isEqualTo(2);
             verify(repo, never()).findTerminalItemIndicesByEpoch(anyString(), anyString(), anyInt());
-            verify(completionService, times(2)).emitNodeComplete(
+            // No traverser = the step-by-step fan-out: items per item, then ONE node-level
+            // aggregate from the fan-out's outcome. That aggregate is what a continuation walk never writes.
+            verify(completionService, times(2)).emitNodeCompletePerItem(
                 eq(execution), eq(node), any(NodeExecutionResult.class), isNull(), anyInt(),
                 any(ExecutionContext.class));
-            verify(completionService, never()).emitNodeCompletePerItem(
+            verify(completionService, times(1)).recordSplitOutcome(eq("run1"), any(), eq("mcp:step1"), anyInt(), eq(2L), eq(0L));
+            verify(completionService, never()).emitNodeComplete(
                 any(), any(), any(), any(), anyInt(), any());
             assertThat(result.metadata()).doesNotContainKey("per_item_continuation");
         }
@@ -428,7 +434,9 @@ class SplitAwareNodeExecutorPerItemContinuationTest {
             assertThat(result.status()).isEqualTo(NodeStatus.COMPLETED);
             assertThat(node.getExecuteCount()).isEqualTo(2);
             verify(repo, never()).findTerminalItemIndicesByEpoch(anyString(), anyString(), anyInt());
-            verify(completionService, never()).emitNodeCompletePerItem(
+            // Same persistence as NONE: per item, plus the one node-level aggregate.
+            verify(completionService, times(1)).recordSplitOutcome(eq("run1"), any(), eq("mcp:step1"), anyInt(), eq(2L), eq(0L));
+            verify(completionService, never()).emitNodeComplete(
                 any(), any(), any(), any(), anyInt(), any());
             assertThat(result.metadata()).doesNotContainKey("per_item_continuation");
         }

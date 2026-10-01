@@ -290,10 +290,6 @@ public class CatalogV1Controller {
             //     choice refuse the call instead of quietly using the default key.
             com.apimarketplace.catalog.service.http.CredentialModeContext.setSelectedCredentialName(safeRequest.getSelectedCredentialName());
             com.apimarketplace.catalog.service.http.CredentialModeContext.setSelectionStrict(safeRequest.getCredentialSelectionStrict());
-            // The caller's own retry budget for this call, and the counter the execution path
-            // writes back into. Cleared in the same finally as the credential context.
-            com.apimarketplace.catalog.service.http.ProviderRetryContext.begin(
-                    safeRequest.getProviderRetryMaxWaitSeconds());
             // Refused HERE and not only where the choice is read, because the branches
             // that read it are not the only ones a caller can reach. The agentic
             // branch (no explicit source) and the platform branch never consult the
@@ -407,7 +403,6 @@ public class CatalogV1Controller {
                     ));
         } finally {
             com.apimarketplace.catalog.service.http.CredentialModeContext.clear();
-            com.apimarketplace.catalog.service.http.ProviderRetryContext.clear();
         }
     }
 

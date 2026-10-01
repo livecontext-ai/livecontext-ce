@@ -252,6 +252,15 @@ public class StorageService implements StorageOperations {
             resolvedParentFolderId = null;
         }
 
+        // A workflow id that names no workflow (an ad-hoc node run, a file tool called outside any
+        // workflow) would file the row under a folder the Files browser can never resolve, so the
+        // file would exist and be invisible. It goes to the root instead, like any other upload.
+        if (workflowId != null && !WorkflowFileScope.isWorkflowScoped(workflowId, runId)) {
+            logger.info("Filing S3 file at root: workflowId={} runId={} is not a workflow run", workflowId, runId);
+            workflowId = null;
+            runId = null;
+        }
+
         StorageEntity storage = new StorageEntity();
         storage.setTenantId(tenantId);
         storage.setOrganizationId(organizationId);
@@ -301,7 +310,9 @@ public class StorageService implements StorageOperations {
     @Transactional
     public int adoptRunContext(String tenantId, Collection<UUID> ids, String workflowId, String runId,
                                String stepKey, int epoch, int spawn, Integer itemIndex) {
-        if (ids == null || ids.isEmpty() || workflowId == null || workflowId.isBlank()) {
+        if (ids == null || ids.isEmpty() || !WorkflowFileScope.isWorkflowScoped(workflowId, runId)) {
+            // Same rule as saveS3FileIndex: adopting into a run that is not a workflow run would
+            // move a visible root file into a folder the Files browser cannot show.
             return 0;
         }
         int adopted = 0;

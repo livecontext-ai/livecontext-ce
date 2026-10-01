@@ -76,23 +76,25 @@ public enum CompletionKind {
     }
 
     /**
-     * Persistence of the {@code workflow_step_data} row when the node executes INSIDE
-     * a loop (iteration != null). Outside loops, BOTH dispositions persist their row
-     * (for attempts, subject to v6-unique-index dedup: only the FIRST failed attempt
-     * of a logical execution actually lands).
+     * Persistence of the {@code workflow_step_data} row. Only the TERMINAL outcome has one:
+     * a non-final attempt is reported on the WS stream only, in a loop or not.
      *
-     * <p><b>WHY attempts skip it in loops</b> (2026-06-10 audit item 4): loop-history
-     * reconstruction reads the per-iteration rows, and the v6 unique index
-     * ({@code …, iteration, item_index, epoch, spawn, status}) admits ONE FAILED row
-     * per logical execution. If an attempt row claimed the iteration's FAILED slot,
-     * the iteration's TERMINAL row (carrying {@code policy_attempt=N/N} and the final
-     * error) would be silently ON-CONFLICT-dropped and the DB would record
-     * "attempt 1/N" as the iteration's terminal state. Loop attempts are therefore
-     * WS-only; the terminal row stays authoritative, and its
-     * {@code policy_attempt}/{@code policy_max_attempts} annotation records how many
-     * attempts the iteration consumed.
+     * <p><b>WHY attempts never persist a row:</b> the v6 unique index
+     * ({@code …, iteration, item_index, epoch, spawn, status}) admits ONE FAILED row per
+     * logical execution. An attempt row would claim it, and then:
+     * <ul>
+     *   <li>the TERMINAL failure's row (carrying {@code policy_attempt=N/N}, the final error
+     *       and the {@code policy_continue_on_failure} flag that STEP_BY_STEP readiness and
+     *       split routing read back from the row) is ON-CONFLICT-dropped, so the database
+     *       records "attempt 1/N" as the node's outcome and a continued failure stops its
+     *       successors (2026-06-10 audit item 4 found this for loops first);</li>
+     *   <li>a retry-then-success keeps that FAILED row beside its COMPLETED one, which a
+     *       row count (the split aggregate at seal) reads as a partial failure.</li>
+     * </ul>
+     * The terminal row stays authoritative; its {@code policy_attempt}/{@code policy_max_attempts}
+     * annotation records how many attempts the execution consumed.
      */
-    public boolean persistsRowInLoopContext() {
+    public boolean persistsRow() {
         return this == TERMINAL;
     }
 

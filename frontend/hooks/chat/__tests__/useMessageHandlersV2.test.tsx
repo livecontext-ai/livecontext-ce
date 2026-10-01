@@ -623,6 +623,195 @@ describe('useMessageHandlersV2 - onStreamComplete stale-conversation guard', () 
     });
   });
 
+  describe('a live stream error', () => {
+    it('re-reads the saved thread silently, since the reply can be saved despite the error', async () => {
+      // Pre-fix the page treated `error` as final and never re-read: a reply persisted by a
+      // fallback (or whose `done` the socket lost) stayed invisible until a manual reload.
+      const hookResult = renderHook(
+        (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+        { initialProps: defaultOptions({ inputValue: 'hello' }) },
+      );
+      await act(async () => {
+        await hookResult.result.current.handleSendMessage('hello');
+      });
+      hookResult.rerender(defaultOptions({ currentConversationId: 'conv-a' }));
+
+      await act(async () => {
+        capturedCallbacks.onError({ message: 'bridge link failed', retryable: true }, 'conv-a');
+      });
+
+      expect(loadMessages).toHaveBeenCalledWith('conv-a', undefined, { silent: true });
+      // The route is NOT changed on an error: the turn may still be going on.
+      expect(routerReplaceMock).not.toHaveBeenCalled();
+    });
+
+    it('does not re-read when the send itself was refused (no conversation id: nothing was saved)', async () => {
+      const hookResult = renderHook(
+        (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+        { initialProps: defaultOptions({ inputValue: 'hello' }) },
+      );
+      await act(async () => {
+        await hookResult.result.current.handleSendMessage('hello');
+      });
+
+      await act(async () => {
+        capturedCallbacks.onError({ message: 'Failed to send message', retryable: true });
+      });
+
+      expect(loadMessages).not.toHaveBeenCalled();
+    });
+
+    it('does not re-read a conversation the reader has already left', async () => {
+      const hookResult = renderHook(
+        (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+        { initialProps: defaultOptions({ inputValue: 'hello' }) },
+      );
+      await act(async () => {
+        await hookResult.result.current.handleSendMessage('hello');
+      });
+      hookResult.rerender(defaultOptions({ currentConversationId: 'conv-b' }));
+
+      await act(async () => {
+        capturedCallbacks.onError({ message: 'late failure', retryable: false }, 'conv-a');
+      });
+
+      expect(loadMessages).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the address of a conversation started here', () => {
+    // Next hooks replaceState / pushState on the history OBJECT to drive its router; a call
+    // through them is a route change, which remounted the chat and dropped the live stream
+    // (2c8524b39f). These instance-level spies stand in for that hook, and their presence as
+    // OWN properties is what the early move checks before relying on the browser's method.
+    const nextState = { __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: { tree: 'app/chat' } };
+    let routedReplaceState: ReturnType<typeof vi.fn>;
+    let routedPushState: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      History.prototype.replaceState.call(window.history, nextState, '', '/app/chat');
+      routedReplaceState = vi.fn();
+      routedPushState = vi.fn();
+      Object.assign(window.history, { replaceState: routedReplaceState, pushState: routedPushState });
+    });
+
+    afterEach(() => {
+      delete (window.history as unknown as Record<string, unknown>).replaceState;
+      delete (window.history as unknown as Record<string, unknown>).pushState;
+    });
+
+    async function sendFirstMessage(pathname = '/app/chat') {
+      currentPathname = pathname;
+      const hookResult = renderHook(
+        (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+        { initialProps: defaultOptions({ inputValue: 'hello' }) },
+      );
+      await act(async () => {
+        await hookResult.result.current.handleSendMessage('hello');
+      });
+      // The page commits the conversation onConversationCreated handed it.
+      hookResult.rerender(defaultOptions({ currentConversationId: 'conv-a' }));
+      return hookResult;
+    }
+
+    it('moves to /app/c/{id} as soon as the conversation exists, mid-stream, without routing', async () => {
+      // Pre-fix the address only moved at the END of the reply: a first message whose turn
+      // errored, or a reload in the middle of it, reopened an empty new chat.
+      await sendFirstMessage('/fr/app/chat');
+
+      expect(window.location.pathname).toBe('/fr/app/c/conv-a');
+      // Nothing that would route (and remount the page and its stream) was called.
+      expect(routedReplaceState).not.toHaveBeenCalled();
+      expect(routedPushState).not.toHaveBeenCalled();
+      expect(routerReplaceMock).not.toHaveBeenCalled();
+    });
+
+    it('keeps the moved address through an error, and routes for real once the errored first turn has settled', async () => {
+      // The error alone does not route (the turn may go on). Once the server confirms it,
+      // StreamingContext reports the turn over through onStreamComplete (as for a stopped
+      // turn), and the route follows like a completed turn's, so the history entry gets
+      // Next's own state instead of keeping the address-only one (Back/Forward would reload).
+      await sendFirstMessage();
+      await act(async () => {
+        capturedCallbacks.onError({ message: 'bridge link failed', retryable: true }, 'conv-a');
+      });
+      expect(window.location.pathname).toBe('/app/c/conv-a');
+      expect(routerReplaceMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        capturedCallbacks.onStreamComplete('conv-a', '', 'gpt-4');
+      });
+      await waitFor(() =>
+        expect(routerReplaceMock).toHaveBeenCalledWith('/app/c/conv-a', { scroll: false }));
+    });
+
+    it('puts the address and Next\'s own history state back when "New chat" resets in place', async () => {
+      // The sidebar resets the conversation without navigating when the router is already on
+      // /app/chat, so the address must follow it back rather than keep naming the old one.
+      const hookResult = await sendFirstMessage();
+      expect(window.location.pathname).toBe('/app/c/conv-a');
+
+      hookResult.rerender(defaultOptions({ currentConversationId: null }));
+
+      expect(window.location.pathname).toBe('/app/chat');
+      expect(window.history.state).toEqual(nextState);
+    });
+
+    it('never writes a conversation it did not create (the shared context lags on arrival at /app/chat)', async () => {
+      // Coming from /app/c/old to /app/chat, the context still names the old conversation for a
+      // render before it is reset: writing it would point the new chat's address at it.
+      renderHook(
+        (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+        { initialProps: defaultOptions({ currentConversationId: 'conv-old' }) },
+      );
+
+      expect(window.location.pathname).toBe('/app/chat');
+      expect(window.history.state).toEqual(nextState);
+    });
+
+    it('leaves the address alone once the router is off the new-chat route', async () => {
+      await sendFirstMessage('/app/c/conv-a');
+
+      expect(window.location.pathname).toBe('/app/chat');
+      expect(window.history.state).toEqual(nextState);
+    });
+
+    it('skips the early move when the router hook of Next is not where it is expected, and still routes at the end', async () => {
+      // The browser's replaceState is only known to be unhooked while Next's hook is an OWN
+      // property of window.history. Without that, writing the address could route mid-stream.
+      delete (window.history as unknown as Record<string, unknown>).replaceState;
+      delete (window.history as unknown as Record<string, unknown>).pushState;
+
+      await sendFirstMessage();
+
+      expect(window.location.pathname).toBe('/app/chat');
+      expect(window.history.state).toEqual(nextState);
+      await act(async () => {
+        capturedCallbacks.onStreamComplete('conv-a');
+      });
+      await waitFor(() =>
+        expect(routerReplaceMock).toHaveBeenCalledWith('/app/c/conv-a', { scroll: false }));
+    });
+
+    it('moves the address again after a router action mid-stream wrote the new-chat address back', async () => {
+      // A router.refresh (any router action) makes Next rewrite the entry with the route's own
+      // address; the next render of the reply puts the conversation's address back.
+      const hookResult = await sendFirstMessage();
+      expect(window.location.pathname).toBe('/app/c/conv-a');
+      const rewritten = { __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: { tree: 'app/chat', refreshed: true } };
+      History.prototype.replaceState.call(window.history, rewritten, '', '/app/chat');
+
+      hookResult.rerender(defaultOptions({ currentConversationId: 'conv-a' }));
+
+      expect(window.location.pathname).toBe('/app/c/conv-a');
+      expect(routedReplaceState).not.toHaveBeenCalled();
+      // And "New chat" in place now puts back Next's NEWER entry, not the one from before the refresh.
+      hookResult.rerender(defaultOptions({ currentConversationId: null }));
+      expect(window.location.pathname).toBe('/app/chat');
+      expect(window.history.state).toEqual(rewritten);
+    });
+  });
+
   it('releases the starting bridge when the send POST itself throws', async () => {
     sendMessageMock.mockImplementationOnce(async () => {
       throw new Error('network down');

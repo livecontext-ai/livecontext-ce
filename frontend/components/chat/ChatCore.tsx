@@ -363,8 +363,19 @@ export function ChatCore({
   // The stream data (with visualizations) stays visible until cleared
   const hasStreamingData = streamContent || streamingToolActivities.length > 0;
   const hasAdditionalActivities = additionalToolActivities.length > 0;
+  // An errored turn keeps what it streamed on screen: the error may not be its end (a fallback
+  // retries the same stream after an `error`), and hiding it left the reader with nothing. Only
+  // when it streamed something real (text, or activity other than the error marker itself): a
+  // turn that failed before producing anything stays explained by the error modal alone, as
+  // before, instead of leaving an "Error" line in the thread. And only until the saved history
+  // holds a reply for it (its last message is the assistant's): from then on the saved row is
+  // the answer and the partial would sit beside it.
+  const erroredTurnStreamedSomething = !!streamContent
+    || streamingToolActivities.some(a => a.toolName !== '_system_error');
+  const erroredTurnStillShown = streamStatus === 'error' && erroredTurnStreamedSomething
+    && messages[messages.length - 1]?.role !== 'assistant';
   const shouldShowStreamingContent = (hasStreamingData &&
-    (streamStatus === 'streaming' || streamStatus === 'completed' || streamStatus === 'stopped'))
+    (streamStatus === 'streaming' || streamStatus === 'completed' || streamStatus === 'stopped' || erroredTurnStillShown))
     || hasAdditionalActivities;
 
   // Check if streaming content matches the last message (to avoid duplicates)
@@ -443,6 +454,32 @@ export function ChatCore({
     userScrolledUpRef.current = false;
     container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
   }, []);
+
+  // A card the agent is waiting on is rendered below the last message, and nothing else
+  // scrolls when one appears: in a narrow side panel it landed out of view and the agent just
+  // looked stuck. Bring each NEW card into view, even for a reader who had scrolled up, since
+  // the turn cannot go on until someone answers it. Keyed by card identity, so a re-render
+  // of cards already seen never moves the page.
+  const seenCardKeysRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const keys = [
+      ...pendingServiceApprovals.map(a => serviceApprovalKey(a.services, a.needsAttention)),
+      ...pendingToolAuthorizations.map(a => toolAuthorizationKey(a.rule, a.toolCallId)),
+      ...pendingAskUserQuestions.map(q => askUserKey(q.toolCallId)),
+    ];
+    const hasNewCard = keys.some(k => !seenCardKeysRef.current.has(k));
+    keys.forEach(k => seenCardKeysRef.current.add(k));
+    if (!hasNewCard) return;
+    // After the card has laid out, so scrollHeight includes it. Not cancelled when the lists
+    // change again before the frame: that re-run sees no new key and would drop the scroll.
+    requestAnimationFrame(() => {
+      const container = messagesContainerRef.current;
+      if (!container) return;
+      // Same forced jump as a fresh user send, and it re-arms the streaming follow.
+      container.scrollTop = container.scrollHeight;
+      userScrolledUpRef.current = false;
+    });
+  }, [pendingServiceApprovals, pendingToolAuthorizations, pendingAskUserQuestions]);
 
   // Streaming + user-send auto-scroll. The initial anchor is handled by
   // useAnchorScrollToBottom above; this effect is only for new chunks/messages.
@@ -665,21 +702,54 @@ export function ChatCore({
       blocking: Boolean(pending?.blocking),
     });
 
+    // "Don't ask again" also answers the other cards on screen. A HELD sibling is released by
+    // the backend itself once `conversationWide` is recorded (that also covers a card this
+    // browser has not received yet), so here it only leaves the screen. A card with no hold
+    // (rebuilt after a reload) has nothing to release: its pending action is cleared and it
+    // needs the resume turn, which runs with the conversation-wide grant.
+    // application:acquire stays, because approving it means the USER installs.
+    let siblingsAnswered = false;
+    const answerSiblings = async (): Promise<boolean> => {
+      if (siblingsAnswered) return false;
+      siblingsAnswered = true;
+      const siblings = pendingToolAuthorizations.filter(a =>
+        toolAuthorizationKey(a.rule, a.toolCallId) !== key && a.rule !== 'application:acquire');
+      let needsResume = false;
+      await Promise.all(siblings.map(async (sibling) => {
+        const siblingKey = toolAuthorizationKey(sibling.rule, sibling.toolCallId);
+        dismissKey(siblingKey);
+        streaming.clearToolAuthorization(conversationId, siblingKey);
+        if (sibling.blocking && sibling.gateKey) return;
+        needsResume = true;
+        // conversationWide, so no one-shot grant is written: the persisted "*" runs it, and a
+        // one-shot grant would survive the user switching the toggle back off.
+        await conversationApi.approveToolAuthorization(conversationId, sibling.rule, false, undefined, true)
+          .catch(() => {});
+      }));
+      return needsResume;
+    };
+
     if (blanket) {
-      // "Ne plus demander dans cette conversation" → persist; backend turns this into a
-      // "*" wildcard so the gate stops firing for the rest of the conversation.
-      //
-      // It takes effect from the NEXT turn, not this one: the wildcard is read into the
-      // turn's credentials when the turn starts, and a released call resumes inside a turn
-      // that started before the box was ticked. So a second sensitive call later in this
-      // same turn still raises its own card. That is a visible consequence of resolving
-      // permission in place rather than restarting the turn, and it is the safe direction:
-      // the alternative would be applying a grant to calls the user had not yet seen.
+      // "Ne plus demander dans cette conversation". The approve call sends
+      // `conversationWide`, which the backend persists AND applies to the turn that is running
+      // now (a released call resumes inside a turn whose grants were read before the box was
+      // ticked, so without it the next sensitive call of this turn raised a card again). This
+      // local update keeps the composer's toggle in sync.
       updateChatConfig({ autoAuthorizeTools: true });
     }
 
     // application:acquire → open the marketplace install modal; resume happens on success.
     if (rule === 'application:acquire' && applicationId) {
+      if (blanket) {
+        // The install itself happens later, in the modal, but "don't ask again" applies now:
+        // the other held calls of this turn must not keep waiting on the user. Only once the
+        // backend has recorded it: a held sibling hidden without that would hold to its
+        // deadline with nothing left to click.
+        const recorded = await conversationApi
+          .approveToolAuthorization(conversationId, rule, false, undefined, true)
+          .then(() => true, () => false);
+        if (recorded) await answerSiblings();
+      }
       try {
         const publication = await publicationService.getPublicationById(applicationId);
         installSucceededRef.current = false;
@@ -693,8 +763,10 @@ export function ChatCore({
     // Grant once so the resume turn's now-authorized call passes the gate without re-prompting.
     // The toolCallId also releases the held call, when there is one.
     let released = false;
+    let recorded = false;
     try {
-      released = await conversationApi.approveToolAuthorization(conversationId, rule, false, gateKey);
+      released = await conversationApi.approveToolAuthorization(conversationId, rule, false, gateKey, blanket);
+      recorded = true;
     } catch {
       // Non-fatal: the backend still has the pending action; the user can retry.
     }
@@ -703,7 +775,9 @@ export function ChatCore({
       // one-shot consumed by the freshly-executed application card.
       useAppRunAutoOpenStore.getState().arm();
     }
-    if (gateKey && released) {
+    // Siblings only once "don't ask again" is recorded (see the install path above).
+    const siblingNeedsResume = blanket && recorded ? await answerSiblings() : false;
+    if (gateKey && released && !siblingNeedsResume) {
       // The released call runs inside the turn that is still open - a resume message here
       // would queue a redundant second turn. Both halves are required: a card that never
       // claimed a hold has nothing to release, and a card whose hold already timed out

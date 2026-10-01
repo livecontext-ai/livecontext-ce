@@ -227,6 +227,22 @@ describe('RunSummaryBar - which epoch the bar says you are on', () => {
     expect((document.querySelector('[data-run-epoch-chip]') as HTMLElement).getAttribute('data-epoch-shown')).toBe('7');
   });
 
+  it('never re-shapes the reserved "All epochs" digits when an epoch is picked (the chip moved by 1px)', () => {
+    // tabular-nums on the chip is inherited by the reserved "(5)" layer, whose digits then
+    // change width with the selection: the chip resized by a pixel on "5" (CE-RUN-EPOCH-SYNC-001).
+    for (const onEpochChipClick of [undefined, vi.fn()]) {
+      for (const selectedEpoch of [null, 5]) {
+        const { unmount } = renderBar('COMPLETED', { epochCount: 5, selectedEpoch, onEpochChipClick });
+        const chip = document.querySelector('[data-run-epoch-chip]') as HTMLElement;
+        const label = chip.querySelector('[data-run-epoch-chip-label]') as HTMLElement;
+        expect(chip.className).not.toContain('tabular-nums');
+        expect(label.className).not.toContain('tabular-nums');
+        expect(label.children[0].className).not.toContain('tabular-nums');
+        unmount();
+      }
+    }
+  });
+
   it('shows the "All epochs" label itself, visible, when no epoch is picked', () => {
     renderBar('COMPLETED', { epochCount: 12, selectedEpoch: null });
     const label = document.querySelector('[data-run-epoch-chip-label]') as HTMLElement;

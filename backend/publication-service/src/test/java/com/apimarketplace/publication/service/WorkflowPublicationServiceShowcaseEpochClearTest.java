@@ -209,6 +209,28 @@ class WorkflowPublicationServiceShowcaseEpochClearTest {
     }
 
     @Test
+    @DisplayName("Bug A7: an epoch missing from the showcase run is a 400-class input error, not a 500 'empty payload'")
+    void missingEpochAtCaptureIsAnInputErrorNotAServerError() {
+        WorkflowPublicationEntity publication = publicationWithEpoch(2);
+        publication.setDisplayMode(DisplayMode.INTERFACE);
+        publication.setShowcaseRunId("run-same");
+        publication.setShowcaseSnapshot(showcaseSnapshotWithEpochs(2));
+        stubUpdateWithoutSave(publication);
+        when(orchestratorClient.validateShowcaseRun("run-same", TENANT_ID, null))
+                .thenReturn(Map.of("isStepByStep", false, "publishable", true, "status", "COMPLETED"));
+        when(orchestratorClient.captureShowcaseSnapshot("run-same", TENANT_ID, null, 7))
+                .thenThrow(new OrchestratorInternalClient.ShowcaseEpochNotFoundException("run-same", 7));
+
+        assertThatThrownBy(() -> service.updatePublicationInfo(
+                PUBLICATION_ID, TENANT_ID, null, "Updated title", "Updated description",
+                INTERFACE_ID, "run-same", null, 0, PublicationVisibility.PRIVATE, DisplayMode.INTERFACE,
+                7, false, true, Map.of(), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .isNotInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Showcase epoch 7 does not exist in run run-same");
+    }
+
+    @Test
     @DisplayName("nonexistent showcaseEpoch is rejected instead of storing an arbitrary pin")
     void nonexistentShowcaseEpochIsRejected() {
         WorkflowPublicationEntity publication = publicationWithEpoch(1);
@@ -832,7 +854,28 @@ class WorkflowPublicationServiceShowcaseEpochClearTest {
                 .thenReturn(Map.of("plan", Map.of()));
     }
 
+    @Test
+    @DisplayName("Bug A7: publishWorkflow with an epoch the run does not have fails as an input error, not a 500")
+    void publishWorkflowMissingEpochAtCaptureIsAnInputError() {
+        stubPublishWorkflowUpToCapture();
+        when(orchestratorClient.captureShowcaseSnapshot("run-publish", TENANT_ID, null, 7))
+                .thenThrow(new OrchestratorInternalClient.ShowcaseEpochNotFoundException("run-publish", 7));
+
+        assertThatThrownBy(() -> service.publishWorkflow(
+                WORKFLOW_ID, TENANT_ID, null, "Published title", "Published description",
+                INTERFACE_ID, "run-publish", null, 0, PublicationVisibility.PUBLIC, null,
+                DisplayMode.INTERFACE, 7, true, Map.of(), null))
+                .isInstanceOf(OrchestratorInternalClient.ShowcaseEpochNotFoundException.class)
+                .hasMessageContaining("Showcase epoch 7 does not exist in run run-publish");
+    }
+
     private void stubPublishWorkflow(Map<String, Object> capturedSnapshot, Integer epochFilter) {
+        stubPublishWorkflowUpToCapture();
+        when(orchestratorClient.captureShowcaseSnapshot("run-publish", TENANT_ID, null, epochFilter))
+                .thenReturn(capturedSnapshot);
+    }
+
+    private void stubPublishWorkflowUpToCapture() {
         Map<String, Object> workflowData = new HashMap<>();
         workflowData.put("tenantId", TENANT_ID);
         workflowData.put("workflowType", "WORKFLOW");
@@ -851,8 +894,6 @@ class WorkflowPublicationServiceShowcaseEpochClearTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(snapshotVersionRepository.getMaxVersion(any(UUID.class))).thenReturn(Optional.empty());
         when(orchestratorClient.getLatestPlanVersion(WORKFLOW_ID, TENANT_ID)).thenReturn(1);
-        when(orchestratorClient.captureShowcaseSnapshot("run-publish", TENANT_ID, null, epochFilter))
-                .thenReturn(capturedSnapshot);
     }
 
     private WorkflowPublicationEntity publicationWithEpoch(Integer epoch) {

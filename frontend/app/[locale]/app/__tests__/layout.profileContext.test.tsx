@@ -63,6 +63,7 @@ vi.mock('@/components/changelog/ChangelogModal', () => ({ default: nothing }));
 vi.mock('@/components/analytics/AppViewTracker', () => ({ default: nothing }));
 vi.mock('@/components/app/IncidentStrip', () => ({ default: nothing }));
 vi.mock('@/components/app/TwoFactorNudge', () => ({ default: nothing }));
+vi.mock('@/components/app/RealtimeConnectionNotice', () => ({ default: nothing }));
 
 async function renderLayout() {
   vi.resetModules();

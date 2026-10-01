@@ -10,10 +10,15 @@ import type { PublicPublicationSummary } from '@/lib/marketplace/publicPublicati
 const fetchAllPublicPublications = vi.fn();
 const fetchVerifiedPublisherHandles =
   vi.fn<(handles: Array<string | null | undefined>) => Promise<Set<string>>>();
+const fetchPartnerHandles =
+  vi.fn<(handles: Array<string | null | undefined>) => Promise<Set<string>>>();
 vi.mock('@/lib/marketplace/publicPublications', () => ({
   fetchAllPublicPublications: (...args: unknown[]) => fetchAllPublicPublications(...args),
-  fetchVerifiedPublisherHandles: (handles: Array<string | null | undefined>) =>
-    fetchVerifiedPublisherHandles(handles),
+  // The page asks for both badges in one lookup; each half is stubbed on its own here.
+  fetchPublisherBadgeHandles: async (handles: Array<string | null | undefined>) => ({
+    verified: await fetchVerifiedPublisherHandles(handles),
+    partners: await fetchPartnerHandles(handles),
+  }),
   fetchMarketplacePage: vi.fn(),
 }));
 
@@ -34,11 +39,16 @@ vi.mock('@/components/seo/JsonLd', () => ({
 
 // The card has its own suite. Here it only has to prove it was rendered.
 vi.mock('../_components/PublicationCardSsr', () => ({
-  default: ({ publication, publisherVerified }: {
+  default: ({ publication, publisherVerified, publisherPartner }: {
     publication: PublicPublicationSummary;
     publisherVerified?: boolean;
+    publisherPartner?: boolean;
   }) => (
-    <article data-testid="card" data-publisher-verified={publisherVerified ? 'true' : 'false'}>
+    <article
+      data-testid="card"
+      data-publisher-verified={publisherVerified ? 'true' : 'false'}
+      data-publisher-partner={publisherPartner ? 'true' : 'false'}
+    >
       {publication.title}
     </article>
   ),
@@ -105,6 +115,8 @@ beforeEach(() => {
   fetchAllPublicPublications.mockReset();
   fetchVerifiedPublisherHandles.mockReset();
   fetchVerifiedPublisherHandles.mockResolvedValue(new Set<string>());
+  fetchPartnerHandles.mockReset();
+  fetchPartnerHandles.mockResolvedValue(new Set<string>());
 });
 
 describe('marketplace index page', () => {
@@ -226,6 +238,20 @@ describe('marketplace index page', () => {
     await renderPage();
 
     expect(screen.getByTestId('card').getAttribute('data-publisher-verified')).toBe('true');
+  });
+
+  it('gives each card its author\'s partner badge from the same lookup, independently of verified', async () => {
+    const byAda = publication(0);
+    const byLinus = { ...publication(2), publisherHandle: 'Linus', publisherName: 'Linus' };
+    fetchAllPublicPublications.mockResolvedValue({ publications: [byAda, byLinus], truncated: false });
+    fetchVerifiedPublisherHandles.mockResolvedValue(new Set(['ada']));
+    fetchPartnerHandles.mockResolvedValue(new Set(['linus']));
+
+    await renderPage();
+
+    const cards = screen.getAllByTestId('card');
+    expect(cards.map((c) => c.getAttribute('data-publisher-verified'))).toEqual(['true', 'false']);
+    expect(cards.map((c) => c.getAttribute('data-publisher-partner'))).toEqual(['false', 'true']);
   });
 
   it('warns when the walk stopped early, so a partial catalogue is never silent', async () => {

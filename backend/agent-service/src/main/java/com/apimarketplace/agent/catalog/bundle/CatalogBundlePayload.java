@@ -133,7 +133,15 @@ public final class CatalogBundlePayload {
         // CE installs even when the cloud disables it locally, FALSE the
         // reverse; NULL inherits). Resolved HERE so the signed bytes carry the
         // decision and nothing downstream needs to know the column exists.
-        putIfNotNull(row, "enabled", m.getBundleEnabled() != null ? m.getBundleEnabled() : m.getEnabled());
+        Boolean shippedEnabled = m.getBundleEnabled() != null ? m.getBundleEnabled() : m.getEnabled();
+        putIfNotNull(row, "enabled", shippedEnabled);
+        // V554: the listing decision, beside the flag it qualifies. Unlisting a model the cloud
+        // had OFF turns `enabled` back on, so without this a CE would receive it as an ordinary
+        // listed model. Emitted only when it applies (an unlisted model the bundle ships on):
+        // every other row's bytes are unchanged, and the key's absence reads "listed".
+        if (m.isUnlisted() && !Boolean.FALSE.equals(shippedEnabled)) {
+            row.put("unlisted", Boolean.TRUE);
+        }
         putIfNotNull(row, "priceInput", bigDecString(m.getPriceInput()));
         putIfNotNull(row, "priceOutput", bigDecString(m.getPriceOutput()));
         putIfNotNull(row, "rateLimitTpm", m.getRateLimitTpm());

@@ -267,6 +267,25 @@ public final class ExecutionMetadataKeys {
     public static final String POLICY_CONTINUE_ON_FAILURE = "policy_continue_on_failure";
 
     /**
+     * {@code true} on the result that ENDS a policied execution (success, exhausted budget, an
+     * early stop, an interrupted backoff). Dual-written in output and metadata. It tells a reader
+     * of the node's output which attempt ended the execution: {@code policy_attempt ==
+     * policy_max_attempts} alone cannot say so when the execution stopped early.
+     * Value: Boolean
+     */
+    public static final String POLICY_FINAL_ATTEMPT = "policy_final_attempt";
+
+    /**
+     * Why a policied execution stopped retrying before its budget ran out, on the final result
+     * (output and metadata). One of {@code permanent_refusal} (the provider refused the request
+     * itself), {@code not_rate_limited} (retryOn=rate_limit and the failure was not a rate limit)
+     * or {@code provider_wait_too_long} (the provider asked to wait longer than a node may).
+     * Absent when the execution succeeded or used its whole budget.
+     * Value: String
+     */
+    public static final String POLICY_RETRY_STOPPED = "policy_retry_stopped";
+
+    /**
      * Flag set on a FAILED attempt result produced by the per-attempt execution
      * timeout ({@code nodePolicy.timeoutMs}, enforced by
      * {@code NodePolicyRunner.callWithTimeout}). Stamped in BOTH output and
@@ -525,6 +544,52 @@ public final class ExecutionMetadataKeys {
     public static boolean isContinueOnFailure(java.util.Map<String, Object> metadata) {
         return metadata != null && Boolean.TRUE.equals(metadata.get(POLICY_CONTINUE_ON_FAILURE));
     }
+
+    /**
+     * Whether a STORED step output says traversal continues past this failure. Reads what the
+     * step-by-step path has in hand after a context rebuild: the output as persisted (the flag is
+     * re-injected there by StepPayloadService, possibly under the {@code output} envelope), or an
+     * in-memory {@code NodeExecutionResult}. Only the runner stamps the flag, on a node's own final
+     * failure; a credit or plan gate refusal never carries it, so it still stops everything below.
+     */
+    @SuppressWarnings("unchecked")
+    public static boolean isContinueOnFailureStored(Object stored) {
+        if (stored instanceof com.apimarketplace.orchestrator.execution.v2.nodes.NodeExecutionResult r) {
+            return isContinueOnFailure(r.metadata()) || isContinueOnFailure(r.output());
+        }
+        if (!(stored instanceof java.util.Map<?, ?> map)) {
+            return false;
+        }
+        java.util.Map<String, Object> m = (java.util.Map<String, Object>) map;
+        if (isContinueOnFailure(m)) {
+            return true;
+        }
+        return m.get("output") instanceof java.util.Map<?, ?> inner
+                && isContinueOnFailure((java.util.Map<String, Object>) inner);
+    }
+
+    /**
+     * The policy annotations that must survive persistence. Schema mappers rebuild a node's output
+     * from its declared fields and would drop them, so StepPayloadService re-injects them the way it
+     * re-injects the mock markers: the continuation after a failure and the attempt report both
+     * read them back after a context rebuild.
+     */
+    /**
+     * On a tool step's failed output: the code of a refusal the CATALOG answered itself, before any
+     * provider was called ({@link #CATALOG_REFUSAL_NO_CREDITS}, {@code PLAN_UPGRADE_REQUIRED},
+     * {@code CREDENTIAL_SELECTION_UNRESOLVED}, {@code TOOL_NOT_FOUND}). The same request is refused
+     * again, so a node policy does not retry it, and one for lack of credits is not continued past.
+     * Not an {@code http_status}: that field is the PROVIDER's answer, and the step row and the
+     * tool-health view read it as one.
+     */
+    public static final String CATALOG_REFUSAL = "catalog_refusal";
+
+    /** {@link #CATALOG_REFUSAL} for an account out of credits: the catalog's 402. */
+    public static final String CATALOG_REFUSAL_NO_CREDITS = "INSUFFICIENT_CREDITS";
+
+    public static final java.util.List<String> POLICY_OUTPUT_KEYS = java.util.List.of(
+            POLICY_ATTEMPT, POLICY_MAX_ATTEMPTS, POLICY_FINAL_ATTEMPT, POLICY_CONTINUE_ON_FAILURE,
+            POLICY_RETRY_STOPPED, POLICY_TIMEOUT);
 
     /**
      * Check if a FAILED result was produced by the per-attempt execution timeout

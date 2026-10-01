@@ -54,7 +54,13 @@ import java.util.Optional;
  *
  * <p><b>Tolerance rules</b>: if the incoming value is not a {@link String}
  * (e.g. the LLM already sent a real number), the coercer is a no-op - the
- * validator will still enforce type. {@code null} values inside the map are
+ * validator will still enforce type. One exception, the mirror of the
+ * {@code integer} rule: a WHOLE number sent for a {@code string} parameter
+ * becomes its decimal text (a model writes a plan version as {@code 3}, not
+ * {@code "3"}), as long as |n| <= 2^53-1. A larger one may already have lost
+ * digits on the way (a 19-digit chat id through a JavaScript bridge), so it
+ * stays as sent and the validator refuses it with a "send it as a string"
+ * message. Fractions and booleans stay as sent and are still refused. {@code null} values inside the map are
  * left as {@code null}; missing keys are not added.
  *
  * <p><b>Bail-out</b>: nested arrays-of-objects and polymorphic/oneOf schemas
@@ -114,6 +120,19 @@ public class SlimSchemaInputCoercer {
         if (rawValue == null || def.type() == null) {
             return rawValue;
         }
+        if (isSafeIntegral(rawValue) && "string".equalsIgnoreCase(def.type())) {
+            // The mirror of the integer case below: a whole number sent for a string
+            // parameter becomes its decimal text. It is how a model naturally writes an
+            // id-like number (a plan version, "3"). Without it the validator refused
+            // workflow(action='pin', version=3) with "expected type string but got
+            // Integer" although the tool reads the version either way.
+            // ONLY up to 2^53-1: past that the number may already have lost digits in a
+            // JSON/JavaScript hop (a 19-digit chat id arrives as ...800), and turning it
+            // into text would silently accept the WRONG id. Such a value is left as
+            // sent, and ToolParameterValidator refuses it asking for a string.
+            // Fractions and booleans are left alone: their text form is ambiguous.
+            return rawValue.toString();
+        }
         if (!(rawValue instanceof String s)) {
             // Real-typed value already - validator enforces type match.
             return rawValue;
@@ -135,6 +154,26 @@ public class SlimSchemaInputCoercer {
                     def.name(), type, s, e.getMessage());
             return rawValue;
         }
+    }
+
+    /** Largest integer every JSON parser (JavaScript's included) represents exactly: 2^53 - 1. */
+    public static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
+
+    static boolean isIntegral(Object value) {
+        return value instanceof Integer || value instanceof Long || value instanceof Short
+                || value instanceof Byte || value instanceof java.math.BigInteger;
+    }
+
+    /** A whole number whose text form is known to be exact: |n| <= 2^53 - 1. */
+    static boolean isSafeIntegral(Object value) {
+        if (value instanceof java.math.BigInteger big) {
+            return big.abs().compareTo(java.math.BigInteger.valueOf(MAX_SAFE_INTEGER)) <= 0;
+        }
+        if (!isIntegral(value)) {
+            return false;
+        }
+        long n = ((Number) value).longValue();
+        return n >= -MAX_SAFE_INTEGER && n <= MAX_SAFE_INTEGER;
     }
 
     private List<?> coerceArray(String s) throws JsonProcessingException {

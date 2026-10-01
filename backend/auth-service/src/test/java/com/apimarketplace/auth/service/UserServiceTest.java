@@ -67,6 +67,9 @@ class UserServiceTest {
     @Mock
     private VerifiedAccountService verifiedAccountService;
 
+    @Mock
+    private PartnerBadgeService partnerBadgeService;
+
     @Captor
     private ArgumentCaptor<User> userCaptor;
 
@@ -74,7 +77,7 @@ class UserServiceTest {
 
     @BeforeEach
     void setUp() {
-        userService = new UserService(userRepository, onboardingRepository, userProfileRepository, usernameValidator, ageValidator, storageService, deactivationMailer, verifiedAccountService);
+        userService = new UserService(userRepository, onboardingRepository, userProfileRepository, usernameValidator, ageValidator, storageService, deactivationMailer, verifiedAccountService, partnerBadgeService);
     }
 
     @Nested
@@ -1489,6 +1492,42 @@ class UserServiceTest {
             when(verifiedAccountService.isVerified(user, profile)).thenReturn(false);
 
             assertThat(userService.getPublicProfile(user).orElseThrow().verified()).isFalse();
+        }
+
+        @Test
+        @DisplayName("carries the official-partner badge, resolved from the same profile row, independently of verified")
+        void carriesThePartnerBadge() {
+            User user = createUser(7L, "alice");
+            UserOnboarding onboarding = new UserOnboarding(user, "Alice A.");
+            UserProfileEntity profile = new UserProfileEntity(7L);
+            profile.setProfileVisibility("PUBLIC");
+            when(userProfileRepository.findByUserId(7L)).thenReturn(Optional.of(profile));
+            when(onboardingRepository.findByUserId(7L)).thenReturn(Optional.of(onboarding));
+            when(usernameValidator.normalize("Alice A.")).thenReturn("alice_a");
+            when(verifiedAccountService.isVerified(user, profile)).thenReturn(false);
+            when(partnerBadgeService.partnerTier(user, profile)).thenReturn("gold");
+
+            PublicProfileDto dto = userService.getPublicProfile(user).orElseThrow();
+
+            assertThat(dto.partner()).isTrue();
+            assertThat(dto.partnerTier()).isEqualTo("gold");
+            assertThat(dto.verified()).isFalse();
+        }
+
+        @Test
+        @DisplayName("an account without the partner badge has no tier and no badge")
+        void noPartnerBadgeNoTier() {
+            User user = createUser(7L, "alice");
+            UserOnboarding onboarding = new UserOnboarding(user, "Alice A.");
+            UserProfileEntity profile = new UserProfileEntity(7L);
+            when(userProfileRepository.findByUserId(7L)).thenReturn(Optional.of(profile));
+            when(onboardingRepository.findByUserId(7L)).thenReturn(Optional.of(onboarding));
+            when(usernameValidator.normalize("Alice A.")).thenReturn("alice_a");
+
+            PublicProfileDto dto = userService.getPublicProfile(user).orElseThrow();
+
+            assertThat(dto.partner()).isFalse();
+            assertThat(dto.partnerTier()).isNull();
         }
 
         @Test

@@ -116,6 +116,48 @@ interface UseMessageHandlersV2Options {
 const isNewChatUrl = (path: string | null | undefined): boolean =>
   !!path && (path.endsWith('/app/chat') || path.endsWith('/app'));
 
+/** Marks a history entry whose address was written by {@link replaceAddressOnly}. */
+const ADDRESS_ONLY_STATE_KEY = 'livecontextAddressOnly';
+
+/**
+ * The browser's own `replaceState`, captured when this module loads, before anything can wrap
+ * it. Null outside a browser (server render).
+ */
+const nativeReplaceState: History['replaceState'] | null =
+  typeof History === 'undefined' ? null : History.prototype.replaceState;
+
+/**
+ * Whether the address can be written without routing: Next's router hook must be an OWN
+ * property of `window.history` (where Next 16.2 installs it: `window.history.replaceState =
+ * function replaceState(...)` in app-router.js), so the prototype method is still the
+ * browser's. That is an implementation detail of Next, not a documented API, so it is checked
+ * rather than assumed: if a Next upgrade moves the hook (onto the prototype, or to the
+ * Navigation API), the early move is skipped and the address moves at the end of the reply
+ * only, through router.replace, exactly as before the early move existed.
+ */
+function canReplaceAddressOnly(): boolean {
+  return nativeReplaceState !== null && Object.prototype.hasOwnProperty.call(window.history, 'replaceState');
+}
+
+/**
+ * Write the address bar WITHOUT routing.
+ *
+ * Next hooks `replaceState` on the `window.history` OBJECT to drive its router, and a route
+ * change is what remounted the chat mid-stream and dropped its live subscription (2c8524b39f,
+ * then the blank page measured on router.replace). The browser's method is untouched by that
+ * hook (see canReplaceAddressOnly, which callers check first), so calling it moves the address
+ * and nothing else: no router action, no re-render, no remount. The router keeps believing it
+ * is on the new-chat route, which is exactly what the end-of-stream sync then corrects with a
+ * real navigation.
+ *
+ * `state` defaults to an object carrying none of Next's markers. On Back/Forward to such an
+ * entry Next does not trust a route tree it never wrote there and reloads the page, which lands
+ * on the address, i.e. the conversation. A non-null object matters: Next ignores a null state.
+ */
+function replaceAddressOnly(url: string, state: unknown = { [ADDRESS_ONLY_STATE_KEY]: true }): void {
+  nativeReplaceState?.call(window.history, state, '', url);
+}
+
 export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
   const {
     currentConversationId,
@@ -159,6 +201,12 @@ export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
     pendingUrlSyncRef.current = conversationId;
     setUrlSyncNonce(nonce => nonce + 1);
   }, []);
+  // The conversation THIS page's send created, and where the address was moved for it (with
+  // the entry it replaced, to put back). Only a conversation created here moves the address:
+  // on arrival at /app/chat from a conversation, the shared context still names the old one
+  // for a render before it is reset, and that must not be written into the address bar.
+  const createdConversationRef = useRef<string | null>(null);
+  const addressMoveRef = useRef<{ conversationId: string; url: string; state: unknown } | null>(null);
 
   /**
    * The end-of-stream reconciliation, with one retry.
@@ -248,6 +296,46 @@ export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
     // is kept because it is the only option here that leaves the router's own state correct.
     router.replace(`${localePrefix}/app/c/${conversationId}`, { scroll: false });
   }, [urlSyncNonce, pathname, router]);
+
+  // The ADDRESS follows a conversation created here from the moment its id is known; the ROUTE
+  // only moves once the reply is saved (the effect above). Without this, a first message whose
+  // turn errored, or a reload in the middle of the reply, left the reader on /app/chat, and
+  // reloading opened an empty new chat although the reply existed. replaceAddressOnly keeps the
+  // router, the page and the live stream exactly where they are.
+  //
+  // Re-checked on EVERY render, not only when the conversation or the route changes: any router
+  // action mid-stream (a router.refresh, a server action) makes Next rewrite the entry with its
+  // own address, /app/chat, and nothing but a render tells us. A reply renders on every chunk,
+  // and the check is two string comparisons when the address is already right. Each move
+  // records the entry it replaces (after a rewrite that is Next's newer one).
+  //
+  // Mirrored back while the router still sits on the new-chat route: "New chat" clicked there
+  // resets the conversation in place without navigating, so the address returns to the entry
+  // it replaced, Next's own state included. Unless Next has rewritten the entry since (any
+  // router action does), in which case the address is already the router's.
+  useEffect(() => {
+    const moved = addressMoveRef.current;
+    if (!isNewChatUrl(pathname)) {
+      addressMoveRef.current = null;
+      return;
+    }
+    if (currentConversationId && currentConversationId === createdConversationRef.current) {
+      const localePrefix = pathname!.replace(/\/(app\/chat|app)$/, '');
+      const target = `${localePrefix}/app/c/${currentConversationId}`;
+      if (window.location.pathname === target || !canReplaceAddressOnly()) return;
+      addressMoveRef.current = {
+        conversationId: currentConversationId,
+        url: window.location.pathname + window.location.search + window.location.hash,
+        state: window.history.state,
+      };
+      replaceAddressOnly(target);
+    } else if (moved) {
+      addressMoveRef.current = null;
+      if ((window.history.state as Record<string, unknown> | null)?.[ADDRESS_ONLY_STATE_KEY]) {
+        replaceAddressOnly(moved.url, moved.state);
+      }
+    }
+  });
 
   // Store pending message helper
   const storePendingMessage = useCallback((message: string, model: string) => {
@@ -393,6 +481,7 @@ export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
             track('chat_conversation_created', { conversation_id: conversationId, agent_id: agentId || null });
 
             conversationIdRef.current = conversationId;
+            createdConversationRef.current = conversationId;
             setCurrentConversationId(conversationId);
             setContextConversationId(conversationId);
 
@@ -408,12 +497,13 @@ export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
             // the post-login pending-message replay).
             clearDraft(null);
 
-            // NOTE: the URL is intentionally NOT updated to /app/c/{id} here (mid-stream). Changing the
+            // NOTE: the ROUTE is intentionally NOT changed to /app/c/{id} here (mid-stream). Changing the
             // route segment while the stream is live - via window.history.replaceState (Next 14.1+ patches
             // it) OR router.replace - re-renders the route tree and REMOUNTS the whole app layout, tearing
             // down the StreamingProvider + its live conversation subscription (the "new conversation from
-            // Home shows empty" bug). We defer the URL sync to onStreamComplete, once the reply is fully
+            // Home shows empty" bug). We defer the route sync to onStreamComplete, once the reply is fully
             // streamed and persisted, so a remount there harmlessly reloads the finished conversation.
+            // Only the ADDRESS moves now, without routing (see the effect using replaceAddressOnly).
 
             addConversations([{
               id: conversationId,
@@ -489,7 +579,7 @@ export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
             onCompactionDone?.(conversationId, turnsCoveredCount, summarizerModel, generatedAt);
           },
 
-          onError: (error) => {
+          onError: (error, erroredConvId) => {
             conversationLogger.error('Stream error', { error });
             // Terminal safety net: the stream errored and will never go active,
             // so release the starting bridge so the composer leaves the Stop state.
@@ -501,6 +591,13 @@ export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
                 ? () => doSendMessage(currentInput, attachments, defaultSkillIds, opts)
                 : undefined,
             });
+            // A live stream's error is not proof that nothing was saved: the reply can be
+            // persisted even though this tab heard `error` (a fallback that finished the turn,
+            // a `done` the socket lost). Re-read the thread the same way a `done` does, and
+            // under the same stale guard. A refused send (no conversation id) saved nothing.
+            if (erroredConvId && conversationIdRef.current === erroredConvId) {
+              void reconcileAfterStream(erroredConvId);
+            }
           },
         }
       );

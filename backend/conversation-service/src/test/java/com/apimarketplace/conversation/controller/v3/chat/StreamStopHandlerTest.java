@@ -2,6 +2,7 @@ package com.apimarketplace.conversation.controller.v3.chat;
 
 import com.apimarketplace.agent.client.AgentClient;
 import com.apimarketplace.conversation.service.ConversationHistoryService;
+import com.apimarketplace.conversation.streaming.StreamInterruptionService;
 import com.apimarketplace.conversation.streaming.StreamMetadata;
 import com.apimarketplace.conversation.streaming.StreamPubSubService;
 import com.apimarketplace.conversation.streaming.StreamState;
@@ -100,6 +101,52 @@ class StreamStopHandlerTest {
             verify(conversationHistoryService).addMessage(
                     eq("conv-1"), eq("assistant"), eq("partial content"),
                     anyString(), anyString(), isNull(), eq("user-1"));
+        }
+
+        @Test
+        @DisplayName("regression: Stop takes the shared rescue claim BEFORE saving its partial, so a later lost-answer rescue cannot save it again")
+        void stopTakesTheRescueClaimBeforeSaving() {
+            StreamInterruptionService rescue = mock(StreamInterruptionService.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(stopHandler, "streamInterruptionService", rescue);
+            when(rescue.claimRescue("stream-1")).thenReturn(true);
+            stubActiveStreamWithPartial();
+
+            StreamStopHandler.StopResult result = stopHandler.stopStream("user-1", "conv-1");
+
+            assertThat(result.savedPartialContent()).isEqualTo(1);
+            org.mockito.InOrder order = inOrder(rescue, conversationHistoryService);
+            order.verify(rescue).claimRescue("stream-1");
+            order.verify(conversationHistoryService).addMessage(
+                    eq("conv-1"), eq("assistant"), eq("partial content"),
+                    anyString(), anyString(), isNull(), eq("user-1"));
+        }
+
+        @Test
+        @DisplayName("another saver already holds the claim: Stop saves nothing, but still stops the stream, sets the cancel key and tells the UI")
+        void claimHeldElsewhereSavesNothingButStillStops() {
+            StreamInterruptionService rescue = mock(StreamInterruptionService.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(stopHandler, "streamInterruptionService", rescue);
+            when(rescue.claimRescue("stream-1")).thenReturn(false);
+            stubActiveStreamWithPartial();
+
+            StreamStopHandler.StopResult result = stopHandler.stopStream("user-1", "conv-1");
+
+            assertThat(result.success()).isTrue();
+            assertThat(result.savedPartialContent()).isZero();
+            verify(conversationHistoryService, never()).addMessage(any(), any(), any(), any(), any(), any(), any());
+            verify(stateService).stop("stream-1");
+            verify(stateService).setCancelKey("stream-1");
+            verify(pubSubService).publishStopped("stream-1", "partial content");
+        }
+
+        private void stubActiveStreamWithPartial() {
+            when(stateService.getByConversationId("conv-1")).thenReturn(Mono.just(new StreamMetadata(
+                    "stream-1", "user-1", "conv-1", "gpt-4", "openai",
+                    StreamState.STREAMING, Instant.now(), Instant.now(), 100)));
+            when(stateService.getFullContent("stream-1")).thenReturn(Mono.just("partial content"));
+            when(stateService.stop("stream-1")).thenReturn(Mono.empty());
+            when(stateService.setCancelKey("stream-1")).thenReturn(Mono.just(true));
+            when(pubSubService.publishStopped("stream-1", "partial content")).thenReturn(Mono.empty());
         }
 
         @Test

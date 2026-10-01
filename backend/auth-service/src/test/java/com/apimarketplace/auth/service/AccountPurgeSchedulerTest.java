@@ -184,4 +184,25 @@ class AccountPurgeSchedulerTest {
         assertThat(lock).as("@SchedulerLock on purgeExpiredAccounts").isNotNull();
         assertThat(lock.name()).isEqualTo("account_purge");
     }
+
+    @Test
+    @DisplayName("purgeAccount (the immediate path) lets a failure through instead of swallowing it")
+    void purgeAccountPropagatesFailure() {
+        User u = user(7L, LocalDateTime.now(), null);
+        when(purgeService.purgeUser(7L)).thenThrow(new IllegalStateException("statement failed"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> scheduler.purgeAccount(u))
+                .hasMessageContaining("statement failed");
+        verify(mailer, never()).sendPurgeConfirmationEmail(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("purgeAccount confirms the deletion by e-mail, like the nightly pass")
+    void purgeAccountConfirmsByMail() {
+        User u = user(8L, LocalDateTime.now(), null);
+        when(purgeService.purgeUser(8L)).thenReturn(true);
+
+        assertThat(scheduler.purgeAccount(u)).isTrue();
+        verify(mailer).sendPurgeConfirmationEmail(eq("user8@test.local"), eq("User8"), any());
+    }
 }

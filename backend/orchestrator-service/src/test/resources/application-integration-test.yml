@@ -6,7 +6,15 @@ spring:
   application:
     name: orchestrator-service-integration-test
   datasource:
-    url: jdbc:h2:mem:integrationdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL;INIT=CREATE SCHEMA IF NOT EXISTS orchestrator\;CREATE SCHEMA IF NOT EXISTS storage\;SET SCHEMA orchestrator
+    # One in-memory database PER Spring context (${random.uuid} is resolved once, when the
+    # context binds its DataSource). Several contexts use this profile in one surefire JVM:
+    # the cached @DataJpaIntegrationTest slice, the cached @IntegrationTest context and the
+    # @DirtiesContext @SpringBootTest classes. With a single shared name (and
+    # DB_CLOSE_DELAY=-1 keeping it alive), closing ANY of them ran Hibernate's create-drop
+    # DROP on every table under the still-cached contexts, so whichever repository test ran
+    # after a dirtied context failed with 'Table "WORKFLOWS" not found' (order-dependent,
+    # green when run alone).
+    url: jdbc:h2:mem:integrationdb-${random.uuid};DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL;INIT=CREATE SCHEMA IF NOT EXISTS orchestrator\;CREATE SCHEMA IF NOT EXISTS storage\;SET SCHEMA orchestrator
     driver-class-name: org.h2.Driver
     username: sa
     password:

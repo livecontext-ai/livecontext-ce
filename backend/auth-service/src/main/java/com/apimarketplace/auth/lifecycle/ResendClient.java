@@ -40,6 +40,9 @@ import java.util.concurrent.TimeUnit;
  */
 public class ResendClient {
 
+    /** A response from /events/send. Network failures and 5xx may have been accepted upstream. */
+    public enum EventResult { ACCEPTED, NOT_SENT, UNKNOWN }
+
     private static final Logger log = LoggerFactory.getLogger(ResendClient.class);
 
     static final String DEFAULT_BASE_URL = "https://api.resend.com";
@@ -163,7 +166,15 @@ public class ResendClient {
      * inside a {@link #submit} task.
      */
     public boolean sendEvent(String email, String event, Map<String, Object> payload) {
-        if (!active || isBlank(email) || isBlank(event)) return false;
+        return sendEventResult(email, event, payload) == EventResult.ACCEPTED;
+    }
+
+    /**
+     * Outcome for a durable campaign step. Resend documents idempotency for /emails, not
+     * /events/send, so a timeout or 5xx must not be automatically replayed as if it failed.
+     */
+    public EventResult sendEventResult(String email, String event, Map<String, Object> payload) {
+        if (!active || isBlank(email) || isBlank(event)) return EventResult.NOT_SENT;
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("event", event);
         body.put("email", email);
@@ -173,10 +184,11 @@ public class ResendClient {
             if (!status.is2xxSuccessful()) {
                 log.warn("[lifecycle] event {} refused by Resend: HTTP {}", event, status.value());
             }
-            return status.is2xxSuccessful();
+            if (status.is2xxSuccessful()) return EventResult.ACCEPTED;
+            return status.is5xxServerError() ? EventResult.UNKNOWN : EventResult.NOT_SENT;
         } catch (Exception e) {
-            log.debug("[lifecycle] event {} failed (dropped): {}", event, e.toString());
-            return false;
+            log.warn("[lifecycle] event {} outcome unknown after transport error: {}", event, e.toString());
+            return EventResult.UNKNOWN;
         }
     }
 

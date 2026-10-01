@@ -1177,7 +1177,18 @@ public class CatalogExecuteModule implements ToolModule {
                 // standing blocker rather than the one action that lifts it. Ask the same
                 // capability the sibling branch asks, and lead with a code that says which
                 // of the two situations this is.
-                if (upstreamStatus == 401 || upstreamStatus == 403) {
+                // One reading of "is this a rate limit", shared with a workflow node's retry: 429,
+                // 503, or a 4xx that says when to come back (Retry-After, even 0) or says so in
+                // words. A 5xx is never reclassified: "try again later" is common in a 500 body.
+                Long retryAfter = retryAfterSecondsOf(metadata);
+                boolean clientError = upstreamStatus >= 400 && upstreamStatus < 500;
+                boolean saidWhen = metadata != null && metadata.get("retryAfterSeconds") instanceof Number;
+                boolean rateLimited = upstreamStatus == 429 || upstreamStatus == 503
+                        || (clientError && (saidWhen || RATE_LIMIT_WORDING.matcher(detail).find()));
+
+                // A rate-limited 403 (GitHub's secondary limit) is not an account problem, even on an
+                // account that also lacks a scope: "reconnect" would be the wrong remedy.
+                if (!rateLimited && (upstreamStatus == 401 || upstreamStatus == 403)) {
                     String integration = firstNonBlank(
                             text(resultMap, "credential_name"),
                             text(metadata, "iconSlug"));
@@ -1206,12 +1217,18 @@ public class CatalogExecuteModule implements ToolModule {
                     }
                 }
 
+                // A 429 or a 503 is a refusal where the SAME call later can be the fix, and the
+                // platform does not re-send it on its own: saying "refused the same way" would be
+                // false, and silence would invite an immediate re-call that deepens the throttle.
+                String next = rateLimited
+                        ? waitAdvice(upstreamStatus, retryAfter)
+                        : " Retrying unchanged is refused the same way.";
                 return ToolExecutionResult.failure(
                         ToolErrorCode.EXECUTION_FAILED,
                         UPSTREAM_REJECTED_CODE + ": the provider refused this call" + status
                                 + ", so it produced nothing and nothing was charged."
                                 + (detail.isEmpty() ? "" : " The provider said: " + detail)
-                                + " Retrying unchanged is refused the same way.",
+                                + next,
                         metadata);
             }
 
@@ -1219,6 +1236,57 @@ public class CatalogExecuteModule implements ToolModule {
         }
 
         return ToolExecutionResult.success(Map.of("result", parsed));
+    }
+
+    /**
+     * Mirrors the default ceiling of {@code wait(action='sleep')} (wait.max-seconds). A provider
+     * asking for longer than one pause can cover is told so, rather than handed a call that the
+     * wait tool would refuse.
+     */
+    static final long WAIT_TOOL_MAX_SECONDS = 240;
+
+    /** The shared rate-limit wording: see {@link com.apimarketplace.common.web.RateLimitSignals#WORDING}. */
+    static final java.util.regex.Pattern RATE_LIMIT_WORDING =
+            com.apimarketplace.common.web.RateLimitSignals.WORDING;
+
+    /** Seconds the provider asked to wait ({@code metadata.retryAfterSeconds}), or null. */
+    private static Long retryAfterSecondsOf(Map<String, Object> metadata) {
+        Object v = metadata == null ? null : metadata.get("retryAfterSeconds");
+        if (v instanceof Number n && n.longValue() > 0) {
+            return n.longValue();
+        }
+        return null;
+    }
+
+    /** What an agent should do after a rate limit or an outage the platform did not re-send. */
+    static String waitAdvice(int status, Long retryAfterSeconds) {
+        String why = status == 503
+                ? " The provider is temporarily unavailable and the platform did not re-send the call."
+                : " The provider is rate limiting these calls and the platform did not re-send this one.";
+        if (retryAfterSeconds == null) {
+            return why + " Wait before calling it again (for example wait(action='sleep', seconds=30)"
+                    + " when that tool is available), and do not call it again straight away or in a"
+                    + " tight loop.";
+        }
+        if (retryAfterSeconds <= WAIT_TOOL_MAX_SECONDS) {
+            return why + " It asked to wait " + retryAfterSeconds + " seconds: wait that long first"
+                    + " (wait(action='sleep', seconds=" + retryAfterSeconds + ") when that tool is"
+                    + " available), then call it once more.";
+        }
+        return why + " It asked to wait " + retryAfterSeconds + " seconds, longer than one"
+                + " wait(action='sleep') can pause (" + WAIT_TOOL_MAX_SECONDS + " seconds at most). Do not"
+                + " call it again now: tell the user it can be retried in about "
+                + humanDuration(retryAfterSeconds) + ".";
+    }
+
+    /** "5 minutes", "3 hours": the wait a person is told, rounded to the unit that reads naturally. */
+    static String humanDuration(long seconds) {
+        long minutes = Math.max(1, Math.round(seconds / 60.0));
+        if (minutes < 90) {
+            return minutes + (minutes == 1 ? " minute" : " minutes");
+        }
+        long hours = Math.round(minutes / 60.0);
+        return hours + (hours == 1 ? " hour" : " hours");
     }
 
     /**

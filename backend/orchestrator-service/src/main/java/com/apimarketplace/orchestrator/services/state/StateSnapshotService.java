@@ -1511,10 +1511,20 @@ public class StateSnapshotService
      */
     @Transactional
     public StateSnapshot.NodeCounts incrementNodeCountsOnly(String runId, String nodeId, String status, int count) {
+        return incrementNodeCountsOnly(runId, nodeId, status, count, 0L);
+    }
+
+    /**
+     * Same, with the duration of the ONE execution it counts: a split item on this path (see
+     * {@link StateSnapshot#incrementNodeCountsOnly(String, String, int, long)}).
+     */
+    @Transactional
+    public StateSnapshot.NodeCounts incrementNodeCountsOnly(String runId, String nodeId, String status, int count,
+                                                          long durationMs) {
         if (count <= 0) return StateSnapshot.NodeCounts.zero();
         return loadFreshForUpdate(runId).map(run -> {
             StateSnapshot current = parseSnapshot(run);
-            StateSnapshot updated = current.incrementNodeCountsOnly(nodeId, status, count);
+            StateSnapshot updated = current.incrementNodeCountsOnly(nodeId, status, count, durationMs);
             if (useJsonbPatch && incrementNodeCountsOnlyPatchBuilder != null) {
                 saveSnapshotPatched(run, current, updated, "incrementNodeCountsOnly",
                         versioned -> incrementNodeCountsOnlyPatchBuilder.build(current, versioned, nodeId));

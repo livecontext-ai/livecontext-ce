@@ -21,6 +21,10 @@ import ReferencePrice from '@/components/pricing/ReferencePrice';
 import { usePricingEvent } from '@/hooks/usePricingEvent';
 import TopUpModal from './TopUpModal';
 import { RewardCodeInline } from '@/components/reward/RewardCodeInline';
+import { usePersonalOffer } from '@/lib/hooks/usePersonalOffer';
+import { savePersonalOfferJourney } from '@/lib/lifecycle/personalOfferJourney';
+import { hasAttachedPersonalOfferCheckout, personalOfferCheckoutApiError, personalOfferCheckoutBlock } from '@/lib/billing/personal-offer-checkout';
+import { ApiError } from '@/lib/api/api-client';
 
 /**
  * Custom event name for triggering the insufficient credits modal.
@@ -48,6 +52,7 @@ export default function InsufficientCreditsModal() {
   const t = useTranslations('modals.insufficientCredits');
   const tPayg = useTranslations('billing.payg');
   const tBilling = useTranslations('pricing.billing');
+  const tOffer = useTranslations('reward.personalOffer');
   // The SAME message and the SAME facts the plan-comparison table quotes. A reader who
   // has just run out of credits is asking exactly the question that table answers, and
   // restating it here in different words is how two surfaces start disagreeing about
@@ -71,6 +76,9 @@ export default function InsufficientCreditsModal() {
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('yearly');
   const [creditTierIndex, setCreditTierIndex] = useState(0);
   const [processingPlanId, setProcessingPlanId] = useState<string | null>(null);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [continueWithoutOffer, setContinueWithoutOffer] = useState(false);
+  const personalOffer = usePersonalOffer(creditTierIndex, billingCycle);
 
   const creditAmount = CREDIT_TIERS[creditTierIndex];
 
@@ -100,12 +108,40 @@ export default function InsufficientCreditsModal() {
 
     setProcessingPlanId(planId);
     try {
+      setCheckoutError(null);
       const backendPlanCode = PLAN_MAPPING[planId] || planId.toUpperCase();
+      const offerBlock = personalOffer.current?.offerId && (!continueWithoutOffer || personalOffer.current.status === 'REVIEW_REQUIRED')
+        ? personalOfferCheckoutBlock(personalOffer.current.status) : null;
+      if (offerBlock) {
+        setCheckoutError(tOffer(offerBlock));
+        return;
+      }
+      if (!continueWithoutOffer && (personalOffer.isLoading || personalOffer.isError)) {
+        setCheckoutError(tOffer('verifyUnavailable'));
+        return;
+      }
+      const hasOffer = !continueWithoutOffer && (!!personalOffer.candidateCode || !!personalOffer.current?.offerId &&
+        ['AVAILABLE', 'CHECKOUT_OPEN'].includes(personalOffer.current.status));
+      const offerPlan = personalOffer.preview?.plans.find((entry) => entry.planCode === backendPlanCode);
+      if (hasOffer && (!personalOffer.preview || !offerPlan || offerPlan.status === 'UNAVAILABLE')) {
+        setCheckoutError(!personalOffer.preview ? tOffer('verifyUnavailable') : tOffer('planUnavailable'));
+        return;
+      }
+      savePersonalOfferJourney(window, {
+        planCode: backendPlanCode,
+        creditTierIndex,
+        billingCycle,
+        returnToWork: window.location.pathname.startsWith('/') ? window.location.pathname : '/app/chat',
+      });
       const result = await createSubscription({
         planCode: backendPlanCode,
         billingCycle,
         creditTierIndex: String(creditTierIndex),
+        ...(hasOffer ? { personalOfferId: personalOffer.preview?.offerId, offerVersion: personalOffer.preview?.offerVersion } : {}),
       });
+      if (hasOffer && !hasAttachedPersonalOfferCheckout(result)) {
+        throw new Error(tOffer('attachFailed'));
+      }
 
       if (result === 'FREE_PLAN_SELECTED' || result === 'SWAP_IMMEDIAT') {
         setOpen(false);
@@ -122,13 +158,12 @@ export default function InsufficientCreditsModal() {
       }
     } catch (error) {
       console.error('Error creating subscription from modal:', error);
-      // Fallback: redirect to pricing page
-      setOpen(false);
-      router.push('/app/settings/pricing');
+      const offerPaymentError = error instanceof ApiError ? personalOfferCheckoutApiError(error.code) : null;
+      setCheckoutError(offerPaymentError ? tOffer(offerPaymentError) : error instanceof Error ? error.message : tOffer('verifyUnavailable'));
     } finally {
       setProcessingPlanId(null);
     }
-  }, [createSubscription, billingCycle, creditTierIndex, router]);
+  }, [createSubscription, billingCycle, creditTierIndex, personalOffer, continueWithoutOffer, tOffer]);
 
   // Same server-resolved window as the pricing page, so the two never disagree.
   // Declared with the other hooks, ABOVE the CE early return: a hook after a
@@ -350,6 +385,18 @@ export default function InsufficientCreditsModal() {
                       creditTierIndex={creditTierIndex}
                       event={pricingEvent}
                     />
+                    {plan.id !== 'free' && billingCycle === 'yearly' && <p className="mt-2 text-sm text-theme-secondary">{tOffer('annualTotal', { amount: new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(plan.monthlyPrice * 12) })}</p>}
+                    {plan.id !== 'free' && ['AVAILABLE', 'CHECKOUT_OPEN'].includes(personalOffer.current?.status ?? '') && !continueWithoutOffer && (
+                      <div className="mt-2 text-sm text-theme-secondary">
+                        {(() => {
+                          const bonus = personalOffer.preview?.plans.find((entry) => entry.planCode === plan.id.toUpperCase());
+                          if (!bonus) return <p>{tOffer('checking')}</p>;
+                          if (bonus.status === 'ELIGIBLE' && bonus.bonusCredits > 0) return <p>{tOffer('bonus', { credits: bonus.bonusCredits.toLocaleString(locale), value: new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(bonus.paygFaceValueUsd) })}</p>;
+                          if (bonus.status === 'NO_BONUS') return <><p>{tOffer('noBonus')}</p>{personalOffer.preview?.nextEligibleMonthlyCredits != null && <p>{tOffer('nextEligible', { credits: personalOffer.preview.nextEligibleMonthlyCredits.toLocaleString(locale) })}</p>}<p>{tOffer('firstPurchaseUsed')}</p></>;
+                          return <p>{tOffer('planUnavailable')}</p>;
+                        })()}
+                      </div>
+                    )}
                   </div>
 
                   <ul className="space-y-1.5 mb-4">
@@ -393,7 +440,7 @@ export default function InsufficientCreditsModal() {
                 it lives on the pricing page now, which "View all plans" leads
                 to, so the modal states its three cards and gets out of the way. */}
             <div className="mt-4 flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
-              <RewardCodeInline />
+              <RewardCodeInline subscriptionCheckout creditTierIndex={creditTierIndex} billingCycle={billingCycle} />
               <button
                 onClick={() => { setOpen(false); router.push('/app/settings/pricing'); }}
                 className="text-xs text-theme-muted hover:text-theme-primary underline"
@@ -401,6 +448,15 @@ export default function InsufficientCreditsModal() {
                 {t('viewAllPlans')}
               </button>
             </div>
+            {(personalOffer.isError || !!personalOffer.current?.offerId && !['ALREADY_USED', 'REVIEW_REQUIRED', 'GRANTED', 'NO_BONUS', 'CLAWED_BACK'].includes(personalOffer.current.status)) && (
+              <div className="mt-3 text-center text-sm text-theme-secondary">
+                {continueWithoutOffer && <p role="alert">{tOffer('firstPurchaseUsed')}</p>}
+                <button type="button" className="underline" onClick={() => setContinueWithoutOffer((value) => !value)}>
+                  {continueWithoutOffer ? tOffer('useOffer') : tOffer('continueWithout')}
+                </button>
+              </div>
+            )}
+            {checkoutError && <p className="mt-3 text-sm text-red-600" role="alert">{checkoutError}</p>}
           </div>
         </DialogContent>
       </Dialog>

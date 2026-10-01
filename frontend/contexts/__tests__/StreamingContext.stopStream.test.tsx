@@ -81,7 +81,7 @@ vi.mock('@/lib/websocket', () => ({
   wsClient: { subscribe: (...args: unknown[]) => subscribe(...args) },
 }));
 vi.mock('@/lib/websocket/ws-client', () => ({
-  wsClient: { subscribe: (...args: unknown[]) => subscribe(...args) },
+  wsClient: { onReconnected: () => () => {}, subscribe: (...args: unknown[]) => subscribe(...args) },
 }));
 
 vi.mock('@/lib/streaming/streamHelpers', () => ({
@@ -89,6 +89,8 @@ vi.mock('@/lib/streaming/streamHelpers', () => ({
   markThinkingAsSuccess: (t: unknown) => t,
   detectStreamEventType: () => 'unknown',
   mapV2EventToV1: () => ({ type: 'unknown' }),
+  isServerStreamLive: () => false,
+  threadEndsWithReply: () => false,
   streamLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 

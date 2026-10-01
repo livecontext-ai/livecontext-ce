@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.tools.workflow.builder;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -192,6 +193,149 @@ class WorkflowBuilderModifierParametrizedTest {
         assertThat(params.get(fieldToPreserve))
                 .as("untouched field MUST survive for trigger=%s - regression in trigger params routing!", triggerType)
                 .isEqualTo(preservedValue);
+    }
+
+    @Test
+    @DisplayName("form trigger: modify stores a field's `default` as defaultValue, like add_node (2026-09-29 Gemini chat)")
+    void formModifyCanonicalizesFieldDefault() {
+        WorkflowBuilderSession session = createSession();
+        Map<String, Object> trigger = new LinkedHashMap<>();
+        trigger.put("id", "trigger:start");
+        trigger.put("type", "form");
+        trigger.put("label", "Start");
+        trigger.put("params", new LinkedHashMap<>(Map.of("formTitle", "Keep me")));
+        session.getTriggers().add(trigger);
+
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("node", "Start");
+        args.put("params", Map.of("fields", List.of(
+                Map.of("name", "theme", "type", "text", "required", true, "default", "Innovation"),
+                Map.of("name", "plain", "type", "text"))));
+
+        ToolExecutionResult result = modifier.executeModifyNode(session, args);
+        assertThat(result.success()).isTrue();
+        // What the builder canonicalized is what was asked: never reported as NOT_APPLIED.
+        assertThat(String.valueOf(result.data())).doesNotContain("NOT_APPLIED");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> params = (Map<String, Object>) session.getTriggers().get(0).get("params");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> fields = (List<Map<String, Object>>) params.get("fields");
+        assertThat(params).containsEntry("formTitle", "Keep me");
+        assertThat(fields.get(0)).containsEntry("defaultValue", "Innovation").doesNotContainKey("default");
+        assertThat(fields.get(1)).doesNotContainKeys("defaultValue", "default");
+    }
+
+    @Test
+    @DisplayName("form trigger: modify with an explicit params block canonicalizes default_value too")
+    void formModifyExplicitParamsCanonicalizesDefaultValueAlias() {
+        WorkflowBuilderSession session = createSession();
+        Map<String, Object> trigger = new LinkedHashMap<>();
+        trigger.put("id", "trigger:start");
+        trigger.put("type", "form");
+        trigger.put("label", "Start");
+        trigger.put("params", new LinkedHashMap<>(Map.of("formTitle", "Keep me")));
+        session.getTriggers().add(trigger);
+
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("node", "Start");
+        args.put("params", Map.of("params", Map.of("formTitle", "Keep me",
+                "fields", List.of(Map.of("name", "auteur", "type", "text", "default_value", "Ada")))));
+
+        ToolExecutionResult result = modifier.executeModifyNode(session, args);
+        assertThat(result.success()).isTrue();
+        // What the builder canonicalized is what was asked: never reported as NOT_APPLIED.
+        assertThat(String.valueOf(result.data())).doesNotContain("NOT_APPLIED");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> params = (Map<String, Object>) session.getTriggers().get(0).get("params");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> fields = (List<Map<String, Object>>) params.get("fields");
+        assertThat(params).containsEntry("formTitle", "Keep me");
+        assertThat(fields.get(0)).containsEntry("defaultValue", "Ada").doesNotContainKey("default_value");
+    }
+
+    @Test
+    @DisplayName("form trigger: modify gives fields add_node's shape (ids, [{id, label, value}] options, real types)")
+    void formModifyCanonicalizesOptionsIdsAndTypes() {
+        WorkflowBuilderSession session = createSession();
+        session.getTriggers().add(formTrigger());
+
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("node", "Start");
+        args.put("params", Map.of("fields", List.of(
+                Map.of("name", "tier", "type", "select", "options", List.of("free", "pro")),
+                Map.of("name", "phone", "type", "phone"))));
+
+        ToolExecutionResult result = modifier.executeModifyNode(session, args);
+        assertThat(result.success()).isTrue();
+        // What the builder canonicalized is what was asked: never reported as NOT_APPLIED.
+        assertThat(String.valueOf(result.data())).doesNotContain("NOT_APPLIED");
+
+        List<Map<String, Object>> fields = storedFields(session);
+        assertThat(fields).extracting(f -> f.get("id")).containsExactly("field-0", "field-1");
+        assertThat(fields.get(0).get("options")).isEqualTo(List.of(
+                Map.of("id", "opt-0", "label", "free", "value", "free"),
+                Map.of("id", "opt-1", "label", "pro", "value", "pro")));
+        assertThat(fields.get(1)).containsEntry("type", "tel");
+    }
+
+    @Test
+    @DisplayName("form trigger: modify refuses what add_node refuses, with add_node's message, and writes nothing")
+    void formModifyRefusesInvalidFields() {
+        WorkflowBuilderSession session = createSession();
+        session.getTriggers().add(formTrigger());
+
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("node", "Start");
+        args.put("params", Map.of("fields", List.of(
+                Map.of("name", "tier", "type", "select", "options", List.of()))));
+
+        ToolExecutionResult result = modifier.executeModifyNode(session, args);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.error()).startsWith("Form field validation failed:")
+                .contains("field 'tier': 'options' is empty");
+        assertThat(storedFields(session)).isNull();
+    }
+
+    @Test
+    @DisplayName("a non-form trigger's `fields` is never taken for form fields: not reshaped, not refused")
+    @SuppressWarnings("unchecked")
+    void nonFormTriggerFieldsUntouched() {
+        WorkflowBuilderSession session = createSession();
+        Map<String, Object> chat = new LinkedHashMap<>();
+        chat.put("id", "trigger:start");
+        chat.put("type", "chat");
+        chat.put("label", "Start");
+        chat.put("params", new LinkedHashMap<>(Map.of("chatEndpointId", "abc")));
+        session.getTriggers().add(chat);
+
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("node", "Start");
+        args.put("params", Map.of("fields", List.of(Map.of("name", "x", "type", "SELECT"))));
+
+        assertThat(modifier.executeModifyNode(session, args).success()).isTrue();
+
+        Map<String, Object> params = (Map<String, Object>) session.getTriggers().get(0).get("params");
+        Map<String, Object> field = ((List<Map<String, Object>>) params.get("fields")).get(0);
+        // No id added and no type rewritten: the form canonicalizer never ran on a chat trigger.
+        assertThat(field).doesNotContainKey("id").containsEntry("type", "SELECT");
+    }
+
+    private Map<String, Object> formTrigger() {
+        Map<String, Object> trigger = new LinkedHashMap<>();
+        trigger.put("id", "trigger:start");
+        trigger.put("type", "form");
+        trigger.put("label", "Start");
+        trigger.put("params", new LinkedHashMap<>(Map.of("formTitle", "Keep me")));
+        return trigger;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> storedFields(WorkflowBuilderSession session) {
+        Map<String, Object> params = (Map<String, Object>) session.getTriggers().get(0).get("params");
+        return (List<Map<String, Object>>) params.get("fields");
     }
 
     // ═══════════════════════════════════════════════════════════════════════

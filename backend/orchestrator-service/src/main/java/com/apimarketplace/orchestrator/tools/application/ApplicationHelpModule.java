@@ -159,7 +159,7 @@ public class ApplicationHelpModule implements ToolModule {
         g.put("run_inspection_fields", Map.of(
             "get_run_macro", "run_id, status, plan_version, execution_mode, started_at, ended_at, dags (DAG summary), epochs (list of epoch headers)",
             "get_run_epoch", "run_id, epoch, status, nodes (lightweight per-node summaries: id, label, type, status), NEXT hint",
-            "get_node_output", "run_id, epoch, node_id, label, type, output (full data), resolved_params, error. Split nodes: execution_count, items[] in list mode. With field=<dot-path>: output_field {field, content, offset, returned_bytes, original_length, truncated, NEXT}",
+            "get_node_output", "run_id, epoch, node_id, label, type, output (full data), resolved_params, error, epoch_note (only when epoch was omitted: which epoch was read, the most recent one in which the node ran). Split nodes: execution_count, items[] in list mode. With field=<dot-path>: output_field {field, content, offset, returned_bytes, original_length, truncated, NEXT}",
             "runs_list", "run_id, status, plan_version, started_at, ended_at, duration_ms, total_nodes, epoch_count (trigger fires in that run), execution_mode",
             "plan_note", "Added to get_run and get_node_output when the plan version the run used is no longer kept: node ids, labels and types then come from the current plan and may differ from what that run executed; statuses, counts and outputs are still the run's own."
         ));
@@ -231,7 +231,7 @@ public class ApplicationHelpModule implements ToolModule {
         Map<String, String> runInspection = new LinkedHashMap<>();
         runInspection.put("runs", "List execution history for an app. Params: application_id (required), limit/offset (optional). Returns paginated list of runs with status, plan_version, duration.");
         runInspection.put("get_run", "Inspect a run. Without epoch: macro overview (epochs + per-node status). With epoch=N: detailed node list for that epoch. Params: run_id (required), epoch (optional integer).");
-        runInspection.put("get_node_output", "Full output/error for one node in one epoch. Params: run_id + epoch + node_id (all required). Optional targeting: item_index, iteration, spawn (for split/loop nodes). A TEXT output field >128 KB comes back as a truncated preview + a NEXT pointer - follow it (field=<dot-path>, offset) to page the full value; max_bytes sets the window (default & cap 128 KB).");
+        runInspection.put("get_node_output", "Full output/error for one node in one epoch. Params: run_id + node_id (required), epoch (optional: omitted = the most recent epoch in which that node ran, named in epoch_note). Optional targeting: item_index, iteration, spawn (for split/loop nodes). A TEXT output field >128 KB comes back as a truncated preview + a NEXT pointer - follow it (field=<dot-path>, offset) to page the full value; max_bytes sets the window (default & cap 128 KB).");
         actions.put("run_inspection", runInspection);
 
         // Other
@@ -260,7 +260,7 @@ public class ApplicationHelpModule implements ToolModule {
         params.put("run_id", "string - Run ID (for: get_run, get_node_output, stop_run; and create to pin the showcase run). Returned by execute or runs. On create, omit to auto-pick the latest successful automatic run (COMPLETED/PARTIAL_SUCCESS/WAITING_TRIGGER). On stop_run, omit ONLY when you are an agent running inside a workflow and want to stop your own run.");
         params.put("reason", "string - Why you are stopping the run (stop_run). One sentence; recorded on the run and returned by get_run as stop_reason.");
         params.put("mode", "string - How hard to stop (stop_run): 'cancel' (default) is terminal AND suspends the schedules of the app's workflow; 'graceful' only closes the running epoch, keeps the run available for its next trigger fire and leaves the schedules alone (refused when the run is PENDING or WAITING_TRIGGER, i.e. nothing is executing yet).");
-        params.put("epoch", "integer - Epoch number (for: get_run detail, get_node_output; and create to pin the showcase epoch). On create, omit to render the latest epoch.");
+        params.put("epoch", "integer - Epoch number (for: get_run detail, get_node_output; and create to pin the showcase epoch). On create, omit to render the latest epoch. On get_node_output, omit it to read the most recent epoch in which that node ran; the response then says which one in epoch_note.");
         params.put("node_id", "string - Node ID (for: get_node_output). From get_run epoch detail response.");
         params.put("item_index", "integer - Split item index (for: get_node_output). Optional targeting.");
         params.put("iteration", "integer - Loop iteration (for: get_node_output). Optional targeting.");

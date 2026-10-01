@@ -43,6 +43,8 @@ public interface SubjectNameResolver {
     String AGENT        = "AGENT";
     /** The account's credit wallet (V528): credits running low or exhausted. */
     String BILLING      = "BILLING";
+    /** A marketplace listing (V551): a creator the user follows published a new one. */
+    String PUBLICATION  = "PUBLICATION";
 
     /**
      * Stable string discriminator matching the {@code subject_type} column

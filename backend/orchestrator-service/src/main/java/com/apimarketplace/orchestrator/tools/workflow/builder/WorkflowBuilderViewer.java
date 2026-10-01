@@ -164,7 +164,9 @@ public class WorkflowBuilderViewer {
         // Surface the node's execution policy the same way. Read back here after
         // modify(nodePolicy=...), and it is also what explains a node that took far longer than
         // its provider did, or a run that carried on past a FAILED step.
-        Object policyBlock = node.get(com.apimarketplace.orchestrator.domain.workflow.NodePolicy.JSON_KEY);
+        Object policyBlock = com.apimarketplace.orchestrator.domain.workflow.WorkflowPlanParser
+                .withoutRemovedProviderRetry(
+                        node.get(com.apimarketplace.orchestrator.domain.workflow.NodePolicy.JSON_KEY));
         if (policyBlock instanceof Map<?, ?> policyMap && !policyMap.isEmpty()) {
             result.put("nodePolicy", policyBlock);
             result.put("node_policy_hint", "Governs this node's failure behaviour on every run, editor "

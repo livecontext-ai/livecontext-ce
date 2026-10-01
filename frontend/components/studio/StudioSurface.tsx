@@ -20,6 +20,7 @@ import { StudioTurnCard } from '@/components/studio/StudioTurnCard';
 import { StudioApps } from '@/components/studio/StudioApps';
 import { GenerationHistoryList } from '@/components/generation/GenerationHistoryList';
 import { StudioDynamicTitle } from '@/components/studio/StudioDynamicTitle';
+import { ROTATING_TITLE_SLOT_CLASS } from '@/app/shared/components/WelcomeTitle';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { HomeModeSwitch } from '@/components/chat/HomeModeSwitch';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
@@ -553,7 +554,9 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
               the anchor was not enough: the chat nests the composer one padding deeper, so the studio
               drew it a row higher and flipping the switch moved the box under the reader's cursor. */}
           <div className="pt-[22vh] shrink-0 mx-auto max-w-4xl px-2 w-full">
-            <div className="text-center max-w-md mx-auto mb-8">
+            {/* The chat home's fixed-height title slot, the same constant: a title that wraps to a
+                second line must move neither composer (see ROTATING_TITLE_SLOT_CLASS). */}
+            <div className={`text-center max-w-md mx-auto mb-8 ${ROTATING_TITLE_SLOT_CLASS}`} data-testid="studio-title-slot">
               <StudioDynamicTitle />
             </div>
             <div className="w-full relative">

@@ -707,18 +707,27 @@ public class ModelCatalogService {
         Map<String, Object> bestProvider = null;
         Map<String, Object> bestModel = null;
         int bestOrder = Integer.MAX_VALUE;
-        for (Map<String, Object> provider : providers) {
-            if (!providerFilter.test(provider)) continue;
-            List<Map<String, Object>> models = (List<Map<String, Object>>) provider.get("models");
-            if (models == null) continue;
-            for (Map<String, Object> model : models) {
-                int order = model.get("displayOrder") instanceof Number n ? n.intValue() : 999;
-                if (order < bestOrder) {
-                    bestOrder = order;
-                    bestProvider = provider;
-                    bestModel = model;
+        // V554: an UNLISTED model is never the default while a listed one exists. The default
+        // is what every omitted model resolves to (a new chat, an agent created without one, a
+        // disabled model's fallback), so defaulting onto a model the admin stopped offering
+        // would put everyone back on it. Only when nothing listed is left does it qualify, so a
+        // catalogue made of unlisted models still has a default rather than none.
+        for (boolean allowUnlisted : new boolean[] {false, true}) {
+            for (Map<String, Object> provider : providers) {
+                if (!providerFilter.test(provider)) continue;
+                List<Map<String, Object>> models = (List<Map<String, Object>>) provider.get("models");
+                if (models == null) continue;
+                for (Map<String, Object> model : models) {
+                    if (!allowUnlisted && Boolean.TRUE.equals(model.get("unlisted"))) continue;
+                    int order = model.get("displayOrder") instanceof Number n ? n.intValue() : 999;
+                    if (order < bestOrder) {
+                        bestOrder = order;
+                        bestProvider = provider;
+                        bestModel = model;
+                    }
                 }
             }
+            if (bestModel != null) break;
         }
         if (bestModel != null) {
             base.put(providerKey, bestProvider.get("name"));
@@ -764,6 +773,11 @@ public class ModelCatalogService {
      *   <li>its DB override (if any) does not have {@code enabled = false}.</li>
      * </ul>
      *
+     * <p>An UNLISTED model (V554) is available: it is runnable, so validation, provider
+     * resolution and the per-model limits must keep finding it. It carries
+     * {@link AvailableModel#unlisted()} so a surface that OFFERS models (agent help, the
+     * "not available, here is what you can use" list) leaves it out.
+     *
      * <p>The returned list preserves the display order from
      * {@code getModelsWithOverrides()} so the first entry per provider is the
      * recommended default. Use {@link #isModelAvailable(String, String)} for
@@ -802,7 +816,9 @@ public class ModelCatalogService {
                 int displayOrder = m.get("displayOrder") instanceof Number n ? n.intValue() : 999;
                 String defaultReasoningEffort = (String) m.get("defaultReasoningEffort");
                 Integer maxOutputTokens = m.get("maxOutputTokens") instanceof Number n ? n.intValue() : null;
-                out.add(new AvailableModel(providerName, modelId, tier, displayOrder, defaultReasoningEffort, maxOutputTokens));
+                boolean unlisted = Boolean.TRUE.equals(m.get("unlisted"));
+                out.add(new AvailableModel(providerName, modelId, tier, displayOrder, defaultReasoningEffort,
+                        maxOutputTokens, unlisted));
             }
         }
         // Sort globally by displayOrder so the list reflects the admin's ranking,
@@ -924,7 +940,18 @@ public class ModelCatalogService {
      * and accessible from test code without extra imports.
      */
     public record AvailableModel(String provider, String modelId, String tier, int displayOrder,
-                                 String defaultReasoningEffort, Integer maxOutputTokens) {
+                                 String defaultReasoningEffort, Integer maxOutputTokens,
+                                 boolean unlisted) {
+        /**
+         * Backward-compatible 6-arg constructor (listed model). {@code unlisted} (V554) marks a
+         * model that stays runnable, so validation and routing keep accepting it, but that a
+         * LIST offered to someone choosing a model must leave out.
+         */
+        public AvailableModel(String provider, String modelId, String tier, int displayOrder,
+                              String defaultReasoningEffort, Integer maxOutputTokens) {
+            this(provider, modelId, tier, displayOrder, defaultReasoningEffort, maxOutputTokens, false);
+        }
+
         /**
          * Backward-compatible 4-arg constructor (no per-model default effort,
          * no output cap). Keeps existing call/test sites compiling unchanged.
@@ -1123,6 +1150,14 @@ public class ModelCatalogService {
         for (ModelConfigOverrideEntity o : overrides) {
             overrideMap.put(o.getProvider() + ":" + o.getModelId(), o);
         }
+        // The "new" badge (see isRecentlyAdded) is judged against the catalogue's first row,
+        // read once for the whole list so every row is measured against the same instant.
+        java.time.Instant now = java.time.Instant.now();
+        java.time.Instant catalogBaseline = overrides.stream()
+                .map(ModelConfigOverrideEntity::getCreatedAt)
+                .filter(Objects::nonNull)
+                .min(Comparator.naturalOrder())
+                .orElse(null);
 
         List<Map<String, Object>> result = new ArrayList<>();
 
@@ -1183,6 +1218,7 @@ public class ModelCatalogService {
                 if (override != null) {
                     applyOverride(entry, override);
                     applyRateLimitFields(entry, override);
+                    stampAddedAt(entry, override, catalogBaseline, now);
                 }
                 entry.put("hasOverride", override != null);
                 entry.put("isCustom", override != null && override.isCustom());
@@ -1215,6 +1251,7 @@ public class ModelCatalogService {
                 for (ModelConfigOverrideEntity custom : customs) {
                     Map<String, Object> entry = buildModelInfo(custom);
                     applyRateLimitFields(entry, custom);
+                    stampAddedAt(entry, custom, catalogBaseline, now);
                     entry.put("hasOverride", true);
                     // isCustom reflects the DB flag - sync-sourced rows are NOT
                     // is_custom (bundle apply can overwrite them), but they
@@ -1259,6 +1296,7 @@ public class ModelCatalogService {
                 for (ModelConfigOverrideEntity custom : localCustoms) {
                     Map<String, Object> e = buildModelInfo(custom);
                     applyRateLimitFields(e, custom);
+                    stampAddedAt(e, custom, catalogBaseline, now);
                     e.put("hasOverride", true);
                     e.put("isCustom", custom.isCustom());
                     e.put("enabled", !Boolean.FALSE.equals(custom.getEnabled()));
@@ -1289,6 +1327,48 @@ public class ModelCatalogService {
         result.sort(Comparator.comparingInt(m -> (int) ((Map<String, Object>) m).getOrDefault("displayOrder", 999)));
 
         return result;
+    }
+
+    /** How long a model the catalogue gained keeps its "new" badge in the admin list. */
+    static final Duration NEW_MODEL_WINDOW = Duration.ofDays(14);
+
+    /**
+     * Rows written within this long of the catalogue's FIRST row are its initial fill, not
+     * additions. A self-hosted install seeds its whole catalogue on first boot, and without
+     * this every model it has would read "new" for two weeks, which says nothing.
+     */
+    static final Duration INITIAL_FILL_GRACE = Duration.ofHours(1);
+
+    /**
+     * Admin-list hint: when the catalogue gained this model ({@code addedAt}) and whether that
+     * is recent enough to badge it ({@code isNew}). "Added" is the row's own creation, i.e.
+     * when a feed sync, a bundle or an admin brought it in, never the vendor's release date
+     * (unknown for most rows, and not what "just arrived here" means).
+     */
+    private static void stampAddedAt(Map<String, Object> entry, ModelConfigOverrideEntity row,
+                                     java.time.Instant catalogBaseline, java.time.Instant now) {
+        java.time.Instant createdAt = row.getCreatedAt();
+        if (createdAt == null) {
+            return;
+        }
+        entry.put("addedAt", createdAt.toString());
+        entry.put("isNew", isRecentlyAdded(createdAt, catalogBaseline, now));
+    }
+
+    /**
+     * A model is new when it was added within {@link #NEW_MODEL_WINDOW} of {@code now} and is
+     * not part of the catalogue's initial fill ({@link #INITIAL_FILL_GRACE} after its first
+     * row). Pure, so the window arithmetic is testable without a clock.
+     */
+    static boolean isRecentlyAdded(java.time.Instant createdAt, java.time.Instant catalogBaseline,
+                                   java.time.Instant now) {
+        if (createdAt == null || now == null) {
+            return false;
+        }
+        if (createdAt.isBefore(now.minus(NEW_MODEL_WINDOW))) {
+            return false;
+        }
+        return catalogBaseline == null || createdAt.isAfter(catalogBaseline.plus(INITIAL_FILL_GRACE));
     }
 
     /**
@@ -1371,6 +1451,14 @@ public class ModelCatalogService {
         // userModifiedFields and only an explicit key in the request changes it.
         if (input.isFreeTierEnabledExplicitlySet()) {
             entity.setFreeTierEnabled(input.isFreeTierEnabled());
+        }
+        // V554: available but not offered. Only an explicit key changes it (NOT NULL column).
+        // Tracked in userModifiedFields, unlike the two flags above: the cloud's decision
+        // travels to CE in the bundle (beside `enabled`), and a CE admin's own choice must
+        // survive the next apply there. No feed carries it, so on the cloud the mark is inert.
+        if (input.isUnlistedExplicitlySet()) {
+            entity.setUnlisted(input.isUnlisted());
+            entity.addUserModifiedField("unlisted");
         }
         if (input.getDisplayName() != null) { entity.setDisplayName(input.getDisplayName()); entity.addUserModifiedField("displayName"); }
         if (input.getTier() != null) { entity.setTier(input.getTier()); entity.addUserModifiedField("tier"); }
@@ -1972,6 +2060,9 @@ public class ModelCatalogService {
             row.setFreeTierEnabled(false);
             row.setEnabled(false);
             row.setBundleEnabled(false);
+            // V554: a restore brings the model back OFF, and off carries no unlisted flag (the
+            // admin panel clears it on every switch-off), so neither does a retired row.
+            row.setUnlisted(false);
             row.setRetiredAt(now);
             row.setRetiredBy(retiredBy);
             repository.save(row);
@@ -2143,6 +2234,10 @@ public class ModelCatalogService {
             model.put("replacementProvider", override.getReplacementProvider());
             model.put("replacementModel", override.getReplacementModel());
         }
+        // V554: available but not offered. The stored flag, unconditionally (same reason as
+        // freeTierEnabled): the picker catalogue only ever carries enabled rows, so there it
+        // means "keep it out of the lists"; the admin list pairs it with `enabled` itself.
+        model.put("unlisted", override.isUnlisted());
         if (override.getContextWindow() != null) {
             model.put("contextWindow", override.getContextWindow());
         }
@@ -2622,6 +2717,11 @@ public class ModelCatalogService {
         // V515: read by applyEnrichmentFields too, same rule.
         c.setReplacementProvider(src.getReplacementProvider());
         c.setReplacementModel(src.getReplacementModel());
+        // V554: applyEnrichmentFields reads the unlisted flag and getEffectiveModelList reads
+        // createdAt (the "new" badge), same rule. The flag is GLOBAL: a category tab can switch
+        // a model off, it cannot list a model the admin unlisted.
+        c.setUnlisted(src.isUnlisted());
+        c.setCreatedAt(src.getCreatedAt());
         return c;
     }
 

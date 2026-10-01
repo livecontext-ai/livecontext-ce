@@ -1964,8 +1964,17 @@ public class SignalResumeService {
                 return Set.of();
             }
             // Only a node that ENDS a loop body: no regular successors, but an iterate back-edge.
-            // (Mirrors UnifiedExecutionEngine.executeNodeStepByStep's stepNextNodes.isEmpty() guard.)
-            if (!node.getNextNodes(nodeResult).isEmpty()) {
+            // (Mirrors UnifiedExecutionEngine.executeNodeStepByStep's stepNextNodes.isEmpty() guard,
+            // including its continueOnFailure step: a failure filters the successors out, and a
+            // continued one restores them, so a node with a forward successor is not a loop tail.)
+            List<ExecutionNode> nextNodes = node.getNextNodes(nodeResult);
+            if (nextNodes.isEmpty() && nodeResult.isFailure()
+                    && node instanceof com.apimarketplace.orchestrator.execution.v2.nodes.BaseNode continuedNode
+                    && com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys
+                        .isContinueOnFailure(nodeResult.metadata())) {
+                nextNodes = continuedNode.getSuccessors();
+            }
+            if (!nextNodes.isEmpty()) {
                 return Set.of();
             }
             ExecutionContext context = stepByStepContextManager.getOrCreateContextWithTriggerData(

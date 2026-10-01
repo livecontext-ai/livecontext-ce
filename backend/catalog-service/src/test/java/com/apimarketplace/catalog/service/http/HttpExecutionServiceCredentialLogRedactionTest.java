@@ -45,6 +45,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -90,7 +92,7 @@ class HttpExecutionServiceCredentialLogRedactionTest {
                 .thenReturn(Optional.empty());
         service = new HttpExecutionService(
                 apiToolParameterRepository, userCredentialService, encryptionService,
-                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine(2, 10_000L));
+                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine());
         CredentialModeContext.clear();
 
         // ROOT, not the service's own logger: the streaming handler and the SSE consumer log too.
@@ -274,8 +276,8 @@ class HttpExecutionServiceCredentialLogRedactionTest {
         }
 
         @Test
-        @DisplayName("The 429 retry log names the safe URL: the path token never reaches it")
-        void retryLogScrubbed() {
+        @DisplayName("A 429 is logged once, without the path token (the platform does not re-send it)")
+        void rateLimitLogScrubbed() {
             givenTelegramCredential();
             HttpHeaders retryAfter = new HttpHeaders();
             retryAfter.add(HttpHeaders.RETRY_AFTER, "0");
@@ -289,7 +291,10 @@ class HttpExecutionServiceCredentialLogRedactionTest {
 
             assertThat(everythingLogged())
                     .doesNotContain(TOKEN)
-                    .contains("answered 429");
+                    .contains("status=429")
+                    .doesNotContain("retrying");
+            verify(restTemplate, times(1))
+                    .exchange(any(URI.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class));
         }
     }
 

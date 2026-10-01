@@ -10,6 +10,7 @@ import {
   type RunState,
   type TriggerType,
 } from '@/contexts/WorkflowRunContext';
+import { TERMINAL_STATUSES } from '@/contexts/workflow-run/RunStateStore';
 import { orchestratorApi, type StepState } from '@/lib/api/orchestrator';
 import { useWorkflowStreaming } from '@/app/workflows/builder/hooks/execution/useWorkflowStreaming';
 import { Button } from '@/components/ui/button';
@@ -183,10 +184,24 @@ export function WorkflowRunBlock({
   // Track if user has clicked "Run" to switch to run mode (before showing trigger button)
   const [hasEnteredRunMode, setHasEnteredRunMode] = useState(false);
 
-  // Use the unified run context - WorkflowRunBlock never opens its own streaming connection
-  // The Run button (in WorkflowBuilder) is the only thing that opens streaming connections
-  // useRun() does NOT auto-connect streaming - it only fetches initial state via REST
+  // Use the unified run context. useRun() only fetches the initial state via REST; the live
+  // updates come from the run channel below.
   const [runState, runContext] = useRun(isHistorical ? undefined : runId);
+
+  // Follow the run live, like every other run surface. Without this the card froze on its
+  // first REST read and showed "running" forever unless a builder canvas for the same run
+  // happened to be mounted. The reconnect re-read is the manager's (it re-reads every run a
+  // surface renders), so there is nothing extra to wire here.
+  //
+  // Subscribed from mount, in parallel with the first read: the channel snapshot cannot
+  // cover a gap between the two (it is skipped when the state is unchanged and never sent for
+  // a finished run), so a run that finished right after the read would stay "running". The
+  // subscription is dropped only once a read or an event reports a TERMINAL status (completed,
+  // failed, cancelled...), which frees a slot of the socket's shared channel budget. A reusable
+  // run resting in waiting_trigger between fires is not terminal (it can fire again) and keeps
+  // its channel for as long as the card is mounted; most production runs are in that state.
+  const isLiveRun = !isHistorical && !(runState?.rawRunState && TERMINAL_STATUSES.has(runState.runStatus));
+  useWorkflowStreaming(runId, isLiveRun);
 
   // Fetch run state when expanding a historical run (one-time REST call, not streaming)
   useEffect(() => {
@@ -460,13 +475,14 @@ export function WorkflowRunBlock({
         className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 transition-colors mb-3 max-w-full"
       >
         {isRunning ? (
-          <span className="font-medium shimmer-text">Run {shortRunId}...</span>
+          <span className="font-medium shimmer-text">{t('headerRunning', { id: shortRunId })}</span>
         ) : (
           <>
             <Play className="h-3.5 w-3.5 shrink-0" />
             <span className="font-medium text-slate-600 dark:text-slate-300">
-              Run {shortRunId} {getStatusText()}
-              {effectiveDuration !== null && effectiveDuration > 0 && ` in ${formatDuration(effectiveDuration)}`}
+              {effectiveDuration !== null && effectiveDuration > 0
+                ? t('headerDoneIn', { id: shortRunId, status: getStatusText(), duration: formatDuration(effectiveDuration) })
+                : t('headerDone', { id: shortRunId, status: getStatusText() })}
             </span>
           </>
         )}

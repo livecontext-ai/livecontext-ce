@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.services.impl;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys;
 import com.apimarketplace.orchestrator.services.interfaces.ExecutionResult;
 import com.apimarketplace.orchestrator.domain.ToolRef;
 import com.apimarketplace.orchestrator.services.TypeCastingService;
@@ -119,6 +120,42 @@ class CatalogToolsGatewayRefusalLogLevelTest {
                 .as("a refusal does not need a stack trace")
                 .isNull();
         });
+    }
+
+    @Test
+    @DisplayName("REGRESSION: a 402 for lack of credits is marked as the catalog's own refusal, so a node policy does not retry it")
+    void insufficientCreditsIsMarkedAsACatalogRefusal() {
+        ExecutionResult result = callWith(HttpStatus.PAYMENT_REQUIRED,
+                "{\"error\":\"INSUFFICIENT_CREDITS\",\"message\":\"Out of credits\"}");
+
+        assertThat(result.output())
+            .containsEntry(ExecutionMetadataKeys.CATALOG_REFUSAL, ExecutionMetadataKeys.CATALOG_REFUSAL_NO_CREDITS)
+            .as("never a status: http_status is the provider's answer, and the tool-health view files "
+                + "every 4xx there as a request the tool built")
+            .doesNotContainKey("http_status");
+    }
+
+    @Test
+    @DisplayName("the plan, credential-choice and missing-tool refusals are marked with their own code")
+    void theOtherCatalogRefusalsAreMarked() {
+        assertThat(callWith(HttpStatus.FORBIDDEN,
+                "{\"error\":\"PLAN_UPGRADE_REQUIRED\",\"message\":\"Needs the Pro plan\"}").output())
+            .containsEntry(ExecutionMetadataKeys.CATALOG_REFUSAL, "PLAN_UPGRADE_REQUIRED");
+        assertThat(callWith(HttpStatus.UNPROCESSABLE_ENTITY,
+                "{\"error\":\"CREDENTIAL_SELECTION_UNRESOLVED\",\"message\":\"no active credential named 'Client Z'\"}").output())
+            .containsEntry(ExecutionMetadataKeys.CATALOG_REFUSAL, "CREDENTIAL_SELECTION_UNRESOLVED");
+        assertThat(callWith(HttpStatus.NOT_FOUND,
+                "{\"success\":false,\"error\":\"TOOL_NOT_FOUND\",\"message\":\"Tool not found: x/y\"}").output())
+            .containsEntry(ExecutionMetadataKeys.CATALOG_REFUSAL, "TOOL_NOT_FOUND");
+    }
+
+    @Test
+    @DisplayName("a 4xx the catalog does not name (a provider's own 403, a 429) carries no marker: an ordinary failure")
+    void anUnnamedClientErrorIsNotMarked() {
+        assertThat(callWith(HttpStatus.FORBIDDEN, "{\"error\":\"invalid_token\"}").output())
+            .doesNotContainKey(ExecutionMetadataKeys.CATALOG_REFUSAL);
+        assertThat(callWith(HttpStatus.TOO_MANY_REQUESTS, "{\"error\":\"rate_limited\"}").output())
+            .doesNotContainKey(ExecutionMetadataKeys.CATALOG_REFUSAL).doesNotContainKey("http_status");
     }
 
     @Test

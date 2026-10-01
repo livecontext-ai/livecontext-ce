@@ -229,6 +229,14 @@ public interface WorkflowStepDataRepository extends JpaRepository<WorkflowStepDa
     List<WorkflowStepDataEntity> findByRunIdAndNormalizedKeyOrderByEpochDesc(String runId, String normalizedKey);
 
     /**
+     * The most recent epoch in which a node wrote a step row, or null when it never ran in
+     * this run. Lets a node-output read default its epoch without loading every row.
+     */
+    @Query("SELECT MAX(w.epoch) FROM WorkflowStepDataEntity w WHERE w.runId = :runId AND w.normalizedKey = :normalizedKey")
+    Integer findLatestEpochByRunIdAndNormalizedKey(@Param("runId") String runId,
+                                                   @Param("normalizedKey") String normalizedKey);
+
+    /**
      * Find step data for a specific epoch.
      */
     List<WorkflowStepDataEntity> findByRunIdAndEpoch(String runId, int epoch);
@@ -362,6 +370,69 @@ public interface WorkflowStepDataRepository extends JpaRepository<WorkflowStepDa
      */
     @Query("SELECT DISTINCT w.itemIndex FROM WorkflowStepDataEntity w WHERE w.runId = :runId AND w.normalizedKey = :normalizedKey AND w.status = 'COMPLETED' AND w.epoch = :epoch")
     List<Integer> findCompletedItemIndicesByEpoch(@Param("runId") String runId, @Param("normalizedKey") String normalizedKey, @Param("epoch") int epoch);
+
+    /**
+     * Item indices that PASS through a node in an epoch: those it COMPLETED, plus those whose latest
+     * failure continued ({@code continueOnFailure}, flagged {@code policy_continue_on_failure=true}
+     * in the row's metadata by StepDataPersistenceService; see {@link #findFailedItemMetadataByEpoch}).
+     * Split routing reads it so a continued item still reaches the nodes below. Without any flagged
+     * row it returns exactly {@link #findCompletedItemIndicesByEpoch}.
+     *
+     * <p>Two portable queries, the flag read in Java: a JSON operator in SQL ({@code ->>}) runs on
+     * Postgres only, and the H2 integration suites route splits through this method too (a native
+     * version made their routing throw, 2026-09-29). A node has few FAILED rows per epoch.
+     */
+    default List<Integer> findPassedItemIndicesByEpoch(String runId, String normalizedKey, int epoch) {
+        java.util.Set<Integer> passed =
+            new java.util.LinkedHashSet<>(findCompletedItemIndicesByEpoch(runId, normalizedKey, epoch));
+        for (Object[] row : findFailedItemMetadataByEpoch(runId, normalizedKey, epoch)) {
+            if (row != null && row.length == 2 && row[0] instanceof Integer itemIndex
+                    && com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys
+                        .isContinueOnFailureStored(row[1])) {
+                passed.add(itemIndex);
+            }
+        }
+        return new java.util.ArrayList<>(passed);
+    }
+
+    /**
+     * {@code [itemIndex, metadata]} of each item's LATEST FAILED row of a node in an epoch: the one
+     * with the highest spawn, then the highest loop iteration. How an item's earlier execution ended
+     * (a previous loop turn, a run of the node before a rerun) says nothing about its latest one: a
+     * failure that continued in turn 1 must not carry a refusal for missing credits in turn 2 past
+     * the node. Read by split routing ({@link #findPassedItemIndicesByEpoch}) and by readiness.
+     */
+    default List<Object[]> findFailedItemMetadataByEpoch(String runId, String normalizedKey, int epoch) {
+        java.util.Map<Integer, Object[]> latest = new java.util.LinkedHashMap<>();
+        for (Object[] row : findFailedItemRowsByEpoch(runId, normalizedKey, epoch)) {
+            if (row == null || row.length < 4 || !(row[0] instanceof Integer itemIndex)) {
+                continue;
+            }
+            Object[] kept = latest.get(itemIndex);
+            if (kept == null || ranksAfter(row, kept)) {
+                latest.put(itemIndex, row);
+            }
+        }
+        List<Object[]> out = new java.util.ArrayList<>(latest.size());
+        for (Object[] row : latest.values()) {
+            out.add(new Object[] {row[0], row[1]});
+        }
+        return out;
+    }
+
+    /** Whether FAILED row {@code a} ran after {@code b}: a later spawn, else a later loop iteration. */
+    private static boolean ranksAfter(Object[] a, Object[] b) {
+        int spawn = Integer.compare(intOrZero(a[2]), intOrZero(b[2]));
+        return spawn != 0 ? spawn > 0 : intOrZero(a[3]) > intOrZero(b[3]);
+    }
+
+    private static int intOrZero(Object value) {
+        return value instanceof Number n ? n.intValue() : 0;
+    }
+
+    /** {@code [itemIndex, metadata, spawn, iteration]} of every FAILED row of a node in an epoch. */
+    @Query("SELECT w.itemIndex, w.metadata, w.spawn, w.iteration FROM WorkflowStepDataEntity w WHERE w.runId = :runId AND w.normalizedKey = :normalizedKey AND w.status = 'FAILED' AND w.epoch = :epoch")
+    List<Object[]> findFailedItemRowsByEpoch(@Param("runId") String runId, @Param("normalizedKey") String normalizedKey, @Param("epoch") int epoch);
 
     /**
      * Find item indices that already reached ANY terminal status (COMPLETED/FAILED/SKIPPED)

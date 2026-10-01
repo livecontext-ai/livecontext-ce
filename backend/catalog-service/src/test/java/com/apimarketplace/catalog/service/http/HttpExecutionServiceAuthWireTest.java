@@ -67,7 +67,7 @@ class HttpExecutionServiceAuthWireTest {
                 .thenReturn(Optional.empty());
         service = new HttpExecutionService(
                 apiToolParameterRepository, userCredentialService, encryptionService,
-                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine(2, 10_000L));
+                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine());
         setField("awsSigV4Signer", new AwsSigV4Signer());
         CredentialModeContext.clear();
     }

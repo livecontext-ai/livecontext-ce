@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.tools.workflow.builder;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
+import com.apimarketplace.orchestrator.utils.EdgeRefParser;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -248,6 +249,73 @@ class WorkflowBuilderLoaderGenerateCoreAdoptionTest {
                 .as("and an end that did not move keeps its own port untouched")
                 .isEqualTo("core:decide:if");
         assertThat(end(session, 1, "to")).isEqualTo("agent:make_clip");
+    }
+
+    /**
+     * An edge that names the node by a BARE stored id follows it too.
+     *
+     * <p>The edge parser cannot type a ref with no {@code type:} prefix and
+     * returns nothing for it, so the rewrite must read such a ref as a whole
+     * node key. Treated as unparseable-and-skipped instead, the edge would keep
+     * naming a key that no longer exists and the node would be unreachable.
+     */
+    @Test
+    @DisplayName("an edge naming the node by its bare, unprefixed stored id is repointed too")
+    void aBareStoredIdEdgeFollowsTheNode() throws Exception {
+        WorkflowEntity workflow = workflowWith();
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> cores = (List<Map<String, Object>>) workflow.getPlan().get("cores");
+        cores.get(0).put("id", "make_clip");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> edges = (List<Map<String, Object>>) workflow.getPlan().get("edges");
+        edges.clear();
+        edges.add(new LinkedHashMap<>(Map.of("from", "trigger:start", "to", "make_clip")));
+
+        WorkflowBuilderSession session = load(workflow);
+
+        assertThat(end(session, 0, "to")).isEqualTo("agent:make_clip");
+        assertThat(end(session, 0, "from"))
+                .as("the other end is not in the rename map and stays as written")
+                .isEqualTo("trigger:start");
+    }
+
+    /**
+     * A ref with more colons than {@code type:label:port} is split where the ENGINE splits it.
+     *
+     * <p>The engine reads every edge end with {@link EdgeRefParser} (ExecutionGraph,
+     * EdgeWiringOrchestrator, WorkflowPlan): for a core ref the port is the LAST segment, since no
+     * port contains a colon (if, elseif_N, case_N, body, iterate, branch_N ...), and everything
+     * before it is the node key. So {@code core:make:clip:done} names the node
+     * {@code core:make:clip} on port {@code done}. The rewrite this replaced split at the SECOND
+     * colon and looked up {@code core:make}, a key nothing answers to: the edge was left naming a
+     * node that had just moved, and the engine drops such an edge, so the node's successors were
+     * silently cut off. Only a rewrite that splits where the engine splits changes exactly the
+     * edges the engine attributes to the adopted node.
+     */
+    @Test
+    @DisplayName("a ref with extra colons is split where the engine splits it: the last segment is the port")
+    void aRefWithExtraColonsIsSplitWhereTheEngineSplitsIt() throws Exception {
+        WorkflowEntity workflow = workflowWith();
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> cores = (List<Map<String, Object>>) workflow.getPlan().get("cores");
+        cores.get(0).put("id", "core:make:clip");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> edges = (List<Map<String, Object>>) workflow.getPlan().get("edges");
+        edges.clear();
+        edges.add(new LinkedHashMap<>(Map.of("from", "core:make:clip:done", "to", "core:use_clip")));
+
+        WorkflowBuilderSession session = load(workflow);
+
+        assertThat(EdgeRefParser.getNodeKey("core:make:clip:done"))
+                .as("how the engine reads the stored edge: the node is core:make:clip")
+                .isEqualTo("core:make:clip");
+        String from = end(session, 0, "from");
+        assertThat(from).isEqualTo("agent:make_clip:done");
+        assertThat(EdgeRefParser.getNodeKey(from))
+                .as("so the engine finds the adopted node at the rewritten end")
+                .isEqualTo("agent:make_clip");
+        assertThat(EdgeRefParser.getPort(from)).isEqualTo("done");
+        assertThat(end(session, 0, "to")).isEqualTo("core:use_clip");
     }
 
     /**

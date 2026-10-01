@@ -90,6 +90,21 @@ public final class ConversationToolDefinitions {
             .build();
     }
 
+    /**
+     * The credential tool's actions, in ONE place: the definition's enum, the help payload and the
+     * unknown-action error all read this list, so none of them can advertise an action the others lack.
+     */
+    public static final List<String> CREDENTIAL_ACTIONS = List.of("list", "variables", "set_variable", "require", "help");
+
+    /**
+     * The credential tool's full agent-facing reference, which is its description. Served by
+     * credential(action='help'): agents call help on every tool first, and this one used to answer
+     * that call with an "'action' must be one of" error.
+     */
+    public static String credentialToolReference() {
+        return createCredentialTool().description();
+    }
+
     private static ToolDefinition createCredentialTool() {
         return ToolDefinition.builder()
             .name("credential")
@@ -97,6 +112,7 @@ public final class ConversationToolDefinitions {
                 The user's third-party credentials and workflow variables.
 
                 ACTIONS
+                - help: returns this reference, as every other tool's help does.
                 - list: which external services the user has connected (never returns secret values).
                   Response: {connected:[{name,integration,status,isDefault,account,scopes}],count,defaultCount,hint}.
                   status: active (ready) | expiring (still works) | needs_reauth (only the user can
@@ -188,9 +204,10 @@ public final class ConversationToolDefinitions {
                 ToolParameter.builder()
                     .name("action")
                     .type("string")
-                    .description("One of: list, variables, set_variable, require.")
+                    .description("One of: " + String.join(", ", CREDENTIAL_ACTIONS)
+                        + " (help returns this tool's full reference).")
                     .required(true)
-                    .enumValues(List.of("list", "variables", "set_variable", "require"))
+                    .enumValues(CREDENTIAL_ACTIONS)
                     .build(),
                 ToolParameter.builder()
                     .name("services")

@@ -26,6 +26,19 @@ export interface PublicProfile {
    * feature. Unrelated to e-mail verification, which is never exposed publicly.
    */
   verified?: boolean;
+  /**
+   * Whether this account carries the official-partner badge (the gold seal): its owner
+   * has a live partner code. Always false on a self-hosted deployment.
+   */
+  partner?: boolean;
+  /** The partner tier (silver, gold, platinum) when {@link partner} is true; the profile names it. */
+  partnerTier?: 'silver' | 'gold' | 'platinum' | null;
+}
+
+/** The ids of one batch that carry each public badge, as strings. */
+export interface UserBadgeIds {
+  verified: string[];
+  partners: string[];
 }
 
 /**
@@ -301,19 +314,23 @@ export class UserApiService {
   }
 
   /**
-   * Which of these users carry the verified badge - one request for a whole rendered
-   * list. Answers only the ids that qualify; unknown and unverified ids are absent.
+   * Which of these users carry a public badge (the blue verified check, the gold
+   * official-partner seal), in one request for a whole rendered list. Each list holds
+   * only the ids that qualify; unknown ids are absent from both.
    *
-   * Call it through `loadVerifiedFlag` (lib/api/verifiedUsers) rather than directly:
-   * that wrapper is what collects a list's ids into a single batch.
+   * Call it through `loadBadges` (lib/api/verifiedUsers) rather than directly: that
+   * wrapper is what collects a list's ids into a single batch.
    */
-  async getVerifiedUserIds(userIds: Array<string | number>): Promise<string[]> {
-    if (userIds.length === 0) return [];
-    const response = await apiClient.get<{ verified: Array<string | number> }>(
+  async getUserBadges(userIds: Array<string | number>): Promise<UserBadgeIds> {
+    if (userIds.length === 0) return { verified: [], partners: [] };
+    const response = await apiClient.get<{ verified?: Array<string | number>; partners?: Array<string | number> }>(
       '/users/public/verified-badges',
       { params: { ids: userIds.join(',') } },
     );
-    return (response?.verified ?? []).map((id) => String(id));
+    return {
+      verified: (response?.verified ?? []).map((id) => String(id)),
+      partners: (response?.partners ?? []).map((id) => String(id)),
+    };
   }
 
   /**

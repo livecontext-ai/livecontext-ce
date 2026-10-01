@@ -68,7 +68,13 @@ export function CategoryFilter({
       value={selectedCategory || 'all'}
       onValueChange={(value) => onCategoryChange(value === 'all' ? undefined : value)}
     >
-      <SelectTrigger className={`h-9 w-48 rounded-xl bg-theme-primary border-theme ${className}`}>
+      {/* Named like the type / sort / rating / date / price selects beside it. A combobox takes
+          no name from its content, so without the label a screen reader announced it as an
+          unnamed combobox, the one control of the row that did not say what it filters. */}
+      <SelectTrigger
+        className={`h-9 w-48 rounded-xl bg-theme-primary border-theme ${className}`}
+        aria-label={t('filterByCategory')}
+      >
         <SelectValue>
           <div className="flex items-center gap-2">
             {selectedCategory ? (

@@ -54,7 +54,7 @@ class HttpExecutionServiceBodyPathTest {
     void setUp() {
         mapper = new ObjectMapper();
         lenient().when(encryption.decrypt(any())).thenAnswer(i -> i.getArgument(0));
-        service = new HttpExecutionService(parameters, credentials, encryption, mapper, jdbc, rest, new ErrorPolicyEngine(2, 10_000L));
+        service = new HttpExecutionService(parameters, credentials, encryption, mapper, jdbc, rest, new ErrorPolicyEngine());
     }
 
     private static ApiToolParameterEntity bodyParam(String name, String extras) {

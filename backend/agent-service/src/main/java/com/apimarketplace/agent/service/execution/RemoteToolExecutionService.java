@@ -801,7 +801,8 @@ public class RemoteToolExecutionService implements ToolExecutionService {
             return result;
         }
 
-        ToolApprovalGate.Decision decision = approvalGate.awaitDecision(parkRequest);
+        // A connect card is answered by connecting, never by a conversation-wide permission.
+        ToolApprovalGate.Decision decision = approvalGate.awaitAnswer(parkRequest).decision();
         dropSettledCard(streamId, buffered, decision);
         if (decision != ToolApprovalGate.Decision.APPROVED) {
             return withCardEmitted(result, decision);
@@ -950,6 +951,10 @@ public class RemoteToolExecutionService implements ToolExecutionService {
         }
         if (isAlreadyAuthorized(credentials, rule, toolCall)) {
             return null; // approved this turn (transient resume) or persisted "always authorize"
+        }
+        if (approvalGate != null && approvalGate.isConversationWideApproved(conversationIdOf(credentials))) {
+            // "Don't ask again" ticked on a card of THIS turn, after its grants were read.
+            return null;
         }
         log.info("Tool authorization required for rule={} (toolCallId={}) - pausing for user approval",
                 rule, toolCall.id());

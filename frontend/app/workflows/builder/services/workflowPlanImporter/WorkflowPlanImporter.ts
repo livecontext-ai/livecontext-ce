@@ -13,7 +13,6 @@ import {
   applyDagreLayout,
   hasValidPosition,
   layoutConfigForDirection,
-  placeUnpositionedNodes,
 } from '../LayoutService';
 import type { InterfaceFormatContext } from './InterfaceFormatService';
 import {
@@ -31,9 +30,9 @@ export interface ImportResult {
   success: boolean;
   error?: string;
   /**
-   * True when the plan carried no position at all and the whole graph was laid out
-   * (an agent build). False when stored positions were kept, even if a few new nodes
-   * were placed around them.
+   * True when the whole graph was laid out: the plan had a node with no position (an
+   * agent build, or nodes an agent added), or its positions were computed in the other
+   * direction. False when every stored position was kept.
    */
   laidOutFromScratch?: boolean;
   /**
@@ -122,10 +121,15 @@ export class WorkflowPlanImporter {
         return updatedNode;
       });
 
-      // Step 5: Decide the reading direction, then position the nodes. A stored position
-      // is kept (the user saved it, see placeUnpositionedNodes) unless it was computed in
-      // the other direction: kept, it would draw a left-to-right graph with top-to-bottom
-      // handles, so the whole graph is laid out again instead.
+      // Step 5: Decide the reading direction, then position the nodes. Stored positions
+      // are kept only when EVERY node has one and they were computed in this direction.
+      // A node without a position is, in practice, one an agent created (agent-made nodes
+      // are saved without one; a pasted or hand-written plan can omit some too), and the
+      // whole graph is then laid out again, exactly as the hover "+" does after a user
+      // insertion: placing only the new nodes around the old layout left them overlapping
+      // it, which read as "no auto-layout". A hand-made layout is given up in that case,
+      // by product decision (2026-09-30). Positions from the other direction would draw a
+      // left-to-right graph with top-to-bottom handles, so they are laid out again too.
       const { direction: layoutDirection, relayout } = resolvePlanLayout({
         storedDirection: (parsedPlan.plan as { layoutDirection?: unknown }).layoutDirection,
         hasStoredPositions: updatedNodes.some(hasValidPosition),
@@ -134,9 +138,10 @@ export class WorkflowPlanImporter {
         unstampedPositionsDirection: layout.unstampedPositionsDirection,
       });
       const layoutConfig = layoutConfigForDirection(layoutDirection);
-      const { nodes: layoutedNodes, laidOutFromScratch } = relayout
-        ? { nodes: applyDagreLayout(updatedNodes, edgeResult.edges, layoutConfig), laidOutFromScratch: true }
-        : placeUnpositionedNodes(updatedNodes, edgeResult.edges, layoutConfig);
+      const laidOutFromScratch = relayout || !updatedNodes.every(hasValidPosition);
+      const layoutedNodes = laidOutFromScratch
+        ? applyDagreLayout(updatedNodes, edgeResult.edges, layoutConfig)
+        : updatedNodes;
 
       // Step 6: Validate inputs
       const validation = InputValidationService.validateNodes(layoutedNodes);

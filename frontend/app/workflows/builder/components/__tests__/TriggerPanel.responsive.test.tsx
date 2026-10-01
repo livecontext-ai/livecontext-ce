@@ -330,12 +330,19 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmount FIRST, while every stub is still in place. cleanup() unmounts
+  // inside act(), and act() flushes any passive effect React has not run yet.
+  // A test that ends the instant its DOM commits (findBy* resolves on the
+  // mutation, before React's scheduled effect flush) leaves the chat tab's
+  // auto-scroll effect pending; restoring jsdom's missing scrollIntoView before
+  // that flush made the effect throw "scrollIntoView is not a function", only
+  // when the runner was loaded enough to lose that race (full CI run).
+  cleanup();
   setViewport(originalViewport);
   restoreMaxWidth();
   restoreLayout();
   (Element.prototype as unknown as Record<string, unknown>).scrollIntoView = originalScrollIntoView;
   vi.unstubAllGlobals();
-  cleanup();
   document.body.innerHTML = '';
 });
 
@@ -1186,5 +1193,23 @@ describe('TriggerPanel - fitting a small screen', () => {
     const row = label.closest('[data-tab-button]')!.parentElement!;
     expect(row.className).toContain('min-w-0');
     expect(row.parentElement?.className).toContain('min-w-0');
+  });
+});
+
+describe('TriggerPanel - suite teardown', () => {
+  it('survives a test that ends the instant the chat messages commit, before their auto-scroll effect ran', async () => {
+    // What a loaded CI runner does to the findBy* tests above, made
+    // deterministic: resolve on the DOM mutation itself, so the test ends with
+    // the scroll-to-bottom effect still pending. The teardown must unmount
+    // before it removes the scrollIntoView stub, or that pending effect throws
+    // "scrollIntoView is not a function" and fails this test.
+    await withChatHistory();
+    renderPanel({ triggerConfigs: [chatTrigger] });
+    await new Promise<void>((resolve) => {
+      const done = () => document.querySelector('[data-testid="trigger-panel-chat-messages"]');
+      if (done()) return resolve();
+      const mo = new MutationObserver(() => { if (done()) { mo.disconnect(); resolve(); } });
+      mo.observe(document.body, { subtree: true, childList: true });
+    });
   });
 });

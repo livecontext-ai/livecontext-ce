@@ -216,6 +216,92 @@ class ConversationControllerTest {
     }
 
     @Test
+    @DisplayName("\"Don't ask again\" persists auto-authorize and lifts the gate for the turn still running")
+    void approveToolAuthorizationConversationWideAppliesToTheRunningTurn() throws Exception {
+        ConversationDto dto = new ConversationDto();
+        dto.setId("conv-1");
+        dto.setUserId("user-1");
+        when(conversationQueryService.getConversationById("conv-1", "user-1", null))
+                .thenReturn(Optional.of(dto));
+        when(toolApprovalGateResolver.resolve("conv-1", "call-9", true)).thenReturn(true);
+
+        mockMvc.perform(post("/api/conversations/{conversationId}/tool-authorization/approve", "conv-1")
+                        .header("X-User-ID", "user-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "rule", "workflow:execute",
+                                "remember", false,
+                                "toolCallId", "call-9",
+                                "conversationWide", true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversationWide").value(true))
+                .andExpect(jsonPath("$.parkedCallReleased").value(true));
+
+        // Persisted in the same request, so a resume turn can never read the setting first.
+        verify(toolAuthorizationApprovalService).enableAutoAuthorize("conv-1");
+        // The released call resumes in a turn whose grants were read before the box was
+        // ticked: without this its next sensitive call raised a card again.
+        verify(toolApprovalGateResolver).grantConversationWideForRunningTurn("conv-1");
+        // The key must exist BEFORE the parked call is released: the released call's next
+        // sensitive call reads it, and in the other order it can race past an empty key.
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(toolAuthorizationApprovalService, toolApprovalGateResolver);
+        order.verify(toolAuthorizationApprovalService).enableAutoAuthorize("conv-1");
+        order.verify(toolApprovalGateResolver).grantConversationWideForRunningTurn("conv-1");
+        order.verify(toolApprovalGateResolver).resolve("conv-1", "call-9", true);
+    }
+
+    @Test
+    @DisplayName("\"Don't ask again\" with nothing held writes NO one-shot grant that could outlive switching it off")
+    void conversationWideWithNothingHeldLeavesNoOneShotGrant() throws Exception {
+        ConversationDto dto = new ConversationDto();
+        dto.setId("conv-1");
+        dto.setUserId("user-1");
+        when(conversationQueryService.getConversationById("conv-1", "user-1", null))
+                .thenReturn(Optional.of(dto));
+        // An install card is never held; neither is a card rebuilt after a reload.
+        when(toolApprovalGateResolver.resolve("conv-1", null, true)).thenReturn(false);
+
+        mockMvc.perform(post("/api/conversations/{conversationId}/tool-authorization/approve", "conv-1")
+                        .header("X-User-ID", "user-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "rule", "application:acquire",
+                                "remember", false,
+                                "conversationWide", true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.parkedCallReleased").value(false));
+
+        verify(toolAuthorizationApprovalService).enableAutoAuthorize("conv-1");
+        // Regression: a one-shot acquire grant was written here, so after the user cancelled the
+        // install and switched auto-authorize off, the next turn still acquired with no card.
+        verify(toolAuthorizationApprovalService, never()).approve(any(), any(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("A plain approval never turns on auto-authorize")
+    void approveToolAuthorizationWithoutConversationWideGrantsNothingBroader() throws Exception {
+        ConversationDto dto = new ConversationDto();
+        dto.setId("conv-1");
+        dto.setUserId("user-1");
+        when(conversationQueryService.getConversationById("conv-1", "user-1", null))
+                .thenReturn(Optional.of(dto));
+        when(toolApprovalGateResolver.resolve("conv-1", "call-9", true)).thenReturn(true);
+
+        mockMvc.perform(post("/api/conversations/{conversationId}/tool-authorization/approve", "conv-1")
+                        .header("X-User-ID", "user-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "rule", "workflow:execute",
+                                "remember", false,
+                                "toolCallId", "call-9"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conversationWide").value(false));
+
+        verify(toolAuthorizationApprovalService, never()).enableAutoAuthorize(any());
+        verify(toolApprovalGateResolver, never()).grantConversationWideForRunningTurn(any());
+    }
+
+    @Test
     void approveToolAuthorizationStillGrantsOnceWhenNothingWasParked() throws Exception {
         ConversationDto dto = new ConversationDto();
         dto.setId("conv-1");

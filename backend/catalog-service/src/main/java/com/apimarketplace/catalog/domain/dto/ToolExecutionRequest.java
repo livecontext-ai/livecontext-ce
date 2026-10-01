@@ -2,6 +2,7 @@ package com.apimarketplace.catalog.domain.dto;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -12,7 +13,11 @@ import java.util.Map;
 
 /**
  * Request for tool execution.
+ *
+ * <p>Unknown keys are ignored on purpose: during a rolling deploy an older caller still sends
+ * {@code providerRetryMaxWaitSeconds} (the removed provider retry), and that must not fail the call.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 @Data
 @Builder
 @NoArgsConstructor
@@ -121,20 +126,6 @@ public class ToolExecutionRequest {
      * Default {@code null}/{@code false} → dehydrate.
      */
     private Boolean inlineBinaries;
-
-    /**
-     * How long THIS call may spend waiting out a provider's rate-limit refusal, in seconds.
-     *
-     * <p>Null leaves the platform default in place (the usual case: a caller with no retry logic
-     * of its own benefits from the 429 handling without knowing it exists). {@code 0} disables
-     * retrying for this call, which is what a workflow node sends when its author already paces
-     * the calls themselves - a loop that calls, waits and comes back would otherwise issue three
-     * requests per turn instead of one, hammering the provider hardest for the author who was
-     * most careful.
-     *
-     * <p>Seconds, not milliseconds, because this is set by a person in a form field.
-     */
-    private Integer providerRetryMaxWaitSeconds;
 
     /**
      * V148+ billing scope discriminator. Forwarded from the

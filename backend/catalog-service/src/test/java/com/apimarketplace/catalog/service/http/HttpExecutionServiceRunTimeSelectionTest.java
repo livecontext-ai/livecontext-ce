@@ -69,7 +69,7 @@ class HttpExecutionServiceRunTimeSelectionTest {
         lenient().when(apiToolParameterRepository.findByApiToolId(any())).thenReturn(List.of());
         service = new HttpExecutionService(
                 apiToolParameterRepository, userCredentialService, encryptionService,
-                new ObjectMapper(), jdbcTemplate, restTemplate, new ErrorPolicyEngine(2, 10_000L));
+                new ObjectMapper(), jdbcTemplate, restTemplate, new ErrorPolicyEngine());
         CredentialModeContext.setExplicitSource("user");
     }
 

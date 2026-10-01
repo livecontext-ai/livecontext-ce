@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.tools.workflow.builder.validation;
 
+import com.apimarketplace.orchestrator.tools.workflow.builder.ExpressionNodeReferences;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderSession;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderValidator.ValidationResult;
 import lombok.extern.slf4j.Slf4j;
@@ -93,10 +94,11 @@ public class ReferenceValidator implements WorkflowValidator {
                            Set<String> validNodeIds, ValidationResult result) {
         if (value instanceof String strValue) {
             for (String ref : extractReferences(strValue)) {
-                String referencedNode = extractNodeFromReference(ref);
-                if (referencedNode != null && !validNodeIds.contains(referencedNode)) {
-                    result.addWarning("INVALID_REFERENCE", nodeId,
-                            "Reference '{{" + ref + "}}' points to unknown node '" + referencedNode + "'.");
+                for (String referencedNode : ExpressionNodeReferences.of(ref)) {
+                    if (!validNodeIds.contains(referencedNode)) {
+                        result.addWarning("INVALID_REFERENCE", nodeId,
+                                "Reference '{{" + ref + "}}' points to unknown node '" + referencedNode + "'.");
+                    }
                 }
             }
         } else if (value instanceof Map<?, ?> map) {
@@ -117,36 +119,6 @@ public class ReferenceValidator implements WorkflowValidator {
             refs.add(matcher.group(1));
         }
         return refs;
-    }
-
-    private String extractNodeFromReference(String ref) {
-        String inner = ref;
-        int parenIdx = inner.indexOf('(');
-        if (parenIdx >= 0) {
-            // Strip single-function wrapper: json(mcp:step.output.x) → mcp:step.output.x
-            inner = inner.substring(parenIdx + 1);
-            if (inner.endsWith(")")) inner = inner.substring(0, inner.length() - 1);
-            inner = inner.replaceAll("^'|'$", "");
-            // Nested/multi-arg SpEL (e.g. concat(mcp:a.output.x, mcp:b.output.y))
-            // is too complex to parse reliably - skip rather than produce false positives
-            if (inner.contains("(") || inner.contains(",")) {
-                return null;
-            }
-        }
-        // Reference format: trigger:xxx.body.field or mcp:xxx.output.field
-        if (inner.contains(".")) {
-            String[] parts = inner.split("\\.", 2);
-            String nodeRef = parts[0];
-            if (nodeRef.contains(":")) {
-                // vars:name (alias of $vars.name) references a workflow
-                // variable, not a node - never flag it as an unknown node.
-                if (nodeRef.startsWith("vars:")) {
-                    return null;
-                }
-                return nodeRef;
-            }
-        }
-        return null;
     }
 
     /**

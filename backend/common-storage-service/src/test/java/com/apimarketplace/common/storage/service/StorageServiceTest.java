@@ -42,6 +42,7 @@ class StorageServiceTest {
 
     private static final String TENANT_ID = "tenant-123";
     private static final String ORG_ID = "org-123";
+    private static final String WORKFLOW_UUID = "5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e";
 
     @Mock
     private StorageRepository storageRepository;
@@ -810,8 +811,8 @@ class StorageServiceTest {
             });
 
             storageService.saveS3FileIndex(
-                    TENANT_ID, "wf-1", "run-1", "mcp:download",
-                    "tenant-123/wf-1/run-1/mcp:download/abc_report.pdf",
+                    TENANT_ID, WORKFLOW_UUID, "run-1", "mcp:download",
+                    "tenant-123/" + WORKFLOW_UUID + "/run-1/mcp:download/abc_report.pdf",
                     "report.pdf", "application/pdf", 200L,
                     /* epoch */ 3, /* spawn */ 2, /* itemIndex */ 7,
                     StorageSourceTypes.STEP_OUTPUT);
@@ -822,9 +823,92 @@ class StorageServiceTest {
             assertThat(saved.getSpawn()).isEqualTo(2);
             assertThat(saved.getItemIndex()).isEqualTo(7);
             assertThat(saved.getSourceType()).isEqualTo(StorageSourceTypes.STEP_OUTPUT);
-            assertThat(saved.getWorkflowId()).isEqualTo("wf-1");
+            assertThat(saved.getWorkflowId()).isEqualTo(WORKFLOW_UUID);
             assertThat(saved.getRunId()).isEqualTo("run-1");
             assertThat(saved.getStepKey()).isEqualTo("mcp:download");
+        }
+
+        @Test
+        @DisplayName("an ad-hoc node run's file is filed at the root, not under its synthetic plan id "
+                + "(the Files browser drops a folder whose workflow does not exist, hiding the file)")
+        void adHocRunFileIsFiledAtRoot() {
+            when(storageUtils.extractFileExtension("clip.mp4")).thenReturn("mp4");
+            when(storageRepository.save(any(StorageEntity.class))).thenAnswer(inv -> {
+                StorageEntity e = inv.getArgument(0);
+                e.setId(UUID.randomUUID());
+                return e;
+            });
+
+            // The synthetic plan id IS a well-formed UUID: only the run id tells it apart.
+            storageService.saveS3FileIndex(
+                    TENANT_ID, WORKFLOW_UUID, WorkflowFileScope.AD_HOC_RUN_ID_PREFIX + WORKFLOW_UUID,
+                    "core:download_file", "tenant-123/x/y/core:download_file/abc_clip.mp4",
+                    "clip.mp4", "video/mp4", 200L, 0, 0, 0, StorageSourceTypes.STEP_OUTPUT);
+
+            verify(storageRepository).save(entityCaptor.capture());
+            StorageEntity saved = entityCaptor.getValue();
+            assertThat(saved.getWorkflowId()).as("no workflow folder for a run that is not a workflow run").isNull();
+            assertThat(saved.getRunId()).isNull();
+            assertThat(saved.getS3Key()).as("the bytes stay where they were written")
+                    .isEqualTo("tenant-123/x/y/core:download_file/abc_clip.mp4");
+        }
+
+        @Test
+        @DisplayName("a file tool's 'unknown' workflow placeholder is filed at the root")
+        void unknownWorkflowPlaceholderIsFiledAtRoot() {
+            when(storageUtils.extractFileExtension("a.pdf")).thenReturn("pdf");
+            when(storageRepository.save(any(StorageEntity.class))).thenAnswer(inv -> {
+                StorageEntity e = inv.getArgument(0);
+                e.setId(UUID.randomUUID());
+                return e;
+            });
+
+            storageService.saveS3FileIndex(
+                    TENANT_ID, "unknown", "unknown", "download", "tenant-123/unknown/unknown/download/abc_a.pdf",
+                    "a.pdf", "application/pdf", 10L, 0, 0, null, StorageSourceTypes.STEP_OUTPUT);
+
+            verify(storageRepository).save(entityCaptor.capture());
+            assertThat(entityCaptor.getValue().getWorkflowId()).isNull();
+            assertThat(entityCaptor.getValue().getRunId()).isNull();
+        }
+
+        @Test
+        @DisplayName("a blank workflow id is stored as no workflow, not as an empty folder key")
+        void blankWorkflowIdIsFiledAtRoot() {
+            when(storageUtils.extractFileExtension("a.pdf")).thenReturn("pdf");
+            when(storageRepository.save(any(StorageEntity.class))).thenAnswer(inv -> {
+                StorageEntity e = inv.getArgument(0);
+                e.setId(UUID.randomUUID());
+                return e;
+            });
+
+            storageService.saveS3FileIndex(
+                    TENANT_ID, "  ", "run-1", "download", "k", "a.pdf", "application/pdf", 10L,
+                    0, 0, null, StorageSourceTypes.STEP_OUTPUT);
+
+            verify(storageRepository).save(entityCaptor.capture());
+            assertThat(entityCaptor.getValue().getWorkflowId()).isNull();
+            assertThat(entityCaptor.getValue().getRunId()).isNull();
+        }
+
+        @Test
+        @DisplayName("a real workflow keeps its folder even when the run id is a placeholder "
+                + "(the folder resolves, so the file stays visible there)")
+        void realWorkflowWithPlaceholderRunIdKeepsItsFolder() {
+            when(storageUtils.extractFileExtension("a.pdf")).thenReturn("pdf");
+            when(storageRepository.save(any(StorageEntity.class))).thenAnswer(inv -> {
+                StorageEntity e = inv.getArgument(0);
+                e.setId(UUID.randomUUID());
+                return e;
+            });
+
+            storageService.saveS3FileIndex(
+                    TENANT_ID, WORKFLOW_UUID, "unknown", "download", "k", "a.pdf", "application/pdf", 10L,
+                    0, 0, null, StorageSourceTypes.STEP_OUTPUT);
+
+            verify(storageRepository).save(entityCaptor.capture());
+            assertThat(entityCaptor.getValue().getWorkflowId()).isEqualTo(WORKFLOW_UUID);
+            assertThat(entityCaptor.getValue().getRunId()).isEqualTo("unknown");
         }
 
         @Test

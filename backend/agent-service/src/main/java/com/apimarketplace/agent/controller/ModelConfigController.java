@@ -131,6 +131,12 @@ public class ModelConfigController {
                 entity.setFreeTierEnabledExplicitlySet(true);
                 entity.setFreeTierEnabled(Boolean.TRUE.equals(optionalBoolean(body, "freeTierEnabled")));
             }
+            if (body.containsKey("unlisted")) {
+                // V554: available but not offered. Absent key leaves the stored value alone;
+                // a null value reads as false (listed), the column being NOT NULL.
+                entity.setUnlistedExplicitlySet(true);
+                entity.setUnlisted(Boolean.TRUE.equals(optionalBoolean(body, "unlisted")));
+            }
             if (body.containsKey("displayName")) entity.setDisplayName(optionalString(body, "displayName"));
             if (body.containsKey("tier")) entity.setTier(optionalString(body, "tier"));
             if (body.containsKey("ranking")) entity.setRanking(optionalInteger(body, "ranking", 0, 100_000));

@@ -35,6 +35,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static com.apimarketplace.agent.tools.common.ToolParamUtils.*;
 import static com.apimarketplace.agent.tools.common.ToolParamUtils.normalizeVisibility;
@@ -135,7 +136,7 @@ public class WorkflowCrudModule implements ToolModule {
             case "pin" -> executePin(parameters, tenantId, context);
             case "unpin" -> executeUnpin(parameters, tenantId, context);
             case "publish" -> executePublish(parameters, tenantId, context);
-            case "unpublish" -> executeUnpublish(parameters, tenantId);
+            case "unpublish" -> executeUnpublish(parameters, tenantId, context);
             default -> ToolExecutionResult.failure(ToolErrorCode.INVALID_ENUM_VALUE, "Unknown action: " + action);
         });
     }
@@ -143,13 +144,14 @@ public class WorkflowCrudModule implements ToolModule {
     // ==================== Pin / Unpin ====================
 
     private ToolExecutionResult executePin(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
-        String workflowIdStr = getStringParam(parameters, "workflow_id");
-        if (workflowIdStr == null || workflowIdStr.isBlank()) {
-            workflowIdStr = getStringParam(parameters, "id");
-        }
+        String workflowIdStr = workflowIdParam(parameters);
         if (workflowIdStr == null || workflowIdStr.isBlank()) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "workflow_id is required for pin");
         }
+        // Allow-list: a restricted agent must not change a workflow outside its list. The reads
+        // (get / runs / get_run / get_node_output) always checked; the writes never did.
+        var workflowDenied = denyIfWorkflowNotAllowed(context, workflowIdStr);
+        if (workflowDenied.isPresent()) return workflowDenied.get();
 
         Integer version = getIntParam(parameters, "version");
         if (version == null) {
@@ -177,13 +179,14 @@ public class WorkflowCrudModule implements ToolModule {
     }
 
     private ToolExecutionResult executeUnpin(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
-        String workflowIdStr = getStringParam(parameters, "workflow_id");
-        if (workflowIdStr == null || workflowIdStr.isBlank()) {
-            workflowIdStr = getStringParam(parameters, "id");
-        }
+        String workflowIdStr = workflowIdParam(parameters);
         if (workflowIdStr == null || workflowIdStr.isBlank()) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "workflow_id is required for unpin");
         }
+        // Allow-list: a restricted agent must not change a workflow outside its list. The reads
+        // (get / runs / get_run / get_node_output) always checked; the writes never did.
+        var workflowDenied = denyIfWorkflowNotAllowed(context, workflowIdStr);
+        if (workflowDenied.isPresent()) return workflowDenied.get();
 
         try {
             UUID workflowId = UUID.fromString(workflowIdStr);
@@ -234,13 +237,14 @@ public class WorkflowCrudModule implements ToolModule {
     // ==================== Publish / Unpublish ====================
 
     private ToolExecutionResult executePublish(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
-        String workflowIdStr = getStringParam(parameters, "workflow_id");
-        if (workflowIdStr == null || workflowIdStr.isBlank()) {
-            workflowIdStr = getStringParam(parameters, "id");
-        }
+        String workflowIdStr = workflowIdParam(parameters);
         if (workflowIdStr == null || workflowIdStr.isBlank()) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "workflow_id is required for publish");
         }
+        // Allow-list: a restricted agent must not change a workflow outside its list. The reads
+        // (get / runs / get_run / get_node_output) always checked; the writes never did.
+        var workflowDenied = denyIfWorkflowNotAllowed(context, workflowIdStr);
+        if (workflowDenied.isPresent()) return workflowDenied.get();
 
         String title = getStringParam(parameters, "title");
         if (title == null || title.isBlank()) {
@@ -362,11 +366,66 @@ public class WorkflowCrudModule implements ToolModule {
                     + (request.containsKey("showcaseInterfaceId") ? "Published as an application. " : "")
                     + "Marketplace publication id: " + response.get("id"));
             return ToolExecutionResult.success(data);
+        } catch (IllegalArgumentException e) {
+            // Reachable once PublicationClient.publishWorkflow reports a 400 as an
+            // IllegalArgumentException (branch fix/agent-tool-ergonomics, 516ad1171f); until that
+            // lands the client wraps every failure in a RuntimeException, handled below.
+            // The publication service refused the request itself (a 400: e.g. a showcase epoch
+            // the run does not have). That is a parameter the agent can fix, not a failure of
+            // the platform, so it gets the parameter code and the service's own message.
+            log.info("Publish of workflow {} refused as invalid: {}", workflowIdStr, e.getMessage());
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                    "Publish refused: " + e.getMessage());
+        } catch (com.apimarketplace.publication.client.PublicationValidationException e) {
+            // 422 = the plan itself is not shareable (today: it uses a custom API, which
+            // exists only in this account and could never resolve for anyone installing
+            // the publication). The agent fixes the PLAN, so it gets the parameter code
+            // and the service's own sentence, not a platform-failure code.
+            log.info("Publish of workflow {} refused ({}): {}", workflowIdStr, e.getErrorCode(), e.getMessage());
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                    buildPublishRefusalMessage(e));
         } catch (RuntimeException e) {
             String msg = extractPublicationErrorMessage(e);
             log.warn("Failed to publish workflow {}: {}", workflowIdStr, msg);
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to publish workflow: " + msg);
         }
+    }
+
+    /**
+     * Render publication-service's structured 422 publish refusal as something the agent
+     * can act on through THIS tool: which custom APIs block the share, which node ids
+     * carry them, and the two ways out (swap the node for a catalog integration, or
+     * publish privately). Without the detail the agent only learns that "a" custom API
+     * is in the way and has to guess which node to change.
+     */
+    private static String buildPublishRefusalMessage(
+            com.apimarketplace.publication.client.PublicationValidationException e) {
+        StringBuilder sb = new StringBuilder("Publish refused: ").append(e.getMessage());
+        Object customApis = e.getBody().get("customApis");
+        if ("CUSTOM_API_NOT_PUBLISHABLE".equals(e.getErrorCode())
+                && customApis instanceof List<?> list && !list.isEmpty()) {
+            sb.append(" Custom APIs used: ");
+            boolean first = true;
+            for (Object apiRaw : list) {
+                if (!(apiRaw instanceof Map<?, ?> api)) continue;
+                if (!first) sb.append(", ");
+                first = false;
+                Object name = api.get("apiName") != null ? api.get("apiName") : api.get("apiSlug");
+                sb.append('"').append(name).append('"');
+                if (api.get("toolIdentifiers") instanceof List<?> tools && !tools.isEmpty()) {
+                    sb.append(" (nodes on: ")
+                      .append(tools.stream().map(String::valueOf).collect(Collectors.joining(", ")))
+                      .append(')');
+                }
+            }
+            sb.append(". Fix: a node's catalog tool cannot be re-pointed in place")
+              .append(" (workflow(action='modify') edits params only), so remove each listed node")
+              .append(" with workflow(action='remove', node='<label>') and add_node one on a shipped")
+              .append(" integration instead (find one with catalog(action='search')), rewiring with")
+              .append(" connect_after. Or publish with visibility='PRIVATE', which keeps the")
+              .append(" application in your own account where the custom API resolves.");
+        }
+        return sb.toString();
     }
 
     /**
@@ -388,14 +447,16 @@ public class WorkflowCrudModule implements ToolModule {
         }
     }
 
-    private ToolExecutionResult executeUnpublish(Map<String, Object> parameters, String tenantId) {
-        String workflowIdStr = getStringParam(parameters, "workflow_id");
-        if (workflowIdStr == null || workflowIdStr.isBlank()) {
-            workflowIdStr = getStringParam(parameters, "id");
-        }
+    private ToolExecutionResult executeUnpublish(Map<String, Object> parameters, String tenantId,
+                                                  ToolExecutionContext context) {
+        String workflowIdStr = workflowIdParam(parameters);
         if (workflowIdStr == null || workflowIdStr.isBlank()) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "workflow_id is required for unpublish");
         }
+        // Allow-list: a restricted agent must not change a workflow outside its list. The reads
+        // (get / runs / get_run / get_node_output) always checked; the writes never did.
+        var workflowDenied = denyIfWorkflowNotAllowed(context, workflowIdStr);
+        if (workflowDenied.isPresent()) return workflowDenied.get();
 
         UUID workflowId;
         try {
@@ -420,9 +481,10 @@ public class WorkflowCrudModule implements ToolModule {
     // ==================== Get ====================
 
     private ToolExecutionResult executeGet(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
-        String workflowIdStr = getStringParam(parameters, "workflow_id");
+        String workflowIdStr = workflowIdParam(parameters);
         if (workflowIdStr == null || workflowIdStr.isBlank()) {
-            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "workflow_id is required");
+            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER,
+                    "workflow_id is required (the workflow UUID; 'id' is accepted too)");
         }
 
         var workflowDenied = denyIfWorkflowNotAllowed(context, workflowIdStr);
@@ -734,10 +796,19 @@ public class WorkflowCrudModule implements ToolModule {
 
     private ToolExecutionResult executeDelete(Map<String, Object> parameters, String tenantId,
                                                 ToolExecutionContext context) {
+        // workflow_id ONLY, never the 'id' alias the other workflow-scoped actions accept: a
+        // delete is irreversible and runs without the user's authorization, so it must name its
+        // target with the one parameter that means "this workflow" (user decision, 2026-09-29).
         String workflowIdStr = getStringParam(parameters, "workflow_id");
         if (workflowIdStr == null || workflowIdStr.isBlank()) {
-            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "workflow_id is required");
+            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER,
+                    "workflow_id is required for delete (the workflow UUID). delete does not accept 'id': "
+                    + "pass workflow(action='delete', workflow_id='<uuid>').");
         }
+        // Allow-list: a restricted agent must not change a workflow outside its list. The reads
+        // (get / runs / get_run / get_node_output) always checked; the writes never did.
+        var workflowDenied = denyIfWorkflowNotAllowed(context, workflowIdStr);
+        if (workflowDenied.isPresent()) return workflowDenied.get();
 
         try {
             UUID workflowId = UUID.fromString(workflowIdStr);
@@ -781,9 +852,10 @@ public class WorkflowCrudModule implements ToolModule {
     // ==================== Runs ====================
 
     private ToolExecutionResult executeRuns(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
-        String workflowIdStr = getStringParam(parameters, "workflow_id");
+        String workflowIdStr = workflowIdParam(parameters);
         if (workflowIdStr == null || workflowIdStr.isBlank()) {
-            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "workflow_id is required");
+            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER,
+                    "workflow_id is required (the workflow UUID; 'id' is accepted too)");
         }
 
         // Allow-list: a restricted agent must not read run history of a workflow outside its list
@@ -1210,9 +1282,15 @@ public class WorkflowCrudModule implements ToolModule {
         if (runId == null || runId.isBlank()) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "run_id is required");
         }
+        // Optional: omitted means the most recent epoch in which this node ran (resolved
+        // below, after the scope checks, and reported back as epoch_note). Present but not a
+        // number is refused rather than defaulted, so a typo never silently reads another fire.
+        Object rawEpoch = parameters.get("epoch");
         Integer epoch = getIntParam(parameters, "epoch");
-        if (epoch == null) {
-            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "epoch is required for get_node_output");
+        if (rawEpoch != null && epoch == null) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                    "epoch must be a number (the epoch as workflow(action='get_run') reports it), got: "
+                    + rawEpoch + ". Omit it to read the most recent epoch in which the node ran.");
         }
         String nodeId = getStringParam(parameters, "node_id");
         if (nodeId == null || nodeId.isBlank()) {
@@ -1248,12 +1326,16 @@ public class WorkflowCrudModule implements ToolModule {
             var workflowDenied = denyIfWorkflowNotAllowed(context,
                     workflow != null && workflow.getId() != null ? workflow.getId().toString() : null);
             if (workflowDenied.isPresent()) return workflowDenied.get();
+            var epochResolution = com.apimarketplace.orchestrator.tools.common.NodeOutputEpoch.resolve(
+                    epoch, run, nodeId, "workflow", agentWorkflowFireService);
+            if (epochResolution.failed()) return epochResolution.failure();
             RunPlan runPlan = planVersionService.resolvePlanForRun(workflow.getId(), run.getPlanVersion(), tenantId);
 
-            return ToolExecutionResult.success(runPlan.annotate(
+            Map<String, Object> report = epochResolution.annotate(runPlan.annotate(
                     agentWorkflowFireService.buildNodeOutputReport(
-                            run, runPlan.plan(), epoch, nodeId, tenantId, itemIndex, iteration, spawn,
+                            run, runPlan.plan(), epochResolution.epoch(), nodeId, tenantId, itemIndex, iteration, spawn,
                             expandField, fieldOffset, fieldMaxBytes)));
+            return ToolExecutionResult.success(report);
         } catch (Exception e) {
             log.error("Failed to get node output for run {}, node {}: {}", runId, nodeId, e.getMessage(), e);
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to get node output: " + e.getMessage());
@@ -1261,6 +1343,25 @@ public class WorkflowCrudModule implements ToolModule {
     }
 
     // ==================== Helpers ====================
+
+    /**
+     * The workflow a workflow-scoped action targets: {@code workflow_id}, else {@code id}.
+     *
+     * <p>The two names mean the same UUID on this tool ({@code load} and {@code execute} take
+     * {@code id}, the CRUD actions were documented with {@code workflow_id}), and agents carry
+     * the name of the last action they used: {@code get} with {@code id} failed with
+     * "workflow_id is required" although the id was right there. pin/unpin/publish/unpublish
+     * already accepted both in this order; get and runs now read it here too, so there is one
+     * spelling of the rule. NOT delete: it is irreversible and requires {@code workflow_id}. Each caller still runs its own allow-list and scope
+     * checks on the value this returns.
+     */
+    static String workflowIdParam(Map<String, Object> parameters) {
+        String workflowId = getStringParam(parameters, "workflow_id");
+        if (workflowId == null || workflowId.isBlank()) {
+            workflowId = getStringParam(parameters, "id");
+        }
+        return workflowId;
+    }
 
     @SuppressWarnings("unchecked")
     private List<String> getAllowedWorkflowIds(ToolExecutionContext context) {
@@ -1271,7 +1372,8 @@ public class WorkflowCrudModule implements ToolModule {
     /**
      * Deny when the agent has a restricted workflow allow-list that excludes {@code workflowIdStr}.
      * null list ⇒ unrestricted (pass); null id ⇒ pass (left to the caller's own handling).
-     * Shared by get / runs / get_run / get_node_output so reads can't bypass the allow-list.
+     * Shared by get / runs / get_run / get_node_output so reads can't bypass the allow-list, and by
+     * delete / pin / unpin / publish / unpublish so writes can't either.
      */
     private Optional<ToolExecutionResult> denyIfWorkflowNotAllowed(ToolExecutionContext context, String workflowIdStr) {
         List<String> allowed = getAllowedWorkflowIds(context);

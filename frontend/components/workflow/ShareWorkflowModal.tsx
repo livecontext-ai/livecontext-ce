@@ -24,6 +24,8 @@ import {
   Monitor, Workflow, Table2, StepForward, Clapperboard,
 } from 'lucide-react';
 import { orchestratorApi, WorkflowPublication, WorkflowRun } from '@/lib/api';
+import { customApiService, type CustomApiRef } from '@/lib/api/orchestrator/custom-api.service';
+import { collectPlanToolIdentifiers } from '@/lib/utils/customApiPlanRefs';
 import { track } from '@/lib/analytics/analytics';
 import type { WorkflowPlanVersion, WorkflowVersionsResponse } from '@/lib/api/orchestrator/types';
 import { useInterfaceRender } from '@/app/workflows/builder/hooks/useInterfaces';
@@ -218,6 +220,10 @@ export function PublishWorkflowModal({
   const [planInterfaces, setPlanInterfaces] = useState<any[]>([]);
   const [planTables, setPlanTables] = useState<any[]>([]);
   const [hasWorkflowTrigger, setHasWorkflowTrigger] = useState(false);
+  // Custom APIs (private to this account) used by the selected version. Non-empty
+  // blocks a PUBLIC / UNLISTED share: the acquirer's catalog has no such API, so those
+  // nodes could never run for them. A PRIVATE publication is exempt (same account).
+  const [planCustomApis, setPlanCustomApis] = useState<CustomApiRef[]>([]);
   // The version whose plan has finished loading into planInterfaces/planTables.
   // Gating the "no interface" explanation on `planLoadedVersion === selectedVersion`
   // means it only renders once THIS version's plan has resolved - so it never
@@ -325,6 +331,14 @@ export function PublishWorkflowModal({
   const isPrivate = visibility === 'PRIVATE';
   const totalSteps = TOTAL_STEPS;
 
+  // Only a SHARED publication is blocked by a custom API: a private one stays inside
+  // this account, where the custom API resolves exactly as it does in the workflow.
+  // Mirrors publication-service's CustomApiPublishGuard.
+  const isBlockedByCustomApi = !isPrivate && planCustomApis.length > 0;
+  const customApiNames = planCustomApis
+    .map(api => api.apiName || api.apiSlug)
+    .join(', ');
+
   const canProceedFromStep = (step: number): boolean => {
     switch (step) {
       case 1: return !!title.trim() && selectedVersion !== null && !hasWorkflowTrigger && versionsWithAutoRuns.has(selectedVersion) && planInterfaces.length > 0;
@@ -381,6 +395,7 @@ export function PublishWorkflowModal({
       setPlanInterfaces([]);
       setPlanTables([]);
       setHasWorkflowTrigger(false);
+      setPlanCustomApis([]);
       setPlanLoadedVersion(null);
       return;
     }
@@ -400,11 +415,24 @@ export function PublishWorkflowModal({
         setHasWorkflowTrigger(
           Array.isArray(plan?.triggers) && plan.triggers.some((t: any) => t.type === 'workflow')
         );
+        // A custom API is private to this account, so publication-service refuses to
+        // SHARE anything built on one (a PRIVATE publication stays allowed). Resolve it
+        // here so step 1 explains it up-front instead of failing at the last step.
+        // A lookup failure leaves the list empty: the backend gate still applies.
+        const toolIdentifiers = collectPlanToolIdentifiers(plan);
+        let customApis: CustomApiRef[] = [];
+        try {
+          customApis = await customApiService.findRefs(toolIdentifiers);
+        } catch (err) {
+          console.error('Error resolving custom APIs used by the plan:', err);
+        }
+        if (!cancelled) setPlanCustomApis(customApis);
       } catch {
         if (!cancelled) {
           setPlanInterfaces([]);
           setPlanTables([]);
               setHasWorkflowTrigger(false);
+          setPlanCustomApis([]);
         }
       } finally {
         // Mark this version's plan as resolved only after its data is set, so
@@ -1200,6 +1228,18 @@ export function PublishWorkflowModal({
       {/* Visibility - the final decision before publishing. */}
       {renderVisibilityToggle()}
 
+      {/* A custom API belongs to this account only, so it cannot travel with a shared
+          publication (publication-service refuses it). Say so right under the visibility
+          choice, where the fix is: switching to Private clears the block. */}
+      {isBlockedByCustomApi && (
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+          <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <span className="text-sm text-amber-700 dark:text-amber-300">
+            {t('customApiCannotShare', { apis: customApiNames })}
+          </span>
+        </div>
+      )}
+
       {visibility === 'PUBLIC' && (
         <>
           {/* Included resources recap */}
@@ -1462,7 +1502,7 @@ export function PublishWorkflowModal({
                   <ArrowRight className="h-4 w-4 ml-2" />
                 </Button>
               ) : (
-                <Button onClick={handlePublish} disabled={isSubmitting || !title.trim() || selectedRunId === 'none' || selectedInterfaceId === 'none'}>
+                <Button onClick={handlePublish} disabled={isSubmitting || !title.trim() || selectedRunId === 'none' || selectedInterfaceId === 'none' || isBlockedByCustomApi}>
                   {isSubmitting ? (
                     <>
                       <LoadingSpinner size="xs" className="mr-2" />

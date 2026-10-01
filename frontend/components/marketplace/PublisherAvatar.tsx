@@ -53,6 +53,12 @@ interface PublisherAvatarProps {
    * (profiles, reviews) renders a LOCAL user and leaves it false.
    */
   remote?: boolean;
+  /**
+   * An explicit image to show instead of the user's avatar endpoint: the illustrative
+   * profiles on the /partners page, which have no account behind them. Falls back to the
+   * initials like a missing avatar would.
+   */
+  src?: string | null;
 }
 
 /**
@@ -65,10 +71,10 @@ interface PublisherAvatarProps {
  *  2. Client-side initials from `name` prop (for personas / deleted users)
  *  3. Generic User icon
  */
-export function PublisherAvatar({ userId, name, size = 18, variant = 'overlay', remote = false }: PublisherAvatarProps) {
+export function PublisherAvatar({ userId, name, size = 18, variant = 'overlay', remote = false, src }: PublisherAvatarProps) {
   const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [userId]);
-  const hasId = userId !== null && userId !== undefined && String(userId).length > 0;
+  useEffect(() => setFailed(false), [userId, src]);
+  const hasId = !!src || (userId !== null && userId !== undefined && String(userId).length > 0);
   const hasName = !!name && name.trim().length > 0;
 
   const wrapperClass = cn(
@@ -76,9 +82,11 @@ export function PublisherAvatar({ userId, name, size = 18, variant = 'overlay', 
     variant === 'overlay' && 'ring-1 ring-black/10 dark:ring-white/15',
   );
 
-  const avatarSrc = remote
-    ? `/api/proxy/publications/remote/users/${userId}/avatar`
-    : `/api/proxy/users/${userId}/avatar`;
+  const avatarSrc = src
+    ? src
+    : remote
+      ? `/api/proxy/publications/remote/users/${userId}/avatar`
+      : `/api/proxy/users/${userId}/avatar`;
 
   // ---- Backend image (happy path) ----
   if (hasId && !failed) {

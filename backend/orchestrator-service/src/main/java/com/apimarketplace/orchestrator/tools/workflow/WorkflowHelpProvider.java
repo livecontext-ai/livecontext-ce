@@ -77,7 +77,7 @@ public class WorkflowHelpProvider {
         "runs",          // Inspecting past workflow runs
         "pin",           // Production version pinning (pin/unpin actions)
         "mocking",       // Node mocks: pin a node's output for editor runs (mock/mock_mode/mock_suggest)
-        "node_policy"    // Per-node execution policy: retry, backoff, timeout, continueOnFailure, executeOnce, provider retry budget
+        "node_policy"    // Per-node execution policy: retry, backoff, timeout, continueOnFailure, executeOnce
     );
 
     // ==================== MAIN ENTRY POINT ====================
@@ -277,9 +277,9 @@ public class WorkflowHelpProvider {
             // Mock mode - pin node outputs for editor runs
             case "mocking", "mock", "mocks", "mock_mode", "mock_suggest", "dry_run" -> ConceptsHelpProvider.getMockingHelp();
 
-            // Per-node execution policy - retry / backoff / timeout / continueOnFailure / executeOnce / provider retry budget
+            // Per-node execution policy - retry / backoff / timeout / continueOnFailure / executeOnce
             case "node_policy", "nodepolicy", "policy", "retry", "retries", "timeout", "continue_on_failure",
-                 "execute_once", "execution_policy", "provider_retry" -> ConceptsHelpProvider.getNodePolicyHelp();
+                 "execute_once", "execution_policy", "rate_limit", "provider_retry" -> ConceptsHelpProvider.getNodePolicyHelp();
 
             // Plan format - JSON structure for set_plan/get_plan
             case "plan", "set_plan", "get_plan", "plan_format" -> ExamplesHelpProvider.getPlanHelp();
@@ -1212,12 +1212,13 @@ public class WorkflowHelpProvider {
             "next", "For one node, call get_node_output (use item_index/iteration/spawn to zoom into one row when execution_count > 1)."
         ));
         actions.put("4_get_node_output", ordered(
-            "syntax", "workflow(action='get_node_output', run_id='uuid', epoch=N, node_id='core:my_node'[, item_index=I][, iteration=K][, spawn=S][, field='F'][, offset=O][, max_bytes=B])",
+            "syntax", "workflow(action='get_node_output', run_id='uuid', node_id='core:my_node'[, epoch=N][, item_index=I][, iteration=K][, spawn=S][, field='F'][, offset=O][, max_bytes=B])",
             "zoom_level", "Deepest - full input/output/error for ONE row in ONE epoch.",
-            "returns_list_mode", "When the node has multiple persisted rows for this epoch and no filter is passed: {run_id, epoch, node_id, label, type, status, execution_count, status_counts, items:[{item_index, iteration?, spawn?, item_id?, item_number?, status, error?, skip_reason?, selected_branch?, condition_result?, loop_iteration?, started_at, ended_at, duration_ms}]} - items[] is sorted by (item_index, iteration, spawn). NO output blob in list mode (call again with a filter to fetch one).",
-            "returns_zoom_mode", "When only one row exists, OR when item_index/iteration/spawn filters select exactly one row: {run_id, epoch, node_id, label, type, status (node-level), item_status (per-row), item_index, iteration?, spawn?, item_id?, item_number?, node_type?, tool_id?, http_status?, output, resolved_params, error?, selected_branch?, condition_expression?, condition_result?, loop_id?, loop_iteration?, loop_exit_reason?, merge_strategy?, merge_received_branches?, merge_skipped_branches?, skip_reason?, skip_source_node?, started_at, ended_at, duration_ms}",
+            "returns_list_mode", "When the node has multiple persisted rows for this epoch and no filter is passed: {run_id, epoch, epoch_note?, node_id, label, type, status, execution_count, status_counts, items:[{item_index, iteration?, spawn?, item_id?, item_number?, status, error?, skip_reason?, selected_branch?, condition_result?, loop_iteration?, started_at, ended_at, duration_ms}]} - items[] is sorted by (item_index, iteration, spawn). NO output blob in list mode (call again with a filter to fetch one).",
+            "returns_zoom_mode", "When only one row exists, OR when item_index/iteration/spawn filters select exactly one row: {run_id, epoch, epoch_note?, node_id, label, type, status (node-level), item_status (per-row), item_index, iteration?, spawn?, item_id?, item_number?, node_type?, tool_id?, http_status?, output, resolved_params, error?, selected_branch?, condition_expression?, condition_result?, loop_id?, loop_iteration?, loop_exit_reason?, merge_strategy?, merge_received_branches?, merge_skipped_branches?, skip_reason?, skip_source_node?, started_at, ended_at, duration_ms}",
             "filter_miss", "If item_index / iteration / spawn don't match any row: {note, execution_count, status_counts} so you can re-call without the filter.",
-            "params", "run_id (required), epoch (required int), node_id (required - use exact node_id from get_run epoch detail), item_index (optional int - pick one item from a split fan-out), iteration (optional int - pick one loop iteration), spawn (optional int - pick one re-run), field (optional - name of a text output field to read in full), offset (optional int - byte offset to expand a field from), max_bytes (optional int - field window size, default & cap 128 KB). Filters are combinable.",
+            "epoch_note", "Present only when you omitted epoch: names the epoch that was read (the most recent one in which this node ran). Pass epoch=N to read another fire.",
+            "params", "run_id (required), epoch (optional int - omitted = the most recent epoch in which this node ran, and the response names it in epoch_note; pass it to read an older fire), node_id (required - use exact node_id from get_run epoch detail), item_index (optional int - pick one item from a split fan-out), iteration (optional int - pick one loop iteration), spawn (optional int - pick one re-run), field (optional - name of a text output field to read in full), offset (optional int - byte offset to expand a field from), max_bytes (optional int - field window size, default & cap 128 KB). Filters are combinable.",
             "expand_large_output", "Text output fields larger than 128 KB come back as a {truncated:true, original_length, preview} stub carrying a NEXT pointer. To read the full value, follow that NEXT - it sets field=<the field's dot-path, e.g. 'output.image' for a nested field> plus the SAME item_index/iteration/spawn, and returns {field, content, offset, returned_bytes, original_length, truncated, NEXT}. Keep following NEXT (each carries the next offset) to page through the whole field. Same 128 KB cap + truncated/original_length vocabulary as the files tool.",
             "field_meanings", ordered(
                 "status", "Node-level aggregated status from EpochState (COMPLETED if the node finished its work, regardless of how many items succeeded).",

@@ -4,6 +4,7 @@ import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.datasource.client.DataSourceClient;
 import com.apimarketplace.datasource.client.dto.ColumnMappingSpecDto;
 import com.apimarketplace.datasource.client.dto.DataSourceDto;
+import com.apimarketplace.orchestrator.tools.workflow.builder.FormFieldCanonicalizer;
 import com.apimarketplace.orchestrator.tools.workflow.builder.ResponseOptimizer;
 import com.apimarketplace.orchestrator.tools.workflow.builder.SmartDefaultsEngine;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderSession;
@@ -132,15 +133,16 @@ public class TriggerCreator extends CreatorBase {
             }
         }
 
-        // 5b. Validate form fields (if form trigger). validateFormFields also
+        // 5b. Validate form fields (if form trigger). FormFieldCanonicalizer.canonicalize also
         // mutates the params Map in place: replaces `fields` with a mutable
         // canonical list (auto-filled ids, coerced select options) so the
         // downstream buildTriggerNode + buildTriggerSchema see the same
         // canonical shape the inspector and PublicFormRenderer key on.
         if ("form".equals(type)) {
-            String fieldError = validateFormFields(parameters);
-            if (fieldError != null) {
-                return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, fieldError);
+            List<String> fieldIssues = FormFieldCanonicalizer.canonicalize(parameters);
+            if (!fieldIssues.isEmpty()) {
+                return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                        FormFieldCanonicalizer.refusal(fieldIssues));
             }
         }
 
@@ -916,205 +918,6 @@ public class TriggerCreator extends CreatorBase {
 
     // ==================== Form Field Validation & Normalization ====================
 
-    /**
-     * Valid form field types, normalized to lowercase. Validation lowercases
-     * the incoming {@code field.type} before checking against this set, so
-     * agents can submit either camelCase ({@code checkboxGroup}) or all-lower
-     * ({@code checkboxgroup}) - both are accepted. The original case is
-     * preserved when persisted; the frontend FieldType enum keys on the
-     * camelCase form.
-     */
-    private static final Set<String> VALID_FIELD_TYPES = Set.of(
-        "text", "email", "password", "number", "textarea", "select", "multiselect",
-        "checkbox", "checkboxgroup", "radio", "date", "datetime", "time",
-        "file", "url", "tel", "hidden"
-    );
-
-    private static final Map<String, String> FIELD_TYPE_ALIASES = Map.of(
-        "string", "text",
-        "str", "text",
-        "int", "number",
-        "integer", "number",
-        "bool", "checkbox",
-        "boolean", "checkbox",
-        "phone", "tel"
-    );
-
-    /**
-     * Field types whose {@code options} array must be coerced to the canonical
-     * {@code [{id, label, value}]} shape. Lowercased to match the resolved
-     * type post {@link #FIELD_TYPE_ALIASES} application.
-     */
-    private static final Set<String> OPTION_BEARING_TYPES = Set.of(
-        "select", "multiselect", "radio", "checkboxgroup"
-    );
-
-    /**
-     * Validate form fields structure AND coerce loose shapes (string-array
-     * options shorthand, missing field/option ids) into the canonical builder
-     * shape so the persisted plan, the inspector, and the public form
-     * renderer all read the same objects.
-     *
-     * <p>Replaces {@code parameters.get("fields")} with a fully-mutable,
-     * canonical list. Callers must NOT cache the pre-call reference. We take
-     * the {@code parameters} Map (rather than the field list directly)
-     * because both the input list AND its inner field maps may be immutable
-     * ({@code List.of(Map.of(...))} from JSON deserialization or test
-     * fixtures); rebuilding upfront avoids scattering immutability checks.</p>
-     *
-     * <p>Returns an error message or {@code null} if valid.</p>
-     */
-    @SuppressWarnings("unchecked")
-    private String validateFormFields(Map<String, Object> parameters) {
-        Object rawFields = parameters.get("fields");
-        if (!(rawFields instanceof List<?> rawList) || rawList.isEmpty()) {
-            return null; // fields are optional
-        }
-
-        // Build a mutable, canonical list up-front. Inner field maps may also
-        // be immutable (Map.of(...) in tests / deser), so copy each one too.
-        List<Map<String, Object>> fields = new ArrayList<>(rawList.size());
-        for (Object raw : rawList) {
-            if (raw instanceof Map<?, ?> m) {
-                fields.add(new LinkedHashMap<>((Map<String, Object>) m));
-            } else {
-                // Non-map entries land here; the per-field validation below
-                // will catch them via the missing-name check.
-                fields.add(new LinkedHashMap<>());
-            }
-        }
-        parameters.put("fields", fields);
-
-        Set<String> seenNames = new HashSet<>();
-        List<String> errors = new ArrayList<>();
-
-        for (int i = 0; i < fields.size(); i++) {
-            Map<String, Object> field = fields.get(i);
-
-            // name is required
-            Object nameObj = field.get("name");
-            if (!(nameObj instanceof String name) || name.isBlank()) {
-                errors.add("field[" + i + "]: 'name' is required");
-                continue;
-            }
-
-            // no duplicate names
-            if (!seenNames.add(name)) {
-                errors.add("field '" + name + "': duplicate name");
-            }
-
-            // type must be valid (after alias resolution)
-            String resolvedType = null;
-            Object typeObj = field.get("type");
-            if (typeObj instanceof String fieldType) {
-                String lower = fieldType.toLowerCase();
-                if (!VALID_FIELD_TYPES.contains(lower) && !FIELD_TYPE_ALIASES.containsKey(lower)) {
-                    errors.add("field '" + name + "': type '" + fieldType + "' is invalid. " +
-                        "Valid: text, email, number, textarea, select, checkbox, date, datetime, time, " +
-                        "file, url, tel, password, radio, multiselect, checkboxGroup, hidden");
-                } else {
-                    resolvedType = FIELD_TYPE_ALIASES.getOrDefault(lower, lower);
-                }
-            }
-
-            // Stable id (the inspector keys React lists on field.id; without
-            // one, edits collapse onto a single sibling). Auto-fill so LLM
-            // callers don't have to know about it.
-            Object idObj = field.get("id");
-            if (!(idObj instanceof String idStr) || idStr.isBlank()) {
-                field.put("id", "field-" + i);
-            }
-
-            // Coerce options shape for select/multiselect/radio/checkboxGroup.
-            // Accept the string shorthand (["a", "b"]) and the canonical
-            // [{label, value}] form. Reject anything else explicitly so the
-            // agent gets a useful error instead of a silently-empty UI.
-            if (resolvedType != null && OPTION_BEARING_TYPES.contains(resolvedType)) {
-                String optionsError = coerceFieldOptions(field, name);
-                if (optionsError != null) {
-                    errors.add(optionsError);
-                }
-            }
-        }
-
-        if (errors.isEmpty()) {
-            return null;
-        }
-
-        return "Form field validation failed:\n  - " + String.join("\n  - ", errors) +
-            "\n\nExample: fields: [{name: 'email', type: 'email', label: 'Email', required: true}, " +
-            "{name: 'tier', type: 'select', label: 'Tier', required: true, " +
-            "options: [{label: 'Free', value: 'free'}, {label: 'Pro', value: 'pro'}]}]";
-    }
-
-    /**
-     * Coerce {@code field.options} for select-like fields into the canonical
-     * {@code [{id, label, value}]} shape and mutate the field map in place.
-     *
-     * <p>Accepts:
-     * <ul>
-     *   <li>String shorthand: {@code options: ["a", "b"]} →
-     *       {@code [{id:"opt-0", label:"a", value:"a"}, ...]}</li>
-     *   <li>Object form: {@code [{label, value}]} (and {@code id} when present)</li>
-     * </ul>
-     * Rejects mixed-shape arrays with empty {@code label} or {@code value} so
-     * the LLM gets a clear error instead of a UI that silently drops options.</p>
-     *
-     * @return an error message string for {@code validateFormFields} to surface,
-     *         or {@code null} when the field is valid (and now canonical).
-     */
-    private String coerceFieldOptions(Map<String, Object> field, String fieldName) {
-        Object opts = field.get("options");
-        if (opts == null) {
-            return "field '" + fieldName + "' is select/multiselect/radio/checkboxGroup but has no 'options'. " +
-                "Provide an array - strings or {label, value} objects both accepted.";
-        }
-        if (!(opts instanceof List<?> rawList)) {
-            return "field '" + fieldName + "': 'options' must be an array, got " + opts.getClass().getSimpleName();
-        }
-        if (rawList.isEmpty()) {
-            return "field '" + fieldName + "': 'options' is empty - provide at least one option.";
-        }
-
-        List<Map<String, Object>> coerced = new ArrayList<>(rawList.size());
-        for (int j = 0; j < rawList.size(); j++) {
-            Object item = rawList.get(j);
-            if (item instanceof String s) {
-                if (s.isBlank()) {
-                    return "field '" + fieldName + "': options[" + j + "] is an empty string.";
-                }
-                Map<String, Object> normalized = new LinkedHashMap<>();
-                normalized.put("id", "opt-" + j);
-                normalized.put("label", s);
-                normalized.put("value", s);
-                coerced.add(normalized);
-            } else if (item instanceof Map<?, ?> rawMap) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> m = (Map<String, Object>) rawMap;
-                Object label = m.get("label");
-                Object value = m.get("value");
-                if (!(label instanceof String labelStr) || labelStr.isBlank()) {
-                    return "field '" + fieldName + "': options[" + j + "] is missing a non-empty 'label'.";
-                }
-                if (!(value instanceof String valueStr) || valueStr.isBlank()) {
-                    return "field '" + fieldName + "': options[" + j + "] is missing a non-empty 'value'.";
-                }
-                Map<String, Object> normalized = new LinkedHashMap<>();
-                Object existingId = m.get("id");
-                normalized.put("id",
-                    (existingId instanceof String idStr && !idStr.isBlank()) ? idStr : "opt-" + j);
-                normalized.put("label", labelStr);
-                normalized.put("value", valueStr);
-                coerced.add(normalized);
-            } else {
-                return "field '" + fieldName + "': options[" + j + "] must be a string or {label, value} object, " +
-                    "got " + (item == null ? "null" : item.getClass().getSimpleName());
-            }
-        }
-
-        field.put("options", coerced);
-        return null;
-    }
 
     /**
      * Normalize form field types: auto-correct known aliases like "string" → "text".
@@ -1126,8 +929,8 @@ public class TriggerCreator extends CreatorBase {
             Object typeObj = f.get("type");
             if (typeObj instanceof String fieldType) {
                 String lower = fieldType.toLowerCase();
-                if (!VALID_FIELD_TYPES.contains(lower)) {
-                    String corrected = FIELD_TYPE_ALIASES.getOrDefault(lower, "text");
+                if (!FormFieldCanonicalizer.VALID_FIELD_TYPES.contains(lower)) {
+                    String corrected = FormFieldCanonicalizer.FIELD_TYPE_ALIASES.getOrDefault(lower, "text");
                     f.put("type", corrected);
                 }
             } else {

@@ -41,7 +41,22 @@ public interface SharedLinkRepository extends JpaRepository<SharedLinkEntity, UU
      */
     Optional<SharedLinkEntity> findByTokenHash(String tokenHash);
 
-    Optional<SharedLinkEntity> findByResourceTokenHashAndIsActiveTrue(String resourceTokenHash);
+    /**
+     * Every ACTIVE link on this resource token, oldest first. Several can exist: the partial
+     * unique index that used to keep one active link per resource token sits on the encrypted
+     * column (random IV), so it no longer catches two rows of the same token.
+     */
+    List<SharedLinkEntity> findAllByResourceTokenHashAndIsActiveTrueOrderByCreatedAtAsc(String resourceTokenHash);
+
+    /**
+     * The active link on this resource token (the oldest when several exist, see
+     * {@link #findAllByResourceTokenHashAndIsActiveTrueOrderByCreatedAtAsc}). A derived
+     * {@code Optional} finder threw {@code IncorrectResultSizeDataAccessException} on a second
+     * row, which failed every share and every check on that resource with a 500.
+     */
+    default Optional<SharedLinkEntity> findByResourceTokenHashAndIsActiveTrue(String resourceTokenHash) {
+        return findAllByResourceTokenHashAndIsActiveTrueOrderByCreatedAtAsc(resourceTokenHash).stream().findFirst();
+    }
 
     Optional<SharedLinkEntity> findByResourceIdAndIsActiveTrue(UUID resourceId);
 

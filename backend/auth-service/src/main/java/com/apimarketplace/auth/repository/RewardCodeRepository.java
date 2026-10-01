@@ -8,14 +8,25 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
+import java.util.List;
 
 public interface RewardCodeRepository extends JpaRepository<RewardCode, Long> {
 
     /** Codes are matched case-insensitively (unique on UPPER(code), see V366). */
     Optional<RewardCode> findByCodeIgnoreCase(String code);
 
+    long countByCodeStartingWithIgnoreCase(String prefix);
+
+    /** Held until the issuing transaction commits, so equal names cannot choose the same code. */
+    @Query(value = "SELECT 1 FROM pg_advisory_xact_lock(hashtext(:key))", nativeQuery = true)
+    Integer lockPersonalOfferCodeName(@Param("key") String key);
+
     /** The owner's single code for a program (unique on (owner_user_id, program)). */
     Optional<RewardCode> findByOwnerUserIdAndProgram(Long ownerUserId, RewardProgram program);
+
+    Optional<RewardCode> findByRecipientUserIdAndCampaignKey(Long recipientUserId, String campaignKey);
+
+    List<RewardCode> findByRecipientUserIdAndProgram(Long recipientUserId, RewardProgram program);
 
     /** V549 admin report: partner codes and creator (credit-granting promo) codes, newest first. */
     @Query("""
@@ -26,6 +37,24 @@ public interface RewardCodeRepository extends JpaRepository<RewardCode, Long> {
            ORDER BY c.id DESC
            """)
     java.util.List<RewardCode> findPartnerProgramCodes();
+
+    /**
+     * The subset of {@code userIds} that own a live PARTNER code (active, inside its validity
+     * window) on an enabled account: the official-partner badge. Same shape as the verified
+     * badge lookups, one indexed query per rendered list.
+     */
+    @Query("""
+           SELECT DISTINCT c.ownerUserId FROM RewardCode c, User u
+           WHERE u.id = c.ownerUserId
+             AND u.enabled = true
+             AND c.program = com.apimarketplace.auth.domain.RewardProgram.PARTNER
+             AND c.active = true
+             AND c.validFrom <= :now
+             AND (c.validUntil IS NULL OR c.validUntil >= :now)
+             AND c.ownerUserId IN :userIds
+           """)
+    java.util.List<Long> findLivePartnerOwnerIdsIn(@Param("userIds") java.util.Collection<Long> userIds,
+                                                   @Param("now") java.time.Instant now);
 
     /**
      * Atomically reserve one redemption slot. Race-safe guard that the code is

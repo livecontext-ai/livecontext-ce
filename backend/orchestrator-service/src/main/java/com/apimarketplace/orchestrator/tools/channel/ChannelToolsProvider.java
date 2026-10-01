@@ -141,8 +141,8 @@ public class ChannelToolsProvider implements ToolsProvider {
                     ? "The bot has not received any message yet. Ask the user to open a chat with "
                             + (result.botUsername() != null ? "@" + result.botUsername() : "the bot")
                             + " and send it any message, then run discover again."
-                    : "Nothing this account can post to was found. On Slack, invite the app to the channel "
-                            + "(/invite in that channel); on Discord, add the bot to the server; on Teams, "
+                    : "Nothing this account can post to was found. On Slack, invite the app to the private "
+                            + "channel (/invite in that channel); on Discord, add the bot to the server; on Teams, "
                             + "start a chat with the person first. Then run discover again.");
         }
         return ToolExecutionResult.success(out);
@@ -296,7 +296,9 @@ public class ChannelToolsProvider implements ToolsProvider {
                         false, null),
                 stringParam("chat_id", "The destination to connect (for: connect). Copy it from a discover result "
                         + "rather than retyping it. whatsapp has no discover: use the person's phone number in "
-                        + "international form, e.g. +33612345678.", false),
+                        + "international form, e.g. +33612345678. slack also takes the channel's name as the user "
+                        + "says it ('#ops') or a member ID ('U0123...') for a direct message: connect stores the "
+                        + "conversation's own id.", false),
                 stringParam("chat_title", "Human label for the destination (for: connect). Copy it from the same "
                         + "discover entry as chat_id, so the user recognises the chat later.", false),
                 stringParam("chat_type", "Kind of destination as discover reported it, e.g. private or group "
@@ -396,8 +398,10 @@ public class ChannelToolsProvider implements ToolsProvider {
                 install the administrator configures that app first, and if the Connect card offers no
                 Slack, that is why):
                 1. credential(action='require', services=['slack']): they approve the LiveContext app in their workspace.
-                2. For a channel, they type /invite followed by the app name in it (a direct message needs nothing).
-                3. channel(action='discover', channel='slack'), then connect the entry they pick.
+                2. For a PRIVATE channel, they type /invite followed by the app name in it. A public channel or
+                   a direct message needs nothing: connect makes the app join a public channel by itself.
+                3. channel(action='discover', channel='slack'), then connect the entry they pick. If they name
+                   the channel instead ("#ops"), connect accepts the name as chat_id and stores its id.
 
                 discord (a bot of their own, 5 minutes):
                 1. In the Discord Developer Portal they create an application, open Bot, copy the bot token, and

@@ -7,11 +7,12 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { conversationApi, Message } from '@/lib/api/conversationApi';
+import { conversationApi, Message, type Conversation } from '@/lib/api/conversationApi';
 import { reconcileMessageIdentity } from '@/lib/utils/messageUtils';
 import { orchestratorApi } from '@/lib/api';
 import { useStreaming } from '@/contexts/StreamingContext';
 import { SelectedModel, getEffectiveDefaultSelectedModel } from '@/hooks/useModels';
+import { useConversationResync } from '@/hooks/chat/useConversationResync';
 
 interface UseWorkflowChatOptions {
   workflowId: string | undefined;
@@ -29,6 +30,12 @@ interface UseWorkflowChatOptions {
 interface UseWorkflowChatReturn {
   // Conversation state
   conversationId: string | null;
+  /**
+   * The conversation as read, whole, so ChatCore can rebuild the cards the agent left waiting
+   * (a credential to connect...) from its pendingActions after a reload. Read again when a turn
+   * ends, which is when those cards are saved.
+   */
+  conversation: Conversation | null;
   messages: Message[];
   isLoading: boolean;
   error: string | null;
@@ -50,6 +57,7 @@ export function useWorkflowChat({
   // the value is already well-typed so no parsing / normalisation is needed.
   const resolvedModel: SelectedModel = model ?? getEffectiveDefaultSelectedModel();
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +70,35 @@ export function useWorkflowChat({
   useEffect(() => {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
+
+  const refreshConversation = useCallback(async (convId: string) => {
+    try {
+      const reread = await conversationApi.getConversation(convId) as Conversation | null;
+      if (reread?.id === convId && conversationIdRef.current === convId) setConversation(reread);
+    } catch {
+      // Keeps what it had: the messages reload reports its own failure.
+    }
+  }, []);
+
+  // The chat's one silent re-read of its conversation, from the DB so the reply carries its tool
+  // calls. Identity-preserving: only the bubbles that actually changed re-render, so picking up the
+  // persisted reply costs no visible refresh. Dropped when the workflow (hence the conversation)
+  // changed meanwhile. The conversation itself is read again too: its waiting cards (a credential
+  // to connect...) are saved when a turn ends.
+  const rereadMessages = useCallback(async (convId: string) => {
+    void refreshConversation(convId);
+    try {
+      const messagesData = await conversationApi.getRecentMessagesAsc(convId);
+      if (conversationIdRef.current !== convId) return;
+      if (Array.isArray(messagesData)) {
+        setMessages(prev => reconcileMessageIdentity(prev, messagesData));
+      }
+    } catch (err) {
+      console.error('[useWorkflowChat] Failed to reload messages:', err);
+    }
+  }, [refreshConversation]);
+  // Re-read on a WebSocket reconnect, and when a stream of this conversation ends or errors.
+  const resync = useConversationResync(conversationId, rereadMessages);
 
   /**
    * Load existing conversation for this workflow (does NOT create)
@@ -81,6 +118,9 @@ export function useWorkflowChat({
 
       if (conversation?.id) {
         setConversationId(conversation.id);
+        // The endpoint answers the full ConversationDto (pendingActions included); only its
+        // client type is narrowed to what the id lookup needs.
+        setConversation(conversation as Conversation);
         conversationIdRef.current = conversation.id;
 
         // Load existing messages
@@ -91,18 +131,8 @@ export function useWorkflowChat({
 
         // Check if there's an active stream for this conversation (reconnection)
         streaming.checkAndReconnect(conversation.id, {
-          onStreamComplete: async (convId) => {
-            // Reload messages from DB to get the full message with tool calls
-            try {
-              const messagesData = await conversationApi.getRecentMessagesAsc(convId);
-              if (Array.isArray(messagesData)) {
-                // Identity-preserving: the reconciliation must not repaint the thread.
-                setMessages(prev => reconcileMessageIdentity(prev, messagesData));
-              }
-            } catch (err) {
-              console.error('[useWorkflowChat] Failed to reload messages on reconnect:', err);
-            }
-          },
+          onStreamComplete: resync.onStreamComplete,
+          onError: resync.onError,
         });
       }
       // If no conversation exists, that's fine - it will be created on first message
@@ -113,7 +143,7 @@ export function useWorkflowChat({
     } finally {
       setIsLoading(false);
     }
-  }, [workflowId, streaming]);
+  }, [workflowId, streaming, resync]);
 
   // Auto-load conversation when workflowId changes
   useEffect(() => {
@@ -126,6 +156,7 @@ export function useWorkflowChat({
   useEffect(() => {
     if (workflowId !== hasLoadedRef.current) {
       setConversationId(null);
+      setConversation(null);
       conversationIdRef.current = null;
       setMessages([]);
       setError(null);
@@ -160,6 +191,7 @@ export function useWorkflowChat({
         if (existingConversation?.id) {
           console.log('[useWorkflowChat] Found existing conversation:', existingConversation.id);
           setConversationId(existingConversation.id);
+          setConversation(existingConversation as Conversation);
           conversationIdRef.current = existingConversation.id;
           currentConversationId = existingConversation.id;
         } else {
@@ -181,6 +213,7 @@ export function useWorkflowChat({
           const newConversation = await conversationApi.createWorkflowConversation(workflowId, rawModelId, currentProvider, title);
           if (newConversation?.id) {
             setConversationId(newConversation.id);
+            setConversation(newConversation as Conversation);
             conversationIdRef.current = newConversation.id;
             currentConversationId = newConversation.id;
             console.log('[useWorkflowChat] Created new conversation:', currentConversationId);
@@ -227,25 +260,12 @@ export function useWorkflowChat({
           keepPendingActions: opts?.keepPendingActions,
         },
         {
-          onStreamComplete: async (convId) => {
-            console.log('[useWorkflowChat] ✅ onStreamComplete - reloading messages from DB for tool calls');
-            // Reload messages from DB to get the full message with tool calls
-            // This ensures tool activities are preserved after streaming ends
-            try {
-              const messagesData = await conversationApi.getRecentMessagesAsc(convId);
-              if (Array.isArray(messagesData)) {
-                // Identity-preserving: only the bubbles that actually changed re-render, so
-                // picking up the persisted tool calls costs no visible refresh.
-                setMessages(prev => reconcileMessageIdentity(prev, messagesData));
-                console.log('[useWorkflowChat] 📝 Messages reloaded from DB, count:', messagesData.length);
-              }
-            } catch (err) {
-              console.error('[useWorkflowChat] Failed to reload messages:', err);
-            }
-          },
-          onError: (err) => {
+          // Reload from DB so the reply keeps its tool activities once streaming ends.
+          onStreamComplete: resync.onStreamComplete,
+          onError: (err, erroredConvId) => {
             console.error('[useWorkflowChat] ❌ Stream error:', err);
             setError(err?.message || 'Stream error');
+            resync.onError(err, erroredConvId);
           },
         }
       );
@@ -254,7 +274,7 @@ export function useWorkflowChat({
       console.error('[useWorkflowChat] Error sending message:', err);
       setError(err instanceof Error ? err.message : 'Failed to send message');
     }
-  }, [workflowId, resolvedModel.id, resolvedModel.provider, workflowTitle, messages, streaming]);
+  }, [workflowId, resolvedModel.id, resolvedModel.provider, workflowTitle, messages, streaming, resync]);
 
   /**
    * Clear all messages (local only, doesn't delete from server)
@@ -274,6 +294,7 @@ export function useWorkflowChat({
 
   return {
     conversationId,
+    conversation,
     messages,
     isLoading,
     error,

@@ -8,8 +8,11 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.*;
 
@@ -1217,6 +1220,31 @@ class ExpressionFunctionsTest {
             // different calendar day from UTC, which for UTC+2 is every night from 00:00 to 02:00.
             assertTrue(result.startsWith(LocalDate.now(ZoneOffset.UTC).toString()),
                     "now() should start with today's UTC date");
+        }
+
+        @ParameterizedTest(name = "{0} -> {1}")
+        @CsvSource({
+                "2026-09-30T07:36:00Z, 2026-09-30T07:36:00",
+                "2026-10-01T00:00:00Z, 2026-10-01T00:00:00"
+        })
+        @DisplayName("Keeps zero seconds, which LocalDateTime.toString() drops (CI failed on 'got: 2026-09-30T07:36')")
+        void keepsZeroSeconds(String instant, String expected) {
+            assertEquals(expected, ExpressionFunctions.now(Clock.fixed(Instant.parse(instant), ZoneOffset.UTC)));
+        }
+
+        @Test
+        @DisplayName("Drops the fraction of a second")
+        void dropsTheFractionOfASecond() {
+            Clock clock = Clock.fixed(Instant.parse("2026-09-30T07:36:12.987654Z"), ZoneOffset.UTC);
+            assertEquals("2026-09-30T07:36:12", ExpressionFunctions.now(clock));
+        }
+
+        @Test
+        @DisplayName("Renders in UTC whatever the clock's zone")
+        void rendersInUtcWhateverTheClockZone() {
+            // 23:30 UTC is already 01:30 the next day in Paris: a zone leak changes the date too.
+            Clock paris = Clock.fixed(Instant.parse("2026-09-30T23:30:00Z"), ZoneId.of("Europe/Paris"));
+            assertEquals("2026-09-30T23:30:00", ExpressionFunctions.now(paris));
         }
     }
 

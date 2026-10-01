@@ -41,7 +41,7 @@ export async function shellLabels(locale: string): Promise<ShellLabels> {
     tables: t('tables'), integrations: t('integrations'),
     videos: t('videos'), status: t('status'), allIntegrations: t('allIntegrations'),
     language: t('language'), toLightTheme: t('toLightTheme'), toDarkTheme: t('toDarkTheme'),
-    about: t('about'), careers: t('careers'), soon: t('soon'), contact: t('contact'),
+    about: t('about'), careers: t('careers'), soon: t('soon'), contact: t('contact'), partners: t('partners'),
     privacy: t('privacy'), terms: t('terms'), notice: t('notice'),
     // The brand is a placeholder rather than a concatenation: "Zapier alternative" inverts in
     // French and Spanish ("Alternative a Zapier"), which a suffix cannot express.

@@ -32,7 +32,8 @@ public class PublicationPurgeFollower implements PurgeFollower.Handler, PurgeFol
             "publication.publication_receipts");
     public static final List<String> USER_TABLES = List.of(
             "publication.image_screening_decisions",
-            "publication.workflow_publications");
+            "publication.workflow_publications",
+            "publication.creator_follows");
 
     private final JdbcTemplate jdbc;
     private final PurgeFollower follower;
@@ -81,5 +82,7 @@ public class PublicationPurgeFollower implements PurgeFollower.Handler, PurgeFol
         jdbc.update("DELETE FROM publication.image_screening_decisions WHERE publication_id IN "
                 + "(SELECT id FROM publication.workflow_publications WHERE owner_type = 'USER' AND owner_id = ?)", userId);
         jdbc.update("DELETE FROM publication.workflow_publications WHERE owner_type = 'USER' AND owner_id = ?", userId);
+        // Both directions: the people this account followed, and its own followers.
+        jdbc.update("DELETE FROM publication.creator_follows WHERE follower_id = ? OR creator_id = ?", userId, userId);
     }
 }

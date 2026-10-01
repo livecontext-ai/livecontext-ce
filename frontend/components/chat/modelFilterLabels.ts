@@ -20,5 +20,6 @@ export function modelFilterLabelsFrom(t: (key: string) => string): ModelFilterLa
     noMatch: t('actions.noModelMatchesFilters'),
     clear: t('actions.clearModelFilters'),
     reset: t('actions.resetModelMenu'),
+    unlisted: t('actions.unlistedModels'),
   };
 }

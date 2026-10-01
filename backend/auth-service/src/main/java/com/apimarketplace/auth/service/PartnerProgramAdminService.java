@@ -39,8 +39,9 @@ import java.util.stream.Collectors;
  *       plus PAYG credits (default 50,000), single use by default.</li>
  *   <li><b>Partner code</b> ({@code PARTNER}, owned by the creator's account): shared
  *       with their audience as a link. Redeem-time PAYG credits for the new user (default
- *       10,000), and a revenue share for the partner (default 30% of every paid invoice
- *       for 12 months, each line held 14 days) recorded by {@link PartnerCommissionService}.</li>
+ *       8,000), and a revenue share for the partner (the Silver rate by default, 30% of every
+ *       paid invoice for 12 months, each line held 14 days, raised by the partner's tier: see
+ *       {@link PartnerTierService}) recorded by {@link PartnerCommissionService}.</li>
  * </ul>
  * Every default is a property ({@code reward.partner.*}) and every value can be overridden
  * per code at creation time.
@@ -78,30 +79,34 @@ public class PartnerProgramAdminService {
     public record Amounts(Map<String, Long> onHold, Map<String, Long> payable, Map<String, Long> paid,
                           Map<String, Long> voided) {}
 
+    /** {@code terms} is the owner's latest acceptance of the Partner Program Terms (V557), null when none. */
     public record CodeReport(RewardCode code, String ownerEmail, long redemptions, long payingCustomers,
-                             Amounts commissions) {}
+                             Amounts commissions, PartnerTermsService.Acceptance terms) {}
 
     private final RewardCodeRepository codeRepository;
     private final PartnerCommissionRepository commissionRepository;
     private final UserRepository userRepository;
+    private final PartnerTermsService termsService;
     private final Defaults defaults;
     private final SecureRandom random = new SecureRandom();
 
     public PartnerProgramAdminService(RewardCodeRepository codeRepository,
                                       PartnerCommissionRepository commissionRepository,
                                       UserRepository userRepository,
+                                      PartnerTermsService termsService,
                                       @Value("${reward.partner.creator.plan-code:PRO}") String creatorPlanCode,
                                       @Value("${reward.partner.creator.plan-days:90}") int creatorPlanDays,
                                       @Value("${reward.partner.creator.credits:50000}") int creatorCredits,
                                       @Value("${reward.partner.creator.max-uses:1}") int creatorMaxUses,
                                       @Value("${reward.partner.creator.valid-days:60}") int creatorValidDays,
-                                      @Value("${reward.partner.audience-credits:10000}") int audienceCredits,
+                                      @Value("${reward.partner.audience-credits:8000}") int audienceCredits,
                                       @Value("${reward.partner.commission-bps:3000}") int commissionBps,
                                       @Value("${reward.partner.commission-months:12}") int commissionMonths,
                                       @Value("${reward.partner.hold-days:14}") int holdDays) {
         this.codeRepository = codeRepository;
         this.commissionRepository = commissionRepository;
         this.userRepository = userRepository;
+        this.termsService = termsService;
         this.defaults = new Defaults(creatorPlanCode, creatorPlanDays, creatorCredits, creatorMaxUses,
                 creatorValidDays, audienceCredits, commissionBps, commissionMonths, holdDays);
     }
@@ -186,6 +191,14 @@ public class PartnerProgramAdminService {
         return save(c, req.code());
     }
 
+    /** The owner of a PARTNER code (the account a tier belongs to); empty for any other code. */
+    @Transactional(readOnly = true)
+    public java.util.Optional<Long> partnerOwnerOf(Long codeId) {
+        return codeRepository.findById(codeId)
+                .filter(c -> c.getProgram() == RewardProgram.PARTNER && c.getOwnerUserId() != null)
+                .map(RewardCode::getOwnerUserId);
+    }
+
     @Transactional
     public boolean setActive(Long codeId, boolean active) {
         return codeRepository.findById(codeId).map(c -> {
@@ -198,12 +211,21 @@ public class PartnerProgramAdminService {
     /**
      * Mark every PAYABLE line of a partner code as PAID (the admin just transferred the
      * money). Lines still in their refund window are left on hold. Returns the lines settled.
+     *
+     * <p>Refused with {@link PartnerTermsNotAcceptedException}, before any line moves, when the
+     * code's owner never accepted the Partner Program Terms (V557): the terms are what make a
+     * commission payable, so no money goes to a partner who is not bound by them.
      */
     @Transactional
     public List<PartnerCommission> markPayablePaid(Long codeId, Long adminUserId) {
+        Long owner = partnerOwnerOf(codeId).orElse(null);
+        List<PartnerCommission> lines = commissionRepository.findByRewardCodeIdIn(List.of(codeId));
+        // No owner to check the terms against: nothing with money on it is paid blind.
+        boolean bound = owner != null ? termsService.hasAcceptedAny(owner) : lines.isEmpty();
+        if (!bound) throw new PartnerTermsNotAcceptedException();
         Instant now = Instant.now();
         List<PartnerCommission> settled = new ArrayList<>();
-        for (PartnerCommission c : commissionRepository.findByRewardCodeIdIn(List.of(codeId))) {
+        for (PartnerCommission c : lines) {
             if (c.isPayableAt(now) && commissionRepository.markPaidIfOnHold(c.getId(), now, adminUserId) == 1) {
                 c.setStatus(PartnerCommission.Status.PAID);
                 c.setPaidAt(now);
@@ -224,6 +246,8 @@ public class PartnerProgramAdminService {
                 .findByRewardCodeIdIn(codes.stream().map(RewardCode::getId).toList())
                 .stream().collect(Collectors.groupingBy(PartnerCommission::getRewardCodeId));
         Map<Long, String> emails = new HashMap<>();
+        Map<Long, PartnerTermsService.Acceptance> accepted = termsService.latestFor(codes.stream()
+                .map(RewardCode::getOwnerUserId).filter(java.util.Objects::nonNull).distinct().toList());
         Instant now = Instant.now();
         List<CodeReport> out = new ArrayList<>();
         for (RewardCode c : codes) {
@@ -233,7 +257,8 @@ public class PartnerProgramAdminService {
                         id -> userRepository.findById(id).map(u -> u.getEmail()).orElse(null));
             long paying = lines.stream().filter(l -> l.getStatus() != PartnerCommission.Status.VOID)
                     .map(PartnerCommission::getCustomerUserId).distinct().count();
-            out.add(new CodeReport(c, email, c.getCurrentRedemptions(), paying, totals(lines, now)));
+            PartnerTermsService.Acceptance terms = c.getOwnerUserId() == null ? null : accepted.get(c.getOwnerUserId());
+            out.add(new CodeReport(c, email, c.getCurrentRedemptions(), paying, totals(lines, now), terms));
         }
         return out;
     }

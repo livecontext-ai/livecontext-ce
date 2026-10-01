@@ -34,6 +34,15 @@ public class ToolExecutionOrchestrator {
      * @param executionMode    tool's execution mode
      * @return projected result
      */
+    /**
+     * Places a body the projection cannot read field by field (a text body, or the file reference
+     * the base64 dehydrator made of one) the way a text answer is placed: under the schema's only
+     * string field, else under {@code data}. See {@link OutputProjector#placeUnparsed(Object, String)}.
+     */
+    public Object placeUnparsed(Object body, String outputSchemaJson) {
+        return outputProjector.placeUnparsed(body, outputSchemaJson);
+    }
+
     public Object projectResult(Object rawData, String outputSchemaJson, String executionMode) {
         return projectResult(rawData, outputSchemaJson, executionMode, null);
     }

@@ -6,13 +6,14 @@ import { Check, ArrowRight, AlertCircle } from 'lucide-react';
 import LoadingSpinner from '../LoadingSpinner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { getClientLocale } from '@/lib/utils/locale';
 import DeploymentBadge from '@/components/pricing/DeploymentBadge';
 import FeatureLabel from '@/components/pricing/FeatureLabel';
 import FoundingPriceNote from '@/components/pricing/FoundingPriceNote';
 import ReferencePrice from '@/components/pricing/ReferencePrice';
 import type { ResolvedPricingEvent } from '@/lib/billing/pricing-events';
+import type { PersonalOfferPlanPreview } from '@/lib/api/services/reward-api.service';
 
 interface Plan {
   id: string;
@@ -44,6 +45,10 @@ interface PlanSelectorProps {
   pricingEvent?: ResolvedPricingEvent | null;
   /** Credit tier the displayed price was composed with, so the announced price matches it. */
   creditTierIndex?: number;
+  personalOffer?: PersonalOfferPlanPreview | null;
+  personalOfferActive?: boolean;
+  nextEligibleMonthlyCredits?: number | null;
+  selectedPlanCode?: string | null;
 }
 
 const PlanSelector = React.memo(function PlanSelector({
@@ -57,11 +62,17 @@ const PlanSelector = React.memo(function PlanSelector({
   onPlanChanged,
   onBillingCycleChange,
   pricingEvent = null,
-  creditTierIndex = 0
+  creditTierIndex = 0,
+  personalOffer = null,
+  personalOfferActive = false,
+  nextEligibleMonthlyCredits = null,
+  selectedPlanCode = null,
 }: PlanSelectorProps) {
   const { theme } = useTheme();
   const { isLoading: isLoadingPlans } = usePlans();
   const t = useTranslations('pricing.planCards');
+  const tOffer = useTranslations('reward.personalOffer');
+  const locale = useLocale();
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -103,11 +114,27 @@ const PlanSelector = React.memo(function PlanSelector({
 
   const isDisabled = isLoading || isProcessing || isProcessingCheckout ||
     (currentPlan === plan.id.toUpperCase() && currentCadence === billingCycle && plan.id !== 'free' && plan.id !== 'enterprise');
+  const showAction = !(currentPlan === plan.id.toUpperCase() && currentCadence === billingCycle && plan.id !== 'free' && plan.id !== 'enterprise');
+  const earlyAction = personalOfferActive && currentPlan === 'FREE' && plan.id !== 'free' && !plan.disabled;
+  const annualTotal = Number(plan.price) * 12;
+  const planAction = showAction ? (
+    <Button onClick={handlePlanSelect} disabled={isDisabled || isProcessing} variant="default" size="default" className="w-full">
+      {isProcessing ? (
+        <div className="flex items-center justify-center gap-2">
+          <LoadingSpinner size="sm" className="text-current" />
+          {t('actions.processing')}
+        </div>
+      ) : (
+        <>{plan.id === 'free' ? t('actions.startFree') : plan.cta}<ArrowRight className="inline-block w-4 h-4 ml-2" /></>
+      )}
+    </Button>
+  ) : null;
 
   return (
     <div className={`relative p-4 border border-black/10 dark:border-white/20 rounded-2xl transition-all duration-200 ${plan.disabled ? 'pointer-events-none' : ''} ${(currentPlan === 'FREE' && plan.popular) ||
       (currentPlan === plan.id.toUpperCase() && currentCadence === billingCycle && plan.id !== 'free') ||
-      ((currentPlan.startsWith('ENTERPRISE_') || currentPlan === 'ENTERPRISE') && plan.id === 'enterprise' && currentCadence === billingCycle)
+      ((currentPlan.startsWith('ENTERPRISE_') || currentPlan === 'ENTERPRISE') && plan.id === 'enterprise' && currentCadence === billingCycle) ||
+      (selectedPlanCode === plan.id.toUpperCase() && currentPlan !== plan.id.toUpperCase())
       ? '!border-2 !border-black dark:!border-white bg-transparent'
       : 'hover:border-theme/30'
       }`}>
@@ -118,6 +145,12 @@ const PlanSelector = React.memo(function PlanSelector({
           <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
             <Badge variant="secondary" className="bg-black text-white dark:bg-white dark:text-black border-transparent px-3 py-1">
               {t('badges.current')}
+            </Badge>
+          </div>
+        ) : selectedPlanCode === plan.id.toUpperCase() ? (
+          <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
+            <Badge variant="secondary" className="bg-black text-white dark:bg-white dark:text-black border-transparent px-3 py-1">
+              {tOffer('selectedPlan')}
             </Badge>
           </div>
         ) : (currentPlan === 'FREE' && plan.popular) ? (
@@ -169,7 +202,29 @@ const PlanSelector = React.memo(function PlanSelector({
             event={pricingEvent}
           />
         )}
+        {billingCycle === 'yearly' && !plan.disabled && plan.id !== 'free' && Number.isFinite(annualTotal) && (
+          <p className="mt-3 text-sm text-theme-primary">{tOffer('annualTotal', { amount: new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(annualTotal) })}</p>
+        )}
+        {personalOfferActive && !plan.disabled && plan.id !== 'free' && (
+          <div className="mt-3 space-y-1 text-sm text-theme-primary">
+            {!personalOffer ? <p>{tOffer('checking')}</p>
+              : personalOffer.status === 'ELIGIBLE' && personalOffer.bonusCredits > 0 ? (
+                <p>{tOffer('bonus', {
+                  credits: personalOffer.bonusCredits.toLocaleString(locale),
+                  value: new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(personalOffer.paygFaceValueUsd),
+                })}</p>
+              ) : personalOffer.status === 'NO_BONUS' ? (
+                <>
+                  <p>{tOffer('noBonus')}</p>
+                  {nextEligibleMonthlyCredits != null && <p>{tOffer('nextEligible', { credits: nextEligibleMonthlyCredits.toLocaleString(locale) })}</p>}
+                  <p className="text-theme-secondary">{tOffer('firstPurchaseUsed')}</p>
+                </>
+              ) : <p>{tOffer('planUnavailable')}</p>}
+          </div>
+        )}
       </div>
+
+      {earlyAction && <div className="mb-6">{planAction}</div>}
 
       <div className="flex justify-center mb-6">
         <ul className="space-y-3 text-sm inline-flex flex-col">
@@ -195,27 +250,7 @@ const PlanSelector = React.memo(function PlanSelector({
         </div>
       )}
 
-      {((currentPlan === plan.id.toUpperCase() && currentCadence === billingCycle && plan.id !== 'free' && plan.id !== 'enterprise')) ? null : (
-        <Button
-          onClick={handlePlanSelect}
-          disabled={isDisabled || isProcessing}
-          variant="default"
-          size="default"
-          className="w-full"
-        >
-          {isProcessing ? (
-            <div className="flex items-center justify-center gap-2">
-              <LoadingSpinner size="sm" className="text-current" />
-              {t('actions.processing')}
-            </div>
-          ) : (
-            <>
-              {plan.id === 'free' ? t('actions.startFree') : plan.cta}
-              <ArrowRight className="inline-block w-4 h-4 ml-2" />
-            </>
-          )}
-        </Button>
-      )}
+      {!earlyAction && planAction}
     </div>
   );
 });

@@ -73,6 +73,19 @@ const cells = (container: HTMLElement) =>
   );
 
 describe('TimeGridView scrolling', () => {
+  it('sizes its card to the hours it draws, leaving no blank space under the last row', () => {
+    // Regression: the card was `flex-1`, so a short hour range (08:00-18:00) left an empty
+    // band inside the bordered card, below the last row. It now takes its content height
+    // and only shrinks (then scrolls) when the page is shorter than the grid.
+    const { container } = renderGrid(1);
+
+    const card = container.querySelector('.rounded-xl.border') as HTMLElement;
+    expect(card).not.toBeNull();
+    expect(card.classList.contains('flex-1')).toBe(false);
+    expect(card.classList.contains('flex-initial')).toBe(true);
+    expect(card.classList.contains('min-h-0')).toBe(true);
+  });
+
   it('never tells a cell to keep a scroll to itself', () => {
     // The regression in one line. `overscroll-contain` anywhere in this grid means the
     // hours behind it cannot be reached with the wheel.

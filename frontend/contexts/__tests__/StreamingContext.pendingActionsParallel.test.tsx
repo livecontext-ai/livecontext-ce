@@ -42,7 +42,7 @@ const subscribe = vi.fn<(...args: unknown[]) => () => void>((...args: unknown[])
 });
 vi.mock('@/lib/websocket', () => ({ wsClient: { subscribe: (...args: unknown[]) => subscribe(...args) } }));
 // ConversationStreamSubscriber imports wsClient through the lower-level module on origin/dev.
-vi.mock('@/lib/websocket/ws-client', () => ({ wsClient: { subscribe: (...args: unknown[]) => subscribe(...args) } }));
+vi.mock('@/lib/websocket/ws-client', () => ({ wsClient: { onReconnected: () => () => {}, subscribe: (...args: unknown[]) => subscribe(...args) } }));
 
 import { StreamingProvider, useStreaming } from '../StreamingContext';
 

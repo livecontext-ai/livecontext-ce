@@ -44,11 +44,17 @@ public final class UserQuestionValidator {
     }
 
     /**
-     * @param raw the {@code questions} tool argument as the model sent it
+     * Validates the questions and reports each declared "Other"-like option it dropped. Such an
+     * option used to fail the whole call although the fix is always the same (the card adds that
+     * row itself), so it is removed and the caller names it in its result: the removal stays
+     * visible to the agent, never silent. There is deliberately no overload without the report.
+     *
+     * @param raw            the {@code questions} tool argument as the model sent it
+     * @param droppedOptions receives one entry per dropped option, e.g. {@code questions[0].options[3] 'Autre'}
      * @return the validated questions, in order
      * @throws InvalidQuestionsException when the shape is wrong, with the index that is wrong
      */
-    public static List<UserQuestion> parseQuestions(Object raw) {
+    public static List<UserQuestion> parseQuestions(Object raw, List<String> droppedOptions) {
         if (!(raw instanceof List<?> list) || list.isEmpty()) {
             throw new InvalidQuestionsException("questions must be a non-empty list of 1 to "
                     + MAX_QUESTIONS + " questions, each with header, question and options.");
@@ -69,21 +75,26 @@ public final class UserQuestionValidator {
                         + "' is used twice; headers must be unique, they are how you read the answers back.");
             }
             String question = requireText(map.get("question"), "questions[" + i + "].question", MAX_QUESTION_LENGTH);
-            List<UserQuestionOption> options = parseOptions(map.get("options"), i);
+            List<UserQuestionOption> options = parseOptions(map.get("options"), i, droppedOptions);
             boolean multiSelect = isTruthy(map.get("multiSelect")) || isTruthy(map.get("multi_select"));
             questions.add(new UserQuestion(header, question, options, multiSelect));
         }
         return questions;
     }
 
-    private static List<UserQuestionOption> parseOptions(Object raw, int questionIndex) {
+    private static List<UserQuestionOption> parseOptions(Object raw, int questionIndex, List<String> droppedOptions) {
         String path = "questions[" + questionIndex + "].options";
         if (!(raw instanceof List<?> list)) {
             throw new InvalidQuestionsException(path + " must be a list of " + MIN_OPTIONS + " to "
                     + MAX_OPTIONS + " options, each with a label.");
         }
-        if (list.size() < MIN_OPTIONS || list.size() > MAX_OPTIONS) {
-            throw new InvalidQuestionsException(path + " holds " + list.size() + " options; give between "
+        // The size rule applies to the options the card will SHOW, so a declared "Other" does not
+        // count: five options of which one is "Other" is four real ones and fine.
+        int reserved = (int) list.stream().filter(UserQuestionValidator::isReservedOption).count();
+        int real = list.size() - reserved;
+        if (real < MIN_OPTIONS || real > MAX_OPTIONS) {
+            throw new InvalidQuestionsException(path + " holds " + real + (real == 1 ? " option" : " options")
+                    + (reserved > 0 ? " besides 'Other'" : "") + "; give between "
                     + MIN_OPTIONS + " and " + MAX_OPTIONS + ". The person can always type their own answer, "
                     + "so do not add an 'Other' option.");
         }
@@ -92,17 +103,10 @@ public final class UserQuestionValidator {
         for (int j = 0; j < list.size(); j++) {
             Object entry = list.get(j);
             String label;
-            String description = null;
+            Object rawDescription = null;
             if (entry instanceof Map<?, ?> map) {
                 label = requireText(map.get("label"), path + "[" + j + "].label", MAX_LABEL_LENGTH);
-                Object rawDescription = map.get("description");
-                if (rawDescription != null) {
-                    description = String.valueOf(rawDescription).trim();
-                    if (description.length() > MAX_DESCRIPTION_LENGTH) {
-                        throw new InvalidQuestionsException(path + "[" + j + "].description is longer than "
-                                + MAX_DESCRIPTION_LENGTH + " characters.");
-                    }
-                }
+                rawDescription = map.get("description");
             } else if (entry instanceof String s && !s.isBlank()) {
                 // A bare string is a label with no description; accepted so a terse call still works.
                 label = s.trim();
@@ -110,8 +114,19 @@ public final class UserQuestionValidator {
                 throw new InvalidQuestionsException(path + "[" + j + "] must be an object with a label.");
             }
             if (RESERVED_LABELS.contains(label.toLowerCase(Locale.ROOT))) {
-                throw new InvalidQuestionsException(path + "[" + j + "] '" + label + "' is added automatically: "
-                        + "the person can always type their own answer. Remove it.");
+                // Dropped, not refused: the card always adds its own free-text row, and a refusal
+                // cost a full retry for a fix that is always the same. Reported so it is not silent.
+                // Checked before the description, so a dropped option's description cannot fail the call.
+                droppedOptions.add(path + "[" + j + "] '" + label + "'");
+                continue;
+            }
+            String description = null;
+            if (rawDescription != null) {
+                description = String.valueOf(rawDescription).trim();
+                if (description.length() > MAX_DESCRIPTION_LENGTH) {
+                    throw new InvalidQuestionsException(path + "[" + j + "].description is longer than "
+                            + MAX_DESCRIPTION_LENGTH + " characters.");
+                }
             }
             if (!labels.add(label.toLowerCase(Locale.ROOT))) {
                 throw new InvalidQuestionsException(path + "[" + j + "] '" + label + "' is a duplicate label.");
@@ -180,6 +195,12 @@ public final class UserQuestionValidator {
             answers.add(new UserQuestionAnswer(question != null ? question.header() : header, selected, freeText, custom));
         }
         return answers;
+    }
+
+    /** A declared option whose label is one the card adds itself (a bare string or {label}). */
+    private static boolean isReservedOption(Object entry) {
+        Object label = entry instanceof Map<?, ?> map ? map.get("label") : entry;
+        return label instanceof String s && RESERVED_LABELS.contains(s.trim().toLowerCase(Locale.ROOT));
     }
 
     private static UserQuestion findQuestion(List<UserQuestion> questions, String header) {

@@ -173,6 +173,25 @@ public class ConversationSharingService {
                 t -> tokenBackfill == null ? Optional.empty() : tokenBackfill.findLegacy(ConversationTokenAtRestBackfill.SHARE_TOKENS, t, conversationRepository::findLegacyPlaintext));
     }
 
+    /**
+     * The conversation a share token opens, when sharing is on AND the conversation is in the
+     * caller's active workspace; empty otherwise.
+     *
+     * <p>Backs publication-service's check before it registers a CONVERSATION share link for a
+     * caller: a link is filed in its creator's workspace, so it may only name a conversation of
+     * that same workspace. Strict scope on purpose, NOT the owner-or-org tolerance of
+     * {@link #assertAuthorized}: that tolerance lets an owner toggle sharing on a conversation
+     * they tagged with another workspace, but a link filed in workspace A naming a conversation
+     * of workspace B is exactly the mismatch the check exists to refuse.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Conversation> findSharedInScope(String shareToken, String userId, String organizationId) {
+        return findByShareToken(shareToken)
+                .filter(c -> c.getShareMode() != null && !"off".equals(c.getShareMode()))
+                .filter(c -> ScopeGuard.isInStrictScope(userId, organizationId,
+                        c.getUserId(), c.getOrganizationId()));
+    }
+
     private static String generateShareToken() {
         return "cs_" + UUID.randomUUID().toString().replace("-", "");
     }

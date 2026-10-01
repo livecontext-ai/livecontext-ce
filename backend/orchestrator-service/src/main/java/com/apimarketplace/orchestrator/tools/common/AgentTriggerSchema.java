@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.tools.common;
 
 import com.apimarketplace.orchestrator.domain.workflow.Trigger;
+import com.apimarketplace.orchestrator.tools.workflow.builder.FormFieldDefaults;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan;
 import com.apimarketplace.orchestrator.trigger.TriggerType;
 
@@ -157,6 +158,9 @@ public final class AgentTriggerSchema {
                     if (options instanceof List<?> optList && !optList.isEmpty()) {
                         field.put("options", optList);
                     }
+                    // Applied by execute when data_inputs omits the field.
+                    Object defaultValue = FormFieldDefaults.of(m);
+                    if (defaultValue != null) field.put("default", defaultValue);
                     fields.add(field);
                 }
                 if (!fields.isEmpty()) out.put("fields", fields);

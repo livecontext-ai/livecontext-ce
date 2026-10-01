@@ -177,9 +177,13 @@ public class PricingSnapshotClient {
                             // not 0 (0 would be indistinguishable from "no context").
                             Integer contextWindow = toIntegerOrNull(row.get("contextWindow"));
                             Integer maxOutputTokens = toIntegerOrNull(row.get("maxOutputTokens"));
+                            // Absent on a snapshot from an older auth-service: null, and
+                            // the guards then keep their pre-change formula.
+                            BigDecimal cacheReadRate = toPositiveBigDecimalOrNull(row.get("cacheReadRate"));
+                            BigDecimal cacheWriteRate = toPositiveBigDecimalOrNull(row.get("cacheWriteRate"));
                             next.put(keyFor(provider, model),
                                 new PricingRates(inputRate, outputRate, fixedCost,
-                                    contextWindow, maxOutputTokens));
+                                    contextWindow, maxOutputTokens, cacheReadRate, cacheWriteRate));
                         }
                     }
                     cache = next;
@@ -218,6 +222,17 @@ public class PricingSnapshotClient {
     }
 
     /**
+     * Parses an optional rate. Returns {@code null} for missing, null, unparseable and
+     * non-positive values: a zero cache price would make cached input free, so it is read
+     * as "unknown" (the consumer then falls back to the input rate), never as zero.
+     */
+    private static BigDecimal toPositiveBigDecimalOrNull(Object obj) {
+        if (obj == null) return null;
+        BigDecimal value = toBigDecimal(obj);
+        return value.signum() > 0 ? value : null;
+    }
+
+    /**
      * Parses an integer-valued field that is allowed to be missing or null
      * (V162 contextWindow / maxOutputTokens). Returns {@code null} for missing,
      * null, or unparseable values - distinct from {@code 0} so callers can detect
@@ -244,19 +259,30 @@ public class PricingSnapshotClient {
      * decide policy (fail-closed when the
      * {@code BUDGET_GUARD_REQUIRE_CTX_WINDOW} flag is on, fall back to growth-
      * based projection otherwise).</p>
+     *
+     * <p>{@code cacheReadRate} / {@code cacheWriteRate}: the price of one cache-read /
+     * cache-write token, resolved by auth-service exactly as the ledger charges it. Both
+     * nullable (older snapshot): the budget guards then keep their pre-change formula.</p>
      */
     public record PricingRates(BigDecimal inputRate, BigDecimal outputRate, BigDecimal fixedCost,
-                               Integer contextWindow, Integer maxOutputTokens) {
+                               Integer contextWindow, Integer maxOutputTokens,
+                               BigDecimal cacheReadRate, BigDecimal cacheWriteRate) {
         public PricingRates {
             if (inputRate == null) inputRate = BigDecimal.ZERO;
             if (outputRate == null) outputRate = BigDecimal.ZERO;
             if (fixedCost == null) fixedCost = BigDecimal.ZERO;
-            // contextWindow / maxOutputTokens deliberately preserved as null when absent.
+            // contextWindow / maxOutputTokens / cache rates deliberately preserved as null when absent.
+        }
+
+        /** Constructor for callers that predate the cache rates. */
+        public PricingRates(BigDecimal inputRate, BigDecimal outputRate, BigDecimal fixedCost,
+                            Integer contextWindow, Integer maxOutputTokens) {
+            this(inputRate, outputRate, fixedCost, contextWindow, maxOutputTokens, null, null);
         }
 
         /** Backward-compat constructor for callers that only know about rates. */
         public PricingRates(BigDecimal inputRate, BigDecimal outputRate, BigDecimal fixedCost) {
-            this(inputRate, outputRate, fixedCost, null, null);
+            this(inputRate, outputRate, fixedCost, null, null, null, null);
         }
     }
 }

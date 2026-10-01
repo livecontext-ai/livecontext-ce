@@ -19,6 +19,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -80,6 +81,9 @@ public class LifecycleEmailService {
     /** Product analytics (PostHog). Optional: a null field emits nothing. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.apimarketplace.auth.analytics.AuthAnalyticsEmitter analytics;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.service.PersonalOfferService personalOfferService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public LifecycleEmailService(ResendClient resend,
@@ -195,6 +199,64 @@ public class LifecycleEmailService {
         }
     }
 
+    /**
+     * Queues one due personal-offer email without claiming its durable step first. The caller's
+     * claim is attempted on the worker, after capacity was reserved. Contact and consent are
+     * read again after the claim, and a failed contact sync prevents an event from leaving.
+     * The outcome callback records ACCEPTED, NOT_SENT or UNKNOWN; UNKNOWN cannot be blindly
+     * retried because /events/send has no documented idempotency contract.
+     */
+    public Dispatch submitPersonalOffer(Long userId, String event,
+                                        Function<String, Map<String, Object>> payloadForLocale,
+                                        BooleanSupplier claim, BooleanSupplier sendAllowed,
+                                        Consumer<ResendClient.EventResult> outcome) {
+        if (!isActive()) return Dispatch.INACTIVE;
+        if (userId == null || event == null || payloadForLocale == null || claim == null
+                || sendAllowed == null || outcome == null
+                || !(LifecycleEvents.PERSONAL_OFFER_INITIAL_DUE.equals(event)
+                || LifecycleEvents.PERSONAL_OFFER_REMINDER_DUE.equals(event))) return Dispatch.INACTIVE;
+        try {
+            return resend.submitBulk(() -> {
+                Optional<ContactSnapshot> before = readTx.execute(status -> snapshot(userId));
+                if (before == null || before.isEmpty() || !marketingAllowed(before.get())) return;
+                if (!claim.getAsBoolean()) return;
+                ResendClient.EventResult result = ResendClient.EventResult.NOT_SENT;
+                try {
+                    Optional<ContactSnapshot> refreshed = readTx.execute(status -> snapshot(userId));
+                    if (refreshed != null && refreshed.isPresent() && marketingAllowed(refreshed.get())) {
+                        ContactSnapshot c = refreshed.get();
+                        Map<String, Object> payload = payloadForLocale.apply(c.properties().get("locale"));
+                        if (payload != null && !payload.isEmpty()
+                                && resend.upsertContact(c.email(), c.firstName(), c.properties())
+                                && sendAllowed.getAsBoolean()) {
+                            result = resend.sendEventResult(c.email(), event, payload);
+                            recordSent(userId, event, result == ResendClient.EventResult.ACCEPTED);
+                        }
+                    }
+                } catch (Exception e) {
+                    // The send method itself classifies transport failures as UNKNOWN. An
+                    // exception before it means no event request was made.
+                    log.warn("[lifecycle] personal offer event {} was not submitted for user {}: {}",
+                            event, userId, e.toString());
+                } finally {
+                    try {
+                        outcome.accept(result);
+                    } catch (Exception e) {
+                        log.warn("[lifecycle] personal offer event {} outcome was not recorded for user {}: {}",
+                                event, userId, e.toString());
+                    }
+                }
+            }) ? Dispatch.QUEUED : Dispatch.BUSY;
+        } catch (Exception e) {
+            log.warn("[lifecycle] personal offer event {} was not queued for user {}: {}", event, userId, e.toString());
+            return Dispatch.BUSY;
+        }
+    }
+
+    private static boolean marketingAllowed(ContactSnapshot c) {
+        return "yes".equals(c.properties().get("marketing_consent"));
+    }
+
     /** Deletes the Resend contact of an account that no longer exists. */
     public void deleteContact(String email) {
         if (!isActive() || email == null || email.isBlank()) return;
@@ -304,7 +366,20 @@ public class LifecycleEmailService {
         props.put("country", user.getSignupCountry() != null ? user.getSignupCountry() : FALLBACK_COUNTRY);
         props.put("marketing_consent", user.isMarketingConsent() ? "yes" : "no");
         props.put("activated", user.getActivatedAt() != null ? "yes" : "no");
+        props.put("personal_offer_available", personalOfferAvailable(user.getId()) ? "yes" : "no");
         return props;
+    }
+
+    private boolean personalOfferAvailable(Long userId) {
+        if (personalOfferService == null) return false;
+        try {
+            String status = personalOfferService.current(userId).status();
+            return "AVAILABLE".equals(status) || "CHECKOUT_OPEN".equals(status)
+                    || "PENDING_PAYMENT".equals(status) || "PROCESSING".equals(status);
+        } catch (Exception e) {
+            log.debug("[lifecycle] personal-offer state unavailable for user {}: {}", userId, e.toString());
+            return false;
+        }
     }
 
     private String plan(Long userId) {

@@ -554,9 +554,9 @@ class SplitAwareNodeExecutorTest {
             // so getRoutedItemIndices falls through to getTransitiveRoutedItemIndices.
             // Stub per-pred completion query: stock-branch leaf completed items [2,3], crypto
             // leaf completed items [0,1].
-            when(repo.findCompletedItemIndicesByEpoch("run1", "table:log_stock_check", 0))
+            when(repo.findPassedItemIndicesByEpoch("run1", "table:log_stock_check", 0))
                 .thenReturn(List.of(2, 3));
-            when(repo.findCompletedItemIndicesByEpoch("run1", "table:log_crypto_check", 0))
+            when(repo.findPassedItemIndicesByEpoch("run1", "table:log_crypto_check", 0))
                 .thenReturn(List.of(0, 1));
             when(context.withGlobalData(any(), any())).thenReturn(context);
             when(context.withItemIndex(org.mockito.ArgumentMatchers.anyInt())).thenReturn(context);
@@ -604,7 +604,7 @@ class SplitAwareNodeExecutorTest {
             when(contextManager.findActiveContext(eq("run1"), eq("mcp:downstream"), eq(0), any()))
                 .thenReturn(Optional.of(splitContext));
             // Upstream only completed items [1,2] - downstream must inherit that subset.
-            when(repo.findCompletedItemIndicesByEpoch("run1", "mcp:upstream", 0))
+            when(repo.findPassedItemIndicesByEpoch("run1", "mcp:upstream", 0))
                 .thenReturn(List.of(1, 2));
             when(context.withGlobalData(any(), any())).thenReturn(context);
             when(context.withItemIndex(org.mockito.ArgumentMatchers.anyInt())).thenReturn(context);
@@ -636,7 +636,7 @@ class SplitAwareNodeExecutorTest {
          * record_X by 36 - clean numerical fingerprint visible in {@code workflow_epochs}.
          *
          * <p>The "No items routed" condition is derived from a DB lookup
-         * ({@code getTransitiveRoutedItemIndices} querying {@code findCompletedItemIndicesByEpoch}),
+         * ({@code getTransitiveRoutedItemIndices} querying {@code findPassedItemIndicesByEpoch}),
          * so its emptiness is a TRANSIENT signal indistinguishable from a true routing
          * decision. Cascading from this state amplifies unrelated persistence
          * regressions. Pre-fix this site used bare {@code skipped()}; the
@@ -662,7 +662,7 @@ class SplitAwareNodeExecutorTest {
                 "core:each_email:0", List.of("email1", "email2", "email3", "email4"));
             when(contextManager.findActiveContext(eq("run1"), eq("core:parse_headers"), eq(0), any()))
                 .thenReturn(Optional.of(splitContext));
-            when(repo.findCompletedItemIndicesByEpoch("run1", "mcp:get_content", 0))
+            when(repo.findPassedItemIndicesByEpoch("run1", "mcp:get_content", 0))
                 .thenReturn(List.of());
 
             NodeExecutionResult result = localExecutor.execute(downstream, context, "run1", nodeMap);
@@ -1162,7 +1162,7 @@ class SplitAwareNodeExecutorTest {
             when(context.epoch()).thenReturn(0);
 
             // Predecessor core:wait only completed for items 0, 1, 2 (3 approved out of 5)
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait", 0))
                 .thenReturn(List.of(0, 1, 2));
 
             NodeExecutionResult result = executorWithRepo.execute(waitCopy, context, "run1", nodeMap);
@@ -1189,7 +1189,7 @@ class SplitAwareNodeExecutorTest {
             when(context.epoch()).thenReturn(0);
 
             // Predecessor completed 0 items (all rejected upstream)
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait", 0))
                 .thenReturn(List.of());
 
             NodeExecutionResult result = executorWithRepo.execute(waitCopy, context, "run1", nodeMap);
@@ -1216,7 +1216,7 @@ class SplitAwareNodeExecutorTest {
             when(context.epoch()).thenReturn(0);
 
             // DB throws
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait", 0))
                 .thenThrow(new RuntimeException("DB error"));
 
             NodeExecutionResult result = executorWithRepo.execute(waitCopy, context, "run1", nodeMap);
@@ -1255,9 +1255,9 @@ class SplitAwareNodeExecutorTest {
             when(context.epoch()).thenReturn(0);
 
             // Predecessor A completed items [0, 1, 2], B completed items [1, 2, 3]
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait_a", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait_a", 0))
                 .thenReturn(List.of(0, 1, 2));
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait_b", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait_b", 0))
                 .thenReturn(List.of(1, 2, 3));
 
             NodeExecutionResult result = executorWithRepo.execute(mergeTarget, context, "run1", nodeMap);
@@ -1288,9 +1288,9 @@ class SplitAwareNodeExecutorTest {
             when(context.epoch()).thenReturn(0);
 
             // Predecessor A completed [0, 1], B completed [2, 3] - disjoint
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait_a", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait_a", 0))
                 .thenReturn(List.of(0, 1));
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait_b", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait_b", 0))
                 .thenReturn(List.of(2, 3));
 
             NodeExecutionResult result = executorWithRepo.execute(mergeTarget, context, "run1", nodeMap);
@@ -1322,9 +1322,9 @@ class SplitAwareNodeExecutorTest {
             when(context.epoch()).thenReturn(0);
 
             // A completed nothing (e.g. all items routed elsewhere), B completed items [1, 2].
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait_a", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait_a", 0))
                 .thenReturn(List.of());
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait_b", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait_b", 0))
                 .thenReturn(List.of(1, 2));
 
             NodeExecutionResult result = executorWithRepo.execute(mergeTarget, context, "run1", nodeMap);
@@ -1361,9 +1361,9 @@ class SplitAwareNodeExecutorTest {
             lenient().when(context.withItemIndex(org.mockito.ArgumentMatchers.anyInt())).thenReturn(context);
             when(context.epoch()).thenReturn(0);
 
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait_a", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait_a", 0))
                 .thenReturn(List.of());
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait_b", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait_b", 0))
                 .thenReturn(List.of());
 
             NodeExecutionResult result = executorWithRepo.execute(mergeTarget, context, "run1", nodeMap);
@@ -1400,9 +1400,9 @@ class SplitAwareNodeExecutorTest {
             // A completed every item; B's stub is intentionally lenient - if the short-circuit
             // path holds, this mock is never invoked. (lenient() avoids Mockito strict-stub
             // failure on unused stub.)
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait_a", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait_a", 0))
                 .thenReturn(List.of(0, 1, 2, 3));
-            lenient().when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait_b", 0))
+            lenient().when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait_b", 0))
                 .thenReturn(List.of(0, 1));
 
             NodeExecutionResult result = executorWithRepo.execute(mergeTarget, context, "run1", nodeMap);
@@ -1414,7 +1414,7 @@ class SplitAwareNodeExecutorTest {
             // first in predecessorIds. If the loop order ever flips, this assertion catches
             // it.)
             verify(mockStepDataRepo, never())
-                .findCompletedItemIndicesByEpoch("run1", "core:wait_b", 0);
+                .findPassedItemIndicesByEpoch("run1", "core:wait_b", 0);
         }
 
         /**
@@ -1439,10 +1439,10 @@ class SplitAwareNodeExecutorTest {
             when(context.withItemIndex(org.mockito.ArgumentMatchers.anyInt())).thenReturn(context);
             when(context.epoch()).thenReturn(0);
 
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait_a", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait_a", 0))
                 .thenThrow(new RuntimeException("DB error"));
             // B's stub is lenient - once A throws, the early return skips B entirely.
-            lenient().when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait_b", 0))
+            lenient().when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait_b", 0))
                 .thenReturn(List.of(0, 1));
 
             NodeExecutionResult result = executorWithRepo.execute(mergeTarget, context, "run1", nodeMap);
@@ -1523,7 +1523,7 @@ class SplitAwareNodeExecutorTest {
             when(context.epoch()).thenReturn(0);
 
             // Predecessor completed ALL items
-            when(mockStepDataRepo.findCompletedItemIndicesByEpoch("run1", "core:wait", 0))
+            when(mockStepDataRepo.findPassedItemIndicesByEpoch("run1", "core:wait", 0))
                 .thenReturn(List.of(0, 1, 2));
 
             NodeExecutionResult result = executorWithRepo.execute(waitCopy, context, "run1", nodeMap);
@@ -2128,8 +2128,8 @@ class SplitAwareNodeExecutorTest {
                     Map.of("v", 0), Map.of("v", 1), Map.of("v", 2), Map.of("v", 3)));
             when(contextManager.findActiveContext(eq("run1"), eq("core:merge"), eq(0), any()))
                 .thenReturn(Optional.of(splitContext));
-            when(repo.findCompletedItemIndicesByEpoch("run1", "table:a", 0)).thenReturn(List.of(0, 1));
-            when(repo.findCompletedItemIndicesByEpoch("run1", "table:b", 0)).thenReturn(List.of(2, 3));
+            when(repo.findPassedItemIndicesByEpoch("run1", "table:a", 0)).thenReturn(List.of(0, 1));
+            when(repo.findPassedItemIndicesByEpoch("run1", "table:b", 0)).thenReturn(List.of(2, 3));
             when(context.withGlobalData(any(), any())).thenReturn(context);
             when(context.withItemIndex(anyInt())).thenReturn(context);
 
@@ -2163,8 +2163,8 @@ class SplitAwareNodeExecutorTest {
             SplitContext splitContext = SplitContext.create("core:split:0", List.of("w", "x", "y", "z"));
             when(contextManager.findActiveContext(eq("run1"), eq("core:merge"), eq(0), any()))
                 .thenReturn(Optional.of(splitContext));
-            when(repo.findCompletedItemIndicesByEpoch("run1", "table:a", 0)).thenReturn(List.of(0, 1));
-            when(repo.findCompletedItemIndicesByEpoch("run1", "table:b", 0)).thenReturn(List.of(2, 3));
+            when(repo.findPassedItemIndicesByEpoch("run1", "table:a", 0)).thenReturn(List.of(0, 1));
+            when(repo.findPassedItemIndicesByEpoch("run1", "table:b", 0)).thenReturn(List.of(2, 3));
             when(context.withGlobalData(any(), any())).thenReturn(context);
             when(context.withItemIndex(anyInt())).thenReturn(context);
             when(context.runId()).thenReturn("run1");

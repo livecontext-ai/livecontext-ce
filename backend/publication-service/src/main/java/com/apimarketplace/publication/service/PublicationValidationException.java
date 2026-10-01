@@ -18,6 +18,10 @@ import java.util.Map;
  *       sub-agent of its closure) has a per-family grant of {@code "all"}.
  *       Details: {@code violations[]} of
  *       {@code {agentId, agentName, root, referencedVia?, families[]}}.</li>
+ *   <li>{@link #CUSTOM_API_NOT_PUBLISHABLE} - a shareable publication (PUBLIC /
+ *       UNLISTED) references a custom API, which exists only in the publisher's
+ *       tenant and can never resolve for an acquirer. Details: {@code customApis[]}
+ *       of {@code {apiSlug, apiName, toolIdentifiers[]}}.</li>
  *   <li>{@link #AGENT_SNAPSHOT_TOO_LARGE} - the built snapshot exceeds a size
  *       cap (total serialized bytes, or rows of a single table). Details:
  *       {@code sizeBytes?/maxBytes?} and {@code breakdown[]} of
@@ -28,6 +32,7 @@ public class PublicationValidationException extends RuntimeException {
 
     public static final String AGENT_ALL_ACCESS_NOT_PUBLISHABLE = "AGENT_ALL_ACCESS_NOT_PUBLISHABLE";
     public static final String AGENT_SNAPSHOT_TOO_LARGE = "AGENT_SNAPSHOT_TOO_LARGE";
+    public static final String CUSTOM_API_NOT_PUBLISHABLE = "CUSTOM_API_NOT_PUBLISHABLE";
 
     private final String errorCode;
     private final Map<String, Object> details;

@@ -49,7 +49,7 @@ import java.util.stream.Collectors;
  */
 @RestController
 @RequestMapping("/api/internal/agents")
-public class InternalAgentController {
+public class InternalAgentController implements com.apimarketplace.agent.config.AgentNameConflictSource {
 
     private static final Logger logger = LoggerFactory.getLogger(InternalAgentController.class);
 
@@ -1159,7 +1159,12 @@ public class InternalAgentController {
             }
             // Content fields validated (not raw-cast): a numeric systemPrompt/name/description
             // in the snapshot must fail loud (400), never silently clone a bare number.
-            newAgent.setName(asContentText(request.get("name"), null));
+            // The installer did not type this name (it is the publisher's), so an existing
+            // agent of the same name in this workspace must not fail the install: take the
+            // first free name ("Name", then "Name (2)"...). The call joins this method's
+            // transaction and holds the workspace name lock until the insert commits.
+            newAgent.setName(agentService.allocateAgentName(organizationId,
+                    asContentText(request.get("name"), null)));
             newAgent.setDescription(asContentText(request.get("description"), null));
             newAgent.setSystemPrompt(asContentText(request.get("systemPrompt"), null));
             newAgent.setModelProvider((String) request.get("modelProvider"));

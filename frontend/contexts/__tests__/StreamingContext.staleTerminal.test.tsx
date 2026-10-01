@@ -78,7 +78,7 @@ vi.mock('@/lib/websocket', () => ({
   wsClient: { subscribe: (...args: unknown[]) => subscribe(...args) },
 }));
 vi.mock('@/lib/websocket/ws-client', () => ({
-  wsClient: { subscribe: (...args: unknown[]) => subscribe(...args) },
+  wsClient: { onReconnected: () => () => {}, subscribe: (...args: unknown[]) => subscribe(...args) },
 }));
 
 // NOTE: streamHelpers is NOT mocked - isStaleTerminal tests use the real reducer

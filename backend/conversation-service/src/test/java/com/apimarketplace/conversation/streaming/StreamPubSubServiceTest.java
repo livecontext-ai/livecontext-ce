@@ -592,6 +592,20 @@ class StreamPubSubServiceTest {
         }
 
         @Test
+        @DisplayName("regression: a live ToolResult whose null resultId was dropped by the serializer is still a ToolResult")
+        void liveToolResultWithoutResultIdIsAToolResult() throws Exception {
+            // What a self-hosted install publishes: its shared ObjectMapper drops null map values,
+            // so the live result arrives with no resultId at all, and it used to fall through.
+            String json = "{\"streamId\":\"s1\",\"toolId\":\"call-1\",\"toolName\":\"workflow\","
+                    + "\"success\":true,\"durationMs\":31}";
+
+            StreamEvent result = service.deserializeEvent(json);
+
+            assertThat(result).isInstanceOf(StreamEvent.ToolResult.class);
+            assertThat(((StreamEvent.ToolResult) result).toolId()).isEqualTo("call-1");
+        }
+
+        @Test
         @DisplayName("should deserialize ToolResult")
         void shouldDeserializeToolResult() throws Exception {
             String json = objectMapper.writeValueAsString(

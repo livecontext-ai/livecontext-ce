@@ -118,23 +118,8 @@ public class ApplicationExecuteModule implements ToolModule {
             // executing inside a run is authorized to be there by construction, and
             // the help promises it can abort itself; the list would deny exactly that
             // (a plain workflow run has no source publication at all).
-            List<String> allowedAppIds = getAllowedApplicationIds(context);
-            if (allowedAppIds != null && !runStopToolHandler.isCallerOwnRun(run, context)) {
-                // Re-read the workflow instead of walking run.getWorkflow(): the association
-                // is LAZY and this path runs with open-in-view=false, so touching any field
-                // beyond the proxy's id would throw LazyInitializationException and turn a
-                // permission decision into a 500. Reading the id off the proxy is safe.
-                WorkflowEntity proxy = run.getWorkflow();
-                UUID pubId = proxy != null && proxy.getId() != null
-                        ? workflowRepository.findById(proxy.getId())
-                            .map(WorkflowEntity::getSourcePublicationId)
-                            .orElse(null)
-                        : null;
-                if (pubId == null || !allowedAppIds.contains(pubId.toString())) {
-                    return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED,
-                        "This run does not belong to an application in your approved application list.");
-                }
-            }
+            var appDenied = ApplicationRunAllowList.denyIfOutside(run, context, workflowRepository);
+            if (appDenied.isPresent()) return appDenied.get();
 
             return runStopToolHandler.stop(run, parameters, context, "application");
         } catch (Exception e) {

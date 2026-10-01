@@ -45,6 +45,9 @@ class UserControllerIntegrationTest {
     @Mock
     private OnboardingService onboardingService;
 
+    @Mock
+    private com.apimarketplace.auth.service.AccountDeletionService accountDeletionService;
+
     @InjectMocks
     private UserController userController;
 
@@ -268,7 +271,7 @@ class UserControllerIntegrationTest {
     class DeactivateProfile {
 
         @Test
-        @DisplayName("should deactivate profile when gateway headers are present")
+        @DisplayName("should request deletion of the account when gateway headers are present")
         void shouldDeactivateProfileWithHeaders() throws Exception {
             User user = createTestUser(1L, "testuser");
             when(userService.findById(1L)).thenReturn(Optional.of(user));
@@ -279,7 +282,20 @@ class UserControllerIntegrationTest {
                     .andExpect(status().isOk());
 
             verify(userService).findById(1L);
-            verify(userService).deactivateUser(user);
+            verify(accountDeletionService).requestDeletion(user);
+        }
+
+        @Test
+        @DisplayName("a test account whose immediate purge failed answers 500, never a silent 200")
+        void failedImmediatePurgeAnswers500() throws Exception {
+            User user = createTestUser(1L, "testuser");
+            when(userService.findById(1L)).thenReturn(Optional.of(user));
+            when(accountDeletionService.requestDeletion(user)).thenThrow(new IllegalStateException("purge failed"));
+
+            mockMvc.perform(delete("/api/users/profile")
+                            .header("X-User-ID", "1")
+                            .header("X-Provider-ID", "f47ac10b-58cc-4372-a567-0e02b2c3d479"))
+                    .andExpect(status().isInternalServerError());
         }
 
         @Test
@@ -293,7 +309,7 @@ class UserControllerIntegrationTest {
                     .andExpect(status().isNotFound());
 
             verify(userService).findById(999L);
-            verify(userService, never()).deactivateUser(any());
+            verify(accountDeletionService, never()).requestDeletion(any());
         }
 
         @Test
@@ -305,7 +321,7 @@ class UserControllerIntegrationTest {
                     .andExpect(status().isBadRequest());
 
             verify(userService, never()).findById(any());
-            verify(userService, never()).deactivateUser(any());
+            verify(accountDeletionService, never()).requestDeletion(any());
         }
 
         @Test

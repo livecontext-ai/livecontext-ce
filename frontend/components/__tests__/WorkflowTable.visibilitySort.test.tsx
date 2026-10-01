@@ -195,8 +195,13 @@ describe('WorkflowTable - visibility filter + sort re-query the server', () => {
     expect(screen.getByText('Alpha')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('common.filterByVisibility'), { target: { value: 'public' } });
-    await waitFor(() => expect(screen.queryByText('Alpha')).not.toBeInTheDocument());
-    expect(screen.getByText('Zoo')).toBeInTheDocument();
+    // One wait for the whole filtered state: the rows are replaced by the loading skeleton while
+    // the new page loads, so "Alpha is gone" alone already holds mid-reload,
+    // before Zoo is back.
+    await waitFor(() => {
+      expect(screen.queryByText('Alpha')).not.toBeInTheDocument();
+      expect(screen.getByText('Zoo')).toBeInTheDocument();
+    });
     expect(mocks.getWorkflowsPage).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'public' }));
 
     fireEvent.change(screen.getByLabelText('common.filterByVisibility'), { target: { value: 'private' } });

@@ -1611,4 +1611,121 @@ class AgentWorkflowFireServiceTest {
             assertThat(service.countEpochsByRunIds(List.of("r1"))).isNull();
         }
     }
+
+    // ==================== form field defaults on execute ====================
+
+    /**
+     * 2026-09-29, a Gemini chat: a required form field declared with a default refused
+     * workflow(action='execute') with no data_inputs, although the public form submits that
+     * default pre-filled. The agent had also spelled the key `default`, which nothing read.
+     */
+    @Nested
+    @DisplayName("fire - form field defaults")
+    class FormFieldDefaultTests {
+
+        @Mock private WorkflowRunEntity run;
+
+        private Trigger formTrigger(Map<String, Object>... fields) {
+            return new Trigger("t-1", "Formulaire de Demande", "single", "form", Map.of("fields", List.of(fields)));
+        }
+
+        private Map<String, Object> field(String name, boolean required, String defaultKey, Object defaultValue) {
+            Map<String, Object> f = new LinkedHashMap<>();
+            f.put("name", name);
+            f.put("type", "text");
+            f.put("required", required);
+            if (defaultKey != null) f.put(defaultKey, defaultValue);
+            return f;
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> firedPayload() {
+            var captor = org.mockito.ArgumentCaptor.forClass(Map.class);
+            verify(reusableTriggerService).executeTrigger(eq(run), anyString(), eq(TriggerType.FORM), captor.capture());
+            return captor.getValue();
+        }
+
+        @Test
+        @DisplayName("A required field with a default no longer refuses an execute without data_inputs (the Gemini case, `default` spelling)")
+        void requiredFieldWithDefault_executesWithTheDefault() {
+            Trigger trigger = formTrigger(
+                    field("theme", true, "default", "Innovation & Futur"),
+                    field("auteur", false, "default", "Ada Lovelace"));
+
+            assertThatCode(() -> service.fire(run, trigger, null)).doesNotThrowAnyException();
+
+            assertThat(firedPayload())
+                    .containsEntry("theme", "Innovation & Futur")
+                    .containsEntry("auteur", "Ada Lovelace");
+        }
+
+        @Test
+        @DisplayName("The canonical defaultValue key is applied too")
+        void canonicalDefaultValueIsApplied() {
+            service.fire(run, formTrigger(field("topic", true, "defaultValue", "General")), Map.of());
+
+            assertThat(firedPayload()).containsEntry("topic", "General");
+        }
+
+        @Test
+        @DisplayName("A value the caller sent always wins over the default; a blank one does not")
+        void callerValueWins_blankIsFilled() {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("theme", "Espace");
+            payload.put("auteur", "  ");
+            service.fire(run, formTrigger(
+                    field("theme", true, "defaultValue", "Innovation"),
+                    field("auteur", false, "defaultValue", "Ada")), payload);
+
+            assertThat(firedPayload())
+                    .containsEntry("theme", "Espace")
+                    .containsEntry("auteur", "Ada");
+        }
+
+        @Test
+        @DisplayName("A required field WITHOUT a default still refuses, and nothing is fired")
+        void requiredFieldWithoutDefault_stillRefuses() {
+            Trigger trigger = formTrigger(
+                    field("theme", true, null, null),
+                    field("auteur", false, "defaultValue", "Ada"));
+
+            assertThatThrownBy(() -> service.fire(run, trigger, Map.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("required fields missing: [theme]");
+            verifyNoInteractions(reusableTriggerService);
+        }
+
+        @Test
+        @DisplayName("A blank default counts as no default")
+        void blankDefault_isNoDefault() {
+            assertThatThrownBy(() -> service.fire(run, formTrigger(field("theme", true, "defaultValue", "")), null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("[theme]");
+        }
+
+        @Test
+        @DisplayName("No default applies -> the caller's payload is passed through untouched")
+        void noDefault_payloadUntouched() {
+            Map<String, Object> payload = Map.of("theme", "Espace");
+            assertThat(service.withFormFieldDefaults(formTrigger(field("theme", true, null, null)), payload))
+                    .isSameAs(payload);
+        }
+
+        @Test
+        @DisplayName("The execute schema shown to the agent carries each field's default")
+        void executeInfo_showsDefault() {
+            Map<String, Object> trigger = Map.of(
+                    "type", "form",
+                    "label", "Formulaire",
+                    "params", Map.of("fields", List.of(field("theme", true, "default", "Innovation"))));
+
+            var info = service.buildTriggerExecuteInfo(List.of(trigger), null);
+
+            @SuppressWarnings("unchecked")
+            var schema = ((List<Map<String, Object>>) info.get("triggers")).get(0);
+            @SuppressWarnings("unchecked")
+            var theme = (Map<String, Object>) ((Map<String, Object>) schema.get("required_data")).get("theme");
+            assertThat(theme).containsEntry("required", true).containsEntry("default", "Innovation");
+        }
+    }
 }

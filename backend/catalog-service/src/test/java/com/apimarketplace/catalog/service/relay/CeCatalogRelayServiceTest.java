@@ -9,7 +9,6 @@ import com.apimarketplace.catalog.repository.ApiRepository;
 import com.apimarketplace.catalog.repository.ApiToolRepository;
 import com.apimarketplace.catalog.service.CatalogV1Service;
 import com.apimarketplace.catalog.service.http.CredentialModeContext;
-import com.apimarketplace.catalog.service.http.ProviderRetryContext;
 import com.apimarketplace.catalog.service.relay.CeCatalogRelayService.PlatformInfo;
 import com.apimarketplace.catalog.service.relay.CeCatalogRelayService.RelayResult;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
@@ -88,7 +87,6 @@ class CeCatalogRelayServiceTest {
     @AfterEach
     void clearThreadLocals() {
         CredentialModeContext.clear();
-        ProviderRetryContext.clear();
     }
 
     private ApiEntity api(String authType) {
@@ -884,90 +882,6 @@ class CeCatalogRelayServiceTest {
             assertThat(CredentialModeContext.getExplicitSource()).isNull();
             assertThat(CredentialModeContext.getSelectedCredentialId()).isNull();
             assertThat(CredentialModeContext.getOverride()).isNull();
-        }
-
-        @Test
-        @DisplayName("the install's provider-retry budget reaches the execution, so a relayed step "
-                + "can still say 'do not retry underneath me'")
-        void providerRetryBudgetIsForwarded() {
-            // The relay is the SECOND entry point into the execution funnel. Without this the
-            // feature works in the cloud edition and silently does nothing for a self-hosted
-            // install: a CE author who paces their own loop has the cloud multiply their requests
-            // to a provider that asked them to slow down.
-            stubResolvedApiAndTool("api_key");
-            stubCredentialAndPricing();
-            stubSuccessfulReserve();
-            ArgumentCaptor<ToolExecutionRequest> requestCaptor =
-                    ArgumentCaptor.forClass(ToolExecutionRequest.class);
-            when(catalogV1Service.executeTool(anyString(), requestCaptor.capture(), anyString(),
-                    isNull(), anyString()))
-                    .thenReturn(ToolExecutionResponse.builder().success(true).build());
-
-            service.execute(CLOUD_USER_ID, INSTALL_ID, API_SLUG, TOOL_SLUG,
-                    CeCatalogRelayRequest.builder()
-                            .parameters(Map.of("city", "Paris"))
-                            .providerRetryMaxWaitSeconds(0)
-                            .build());
-
-            assertThat(requestCaptor.getValue().getProviderRetryMaxWaitSeconds())
-                    .as("0 is the whole point of the field and the value a null-ish copy would lose")
-                    .isEqualTo(0);
-        }
-
-        @Test
-        @DisplayName("a relayed call that says nothing leaves the cloud's own budget in place")
-        void anAbsentBudgetIsNotInvented() {
-            stubResolvedApiAndTool("api_key");
-            stubCredentialAndPricing();
-            stubSuccessfulReserve();
-            ArgumentCaptor<ToolExecutionRequest> requestCaptor =
-                    ArgumentCaptor.forClass(ToolExecutionRequest.class);
-            when(catalogV1Service.executeTool(anyString(), requestCaptor.capture(), anyString(),
-                    isNull(), anyString()))
-                    .thenReturn(ToolExecutionResponse.builder().success(true).build());
-
-            service.execute(CLOUD_USER_ID, INSTALL_ID, API_SLUG, TOOL_SLUG, relayRequest());
-
-            assertThat(requestCaptor.getValue().getProviderRetryMaxWaitSeconds()).isNull();
-        }
-
-        @Test
-        @DisplayName("ProviderRetryContext is opened for the call and cleared afterwards, so a "
-                + "pooled thread cannot carry a count into the next tenant's request")
-        void providerRetryContextIsOpenedThenCleared() {
-            // The count does not self-heal the way the budget does: every entry point sets a budget,
-            // nothing resets a count. One left behind is reported on the NEXT request through that
-            // thread as a re-send that never happened, on a step whose only evidence of a wait is
-            // that number.
-            stubResolvedApiAndTool("api_key");
-            stubCredentialAndPricing();
-            stubSuccessfulReserve();
-            ProviderRetryContext.recordRetry();
-            AtomicReference<Long> budgetDuringExecution = new AtomicReference<>(-1L);
-            AtomicReference<Integer> countDuringExecution = new AtomicReference<>(-1);
-            when(catalogV1Service.executeTool(anyString(), any(), anyString(), isNull(), anyString()))
-                    .thenAnswer(invocation -> {
-                        budgetDuringExecution.set(ProviderRetryContext.getMaxWaitMs());
-                        countDuringExecution.set(ProviderRetryContext.getRetries());
-                        return ToolExecutionResponse.builder().success(true).build();
-                    });
-
-            service.execute(CLOUD_USER_ID, INSTALL_ID, API_SLUG, TOOL_SLUG,
-                    CeCatalogRelayRequest.builder()
-                            .parameters(Map.of("city", "Paris"))
-                            .providerRetryMaxWaitSeconds(0)
-                            .build());
-
-            assertThat(budgetDuringExecution.get())
-                    .as("the budget is bound to the thread for the duration of the call")
-                    .isEqualTo(0L);
-            assertThat(countDuringExecution.get())
-                    .as("the stale count from before this call was reset on the way in")
-                    .isZero();
-            assertThat(ProviderRetryContext.getMaxWaitMs())
-                    .as("and nothing is left on the thread when it goes back to the pool")
-                    .isNull();
-            assertThat(ProviderRetryContext.getRetries()).isZero();
         }
     }
 

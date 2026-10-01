@@ -41,6 +41,26 @@ public interface WorkflowPublicationRepository extends JpaRepository<WorkflowPub
 
     Optional<WorkflowPublicationEntity> findByWorkflowId(UUID workflowId);
 
+    /**
+     * The three columns the owner-scope rule reads
+     * ({@code WorkflowPublicationService#isInOwnerScope}), and nothing else. Read on EVERY
+     * share-token resolution (the CE edge resolves one per request, with no cache), where
+     * {@code findById} would load the plan snapshot and every other JSONB column of the row
+     * to answer a yes/no. Empty when no publication has that id.
+     */
+    @Query("SELECT p.ownerType AS ownerType, p.ownerId AS ownerId, p.publisherId AS publisherId "
+            + "FROM WorkflowPublicationEntity p WHERE p.id = :id")
+    List<OwnerScopeView> findOwnerScopeById(@Param("id") UUID id);
+
+    /** Scalar view of a publication's owner scope, see {@link #findOwnerScopeById}. */
+    interface OwnerScopeView {
+        OwnerType getOwnerType();
+
+        String getOwnerId();
+
+        String getPublisherId();
+    }
+
     boolean existsByWorkflowId(UUID workflowId);
 
     Optional<WorkflowPublicationEntity> findByAgentConfigId(UUID agentConfigId);

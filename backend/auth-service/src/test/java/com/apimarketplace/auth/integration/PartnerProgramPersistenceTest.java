@@ -32,6 +32,7 @@ class PartnerProgramPersistenceTest extends AuthScratchPostgresSpringTest {
     @Autowired private RewardCodeRepository codeRepository;
     @Autowired private RewardRedemptionRepository redemptionRepository;
     @Autowired private PartnerCommissionRepository commissionRepository;
+    @Autowired private PartnerApplicationRepository applicationRepository;
     @Autowired private SubscriptionRepository subscriptionRepository;
     @Autowired private BillingCustomerRepository billingCustomerRepository;
     @Autowired private UserRepository userRepository;
@@ -49,6 +50,8 @@ class PartnerProgramPersistenceTest extends AuthScratchPostgresSpringTest {
         // (insertable = false); the migrations give it DEFAULT now(), so the test schema must too.
         jdbcTemplate.execute("ALTER TABLE auth.reward_code ALTER COLUMN created_at SET DEFAULT now()");
         jdbcTemplate.execute("ALTER TABLE auth.partner_commission ALTER COLUMN created_at SET DEFAULT now()");
+        jdbcTemplate.execute("ALTER TABLE auth.partner_application ALTER COLUMN created_at SET DEFAULT now()");
+        applicationRepository.deleteAll();
         commissionRepository.deleteAll();
         redemptionRepository.deleteAll();
         codeRepository.deleteAll();
@@ -245,5 +248,103 @@ class PartnerProgramPersistenceTest extends AuthScratchPostgresSpringTest {
         Subscription other = internalSub("other@x.io", free, null);
         assertThat(rewardService.redeem(other.getBillingCustomer().getUser().getId(), "LC-CREATOR9").status())
                 .isEqualTo(RewardService.RedeemStatus.EXHAUSTED);
+    }
+
+    private Long userId(String email, boolean enabled) {
+        User u = new User();
+        u.setEmail(email);
+        u.setUsername(email);
+        u.setEnabled(enabled);
+        return userRepository.save(u).getId();
+    }
+
+    private RewardCode partnerCodeFor(String value, Long owner) {
+        RewardCode c = code(value, RewardProgram.PARTNER, BenefitKind.CREDIT_GRANT);
+        c.setOwnerUserId(owner);
+        c.setOwnerRewardKind(OwnerRewardKind.PARTNER_PAYOUT);
+        c.setPayoutBps(5000);
+        c.setPayoutMonths(12);
+        return c;
+    }
+
+    @Test
+    @DisplayName("V553 badge query: only live PARTNER codes of enabled accounts count (not disabled, expired, future or referral)")
+    void livePartnerOwnersQuery() {
+        Long live = userId("live@x.io", true);
+        Long disabledCode = userId("off@x.io", true);
+        Long expired = userId("expired@x.io", true);
+        Long future = userId("future@x.io", true);
+        Long disabledAccount = userId("gone@x.io", false);
+        Long referrer = userId("ref@x.io", true);
+
+        codeRepository.save(partnerCodeFor("LIVE01", live));
+        RewardCode off = partnerCodeFor("OFF01", disabledCode);
+        off.setActive(false);
+        codeRepository.save(off);
+        RewardCode old = partnerCodeFor("OLD01", expired);
+        old.setValidUntil(Instant.now().minus(1, ChronoUnit.HOURS));
+        codeRepository.save(old);
+        RewardCode notYet = partnerCodeFor("SOON01", future);
+        notYet.setValidFrom(Instant.now().plus(1, ChronoUnit.DAYS));
+        codeRepository.save(notYet);
+        codeRepository.save(partnerCodeFor("GONE01", disabledAccount));
+        RewardCode referral = code("REFER02", RewardProgram.REFERRAL, BenefitKind.CREDIT_GRANT);
+        referral.setOwnerUserId(referrer);
+        referral.setBenefitTrigger(BenefitTrigger.PAID_CONVERSION);
+        codeRepository.save(referral);
+
+        assertThat(codeRepository.findLivePartnerOwnerIdsIn(
+                List.of(live, disabledCode, expired, future, disabledAccount, referrer), Instant.now()))
+                .containsExactly(live);
+    }
+
+    @Test
+    @DisplayName("V553 application queries: latest per user, the pending queue, the open-application probe")
+    void applicationQueries() {
+        Long user = userId("apply@x.io", true);
+        PartnerApplication first = new PartnerApplication();
+        first.setUserId(user);
+        first.setCompanyName("Acme");
+        first.setStatus(PartnerApplication.Status.REJECTED);
+        applicationRepository.saveAndFlush(first);
+        PartnerApplication second = new PartnerApplication();
+        second.setUserId(user);
+        second.setCompanyName("Acme 2");
+        applicationRepository.saveAndFlush(second);
+
+        assertThat(applicationRepository.findFirstByUserIdOrderByCreatedAtDescIdDesc(user))
+                .get().extracting(PartnerApplication::getCompanyName).isEqualTo("Acme 2");
+        assertThat(applicationRepository.findByStatusOrderByCreatedAtDescIdDesc(PartnerApplication.Status.PENDING))
+                .extracting(PartnerApplication::getId).containsExactly(second.getId());
+        assertThat(applicationRepository.existsByUserIdAndStatus(user, PartnerApplication.Status.PENDING)).isTrue();
+        assertThat(applicationRepository.findTop200ByOrderByCreatedAtDescIdDesc()).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("regression: two admins deciding the same application at once, the second write is refused (V553 version)")
+    void concurrentDecisionsCannotBothWin() {
+        Long user = userId("race@x.io", true);
+        PartnerApplication row = new PartnerApplication();
+        row.setUserId(user);
+        row.setCompanyName("Acme");
+        Long id = applicationRepository.saveAndFlush(row).getId();
+        var tx = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+
+        // Both admins loaded the PENDING row before either decided.
+        PartnerApplication seenByFirst = tx.execute(st -> applicationRepository.findById(id).orElseThrow());
+        PartnerApplication seenBySecond = tx.execute(st -> applicationRepository.findById(id).orElseThrow());
+
+        seenByFirst.setStatus(PartnerApplication.Status.REJECTED);
+        tx.executeWithoutResult(st -> applicationRepository.saveAndFlush(seenByFirst));
+
+        seenBySecond.setStatus(PartnerApplication.Status.APPROVED);
+        seenBySecond.setRewardCodeId(99L);
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> tx.executeWithoutResult(st -> applicationRepository.saveAndFlush(seenBySecond)))
+                .isInstanceOf(org.springframework.dao.OptimisticLockingFailureException.class);
+        // The first decision stands, untouched by the second.
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status || ':' || coalesce(reward_code_id::text, 'none') FROM auth.partner_application WHERE id = ?",
+                String.class, id)).isEqualTo("REJECTED:none");
     }
 }

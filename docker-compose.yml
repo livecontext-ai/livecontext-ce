@@ -52,7 +52,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          # 512M, not 256M: default settings (128MB shared_buffers) plus up to 20 app connections
+          # (Hikari maximum-pool-size) outgrow 256M under load. The e2e suite (e2e-measure,
+          # 2026-09-29) saw Postgres OOM-killed 3 times at 256M, then "the database system is in
+          # recovery mode". Keep >= 512M (test_installation_config.py).
+          memory: 512M
 
   redis:
     image: redis:7-alpine
@@ -111,7 +115,7 @@ services:
     restart: "no"
 
   bridge:
-    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.3.4
+    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.3.5
     container_name: livecontext-bridge
     restart: unless-stopped
     depends_on:
@@ -139,7 +143,7 @@ services:
           memory: 512M
 
   livecontext:
-    image: ghcr.io/livecontext-ai/livecontext-ce:v0.3.4
+    image: ghcr.io/livecontext-ai/livecontext-ce:v0.3.5
     container_name: livecontext-app
     restart: unless-stopped
     depends_on:
@@ -387,7 +391,7 @@ services:
   # secrets - HTML in, bytes out; reached only by the app over the compose network.
   screenshot-renderer:
     profiles: ["renderer"]
-    image: ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer:v0.3.4
+    image: ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer:v0.3.5
     container_name: livecontext-screenshot-renderer
     restart: unless-stopped
     environment:
@@ -411,7 +415,7 @@ services:
           memory: 1024M
 
   frontend:
-    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.3.4
+    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.3.5
     container_name: livecontext-frontend
     restart: unless-stopped
     depends_on:

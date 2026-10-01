@@ -100,7 +100,11 @@ describe('Verified accounts admin page', () => {
       target_email: 'alice@example.com', verified: true,
     }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'User ID' }));
+    // The mode toggle stays disabled until the first grant settles; clicking it
+    // earlier is a no-op, which a loaded CI runner hits.
+    const idMode = screen.getByRole<HTMLButtonElement>('button', { name: 'User ID' });
+    await waitFor(() => expect(idMode.disabled).toBe(false));
+    fireEvent.click(idMode);
     fireEvent.change(screen.getByLabelText('User ID'), { target: { value: '42' } });
     fireEvent.click(screen.getByRole('button', { name: /Verify account/ }));
     await waitFor(() => expect(adminSetVerified).toHaveBeenCalledWith({

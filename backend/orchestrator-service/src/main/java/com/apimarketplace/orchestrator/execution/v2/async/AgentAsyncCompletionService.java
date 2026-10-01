@@ -301,6 +301,18 @@ public class AgentAsyncCompletionService {
     private com.apimarketplace.orchestrator.services.agent.AgentConversationManager conversationManager;
 
     /**
+     * nodePolicy on a queued agent: sends a failed attempt again (retryCount) and bounds the wait
+     * for an answer (timeoutMs). Absent when the queue is off, where the node runs inline under
+     * NodePolicyRunner, and in focused unit tests, where a failure simply ends the execution.
+     */
+    @Autowired(required = false)
+    private AgentAttemptScheduler attemptScheduler;
+
+    /** Keeps an attempt that ended as a timeout so its late answer is billed. Absent without the queue. */
+    @Autowired(required = false)
+    private RedisPendingAgentStore pendingStore;
+
+    /**
      * Phase 1 (2026-04-29 prod-incident fix) feature flag.
      * When false, falls back to legacy global-readiness-walker path that loses
      * per-item routing on partial-failure splits. Default true.
@@ -350,6 +362,7 @@ public class AgentAsyncCompletionService {
         if (opt.isEmpty()) {
             logger.debug("[AgentAsyncCompletion] No pending entry for correlationId={} (already processed or unknown)",
                 result.correlationId());
+            billLateAnswerIfTimedOut(result);
             return false;
         }
 
@@ -432,6 +445,13 @@ public class AgentAsyncCompletionService {
     }
 
     private boolean deliverConsumedPending(PendingAgent pending, AgentResultMessage result) {
+        if (pendingStore != null && AgentAttemptScheduler.isPolicyTimeout(result.result())) {
+            // This attempt ends as a nodePolicy.timeoutMs timeout while its agent may still be
+            // running: kept so its late answer is billed (billLateAnswerIfTimedOut). Here rather
+            // than at the consume, so it is written after the in-flight stage and a replay
+            // after a crash writes it too.
+            pendingStore.storeTimedOut(pending);
+        }
         // Bind organizationId on the thread BEFORE running the delivery pipeline.
         // This method is invoked from two callsites that do NOT carry HTTP request
         // context: (a) AgentResultSubscriber.onMessage running on a Spring Data Redis
@@ -527,12 +547,28 @@ public class AgentAsyncCompletionService {
             }
             WorkflowExecution execution = loaded.execution();
 
+            // 3-. nodePolicy on a queued agent. NodePolicyRunner only saw this node yield, so the
+            //     attempt is judged here, with the runner's own rule: a failure the policy retries
+            //     is reported as a non-final attempt and sent again, and nothing below runs (the
+            //     node is still RUNNING). Any other outcome carries the annotations a synchronous
+            //     node's result gets (policy_attempt, policy_max_attempts, policy_final_attempt...).
+            AttemptVerdict verdict = attemptVerdict(execution, pending, result);
+            if (verdict.alreadySentAgain()) {
+                return true;
+            }
+            if (verdict.retryWaitMs() >= 0 && retryAttempt(execution, pending, result, verdict)) {
+                return true;
+            }
+
             // 3a. Persist step result via the SAME pipeline as inline execution
             //     (enrichAgentFields, selectedBranch derivation, everything) - no
             //     parallel logic.
-            StepExecutionResult stepResult = buildStepResult(execution, pending, result);
+            StepExecutionResult stepResult = buildStepResult(execution, pending, result, verdict.finalAnnotations());
             com.apimarketplace.orchestrator.services.completion.StepCompletionResult completion =
                 persistStepResult(execution, pending, stepResult);
+            if (attemptScheduler != null && !verdict.finalAnnotations().isEmpty()) {
+                attemptScheduler.forget(pending.correlationId()); // the execution ended: nothing to send again
+            }
 
             // Payload-lost rewrite (tier 2, traversal truth): the orchestrator
             // flipped this success to FAILED because the output blob could not
@@ -603,7 +639,12 @@ public class AgentAsyncCompletionService {
             //     a loop body drops the iterate edge and the loop runs the body exactly once instead
             //     of N times. Success only (a failed agent goes through the cascade below); delegated
             //     to SignalResumeService so the back-edge + snapshot-reset logic stays single-sourced.
-            if (effectiveSuccess && signalResumeService != null) {
+            boolean continuedFailure = !effectiveSuccess
+                && com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys
+                    .isContinueOnFailure(nodeResult.metadata());
+            // A continued failure iterates too, as on the synchronous path: the loop goes on past the
+            // failed turn instead of stopping without reaching its exit.
+            if ((effectiveSuccess || continuedFailure) && signalResumeService != null) {
                 signalResumeService.advanceLoopBackEdgeForAsyncCompletedNode(
                     runId, pending.itemId(), pending.nodeId(), pending.itemIndex(),
                     pending.epoch(), pending.dagTriggerId(), nodeResult);
@@ -635,7 +676,11 @@ public class AgentAsyncCompletionService {
             // try/catch at line ~370 would re-register the pending agent for retry, which
             // is the wrong recovery for a cascade-only failure (FAILED row already exists,
             // re-delivery would just retry the cascade).
-            if (!effectiveSuccess && skipPropagationService != null) {
+            if (continuedFailure) {
+                logger.info("[AgentAsyncCompletion] Agent failed with continueOnFailure - no SKIPPED cascade, successors run: runId={}, nodeId={}",
+                    runId, pending.nodeId());
+            }
+            if (!effectiveSuccess && !continuedFailure && skipPropagationService != null) {
                 try {
                     ExecutionNode failedNode = lookupNode(runId, pending.nodeId());
                     if (failedNode != null) {
@@ -699,12 +744,21 @@ public class AgentAsyncCompletionService {
 
     private com.apimarketplace.orchestrator.services.completion.StepCompletionResult persistStepResult(
             WorkflowExecution execution, PendingAgent pending, StepExecutionResult stepResult) {
+        // Return the completion result: it carries the payload-lost rewrite
+        // (tier 2) that deliverUnderLock must honor for its traversal decision.
+        return stepCompletionOrchestrator.complete(completionContext(execution, pending, stepResult),
+            pending.dagTriggerId());
+    }
+
+    /** The completion context of this delivery, shared by the terminal persist and a non-final attempt report. */
+    private com.apimarketplace.orchestrator.services.completion.StepCompletionContext completionContext(
+            WorkflowExecution execution, PendingAgent pending, StepExecutionResult stepResult) {
         // Phase 2.E (2026-04-29): for split-async items, suppress the global EpochState
         // mark so the first per-item failure doesn't poison failedNodeIds for the whole
         // node. The aggregate global status is written ONCE at barrier seal via
         // recordSplitAggregateIfMissing.
         boolean suppressGlobal = isSplitAgent(pending);
-        com.apimarketplace.orchestrator.services.completion.StepCompletionContext ctx =
+        return
             new com.apimarketplace.orchestrator.services.completion.StepCompletionContext(
                 execution,
                 pending.nodeId(),
@@ -718,9 +772,211 @@ public class AgentAsyncCompletionService {
                 null,
                 pending.epoch(),
                 suppressGlobal);
-        // Return the completion result: it carries the payload-lost rewrite
-        // (tier 2) that deliverUnderLock must honor for its traversal decision.
-        return stepCompletionOrchestrator.complete(ctx, pending.dagTriggerId());
+    }
+
+    /**
+     * How a queued agent's attempt ends under its node's policy. {@code retryWaitMs >= 0}: another
+     * attempt is sent after that wait. Otherwise the attempt ends the execution. The annotation
+     * maps are the ones NodePolicyRunner stamps on a synchronous node's result: {@code policy_attempt}
+     * and {@code policy_max_attempts} on every attempt, plus, on the result that ends the execution,
+     * {@code policy_final_attempt}, the early-stop reason and the continueOnFailure flag. Both
+     * empty for a node without a policy, whose result stays exactly as it was.
+     */
+    record AttemptVerdict(long retryWaitMs, Map<String, Object> attemptAnnotations,
+                          Map<String, Object> finalAnnotations, boolean alreadySentAgain) {
+        static final AttemptVerdict NO_POLICY = new AttemptVerdict(-1L, Map.of(), Map.of(), false);
+
+        AttemptVerdict(long retryWaitMs, Map<String, Object> attemptAnnotations, Map<String, Object> finalAnnotations) {
+            this(retryWaitMs, attemptAnnotations, finalAnnotations, false);
+        }
+    }
+
+    private AttemptVerdict attemptVerdict(WorkflowExecution execution, PendingAgent pending, AgentResultMessage result) {
+        com.apimarketplace.orchestrator.domain.workflow.NodePolicy policy =
+            com.apimarketplace.orchestrator.execution.v2.engine.NodePolicyRunner.effectivePolicy(
+                execution.getPlan(), pending.nodeId());
+        if (policy.isDefault()) {
+            return AttemptVerdict.NO_POLICY;
+        }
+        int attempt = pending.attempt();
+        int maxAttempts = policy.maxAttempts();
+        Map<String, Object> attemptAnnotations = new HashMap<>();
+        attemptAnnotations.put(com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.POLICY_ATTEMPT, attempt);
+        attemptAnnotations.put(com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.POLICY_MAX_ATTEMPTS, maxAttempts);
+        Map<String, Object> finalAnnotations = new HashMap<>(attemptAnnotations);
+        finalAnnotations.put(com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.POLICY_FINAL_ATTEMPT, Boolean.TRUE);
+        if (result.success()) {
+            return new AttemptVerdict(-1L, attemptAnnotations, finalAnnotations);
+        }
+        String errorMessage = result.errorMessage() != null ? result.errorMessage() : "Async agent execution failed";
+        NodeExecutionResult failure = NodeExecutionResult.failureWithOutput(pending.nodeId(), errorMessage,
+            result.result() != null ? new HashMap<>(result.result()) : new HashMap<>(), 0L);
+        // continueOnFailure: stamped on the final failure, from the same policy the runner reads, and
+        // like the runner never for a refusal for missing credits or a budget. Persisted with the
+        // row, it stops the SKIPPED cascade and lets the successors run.
+        if (policy.continueOnFailure()
+                && !com.apimarketplace.orchestrator.execution.v2.engine.NodePolicyRunner.isBudgetRefusal(failure)) {
+            finalAnnotations.put(com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE,
+                Boolean.TRUE);
+        }
+        com.apimarketplace.orchestrator.execution.v2.engine.NodePolicyRunner.NextAttempt next =
+            com.apimarketplace.orchestrator.execution.v2.engine.NodePolicyRunner.afterFailedAttempt(
+                policy, pending.nodeId(), attempt, failure);
+        if (next.stopReason() != null) {
+            finalAnnotations.put(com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.POLICY_RETRY_STOPPED,
+                next.stopReason());
+        }
+        if (!next.retry()) {
+            return new AttemptVerdict(-1L, attemptAnnotations, finalAnnotations);
+        }
+        if (attemptScheduler != null
+                && attemptScheduler.isScheduled(AgentAttemptScheduler.nextCorrelationId(pending))) {
+            // This failure was already judged and its next attempt is on its way: a delivery
+            // replayed after a crash (the in-flight store) must neither record it again nor end the
+            // execution a second time.
+            logger.info("[AgentAsyncCompletion] Attempt {}/{} already sent again, replayed delivery ignored: runId={}, nodeId={}, correlationId={}",
+                attempt, maxAttempts, pending.runId(), pending.nodeId(), pending.correlationId());
+            return new AttemptVerdict(-1L, attemptAnnotations, finalAnnotations, true);
+        }
+        if (workflowBudgetBlocks(pending.runId())) {
+            // The resend skips the agent's own pre-dispatch gates, and a synchronous retry would be
+            // refused by this one before it starts: the workflow already reached its credit cap.
+            logger.info("[AgentAsyncCompletion] Attempt {}/{} failed and the workflow reached its credit cap, not sent again: runId={}, nodeId={}",
+                attempt, maxAttempts, pending.runId(), pending.nodeId());
+            finalAnnotations.put(com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.POLICY_RETRY_STOPPED,
+                com.apimarketplace.orchestrator.execution.v2.engine.NodePolicyRunner.STOP_PERMANENT_REFUSAL);
+            // Nor continued past: the synchronous retry would have ended on the budget refusal,
+            // which is never continued, and the paid nodes below would run with no money for them.
+            finalAnnotations.remove(com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE);
+            return new AttemptVerdict(-1L, attemptAnnotations, finalAnnotations);
+        }
+        if (isRunStoppedOrTerminal(pending.runId())) {
+            logger.info("[AgentAsyncCompletion] Attempt {}/{} failed on a stopped run, not sent again: runId={}, nodeId={}",
+                attempt, maxAttempts, pending.runId(), pending.nodeId());
+            return new AttemptVerdict(-1L, attemptAnnotations, finalAnnotations);
+        }
+        if (attemptScheduler == null) {
+            return new AttemptVerdict(-1L, attemptAnnotations, finalAnnotations);
+        }
+        if (!attemptScheduler.claimRetry(pending.correlationId())) {
+            // Another delivery of this same failure (a startup replay racing the live delivery)
+            // is sending the next attempt: this one records nothing and ends nothing. Checked
+            // BEFORE the kept request: the winner takes that request, and a delivery that looked
+            // for it first would find it gone and end the execution while the retry goes out.
+            logger.info("[AgentAsyncCompletion] Attempt {}/{} is being sent again by another delivery, this one ignored: runId={}, nodeId={}, correlationId={}",
+                attempt, maxAttempts, pending.runId(), pending.nodeId(), pending.correlationId());
+            return new AttemptVerdict(-1L, attemptAnnotations, finalAnnotations, true);
+        }
+        if (!attemptScheduler.canResend(pending.correlationId())) {
+            logger.warn("[AgentAsyncCompletion] Attempt {}/{} failed but its request was not kept, so it ends the execution: runId={}, nodeId={}, correlationId={}",
+                attempt, maxAttempts, pending.runId(), pending.nodeId(), pending.correlationId());
+            return new AttemptVerdict(-1L, attemptAnnotations, finalAnnotations);
+        }
+        return new AttemptVerdict(next.waitMs(), attemptAnnotations, finalAnnotations);
+    }
+
+    /**
+     * A failed attempt the policy retries. The next attempt is registered and scheduled first:
+     * it is the step that can fail, and the attempt then simply ends the execution. Then this
+     * one is reported as a non-final attempt (a step event, no row) and its tokens are billed.
+     * Nothing else runs: the node stays RUNNING, its successors wait, its epoch stays open.
+     */
+    private boolean retryAttempt(WorkflowExecution execution, PendingAgent pending, AgentResultMessage result,
+                                 AttemptVerdict verdict) {
+        String executionId = pending.executionId() != null ? java.util.UUID.randomUUID().toString() : null;
+        // The next correlation id is derived from this one, so a replayed delivery of the same
+        // failure finds the attempt it already scheduled (attemptVerdict) instead of a second one.
+        PendingAgent next = pending.nextAttempt(AgentAttemptScheduler.nextCorrelationId(pending), executionId,
+            startRetryStream(pending, executionId), java.time.Instant.now().plusMillis(verdict.retryWaitMs()));
+        boolean scheduled;
+        try {
+            scheduled = attemptScheduler.scheduleResend(pending, next, verdict.retryWaitMs());
+        } catch (RuntimeException e) {
+            // The delivery is re-registered and redelivered by the recovery scan: give the
+            // judgement back so that redelivery can make it.
+            attemptScheduler.releaseRetry(pending.correlationId());
+            throw e;
+        }
+        if (!scheduled) {
+            return false;
+        }
+        StepExecutionResult attemptResult = buildStepResult(execution, pending, result, verdict.attemptAnnotations());
+        try {
+            stepCompletionOrchestrator.completeAttempt(completionContext(execution, pending, attemptResult),
+                pending.dagTriggerId());
+        } catch (Exception e) {
+            logger.warn("[AgentAsyncCompletion] Could not report attempt {} (the next one is scheduled): runId={}, nodeId={}, error={}",
+                pending.attempt(), pending.runId(), pending.nodeId(), e.getMessage());
+        }
+        recordAsyncObservability(execution, pending, result, attemptResult);
+        logger.info("[AgentAsyncCompletion] Attempt {} failed, attempt {} sent in {}ms: runId={}, nodeId={}, itemIndex={}, error={}",
+            pending.attempt(), next.attempt(), verdict.retryWaitMs(), pending.runId(), pending.nodeId(),
+            pending.itemIndex(), result.errorMessage());
+        return true;
+    }
+
+    /** Whether the run's workflow already reached its credit cap. Fails open, like the agent's own gate. */
+    private boolean workflowBudgetBlocks(String runId) {
+        try {
+            return runRepository.findBudgetStateByRunIdPublic(runId)
+                .map(state -> state.blocksAt(java.time.Instant.now()))
+                .orElse(false);
+        } catch (Exception e) {
+            logger.warn("[AgentAsyncCompletion] Workflow budget check failed for runId={}, retrying anyway: {}",
+                runId, e.getMessage());
+            return false;
+        }
+    }
+
+    /** A retried agent that writes to a conversation gets its own stream there (its prompt is already saved). */
+    private String startRetryStream(PendingAgent pending, String executionId) {
+        if (conversationManager == null || pending.conversationId() == null || executionId == null) {
+            return null;
+        }
+        try {
+            com.apimarketplace.orchestrator.services.agent.AgentConversationManager.StreamSession session =
+                conversationManager.startExecution(pending.conversationId(), pending.resolvedUserPrompt(),
+                    pending.tenantId(), executionId, pending.model(), /*skipUserPrompt=*/ true);
+            return session != null ? session.streamId() : null;
+        } catch (Exception e) {
+            logger.warn("[AgentAsyncCompletion] Could not open the retry's conversation stream: runId={}, nodeId={}, error={}",
+                pending.runId(), pending.nodeId(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * An answer that arrives after its attempt ended as a nodePolicy.timeoutMs timeout: the agent
+     * ran and spent tokens, so they are billed, and nothing else happens (the node went on without
+     * it). Every replica receives the answer; the GETDEL of the kept attempt lets exactly one bill.
+     */
+    private void billLateAnswerIfTimedOut(AgentResultMessage result) {
+        if (pendingStore == null || AgentAttemptScheduler.isPolicyTimeout(result.result())) {
+            return;
+        }
+        Optional<PendingAgent> timedOut = pendingStore.claimTimedOut(result.correlationId());
+        if (timedOut.isEmpty()) {
+            return;
+        }
+        PendingAgent pending = timedOut.get();
+        com.apimarketplace.common.web.TenantResolver.runWithOrgScope(pending.organizationId(), () -> {
+            try {
+                com.apimarketplace.orchestrator.execution.v2.cache.ExecutionCacheManager.LoadedExecution loaded =
+                    rebuildLoadedExecution(pending.runId());
+                if (loaded == null || loaded.execution() == null) {
+                    logger.warn("[AgentAsyncCompletion] Late answer after a timeout not billed (run not loadable): runId={}, correlationId={}",
+                        pending.runId(), result.correlationId());
+                    return;
+                }
+                recordAsyncObservability(loaded.execution(), pending, result,
+                    buildStepResult(loaded.execution(), pending, result));
+                logger.info("[AgentAsyncCompletion] Late answer of a timed-out attempt billed, not delivered: runId={}, nodeId={}, attempt={}, correlationId={}",
+                    pending.runId(), pending.nodeId(), pending.attempt(), result.correlationId());
+            } catch (Exception e) {
+                logger.warn("[AgentAsyncCompletion] Late answer after a timeout not billed: runId={}, correlationId={}, error={}",
+                    pending.runId(), result.correlationId(), e.getMessage());
+            }
+        });
     }
 
     /**
@@ -954,6 +1210,21 @@ public class AgentAsyncCompletionService {
         for (IndexedNodeResult item : batch) {
             NodeExecutionResult itemResult = item.result();
             if (itemResult == null) continue;
+            boolean continuedItem = !itemResult.isSuccess()
+                && com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys
+                    .isContinueOnFailure(itemResult.metadata());
+            if (continuedItem) {
+                // continueOnFailure: this item failed but traverses like a success - no per-item
+                // cascade, and its successors are dispatched (getNextNodes filters on failure).
+                fail++;
+                for (ExecutionNode successor : node.getSuccessors()) {
+                    distinctSuccessors.add(successor.getNodeId());
+                    if (successor.isImplicitMerge() || successor.isMergeNode()) {
+                        mergeSuccessors.add(successor.getNodeId());
+                    }
+                }
+                continue;
+            }
             if (!itemResult.isSuccess()) {
                 fail++;
                 // Per-item cascade for the failed item - same routine as non-split,
@@ -1252,12 +1523,17 @@ public class AgentAsyncCompletionService {
             ? Optional.empty()
             : Optional.ofNullable(result.success() ? stepResult.message() : result.errorMessage())
                 .or(() -> Optional.of("Async agent execution failed"));
+        Map<String, Object> metadata = new HashMap<>();
+        if (!success && com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.isContinueOnFailure(output)) {
+            metadata.put(com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE,
+                Boolean.TRUE);
+        }
         return new NodeExecutionResult(
             pending.nodeId(),
             status,
             output,
             errorMessage,
-            new HashMap<>(),
+            metadata,
             stepResult.executionTime()
         );
     }
@@ -1349,6 +1625,12 @@ public class AgentAsyncCompletionService {
      * run {@code *_512defbb} where 5 guardrail items produced 0 routed classify items.
      */
     private StepExecutionResult buildStepResult(WorkflowExecution execution, PendingAgent pending, AgentResultMessage result) {
+        return buildStepResult(execution, pending, result, Map.of());
+    }
+
+    /** @param policyAnnotations the node policy's attempt annotations (see {@link AttemptVerdict}), merged into the output */
+    private StepExecutionResult buildStepResult(WorkflowExecution execution, PendingAgent pending, AgentResultMessage result,
+                                                Map<String, Object> policyAnnotations) {
         long durationMs = 0L;
         if (pending.startedAt() != null && result.completedAt() != null) {
             durationMs = Math.max(0L,
@@ -1380,6 +1662,7 @@ public class AgentAsyncCompletionService {
         if (snapshot != null && !snapshot.isEmpty()) {
             output.put("resolved_params", snapshot);
         }
+        output.putAll(policyAnnotations);
 
         if (result.success()) {
             return StepExecutionResult.success(pending.nodeId(), output, durationMs);

@@ -293,6 +293,22 @@ class SharedLinkControllerTest {
         }
 
         @Test
+        @DisplayName("returns 404 'Resource not found' when the caller does not hold the named resource")
+        void returns404WhenResourceNotOwned() {
+            when(sharedLinkService.register(any(), any(), any(), any(), any(), any(), any(), any()))
+                    .thenThrow(new SharedLinkService.SharedLinkResourceNotFoundException());
+
+            Map<String, Object> body = Map.of(
+                    "resourceType", "APPLICATION",
+                    "resourceToken", UUID.randomUUID().toString());
+
+            ResponseEntity<?> response = controller.create(TENANT_ID, "org-b", null, "PRO", body);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(response.getBody()).isEqualTo(Map.of("error", "Resource not found"));
+        }
+
+        @Test
         @DisplayName("returns 400 when resourceType is missing")
         void returns400WhenMissingResourceType() {
             Map<String, Object> body = Map.of("resourceToken", "ch_1");

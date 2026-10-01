@@ -25,9 +25,9 @@ import static org.mockito.Mockito.mock;
  *   <li><b>The topic is reachable.</b> The refusal messages the tools return point the agent at
  *       {@code topics=['node_policy']}. A topic name that resolves to nothing sends the agent to a
  *       dead end at the exact moment it needs the answer.</li>
- *   <li><b>The multiplication is stated.</b> It is the one thing an author cannot deduce: their
- *       retry and the platform's compose by multiplying, so a careful author hammers a provider
- *       harder than a careless one unless the help says so.</li>
+ *   <li><b>The absence of a platform retry is stated.</b> A provider refusal fails the call on its
+ *       first answer, so the node's own retry, with a backoff that outlasts the provider's window,
+ *       is the only retry there is.</li>
  * </ul>
  */
 @DisplayName("workflow(action='help', topics=['node_policy']) describes the policy the tool accepts")
@@ -74,7 +74,7 @@ class NodePolicyHelpMatchesTheToolTest {
     @DisplayName("the spellings a model reaches for resolve to the same topic")
     void theAliasesResolve() {
         for (String alias : List.of("nodePolicy", "policy", "retry", "timeout",
-                "continue_on_failure", "execute_once", "execution_policy", "provider_retry")) {
+                "continue_on_failure", "execute_once", "execution_policy", "rate_limit")) {
             assertThat(provider().getHelp(alias))
                     .as("alias '%s'", alias)
                     .isNotNull()
@@ -100,14 +100,37 @@ class NodePolicyHelpMatchesTheToolTest {
     }
 
     @Test
-    @DisplayName("it states the one thing an author cannot deduce: the two retry layers MULTIPLY")
-    void itStatesTheMultiplication() {
+    @DisplayName("it states that the platform never retries a provider refusal, and how to retry instead")
+    void itStatesThereIsNoPlatformRetry() {
         String text = rendered("node_policy");
 
-        assertThat(text).containsIgnoringCase("multiply");
+        assertThat(text).contains("never re-sends a call a provider refused");
         assertThat(text)
                 .as("and what to do about it")
-                .contains("providerRetryMaxWaitSec=0");
+                .contains("retryBackoffMs=60000");
+    }
+
+    @Test
+    @DisplayName("REGRESSION: it no longer mentions the removed provider-retry budget or its read-back field")
+    void itDoesNotMentionTheRemovedKnob() {
+        String text = rendered("node_policy");
+
+        assertThat(text)
+                .doesNotContain("providerRetryMaxWaitSec")
+                .doesNotContain("_provider_retries");
+    }
+
+    @Test
+    @DisplayName("it explains which failures are retried, the safe choice for a node that writes, and the caps")
+    void itExplainsRetryClassification() {
+        String text = rendered("node_policy");
+
+        assertThat(text).contains("'rate_limit'");
+        assertThat(text).contains("408, 425 and 429");
+        assertThat(text).contains("Retry-After");
+        assertThat(text).contains("at most 10").contains("at most 60000");
+        assertThat(text).as("http_request completes on an HTTP error, so the policy never retries it")
+                .contains("http_request node does not FAIL on an HTTP error");
     }
 
     @Test
@@ -124,6 +147,9 @@ class NodePolicyHelpMatchesTheToolTest {
         String text = rendered("node_policy");
 
         assertThat(text).containsIgnoringCase("decision, switch, option");
+        assertThat(text).containsIgnoringCase("decision, switch, option, loop, and classify and guardrail agents");
+        assertThat(text).as("the agent learns an agent node is retried too").contains("Agent nodes are retried too");
+        assertThat(text).as("and which platform refusals are never retried").contains("catalog_refusal");
         assertThat(text).containsIgnoringCase("split, aggregate, merge, loop");
         assertThat(text).containsIgnoringCase("trigger");
     }
@@ -138,14 +164,11 @@ class NodePolicyHelpMatchesTheToolTest {
     }
 
     @Test
-    @DisplayName("it says what the agent can READ BACK, since a provider wait emits no event")
+    @DisplayName("it says what the agent can READ BACK about the attempts")
     void itSaysWhatCanBeReadBack() {
         String text = rendered("node_policy");
 
-        assertThat(text)
-                .as("the wait happens inside one tool call, so the node stays RUNNING and the only "
-                        + "trace is this field")
-                .contains("_provider_retries");
+        assertThat(text).contains("policy_attempt");
         assertThat(text).contains("get_node_output");
     }
 
@@ -155,6 +178,29 @@ class NodePolicyHelpMatchesTheToolTest {
         String text = rendered("node_policy");
 
         assertThat(text).containsIgnoringCase("ONE credit");
+    }
+
+    @Test
+    @DisplayName("REGRESSION: the help and the tool schema say continueOnFailure lets the next nodes run on every run, never that it is not applied")
+    void continueOnFailureIsDescribedAsWorkingEverywhere() {
+        // Until 2026-09-29 the production path ignored the flag and both texts said so. It now
+        // applies on every run; a text still saying "not applied" steers an agent into a
+        // workaround it does not need, the exact cost this class exists to prevent.
+        String help = rendered("node_policy");
+        String schema = new com.apimarketplace.orchestrator.tools.workflow.builder
+                .WorkflowBuilderToolDefinitionFactory(
+                mock(com.apimarketplace.orchestrator.service.NodeLibraryService.class))
+                .buildToolDefinition().parameters().stream()
+                .filter(parameter -> "nodePolicy".equals(parameter.name()))
+                .findFirst().orElseThrow().description();
+
+        for (String text : List.of(help, schema)) {
+            assertThat(text).doesNotContainIgnoringCase("not applied");
+            assertThat(text).containsIgnoringCase("whatever started the run");
+            assertThat(text).as("the node itself is not turned into a success").contains("still FAILED");
+            assertThat(text).as("a gate refusal is not continued").containsIgnoringCase("never continued");
+        }
+        assertThat(help).as("what the agent reads back").contains("policy_continue_on_failure");
     }
 
     @Test

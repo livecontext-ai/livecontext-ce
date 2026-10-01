@@ -56,6 +56,16 @@ public final class AuditEventTypes {
     public static final String PARTNER_CODE_ACTIVE_CHANGED = "partner.code_active_changed";
     /** V549 partner program: payable commission lines were marked paid (money left the platform). */
     public static final String PARTNER_COMMISSIONS_PAID = "partner.commissions_paid";
+    /** V553 partner program: an admin approved an application (which created the applicant's code). */
+    public static final String PARTNER_APPLICATION_APPROVED = "partner.application_approved";
+    /** V553 partner program: an admin rejected an application. */
+    public static final String PARTNER_APPLICATION_REJECTED = "partner.application_rejected";
+    /** V556 partner tiers: an admin granted a partner the founder tier (Platinum for life). */
+    public static final String PARTNER_FOUNDER_GRANTED = "partner.founder_granted";
+    /** V557: an admin ended a partner's founder status (terms clause 7.5); the earned tier applies. */
+    public static final String PARTNER_FOUNDER_ENDED = "partner.founder_ended";
+    /** V557: a partner accepted a version of the Partner Program Terms (with an application or from the dashboard). */
+    public static final String PARTNER_TERMS_ACCEPTED = "partner.terms_accepted";
     public static final String DATA_EXPORTED = "data.exported";
     /**
      * Admin granted or revoked a user's verified badge (the blue check next to a public

@@ -134,6 +134,20 @@ function renderWizard(initialMode: 'standard' | 'advanced' = 'standard') {
   );
 }
 
+// The absence tests below need a POSITIVE signal that the configure step is showing with
+// gates (1) and (2) already resolved, or "no toggle" would also hold for a wizard still
+// loading. The unverified-app notice is that signal: it renders only for an OAuth2 template
+// (gate 1) and is set in the same state update as hasPlatformCredentials (gate 2), so once
+// it is on screen the byok surface is the only thing left deciding the toggle.
+//
+// These tests used to wait for "Saving...", which only renders while a submit is in flight
+// and so never appeared: the swallowed rejection cost the whole waitFor budget, 15 s per
+// test once vitest.setup.ts raised it, and the assertions then ran on whatever state the
+// wizard happened to be in.
+async function waitForLoadedOAuthConfigureStep() {
+  await screen.findByText('Some providers have not finished verification.');
+}
+
 describe('CredentialWizard - byok.surface gates the toggle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -143,8 +157,7 @@ describe('CredentialWizard - byok.surface gates the toggle', () => {
     __TEMPLATE = buildTemplate(undefined); // surface absent ≡ "hidden"
     renderWizard('standard');
 
-    // Configure step renders Standard. Wait for an element that's deterministic on the configure step.
-    await screen.findByText('Saving...').catch(() => {});
+    await waitForLoadedOAuthConfigureStep();
 
     // No inline pills - neither role=radio nor named buttons appear.
     expect(screen.queryByRole('radiogroup')).toBeNull();
@@ -154,7 +167,7 @@ describe('CredentialWizard - byok.surface gates the toggle', () => {
   it('regression - surface="hidden" explicitly set: same behavior as absent. Confirms surface="hidden" is a real value, not just a default - useful when a future PR wants to deprecate inline mode for a provider without removing the byok block', async () => {
     __TEMPLATE = buildTemplate({ surface: 'hidden' });
     renderWizard('standard');
-    await screen.findByText('Saving...').catch(() => {});
+    await waitForLoadedOAuthConfigureStep();
     expect(screen.queryByRole('radiogroup')).toBeNull();
     expect(screen.queryByText('Need a custom OAuth app?')).toBeNull();
   });

@@ -803,4 +803,54 @@ class ToolApprovalGateTest {
         // Bounded by the caller's budget, nowhere near the gate's own 60s.
         assertThat(System.currentTimeMillis() - startedAt).isLessThan(5_000);
     }
+
+    @Test
+    @DisplayName("The running-turn \"don't ask again\" grant is read from the key conversation-service writes")
+    void conversationWideGrantIsReadFromTheSharedKey() {
+        when(redisTemplate.hasKey(StreamRedisKeys.conversationWideApprovalKey("conv-1"))).thenReturn(true);
+
+        assertThat(gate.isConversationWideApproved("conv-1")).isTrue();
+        assertThat(gate.isConversationWideApproved("conv-2")).isFalse();
+        assertThat(gate.isConversationWideApproved(null)).isFalse();
+    }
+
+    @Test
+    @DisplayName("An unreadable running-turn grant fails CLOSED: a card, never an unconsented action")
+    void conversationWideGrantFailsClosed() {
+        when(redisTemplate.hasKey(StreamRedisKeys.conversationWideApprovalKey("conv-1")))
+                .thenThrow(new IllegalStateException("redis down"));
+
+        assertThat(gate.isConversationWideApproved("conv-1")).isFalse();
+    }
+
+    @Test
+    @DisplayName("A held authorization is released when \"don't ask again\" is ticked on ANOTHER card")
+    void authorizationParkReleasedByTheConversationWideGrant() {
+        // No verdict ever lands on this card: the browser may not even have received it.
+        when(valueOps.get(KEY)).thenReturn("pending");
+        when(redisTemplate.hasKey(StreamRedisKeys.conversationWideApprovalKey(CONVERSATION))).thenReturn(false, true);
+
+        assertThat(gate.awaitDecision(park(0))).isEqualTo(ToolApprovalGate.Decision.APPROVED);
+        verify(redisTemplate).delete(KEY);
+    }
+
+    @Test
+    @DisplayName("A Deny on this very card still wins over a conversation-wide grant")
+    void explicitDenyBeatsTheConversationWideGrant() {
+        when(valueOps.get(KEY)).thenReturn("denied");
+        org.mockito.Mockito.lenient().when(redisTemplate.hasKey(StreamRedisKeys.conversationWideApprovalKey(CONVERSATION))).thenReturn(true);
+
+        assertThat(gate.awaitDecision(park(0))).isEqualTo(ToolApprovalGate.Decision.DENIED);
+    }
+
+    @Test
+    @DisplayName("A question or connect park (awaitAnswer) is never answered by a permission")
+    void nonAuthorizationParkIgnoresTheConversationWideGrant() {
+        when(valueOps.get(KEY)).thenReturn("pending");
+        org.mockito.Mockito.lenient().when(redisTemplate.hasKey(StreamRedisKeys.conversationWideApprovalKey(CONVERSATION))).thenReturn(true);
+        gate.configureForTest(true, 60, 10);
+
+        assertThat(gate.awaitAnswer(park(0)).decision()).isEqualTo(ToolApprovalGate.Decision.EXPIRED);
+        verify(redisTemplate, never()).hasKey(StreamRedisKeys.conversationWideApprovalKey(CONVERSATION));
+    }
 }

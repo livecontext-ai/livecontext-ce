@@ -175,6 +175,65 @@ class OrchestratorInternalClientTest {
     }
 
     @Test
+    @DisplayName("Bug A7: the orchestrator's EPOCH_NOT_FOUND 404 is a missing epoch (input error), not a null that becomes a 500")
+    void captureShowcaseSnapshotWithMissingEpochThrowsEpochNotFound() {
+        String runId = "run_123";
+        String expectedUrl = BASE_URL + "/api/internal/publication-support/runs/" + runId + "/full-snapshot"
+                + "?tenantId=" + TENANT_ID + "&organizationId=" + ORG_ID + "&epochFilter=9";
+        server.expect(requestTo(expectedUrl))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                        .withStatus(org.springframework.http.HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"error\":\"EPOCH_NOT_FOUND\",\"epoch\":9}"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> client.captureShowcaseSnapshot(runId, TENANT_ID, ORG_ID, 9))
+                .isInstanceOf(OrchestratorInternalClient.ShowcaseEpochNotFoundException.class)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Showcase epoch 9 does not exist in run run_123");
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("A bodiless 404 (run missing / out of scope), an unfiltered 404 and a 500 keep the null contract")
+    void captureShowcaseSnapshotKeepsNullForOtherFailures() {
+        String base = BASE_URL + "/api/internal/publication-support/runs/run_123/full-snapshot?tenantId=" + TENANT_ID;
+        server.expect(requestTo(base))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                        .withStatus(org.springframework.http.HttpStatus.NOT_FOUND));
+        server.expect(requestTo(base + "&organizationId=" + ORG_ID + "&epochFilter=2"))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                        .withStatus(org.springframework.http.HttpStatus.NOT_FOUND));
+        server.expect(requestTo(base + "&organizationId=" + ORG_ID + "&epochFilter=2"))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators.withServerError());
+
+        assertThat(client.captureShowcaseSnapshot("run_123", TENANT_ID)).isNull();
+        assertThat(client.captureShowcaseSnapshot("run_123", TENANT_ID, ORG_ID, 2)).isNull();
+        assertThat(client.captureShowcaseSnapshot("run_123", TENANT_ID, ORG_ID, 2)).isNull();
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("Only a FILTERED capture with the EPOCH_NOT_FOUND body throws: unfiltered, or another error code, stays null")
+    void epochNotFoundNeedsBothTheFilterAndTheCode() {
+        String base = BASE_URL + "/api/internal/publication-support/runs/run_123/full-snapshot?tenantId=" + TENANT_ID;
+        server.expect(requestTo(base))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                        .withStatus(org.springframework.http.HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"error\":\"EPOCH_NOT_FOUND\",\"epoch\":3}"));
+        server.expect(requestTo(base + "&organizationId=" + ORG_ID + "&epochFilter=2"))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                        .withStatus(org.springframework.http.HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"error\":\"RUN_NOT_FOUND\"}"));
+
+        assertThat(client.captureShowcaseSnapshot("run_123", TENANT_ID)).isNull();
+        assertThat(client.captureShowcaseSnapshot("run_123", TENANT_ID, ORG_ID, 2)).isNull();
+        server.verify();
+    }
+
+    @Test
     @DisplayName("getInterfaceSnapshotsForRun sends organization scope to orchestrator")
     void getInterfaceSnapshotsForRunSendsOrganizationScope() {
         String runId = "run_123";

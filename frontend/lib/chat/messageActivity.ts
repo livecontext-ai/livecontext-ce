@@ -45,6 +45,8 @@ export interface AutoOpenDetail {
   title?: string;
   runId?: string;
   planVersion?: number;
+  /** A click: the panel opens the tab in front, on any page (AppHeader handleAutoOpen). */
+  userInitiated?: boolean;
 }
 
 /**
@@ -61,7 +63,7 @@ export function isOpenableVisualization(v?: ToolVisualization | null): v is Tool
 /** Build the `sidePanelAutoOpen` detail from an openable visualization. */
 export function toAutoOpenDetail(v: ToolVisualization): AutoOpenDetail {
   // planVersion lets the workflow page load an old or pinned run's own plan instead of overlaying HEAD.
-  return { type: v.type, id: v.id, title: v.title, runId: v.runId, planVersion: v.planVersion };
+  return { type: v.type, id: v.id, title: v.title, runId: v.runId, planVersion: v.planVersion, userInitiated: true };
 }
 
 /**

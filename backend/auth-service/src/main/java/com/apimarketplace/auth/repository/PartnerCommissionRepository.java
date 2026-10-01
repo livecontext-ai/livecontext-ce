@@ -56,4 +56,21 @@ public interface PartnerCommissionRepository extends JpaRepository<PartnerCommis
     int voidIfOnHold(@Param("id") Long id, @Param("now") Instant now, @Param("reason") String reason);
 
     List<PartnerCommission> findByPartnerUserIdAndStatus(Long partnerUserId, PartnerCommission.Status status);
+
+    /**
+     * Revenue a partner's customers have paid that is settled (V556 tiers): the invoice amounts
+     * excluding tax, in one currency, of the lines not voided whose invoice was paid on or before
+     * {@code settledBefore}. The caller sets that cutoff well past the 14-day payout hold (a card
+     * dispute can come weeks later), because a tier reached can never be taken back: an invoice
+     * refunded or disputed inside the window is voided and never counts.
+     */
+    @Query("""
+           SELECT COALESCE(SUM(c.baseAmountMinor), 0) FROM PartnerCommission c
+            WHERE c.partnerUserId = :partnerUserId
+              AND c.currency = :currency
+              AND c.status <> com.apimarketplace.auth.domain.PartnerCommission.Status.VOID
+              AND c.invoicePaidAt <= :settledBefore
+           """)
+    long sumSettledRevenue(@Param("partnerUserId") Long partnerUserId, @Param("currency") String currency,
+                           @Param("settledBefore") Instant settledBefore);
 }

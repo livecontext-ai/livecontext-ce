@@ -19,6 +19,18 @@ vi.mock('next-intl', () => ({
 }));
 
 const redeem = vi.hoisted(() => vi.fn());
+const offer = vi.hoisted(() => ({
+  current: null as null | { offerId: number; status: string; grantedCredits?: number; expiresAt?: string; sessionExpiresAt?: string },
+  preview: null,
+  candidateCode: null,
+  errorCode: null,
+  isError: false,
+  isLoading: false,
+  isAuthenticated: true,
+  refresh: vi.fn(),
+  clearCandidate: vi.fn(),
+}));
+vi.mock('@/lib/hooks/usePersonalOffer', () => ({ usePersonalOffer: () => offer }));
 vi.mock('@/lib/api/services/reward-api.service', async (orig) => ({
   ...(await orig<typeof import('@/lib/api/services/reward-api.service')>()),
   RewardApiService: class { redeem = redeem; },
@@ -26,7 +38,11 @@ vi.mock('@/lib/api/services/reward-api.service', async (orig) => ({
 
 import { RewardCodeInline } from '../RewardCodeInline';
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  offer.current = null;
+  offer.isError = false;
+});
 afterEach(() => {
   cleanup();
   redeem.mockReset();
@@ -63,6 +79,65 @@ describe('RewardCodeInline', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('errors.alreadyPaid');
   });
 
+  it('regression: the opened field can be closed again with its X button, back to the discreet link', () => {
+    render(<RewardCodeInline />);
+
+    fireEvent.click(screen.getByRole('button', { name: /toggle/ }));
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'close' }));
+
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.getByRole('button', { name: /toggle/ })).toBeInTheDocument();
+  });
+
+  it('closing hands focus back to the Have a code? link', () => {
+    render(<RewardCodeInline />);
+
+    fireEvent.click(screen.getByRole('button', { name: /toggle/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'close' }));
+
+    expect(screen.getByRole('button', { name: /toggle/ })).toHaveFocus();
+  });
+
+  it('cannot be closed while a code is being applied (its answer would land on a collapsed field)', async () => {
+    let resolve!: (v: unknown) => void;
+    redeem.mockReturnValue(new Promise((r) => { resolve = r; }));
+    render(<RewardCodeInline />);
+
+    fireEvent.click(screen.getByRole('button', { name: /toggle/ }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'TECHDOX' } });
+    fireEvent.click(screen.getByRole('button', { name: /apply/ }));
+
+    const closeButton = await screen.findByRole('button', { name: 'close' });
+    await vi.waitFor(() => expect(closeButton).toBeDisabled());
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+
+    resolve({ success: true, code: 'X', grantedCredits: 10 });
+    expect(await screen.findByRole('status')).toBeInTheDocument();
+  });
+
+  it('Escape in the field closes it too, and clears a shown error', async () => {
+    redeem.mockRejectedValue(new ApiError('paid', 409, 'ALREADY_PAID'));
+    render(<RewardCodeInline />);
+
+    fireEvent.click(screen.getByRole('button', { name: /toggle/ }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'TECHDOX' } });
+    fireEvent.click(screen.getByRole('button', { name: /apply/ }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+
+    expect(screen.queryByRole('textbox')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /toggle/ }));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('regression: on the pricing page the line keeps top padding, so the opened field is not clipped by the scroll container', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../pricing/PricingPageContent.tsx'), 'utf-8');
+    expect(src).toMatch(/<RewardCodeInline className="[^"]*\bpt-4\b[^"]*"/);
+  });
+
   it('a code still waiting from a partner link is named and pre-filled', async () => {
     localStorage.setItem(PENDING_REWARD_CODE_KEY, JSON.stringify({ code: 'TECHDOX', savedAt: Date.now() }));
     render(<RewardCodeInline />);
@@ -71,6 +146,34 @@ describe('RewardCodeInline', () => {
     expect(toggle).toHaveTextContent('TECHDOX');
     fireEvent.click(toggle);
     expect(screen.getByRole('textbox')).toHaveValue('TECHDOX');
+  });
+
+  it('reports a paid purchase with zero bonus as used, without claiming credits were granted', () => {
+    offer.current = { offerId: 42, status: 'NO_BONUS' };
+    render(<RewardCodeInline subscriptionCheckout />);
+
+    expect(screen.getByRole('status')).toHaveTextContent('usedWithoutBonus');
+    expect(screen.getByRole('status')).not.toHaveTextContent('granted');
+  });
+
+  it('shows review and used states without an applied-until claim or another code action', () => {
+    offer.current = { offerId: 42, status: 'REVIEW_REQUIRED', expiresAt: '2026-09-01T00:00:00Z' };
+    const { rerender } = render(<RewardCodeInline subscriptionCheckout />);
+    expect(screen.getByRole('alert')).toHaveTextContent('reviewRequired');
+    expect(screen.queryByRole('button', { name: 'changeCode' })).toBeNull();
+    offer.current = { offerId: 42, status: 'ALREADY_USED', expiresAt: '2026-09-01T00:00:00Z' };
+    rerender(<RewardCodeInline subscriptionCheckout />);
+    expect(screen.getByRole('status')).toHaveTextContent('usedWithoutOffer');
+    expect(screen.queryByRole('button', { name: 'changeCode' })).toBeNull();
+  });
+
+  it('shows the Stripe reservation deadline rather than a past marketing expiry', () => {
+    offer.current = { offerId: 42, status: 'CHECKOUT_OPEN',
+      expiresAt: '2026-09-01T00:00:00Z', sessionExpiresAt: '2026-10-01T00:00:00Z' };
+    render(<RewardCodeInline subscriptionCheckout />);
+    expect(screen.getByRole('status')).toHaveTextContent('reservedUntil');
+    expect(screen.getByRole('status')).toHaveTextContent('2026');
+    expect(screen.getByRole('status')).not.toHaveTextContent('appliedUntil');
   });
 });
 

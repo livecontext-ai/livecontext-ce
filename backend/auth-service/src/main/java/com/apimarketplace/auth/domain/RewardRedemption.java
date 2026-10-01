@@ -27,6 +27,15 @@ public class RewardRedemption {
     @Column(name = "reward_code_id", nullable = false)
     private Long rewardCodeId;
 
+    @Column(name = "campaign_key", length = 64)
+    private String campaignKey;
+
+    @Column(name = "offer_attempt_id")
+    private java.util.UUID offerAttemptId;
+
+    @Column(name = "qualifying_invoice_id", length = 255)
+    private String qualifyingInvoiceId;
+
     @Column(name = "redeemer_user_id", nullable = false)
     private Long redeemerUserId;
 
@@ -100,6 +109,12 @@ public class RewardRedemption {
     public void setId(Long id) { this.id = id; }
     public Long getRewardCodeId() { return rewardCodeId; }
     public void setRewardCodeId(Long rewardCodeId) { this.rewardCodeId = rewardCodeId; }
+    public String getCampaignKey() { return campaignKey; }
+    public void setCampaignKey(String campaignKey) { this.campaignKey = campaignKey; }
+    public java.util.UUID getOfferAttemptId() { return offerAttemptId; }
+    public void setOfferAttemptId(java.util.UUID offerAttemptId) { this.offerAttemptId = offerAttemptId; }
+    public String getQualifyingInvoiceId() { return qualifyingInvoiceId; }
+    public void setQualifyingInvoiceId(String qualifyingInvoiceId) { this.qualifyingInvoiceId = qualifyingInvoiceId; }
     public Long getRedeemerUserId() { return redeemerUserId; }
     public void setRedeemerUserId(Long redeemerUserId) { this.redeemerUserId = redeemerUserId; }
     public Long getOwnerUserId() { return ownerUserId; }

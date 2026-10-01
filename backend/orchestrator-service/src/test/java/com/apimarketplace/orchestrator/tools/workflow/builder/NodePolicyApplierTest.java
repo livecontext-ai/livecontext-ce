@@ -197,8 +197,23 @@ class NodePolicyApplierTest {
         @DisplayName("a well-formed policy passes")
         void wellFormedPasses() {
             assertThat(NodePolicyApplier.validate(Map.of(
-                    "retryCount", 2, "retryBackoffMs", 1000, "providerRetryMaxWaitSec", 0)))
+                    "retryCount", 2, "retryBackoffMs", 1000)))
                     .isNull();
+        }
+
+        @Test
+        @DisplayName("REGRESSION: the removed providerRetryMaxWaitSec is refused with what to do instead")
+        void removedProviderBudgetIsRefused() {
+            // The platform no longer re-sends a refused provider call, so the knob that bounded
+            // that wait reads nothing. Accepting it would report a setting as applied that does
+            // not exist; the refusal tells the agent to retry through the node instead.
+            String rejection = NodePolicyApplier.validate(Map.of("providerRetryMaxWaitSec", 0));
+
+            assertThat(rejection)
+                    .contains("providerRetryMaxWaitSec no longer exists")
+                    .contains("never retries a provider refusal")
+                    .contains("retryCount")
+                    .contains("retryBackoffMs");
         }
 
         @Test
@@ -264,6 +279,35 @@ class NodePolicyApplierTest {
         }
 
         @Test
+        @DisplayName("continueOnFailure on a classify or a guardrail agent is refused: a failed one picked no branch")
+        void continueOnFailureOnABranchingAgent() {
+            for (String type : java.util.List.of("classify", "guardrail")) {
+                String rejection = NodePolicyApplier.rejectionForNode(
+                        "agent:route", mutable(Map.of("type", type)), Map.of("continueOnFailure", true));
+
+                assertThat(rejection).as(type).contains("continueOnFailure").contains("EVERY branch");
+            }
+            assertThat(NodePolicyApplier.rejectionForNode(
+                    "agent:writer", mutable(Map.of("type", "agent")), Map.of("continueOnFailure", true)))
+                    .as("a plain agent picks no branch: allowed").isNull();
+            assertThat(NodePolicyApplier.rejectionForNode(
+                    "agent:route", mutable(Map.of("type", "classify")), Map.of("retryCount", 2)))
+                    .as("retries stay allowed on a classify").isNull();
+        }
+
+        @Test
+        @DisplayName("continueOnFailure on a loop is refused: a failed loop chose neither its body nor its exit")
+        void continueOnFailureOnALoop() {
+            String rejection = NodePolicyApplier.rejectionForNode(
+                    "core:repeat", core("loop"), Map.of("continueOnFailure", true));
+
+            assertThat(rejection).contains("continueOnFailure").contains("both at once");
+            assertThat(NodePolicyApplier.rejectionForNode(
+                    "core:repeat", core("loop"), Map.of("retryCount", 2)))
+                    .as("retries stay allowed on a loop").isNull();
+        }
+
+        @Test
         @DisplayName("executeOnce on a loop is refused, with the reason that names the confusion")
         void executeOnceOnALoop() {
             String rejection = NodePolicyApplier.rejectionForNode(
@@ -283,20 +327,14 @@ class NodePolicyApplierTest {
         }
 
         @Test
-        @DisplayName("the provider-retry budget is refused on every node type that makes no "
-                + "catalog tool call")
-        void providerBudgetIsRefusedOffAToolStep() {
-            // StepNode is the only node that carries this budget to the catalog. Stored anywhere
-            // else it is read by nothing: the call succeeds, the plan shows the field, the platform
-            // goes on retrying underneath an author who asked it not to, and nothing says so. An
-            // AI node and a core http_request node are the two that look most like exceptions -
-            // both do call a provider, neither goes through StepNode.
-            for (String nodeId : List.of("agent:analyst", "core:fetch_page", "table:save_row",
-                    "interface:review")) {
+        @DisplayName("the removed provider-retry budget is refused on EVERY node type, tool steps included")
+        void removedProviderBudgetIsRefusedEverywhere() {
+            for (String nodeId : List.of("mcp:publish", "agent:analyst", "core:fetch_page",
+                    "table:save_row", "interface:review")) {
                 assertThat(NodePolicyApplier.rejectionForNode(
                         nodeId, mutable(Map.of("type", "x")), Map.of("providerRetryMaxWaitSec", 0)))
                         .as("node '%s'", nodeId)
-                        .contains("catalog tool step only");
+                        .contains("no longer exists");
             }
         }
 
@@ -315,7 +353,7 @@ class NodePolicyApplierTest {
             assertThat(NodePolicyApplier.rejectionForNode(
                     "mcp:publish", mutable(Map.of("type", "mcp")),
                     Map.of("retryCount", 2, "continueOnFailure", true, "executeOnce", true,
-                            "timeoutMs", 30000, "providerRetryMaxWaitSec", 0)))
+                            "timeoutMs", 30000)))
                     .isNull();
         }
 
@@ -412,19 +450,6 @@ class NodePolicyApplierTest {
         }
 
         @Test
-        @DisplayName("a zero provider budget IS stored, because absent means something else")
-        void storesAZeroProviderBudget() {
-            // The only field where 0 is a statement rather than a default: absent leaves the
-            // platform's retry in place, 0 turns it off. Dropping it as "just a zero" would make
-            // "the author owns the pacing" unexpressible through the tool.
-            Map<String, Object> node = mutable(Map.of("id", "mcp:publish"));
-
-            NodePolicyApplier.applyToNode(node, Map.of("providerRetryMaxWaitSec", 0), "mcp:publish");
-
-            assertThat(node.get(NodePolicy.JSON_KEY)).isEqualTo(Map.of("providerRetryMaxWaitSec", 0));
-        }
-
-        @Test
         @DisplayName("the block is REPLACED, not merged, so a setting can be unsaid")
         void replacesRatherThanMerges() {
             Map<String, Object> node = mutable(Map.of("id", "mcp:publish"));
@@ -500,6 +525,63 @@ class NodePolicyApplierTest {
             assertThat(node.get(NodePolicy.JSON_KEY))
                     .as("the plan is read back by the engine's parser, so store what it stores")
                     .isEqualTo(Map.of("retryCount", 3));
+        }
+    }
+
+    @Nested
+    @DisplayName("retryOn and the retry caps")
+    class RetryOnAndCaps {
+
+        @Test
+        @DisplayName("validate refuses a retryCount above 10, naming the cap")
+        void refusesRetryCountAboveCap() {
+            assertThat(NodePolicyApplier.validate(Map.of("retryCount", 11))).contains("at most 10");
+        }
+
+        @Test
+        @DisplayName("validate refuses a retryBackoffMs above 60000, naming the cap")
+        void refusesBackoffAboveCap() {
+            assertThat(NodePolicyApplier.validate(Map.of("retryCount", 1, "retryBackoffMs", 60_001)))
+                    .contains("at most 60000");
+        }
+
+        @Test
+        @DisplayName("validate refuses an unknown retryOn and accepts 'rate_limit'")
+        void retryOnValidation() {
+            assertThat(NodePolicyApplier.validate(Map.of("retryOn", "bogus"))).contains("rate_limit");
+            assertThat(NodePolicyApplier.validate(Map.of("retryCount", 1, "retryOn", "rate_limit"))).isNull();
+        }
+
+        @Test
+        @DisplayName("rejectionForNode applies the caps on modify too")
+        void rejectionForNodeAppliesCaps() {
+            assertThat(NodePolicyApplier.rejectionForNode("mcp:publish", Map.of("id", "mcp:publish"),
+                    Map.of("retryCount", 11))).contains("at most 10");
+        }
+
+        @Test
+        @DisplayName("retryOn is refused on a node that is not a tool step, and without retries")
+        void retryOnIsRefusedOffToolStepsAndWithoutRetries() {
+            Map<String, Object> policy = Map.of("retryCount", 1, "retryOn", "rate_limit");
+            assertThat(NodePolicyApplier.rejectionForNode("agent:writer", Map.of("id", "agent:writer"), policy))
+                    .contains("only available on a tool step");
+            assertThat(NodePolicyApplier.rejectionForNode("core:fetch", Map.of("id", "core:fetch", "type", "http_request"), policy))
+                    .contains("only available on a tool step");
+            assertThat(NodePolicyApplier.rejectionForNode("mcp:publish", Map.of("id", "mcp:publish"), policy)).isNull();
+            assertThat(NodePolicyApplier.validate(Map.of("retryOn", "rate_limit")))
+                    .contains("retryOn only applies when retryCount > 0");
+        }
+
+        @Test
+        @DisplayName("retryOn is stored in the node's block, so get_plan and describe read it back")
+        void retryOnIsStored() {
+            Map<String, Object> node = mutable(Map.of("id", "mcp:publish"));
+
+            NodePolicyApplier.applyToNode(node,
+                    Map.of("retryCount", 1, "retryBackoffMs", 60000, "retryOn", "rate_limit"), "mcp:publish");
+
+            assertThat(node.get(NodePolicy.JSON_KEY))
+                    .isEqualTo(Map.of("retryCount", 1, "retryBackoffMs", 60000L, "retryOn", "rate_limit"));
         }
     }
 }

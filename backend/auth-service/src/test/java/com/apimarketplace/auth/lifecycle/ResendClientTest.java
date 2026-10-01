@@ -24,6 +24,7 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withException;
 
 @DisplayName("ResendClient - request shapes and the never-throw, no-op-when-off contract")
 class ResendClientTest {
@@ -155,6 +156,41 @@ class ResendClientTest {
         boolean ok = client.sendEvent("ada@example.com", "user.activated", Map.of());
 
         assertThat(ok).isFalse();
+    }
+
+    @Test
+    @DisplayName("a 500 from events/send has unknown acceptance and must not be replayed blindly")
+    void serverErrorLeavesEventOutcomeUnknown() {
+        server.expect(requestTo(BASE + "/events/send")).andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
+
+        ResendClient.EventResult result = client.sendEventResult("ada@example.com", "personal_offer.initial_due", Map.of());
+
+        assertThat(result).isEqualTo(ResendClient.EventResult.UNKNOWN);
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("a transport timeout from events/send has unknown acceptance")
+    void transportTimeoutLeavesEventOutcomeUnknown() {
+        server.expect(requestTo(BASE + "/events/send"))
+                .andRespond(withException(new java.net.SocketTimeoutException("read timed out")));
+
+        ResendClient.EventResult result = client.sendEventResult("ada@example.com", "personal_offer.reminder_due", Map.of());
+
+        assertThat(result).isEqualTo(ResendClient.EventResult.UNKNOWN);
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("a repeated explicit 429 refusal is safe to retry later")
+    void repeatedRateLimitIsKnownNotSent() {
+        server.expect(requestTo(BASE + "/events/send")).andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS));
+        server.expect(requestTo(BASE + "/events/send")).andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS));
+
+        ResendClient.EventResult result = client.sendEventResult("ada@example.com", "personal_offer.initial_due", Map.of());
+
+        assertThat(result).isEqualTo(ResendClient.EventResult.NOT_SENT);
+        server.verify();
     }
 
     @Test

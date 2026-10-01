@@ -90,6 +90,39 @@ class ToolApprovalGateResolverTest {
     }
 
     @Test
+    @DisplayName("\"Don't ask again\" writes the conversation-wide key agent-service reads, with its TTL")
+    void conversationWideGrantWritesTheKeyTheGateReads() {
+        resolver.grantConversationWideForRunningTurn("conv-1");
+
+        verify(valueOps).set(StreamRedisKeys.conversationWideApprovalKey("conv-1"), "1",
+                StreamRedisKeys.CONVERSATION_WIDE_APPROVAL_TTL);
+    }
+
+    @Test
+    @DisplayName("A new turn deletes the running-turn grant, so switching the toggle off wins")
+    void clearingDeletesTheConversationWideKey() {
+        resolver.clearConversationWideForRunningTurn("conv-1");
+
+        verify(redisTemplate).delete(StreamRedisKeys.conversationWideApprovalKey("conv-1"));
+    }
+
+    @Test
+    @DisplayName("Conversation-wide grant: no conversation is a no-op, and a Redis failure never fails the click")
+    void conversationWideGrantIsBestEffort() {
+        resolver.grantConversationWideForRunningTurn(null);
+        resolver.grantConversationWideForRunningTurn("  ");
+        resolver.clearConversationWideForRunningTurn(null);
+        verify(valueOps, never()).set(anyString(), anyString(), any(java.time.Duration.class));
+        verify(redisTemplate, never()).delete(anyString());
+
+        org.mockito.Mockito.doThrow(new IllegalStateException("redis down"))
+                .when(valueOps).set(anyString(), anyString(), any(java.time.Duration.class));
+        when(redisTemplate.delete(anyString())).thenThrow(new IllegalStateException("redis down"));
+        assertThatCode(() -> resolver.grantConversationWideForRunningTurn("conv-1")).doesNotThrowAnyException();
+        assertThatCode(() -> resolver.clearConversationWideForRunningTurn("conv-1")).doesNotThrowAnyException();
+    }
+
+    @Test
     @DisplayName("A Redis failure reports 'not released' instead of failing the user's click")
     void redisFailureDoesNotBreakTheClick() {
         when(valueOps.setIfPresent(anyString(), anyString(), any(java.time.Duration.class)))

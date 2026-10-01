@@ -43,6 +43,8 @@ import {
 type Spy = {
   tabIds: string[];
   workflowPanelContent: React.ReactNode | undefined;
+  isOpen: boolean;
+  activeTabId: string | null;
 };
 
 const spyRef: { current: Spy | null } = { current: null };
@@ -59,6 +61,8 @@ function Harness({
   spyRef.current = {
     tabIds: sidePanel?.tabs.map(t => t.id) ?? [],
     workflowPanelContent: sidePanel?.tabs.find(t => t.id === WORKFLOW_PANEL_TAB_ID)?.content,
+    isOpen: !!sidePanel?.isOpen,
+    activeTabId: sidePanel?.activeTabId ?? null,
   };
   return null;
 }
@@ -164,5 +168,45 @@ describe('useAutoRegisterWorkflowPanelTab', () => {
     // the stale-content regression where a same-id readd would skip the merge.
     const reAddedContent = spyRef.current!.workflowPanelContent as React.ReactElement<{ workflowId: string }>;
     expect(reAddedContent.props.workflowId).toBe('A');
+  });
+
+  it('(f) regression: reopens the panel after a reload that left its AI chat on screen', () => {
+    // The OAuth round trip of a credential card started in the panel's chat is a full reload:
+    // the panel came back closed and the conversation waiting for that account never resumed.
+    sessionStorage.clear();
+    sessionStorage.setItem('lc.sidePanel.onScreen:/app/workflow/A', '__chat_ia__');
+    pathHolder.current = '/fr/app/workflow/A';
+    spyRef.current = null;
+    render(
+      <SidePanelProvider>
+        <Harness shouldRegister={true} workflowId="A" />
+      </SidePanelProvider>
+    );
+    expect(spyRef.current!.isOpen).toBe(true);
+    expect(spyRef.current!.activeTabId).toBe(WORKFLOW_PANEL_TAB_ID);
+    sessionStorage.clear();
+  });
+
+  it('(g) an ordinary load, or a later navigation to a marked page, registers it closed', () => {
+    sessionStorage.clear();
+    pathHolder.current = '/app/workflow/B';
+    spyRef.current = null;
+    const { rerender } = render(
+      <SidePanelProvider>
+        <Harness shouldRegister={true} workflowId="B" />
+      </SidePanelProvider>
+    );
+    expect(spyRef.current!.isOpen).toBe(false);
+
+    // Only the first registration of a page load restores: a mark met later on is not a reload.
+    sessionStorage.setItem('lc.sidePanel.onScreen:/app/workflow/A', '__chat_ia__');
+    pathHolder.current = '/app/workflow/A';
+    rerender(
+      <SidePanelProvider>
+        <Harness shouldRegister={true} workflowId="A" />
+      </SidePanelProvider>
+    );
+    expect(spyRef.current!.isOpen).toBe(false);
+    sessionStorage.clear();
   });
 });

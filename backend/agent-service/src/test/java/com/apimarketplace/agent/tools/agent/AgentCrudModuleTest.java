@@ -2159,6 +2159,25 @@ class AgentCrudModuleTest {
         }
 
         @Test
+        @DisplayName("the 'here is what you can use' list after a bad pair leaves UNLISTED models out (V554)")
+        void notAvailableListHidesUnlisted() {
+            when(modelCatalogService.isModelAvailable("anthropic", "claude-sonnet-4-6")).thenReturn(false);
+            when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
+                new AvailableModel("openai", "gpt-5", "top", 1, null, null, false),
+                new AvailableModel("openai", "gpt-4o", "mid", 2, null, null, true)
+            ));
+            Map<String, Object> params = new HashMap<>(Map.of(
+                "action", "create", "name", "Agent", "system_prompt", "hello",
+                "model_provider", "anthropic", "model_name", "claude-sonnet-4-6"
+            ));
+
+            Optional<ToolExecutionResult> result = module.execute("create", params, TENANT, ctx());
+
+            String err = result.orElseThrow().error();
+            assertThat(err).contains("gpt-5").doesNotContain("gpt-4o");
+        }
+
+        @Test
         @DisplayName("create with empty catalog tells the agent to stop and inform the user (no admin-UI references)")
         void createWithEmptyCatalog() {
             when(modelCatalogService.isModelAvailable(anyString(), anyString())).thenReturn(false);

@@ -201,7 +201,7 @@ export interface ShellLabels {
   workflows: string; agents: string; interfaces: string; tables: string; integrations: string;
   videos: string; status: string; allIntegrations: string;
   language: string; toLightTheme: string; toDarkTheme: string;
-  about: string; careers: string; soon: string; contact: string;
+  about: string; careers: string; soon: string; contact: string; partners: string;
   privacy: string; terms: string; notice: string;
   /** Takes the competitor's name, because the word order differs: "Alternative a Zapier". */
   alternativeTo: (brand: string) => string;
@@ -219,7 +219,7 @@ export const DEFAULT_SHELL_LABELS: ShellLabels = {
   workflows: 'Workflows', agents: 'Agents', interfaces: 'Interfaces & apps', tables: 'Tables & data', integrations: 'Integrations',
   videos: 'Videos', status: 'Status', allIntegrations: 'All integrations',
   language: 'Language', toLightTheme: 'Switch to light theme', toDarkTheme: 'Switch to dark theme',
-  about: 'About', careers: 'Careers', soon: 'Soon', contact: 'Contact',
+  about: 'About', careers: 'Careers', soon: 'Soon', contact: 'Contact', partners: 'Partners',
   privacy: 'Privacy Policy', terms: 'Terms of Service', notice: 'Legal Notice',
   alternativeTo: (brand) => `${brand} alternative`,
   tagline: 'The AI automation platform. Describe a job, watch the workflow build itself, and ship it as an app your team can use. Cloud or self-hosted.',
@@ -404,7 +404,7 @@ export function LandingFooter({ siteBaseUrl, labels = DEFAULT_SHELL_LABELS }: { 
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M23.5 6.19a3.02 3.02 0 0 0-2.12-2.14C19.5 3.55 12 3.55 12 3.55s-7.5 0-9.38.5A3.02 3.02 0 0 0 .5 6.19C0 8.08 0 12 0 12s0 3.92.5 5.81a3.02 3.02 0 0 0 2.12 2.14c1.88.5 9.38.5 9.38.5s7.5 0 9.38-.5a3.02 3.02 0 0 0 2.12-2.14C24 15.92 24 12 24 12s0-3.92-.5-5.81zM9.55 15.57V8.43L15.82 12l-6.27 3.57z" /></svg>
             </a>
             <a
-              href="https://discord.gg/5gTuUwhkJ"
+              href="https://discord.gg/ySUXvs7vq2"
               target="_blank"
               rel="noopener noreferrer"
               aria-label="Discord"
@@ -533,6 +533,9 @@ export function LandingFooter({ siteBaseUrl, labels = DEFAULT_SHELL_LABELS }: { 
               </span>
             </li>
             <li><Link href={withBase(siteBaseUrl, '/contact')}>{labels.contact}</Link></li>
+            {/* Cloud only: the partner program shares cloud billing, and /partners 404s in a
+                self-hosted build. */}
+            {!IS_CE && <li><Link href={withBase(siteBaseUrl, '/partners')}>{labels.partners}</Link></li>}
             {/* No postal address here: a raw street line among nav links read as
                 a stray entry. The registered office stays where it is legally
                 required, on the Legal Notice / Terms / Privacy pages. */}

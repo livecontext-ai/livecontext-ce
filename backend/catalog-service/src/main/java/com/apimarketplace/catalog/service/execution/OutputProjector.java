@@ -188,6 +188,18 @@ public class OutputProjector {
                 log.debug("OutputProjector: schema is not an array, skipping projection");
                 return rawResponse;
             }
+            if (rawResponse instanceof String text) {
+                return placeUnparsed(text, schema);
+            }
+            if (rawResponse instanceof JsonLines lines) {
+                String wholeBodyKey = singleStringBodyKey(schema);
+                if (wholeBodyKey != null) {
+                    Map<String, Object> out = new LinkedHashMap<>();
+                    out.put(wholeBodyKey, lines.text());
+                    return out;
+                }
+                // Otherwise the records are projected like any root array, below.
+            }
             JsonNode responseNode = objectMapper.valueToTree(rawResponse);
 
             // List-endpoint pattern: API returns a JSON array at the root and the
@@ -215,6 +227,83 @@ public class OutputProjector {
             log.warn("OutputProjector: failed to project response, returning raw ({})", e.getMessage());
             return rawResponse;
         }
+    }
+
+    /**
+     * Where an answer the projection cannot read field by field goes: a TEXT body (CSV, XML, plain
+     * text, an HTML page an endpoint declared as text), or the file reference the base64
+     * dehydrator made of one (see {@link #placeUnparsed(Object, String)}).
+     *
+     * <p>Object projection would drop it: it is not an object, so every declared field came back
+     * missing and the call reported success with an EMPTY result, charged, green on the
+     * tool-health board. 212 seed endpoints declare {@code response.type=text}, all with a schema
+     * (InfluxDB {@code csv}, AssemblyAI {@code content}, Jenkins {@code output}, 143 AWS XML
+     * endpoints under an object key the XML never fills).
+     *
+     * <ul>
+     *   <li>When the schema declares exactly ONE body field and it is a string, the body is that
+     *       field ({@code {"csv": "<the csv>"}}): the declared name is what workflows and the
+     *       variable picker already reference.</li>
+     *   <li>Otherwise a text is returned as it is (the caller receives it under {@code data}), and
+     *       any other value under an explicit {@code data} key, so a file reference is never merged
+     *       into the result's own keys. Nothing is invented for an object-typed or multi-field
+     *       schema (the AWS XML case).</li>
+     * </ul>
+     */
+    private Object placeUnparsed(Object body, JsonNode schema) {
+        String key = singleStringBodyKey(schema);
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (key != null) {
+            out.put(key, body);
+            return out;
+        }
+        if (body instanceof String) {
+            return body;
+        }
+        out.put("data", body);
+        return out;
+    }
+
+    /**
+     * {@link #placeUnparsed(Object, JsonNode)} for a caller holding the schema as JSON: the
+     * execution path uses it for a text body the base64 dehydrator turned into a file reference
+     * before projection (a 64 KB+ base64-looking text), which object projection would drop.
+     */
+    public Object placeUnparsed(Object body, String outputSchemaJson) {
+        if (body == null || outputSchemaJson == null || outputSchemaJson.isBlank()) {
+            return body;
+        }
+        try {
+            JsonNode schema = objectMapper.readTree(outputSchemaJson);
+            return schema.isArray() ? placeUnparsed(body, schema) : body;
+        } catch (Exception e) {
+            log.warn("OutputProjector: could not read the output schema to place a text body ({})", e.getMessage());
+            return body;
+        }
+    }
+
+    /**
+     * The key of the schema's only body field when that field is a string, else null. Counted the
+     * way {@link #projectAgainstFields} reads a schema: an entry with a blank key or type is
+     * skipped, and a header-sourced field is not a body field (the header layer adds it). A
+     * {@code root} string field counts: it names the whole body, which is exactly this case.
+     */
+    private String singleStringBodyKey(JsonNode schema) {
+        JsonNode only = null;
+        int bodyFields = 0;
+        for (JsonNode field : schema) {
+            String key = field.path("key").asText("");
+            String type = field.path("type").asText("");
+            if (key.isBlank() || type.isBlank()
+                    || SOURCE_HEADER.equalsIgnoreCase(field.path("source").asText(""))) {
+                continue;
+            }
+            bodyFields++;
+            only = field;
+        }
+        return bodyFields == 1 && "string".equalsIgnoreCase(only.path("type").asText(""))
+                ? only.path("key").asText("")
+                : null;
     }
 
     /**

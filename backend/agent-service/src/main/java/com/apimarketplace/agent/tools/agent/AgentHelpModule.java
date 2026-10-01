@@ -705,7 +705,12 @@ public class AgentHelpModule implements ToolModule {
 
     private Map<String, Object> buildAvailableModels(ToolExecutionContext context) {
         Map<String, Object> out = new LinkedHashMap<>();
-        List<AvailableModel> flat = modelCatalogService.listAvailableModels();
+        // Unlisted models (V554) stay runnable, so an agent already on one keeps working, but
+        // they are not offered: an agent choosing a model picks among the listed ones, exactly
+        // like a person in the picker.
+        List<AvailableModel> flat = modelCatalogService.listAvailableModels().stream()
+                .filter(m -> !m.unlisted())
+                .toList();
         // Hide CLI-bridge models (claude-code/codex/gemini-cli/mistral-vibe) the
         // caller would be blocked from using. This mirrors the dispatch-time
         // BridgeAccessGuard decision so the agent never sees - and never picks -
@@ -734,7 +739,8 @@ public class AgentHelpModule implements ToolModule {
             + "(same ordering as the configured catalog the platform admin manages). Only providers with a configured API key appear here. "
             + "BOTH FIELDS ARE OPTIONAL on create/update - omit them to use the platform default (the first pair below). "
             + "Passing an unknown pair never errors out: it's silently substituted with the default and the swap appears as 'model_substituted' in the response. "
-            + "The list is managed by the platform admin - you cannot change it from this tool.");
+            + "The list is managed by the platform admin - you cannot change it from this tool. "
+            + "An existing agent can run on a pair that is not listed here and is still valid: keep its model_provider/model_name unless the user asks to change them.");
         return out;
     }
 
@@ -822,7 +828,13 @@ public class AgentHelpModule implements ToolModule {
 
         // Core
         params.put("agent_id", "string UUID, required for get/update/delete/execute - Agent ID");
-        params.put("name", "string, required for create - Agent name");
+        params.put("name", "string, required for create - Agent name, unique among the ACTIVE agents of the workspace"
+            + " (case-sensitive). On create, a taken name is refused with RESOURCE_CONFLICT and nothing is saved;"
+            + " the error message gives the first free name (e.g. 'Nova (2)') and, when known, the existing agent's"
+            + " ID. If you meant that agent, call agent(action='update') on it (without an ID in the message, find it"
+            + " with agent(action='list')); otherwise repeat the call with the free name. An update that changes the"
+            + " name, or sets is_active=true on an inactive agent, is refused the same way when another active agent"
+            + " holds the name: repeat the update with the free name.");
         params.put("system_prompt", "string, required for create - Instructions defining personality/behavior");
         params.put("description", "string - Short description");
 

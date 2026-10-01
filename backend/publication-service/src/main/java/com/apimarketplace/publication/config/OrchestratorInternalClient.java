@@ -442,6 +442,23 @@ public class OrchestratorInternalClient {
         return captureShowcaseSnapshot(runIdPublic, tenantId, organizationId, null);
     }
 
+    /** Error code the orchestrator's full-snapshot 404 carries when the requested epoch is not in the run. */
+    static final String EPOCH_NOT_FOUND = com.apimarketplace.common.publication.ShowcaseCaptureContract.EPOCH_NOT_FOUND;
+
+    /** The chosen showcase epoch does not exist in the run: an input error, never a server fault. */
+    public static final class ShowcaseEpochNotFoundException extends IllegalArgumentException {
+        public ShowcaseEpochNotFoundException(String runIdPublic, int epoch) {
+            super("Showcase epoch " + epoch + " does not exist in run " + runIdPublic
+                    + ". Showcase a run that has epoch " + epoch + " (showcase_run_id on a workflow publish, run_id "
+                    + "on an application create), or re-share it from the app to choose another epoch: a republish "
+                    + "keeps the epoch already chosen.");
+        }
+    }
+
+    /**
+     * @throws ShowcaseEpochNotFoundException when {@code epochFilter} is set and the orchestrator
+     *         answers 404 with error {@code EPOCH_NOT_FOUND}; every other failure returns null
+     */
     @SuppressWarnings("unchecked")
     public Map<String, Object> captureShowcaseSnapshot(String runIdPublic, String tenantId, String organizationId, Integer epochFilter) {
         UriComponentsBuilder builder = UriComponentsBuilder
@@ -459,8 +476,16 @@ public class OrchestratorInternalClient {
                     builder.toUriString(), HttpMethod.GET, entity, new ParameterizedTypeReference<>() {});
             return response.getBody();
         } catch (HttpStatusCodeException e) {
-            log.warn("captureShowcaseSnapshot upstream returned {}: run={} tenant={} org={}",
-                    e.getStatusCode(), runIdPublic, tenantId, organizationId);
+            log.warn("captureShowcaseSnapshot upstream returned {}: run={} tenant={} org={} epoch={}",
+                    e.getStatusCode(), runIdPublic, tenantId, organizationId, epochFilter);
+            if (epochFilter != null && e.getStatusCode().value() == 404
+                    && e.getResponseBodyAsString().contains("\"" + EPOCH_NOT_FOUND + "\"")) {
+                // The orchestrator names this one miss explicitly: the chosen epoch is not in the
+                // run. Folding it into null made the publisher answer a 500 "returned empty payload"
+                // for a correctable input mistake. A bodiless 404 (run missing or out of scope) and
+                // every unfiltered caller (the backfill) keep the documented null-on-404 contract.
+                throw new ShowcaseEpochNotFoundException(runIdPublic, epochFilter);
+            }
             return null;
         } catch (Exception e) {
             log.warn("Failed to capture showcase snapshot for run {} (tenant={} org={}): {}",

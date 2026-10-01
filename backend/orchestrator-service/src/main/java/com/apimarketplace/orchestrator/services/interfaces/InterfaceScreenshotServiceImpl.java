@@ -295,16 +295,19 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
                                        String pdfFormat, boolean landscape, VideoOptions videoOptions) {
         ResolvedTemplateSnapshot snapshot;
         try {
-            Optional<ResolvedTemplateSnapshot> opt = renderService.resolveTemplateSnapshot(interfaceId, runId, tenantId, epoch);
+            // Resolved for THIS execution's item: inside a split the epoch-only overload draws the
+            // page from another item's data (see resolveTemplateSnapshot's item-scoped overload).
+            Optional<ResolvedTemplateSnapshot> opt = renderService.resolveTemplateSnapshot(
+                interfaceId, runId, tenantId, epoch, spawn, itemIndex);
             if (opt.isEmpty()) {
-                logger.warn("Interface render returned no snapshot for interfaceId={} runId={} epoch={}",
-                    interfaceId, runId, epoch);
+                logger.warn("Interface render returned no snapshot for interfaceId={} runId={} epoch={} spawn={} itemIndex={}",
+                    interfaceId, runId, epoch, spawn, itemIndex);
                 return Optional.empty();
             }
             snapshot = opt.get();
         } catch (Exception e) {
-            logger.warn("Interface render failed for {} capture: interfaceId={} runId={} epoch={}: {}",
-                kind.segment, interfaceId, runId, epoch, e.getMessage());
+            logger.warn("Interface render failed for {} capture: interfaceId={} runId={} epoch={} spawn={} itemIndex={}: {}",
+                kind.segment, interfaceId, runId, epoch, spawn, itemIndex, e.getMessage());
             return Optional.empty();
         }
 
@@ -401,8 +404,8 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
                 kind.sourceType
             );
         } catch (Exception e) {
-            logger.warn("{} upload failed for nodeId={} runId={} epoch={} spawn={}: {}",
-                kind.segment, nodeId, runId, epoch, spawn, e.getMessage());
+            logger.warn("{} upload failed for nodeId={} runId={} epoch={} spawn={} itemIndex={}: {}",
+                kind.segment, nodeId, runId, epoch, spawn, itemIndex, e.getMessage());
             return Optional.empty();
         }
 
@@ -412,8 +415,8 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
             return Optional.empty();
         }
 
-        logger.info("Captured interface {}: nodeId={}, runId={}, epoch={}, spawn={}, bytes={}, path={}",
-            kind.segment, nodeId, runId, epoch, spawn, bytes.length, fileRef.path());
+        logger.info("Captured interface {}: nodeId={}, runId={}, epoch={}, spawn={}, itemIndex={}, bytes={}, path={}",
+            kind.segment, nodeId, runId, epoch, spawn, itemIndex, bytes.length, fileRef.path());
         return Optional.of(fileRef);
     }
 

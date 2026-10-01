@@ -52,6 +52,40 @@ function commonProps(): AnalyticsProps {
   return { app_edition: EDITION, surface: 'frontend', organization_id: currentOrgId };
 }
 
+/** Pageviews can run before React captures the offer link, including with storage blocked. */
+function redactPersonalOfferProperties(properties: Record<string, unknown>): Record<string, unknown> {
+  const clean = { ...properties };
+  delete clean.lc_offer;
+  for (const key of ['$current_url', '$referrer', '$initial_current_url', '$initial_referrer']) {
+    const value = clean[key];
+    if (typeof value !== 'string') continue;
+    try {
+      const url = new URL(value);
+      if (url.searchParams.has('lc_offer')) {
+        url.searchParams.delete('lc_offer');
+        clean[key] = url.toString();
+      }
+    } catch {
+      // Do not forward a malformed URL carrying an offer candidate.
+      if (value.includes('lc_offer')) delete clean[key];
+    }
+  }
+  for (const key of ['$set', '$set_once']) {
+    const nested = clean[key];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      clean[key] = redactPersonalOfferProperties(nested as Record<string, unknown>);
+    }
+  }
+  return clean;
+}
+
+type AnalyticsEnvelope = { properties?: Record<string, unknown>; [key: string]: unknown };
+
+function redactPersonalOfferEvent(event: AnalyticsEnvelope | null): AnalyticsEnvelope | null {
+  if (!event?.properties) return event;
+  return { ...event, properties: redactPersonalOfferProperties(event.properties) };
+}
+
 /**
  * Initializes PostHog. Idempotent. No-op when not configured, on the server, or
  * when consent has not been granted. Safe to call repeatedly (e.g. when consent
@@ -78,6 +112,7 @@ export function initAnalytics(): void {
   ph.init(POSTHOG_KEY, {
     api_host: POSTHOG_HOST,
     capture_pageview: true,
+    before_send: redactPersonalOfferEvent,
     // ── Performance budget: keep PostHog as light as possible ──────────────
     // Explicit, named events only - no global click/input listeners.
     autocapture: false,

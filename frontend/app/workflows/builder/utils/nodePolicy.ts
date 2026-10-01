@@ -14,29 +14,14 @@ import { isToolStepNode } from './planHelpers';
  *    block the backend would reject.
  */
 
-/** UI bound for the retry stepper (backend accepts any value >= 0). */
+/** Most retries a node may ask for (the backend refuses more on write and clamps a stored plan). */
 export const MAX_RETRY_COUNT = 10;
 
-/**
- * True when this node is executed as a catalog tool call, which is the only place the
- * provider-retry budget means anything (`StepNode` is what carries it to the catalog).
- *
- * Delegates to `isToolStepNode`, the predicate that decides which canvas nodes become `plan.mcps`
- * entries. That is deliberate and load-bearing: a second, similar-looking test disagreed with it in
- * both directions, and the direction that mattered was offering the field on a node whose setting
- * could never reach a plan entry at all.
- */
-export function nodeCallsProvider(node: Node<BuilderNodeData>): boolean {
-  return !!node && isToolStepNode(node);
-}
+/** Longest wait before one attempt, in ms (60 seconds), mirrored from the backend cap. */
+export const MAX_RETRY_BACKOFF_MS = 60_000;
 
-/** Like {@link coercePositiveInt} but keeps 0, for the one field where 0 is a real value. */
-function coerceNonNegativeInt(value: unknown): number | undefined {
-  const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
-  if (typeof n !== 'number' || !Number.isFinite(n)) return undefined;
-  const i = Math.floor(n);
-  return i >= 0 ? i : undefined;
-}
+/** The only non-default `retryOn`: retry only when the provider signals a rate limit (429, 503, or a 4xx with a Retry-After or a rate-limit message). */
+export const RETRY_ON_RATE_LIMIT = 'rate_limit' as const;
 
 function coercePositiveInt(value: unknown): number | undefined {
   const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
@@ -57,7 +42,8 @@ function coerceTrue(value: unknown): boolean {
  * and a fully-default/empty/invalid block returns `undefined` so callers drop
  * the key entirely - plans without a policy stay byte-identical.
  *
- * Values are kept faithful (no clamping): the backend is the validator.
+ * `retryCount` and `retryBackoffMs` are clamped to the backend caps, which the engine
+ * applies at run time anyway, so what the inspector shows is what runs.
  */
 export function sanitizeNodePolicy(raw: unknown): NodePolicy | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
@@ -65,10 +51,12 @@ export function sanitizeNodePolicy(raw: unknown): NodePolicy | undefined {
   const policy: NodePolicy = {};
 
   const retryCount = coercePositiveInt(source.retryCount);
-  if (retryCount !== undefined) policy.retryCount = retryCount;
+  if (retryCount !== undefined) policy.retryCount = Math.min(retryCount, MAX_RETRY_COUNT);
 
   const retryBackoffMs = coercePositiveInt(source.retryBackoffMs);
-  if (retryBackoffMs !== undefined) policy.retryBackoffMs = retryBackoffMs;
+  if (retryBackoffMs !== undefined) policy.retryBackoffMs = Math.min(retryBackoffMs, MAX_RETRY_BACKOFF_MS);
+
+  if (source.retryOn === RETRY_ON_RATE_LIMIT) policy.retryOn = RETRY_ON_RATE_LIMIT;
 
   if (coerceTrue(source.continueOnFailure)) policy.continueOnFailure = true;
 
@@ -76,15 +64,6 @@ export function sanitizeNodePolicy(raw: unknown): NodePolicy | undefined {
   if (timeoutMs !== undefined) policy.timeoutMs = timeoutMs;
 
   if (coerceTrue(source.executeOnce)) policy.executeOnce = true;
-
-  // The one field where 0 is a STATEMENT, not a default: it means "do not retry the provider
-  // call, this node paces itself". Every field above resolves 0 to "unset" and drops it, which
-  // here would make "off" unexpressible - the setting would silently fall back to the platform
-  // budget it was added to override.
-  const providerRetryMaxWaitSec = coerceNonNegativeInt(source.providerRetryMaxWaitSec);
-  if (providerRetryMaxWaitSec !== undefined) {
-    policy.providerRetryMaxWaitSec = providerRetryMaxWaitSec;
-  }
 
   return Object.keys(policy).length > 0 ? policy : undefined;
 }
@@ -98,16 +77,21 @@ export function nodeSupportsPolicy(node: Node<BuilderNodeData>): boolean {
 }
 
 /**
- * Mirrors the backend rejection of `continueOnFailure: true` on single-port
- * branching cores (decision / switch / option): a failed branching node
- * selected no port, so continuing past the failure would fan out ALL its
- * ports at once (every branch / case / choice).
+ * Mirrors the backend rejection of `continueOnFailure: true` on every node that
+ * picks where the run goes next: decision / switch / option cores (refused when
+ * the plan is parsed), loop cores and classify / guardrail agents (refused by
+ * the builder tools, ignored at run time). A failed one selected no port, so
+ * continuing past the failure would fan out ALL its ports at once (every branch,
+ * case, choice or category; a loop's body AND its exit).
  */
 export function isContinueOnFailureBlocked(node: Node<BuilderNodeData>): boolean {
   return (
     nodeRegistry.isDecisionNode(node) ||
     nodeRegistry.isSwitchNode(node) ||
-    nodeRegistry.isOptionNode(node)
+    nodeRegistry.isOptionNode(node) ||
+    nodeRegistry.isLoopNode(node) ||
+    nodeRegistry.isClassifyNode(node) ||
+    nodeRegistry.isGuardrailNode(node)
   );
 }
 
@@ -123,6 +107,15 @@ export function isExecuteOnceBlocked(node: Node<BuilderNodeData>): boolean {
     nodeRegistry.isMergeNode(node) ||
     nodeRegistry.isLoopNode(node)
   );
+}
+
+/**
+ * `retryOn` reads the HTTP status of the provider's answer, which only a catalog tool step
+ * reports, so the backend refuses it anywhere else (and without retries). Delegates to the one
+ * authority on "this node becomes a tool step".
+ */
+export function supportsRetryOn(node: Node<BuilderNodeData>): boolean {
+  return isToolStepNode(node);
 }
 
 /**
@@ -144,9 +137,9 @@ export function gateNodePolicyForNode(
     const { executeOnce: _dropped, ...rest } = gated;
     gated = rest;
   }
-  // providerRetryMaxWaitSec is deliberately NOT gated. It is inert on a node the engine does not
-  // execute as a tool call, and the backend simply never reads it there, whereas dropping it here
-  // would run on every save: opening an agent-built workflow and saving it would silently delete a
-  // setting nobody asked to remove. An inert field is a much smaller problem than that.
+  if (gated.retryOn && (!supportsRetryOn(node) || !gated.retryCount)) {
+    const { retryOn: _dropped, ...rest } = gated;
+    gated = rest;
+  }
   return Object.keys(gated).length > 0 ? gated : undefined;
 }

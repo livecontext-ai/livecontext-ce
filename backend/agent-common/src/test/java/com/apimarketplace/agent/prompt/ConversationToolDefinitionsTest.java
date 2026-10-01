@@ -78,14 +78,14 @@ class ConversationToolDefinitionsTest {
     class CredentialContract {
 
         @Test
-        @DisplayName("action is the only required parameter and its enum lists all four actions")
+        @DisplayName("action is the only required parameter and its enum lists all five actions, help included")
         void actionIsOnlyRequiredParam() {
             ToolDefinition tool = find("credential", false);
             assertThat(tool.requiredParameters()).containsExactly("action");
             ToolParameter action = param(tool, "action");
             assertThat(action.required()).isTrue();
             assertThat(action.enumValues())
-                    .containsExactlyInAnyOrder("list", "variables", "set_variable", "require");
+                    .containsExactlyInAnyOrder("list", "variables", "set_variable", "require", "help");
         }
 
         @Test

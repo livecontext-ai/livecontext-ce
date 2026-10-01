@@ -8,10 +8,11 @@ import { useUnifiedAppSafe } from '@/contexts/UnifiedAppContext';
 import { useBreadcrumbs } from '@/hooks/useBreadcrumbs';
 import { ChatHeader } from '@/components/chat/ChatHeader';
 import { GlobalSearchBar } from '@/components/search/GlobalSearchBar';
-import { useVisibleModels, AIModel, SelectedModel, EMPTY_SELECTED_MODEL, selectedModelFromAIModel, modelMatches, selectedModelEquals, getEffectiveDefaultSelectedModel } from '@/hooks/useModels';
+import { useVisibleModels, AIModel, SelectedModel, EMPTY_SELECTED_MODEL, selectedModelFromAIModel, selectedModelEquals, getEffectiveDefaultSelectedModel } from '@/hooks/useModels';
 import { useSafeNavigate } from '@/contexts/NavigationGuardContext';
 import { useMonthlyCreditsCannotPay } from '@/lib/hooks/useMonthlyCreditsCannotPay';
 import { resolveFreeTierPreferredModel } from '@/lib/models/freeTierModel';
+import { isSelectionAvailable } from '@/lib/models/selection';
 import { useSidePanelSafe, stripLocale, type SidePanelContextValue } from '@/contexts/SidePanelContext';
 import { togglePanelFromHeader } from '@/lib/sidePanel/togglePanelFromHeader';
 import { useAuth } from '@/lib/providers/smart-providers';
@@ -40,7 +41,10 @@ import { buildWorkflowPanelTab, useAutoRegisterWorkflowPanelTab } from '@/lib/si
 import { buildAgentConfigPanelTab } from '@/lib/sidePanel/agentConfigPanelTab';
 import { fetchLinkedAgent } from '@/lib/chat/linkedAgent';
 import { workflowPanelTabId } from '@/lib/sidePanel/tabResource';
-import { openPresentedView, type PresentedView } from '@/lib/sidePanel/presentedView';
+import { openPresentedView } from '@/lib/sidePanel/presentedView';
+import { autoOpenPlacement, hostWorkflowOf, opensInBackground, tabOpener, useSettleAgentWorkingTabs } from '@/lib/sidePanel/sidePanelConversations';
+import type { AutoOpenVisualization } from '@/contexts/sidePanelAutoOpen';
+import { useStreamingSafe } from '@/contexts/StreamingContext';
 import {
   emitFilesDetailCommand,
   emitFilesFolderNavigate,
@@ -50,6 +54,19 @@ import {
   FILES_DETAIL_DOWNLOAD,
 } from '@/lib/files/filesHeaderBus';
 import { useInterfaceViewerControls } from '@/hooks/useInterfaceViewerControls';
+
+const neverStreaming = () => false;
+
+/**
+ * Stops the shimmer of a tab opened beside a side-panel chat once the agent working in it is
+ * done. Its own component so the header does not re-render on every streamed chunk.
+ */
+function AgentWorkingTabsSettler() {
+  const streaming = useStreamingSafe();
+  const sidePanel = useSidePanelSafe();
+  useSettleAgentWorkingTabs(streaming?.isStreamingConversation ?? neverStreaming, sidePanel?.updateTab);
+  return null;
+}
 
 /** The workflow/application pages' open branch, shared by the button and the event. */
 function openWorkflowPanel(panel: SidePanelContextValue, workflowId: string | null | undefined): void {
@@ -66,7 +83,7 @@ export function AppHeader() {
   const safeNavigate = useSafeNavigate();
   const pathname = usePathname();
   const normalizedPathname = stripLocale(pathname);
-  const { models, defaultModel, isLoading: modelsLoading } = useVisibleModels();
+  const { models, unlistedModels, defaultModel, isLoading: modelsLoading } = useVisibleModels();
 
   // Use native Next.js routing hooks
   const sidebarContext = useSidebarSafe();
@@ -161,8 +178,8 @@ export function AppHeader() {
   const setSelectedModel = appContext?.setSelectedModel ?? ((_: SelectedModel) => {});
   const setReasoningEffort = appContext?.setReasoningEffort ?? ((_: string) => {});
 
-  // Validate that the stored selection still exists in the available-models list.
-  // With the typed SelectedModel shape, the check is a single modelMatches call -
+  // Validate that the stored selection still exists in the catalogue (listed or unlisted).
+  // With the typed SelectedModel shape, the check is a typed match -
   // no string splitting, no "forgot to strip the prefix" class of bug.
   useEffect(() => {
     if (!appContext || models.length === 0 || !effectiveDefault.id) return;
@@ -170,12 +187,14 @@ export function AppHeader() {
     // Free account reads as paid, and the catalogue default would be written instead.
     if (!verdictReady) return;
     const sel = appState.selectedModel;
-    const isValid = !!sel && !!sel.id && models.some(m => modelMatches(m, sel));
+    // An UNLISTED model (V554) is still available: a user who picked one from the composer's
+    // hidden group keeps it. Only a model gone from the catalogue altogether is replaced.
+    const isValid = isSelectionAvailable(sel, models, unlistedModels);
     if (!isValid && !selectedModelEquals(sel, effectiveDefault)) {
       console.log('[AppHeader] Invalid model detected, switching to default:', effectiveDefault);
       setSelectedModel(effectiveDefault);
     }
-  }, [models, effectiveDefault, appState.selectedModel, setSelectedModel, appContext, verdictReady]);
+  }, [models, unlistedModels, effectiveDefault, appState.selectedModel, setSelectedModel, appContext, verdictReady]);
 
   // Detect if we're on a conversation page with a specific conversation ID (/app/c/[cid])
   // Don't show agent config on /app or /app/chat (no conversation to link)
@@ -261,6 +280,8 @@ export function AppHeader() {
   // boolean - flips only when the AI Chat tab itself appears/disappears), and the path.
   // `sidePanel.tabs` is NOT a dependency, so unrelated tab mutations don't re-run this.
   const addTabFn = sidePanel?.addTab;
+  // Only to bring the chat back open after a reload that left it on screen (registerAiChatTab).
+  const openTabFn = sidePanel?.openTab;
   const hasAiChatTab = !!sidePanel?.tabs.some(t => t.id === AI_CHAT_TAB_ID);
   useEffect(() => {
     if (authLoading) return;                          // wait for auth before fetch-driven content
@@ -268,8 +289,8 @@ export function AppHeader() {
     if (hasAiChatTab) return;                         // already registered - no churn
     if (!normalizedPathname) return;                  // hydration window: defer registration
     if (isAiChatExcludedPath(normalizedPathname)) return;
-    registerAiChatTab({ addTab: addTabFn });
-  }, [authLoading, addTabFn, hasAiChatTab, normalizedPathname]);
+    registerAiChatTab({ addTab: addTabFn, openTab: openTabFn }, normalizedPathname);
+  }, [authLoading, addTabFn, openTabFn, hasAiChatTab, normalizedPathname]);
 
   useAutoRegisterWorkflowPanelTab(isWorkflowViewWithWorkflow, workflowId);
 
@@ -507,34 +528,36 @@ export function AppHeader() {
   const isChatPage = normalizedPathname?.startsWith('/app/c/') ||
                      normalizedPathname === '/app' ||
                      normalizedPathname?.startsWith('/app/chat');
+  // The conversation the page itself shows, when it is a conversation page.
+  const pageConversationId = normalizedPathname?.match(/^\/app\/c\/([^/]+)/)?.[1] ?? null;
+  // The workflow the current page shows, if it is a workflow page: it follows its own workflow
+  // in place (WorkflowDetailView), so nothing opens a second view of it beside it.
+  const presentingWorkflowPageId = normalizedPathname?.match(/^\/app\/workflow\/([^/]+)/)?.[1] ?? null;
+  // The application the current page shows, on an application page.
+  const applicationPageId = normalizedPathname?.match(/^\/app\/applications\/([^/]+)/)?.[1] ?? null;
 
   useEffect(() => {
-    if (!isChatPage || !sidePanel) {
+    if (!sidePanel) {
       return;
     }
 
-    const handleAutoOpen = (event: CustomEvent<{
-      type: string;
-      id: string;
-      title?: string;
-      runId?: string;
-      // M7 live-view: when the auto-open is triggered from a streaming
-      // agent_browse_step event, the coords needed by BrowserLiveCdpPanel
-      // are already in hand - no Interface fetch required.
-      liveCoords?: {
-        sessionId: string;
-        cdpToken: string;
-        cdpWsUrl: string;
-        currentUrl: string;
-        runId: string;
-        nodeId: string;
-      };
-    }>) => {
-      const { type, id, title, runId: eventRunId, liveCoords } = event.detail;
-      if (!id) return;
+    // M7 live-view: when the auto-open is triggered from a streaming agent_browse_step event,
+    // the coords needed by BrowserLiveCdpPanel are already in hand (liveCoords), no Interface
+    // fetch required.
+    const handleAutoOpen = (event: CustomEvent<AutoOpenVisualization>) => {
+      const { type, id, title, runId: eventRunId, liveCoords, conversationId } = event.detail;
 
-      // On mobile, add the tab without opening the panel (peek animation instead)
-      const openFn = isMobile ? sidePanel.openTabDeferred : sidePanel.openTab;
+      // What a chat living IN the side panel builds opens as a tab beside the conversation, on
+      // every page, and the reader stays on the conversation; a click opens in front on every
+      // page; anything else only on chat pages. Presentations are the handler below's.
+      const placement = autoOpenPlacement(event.detail, {
+        isChatPage: !!isChatPage, pageConversationId, workflowPageId: presentingWorkflowPageId, applicationPageId,
+      });
+      if (!placement) return;
+      const background = placement === 'background';
+
+      // Beside a side-panel chat: added, not brought forward. On mobile: a peek, not an open panel.
+      const openFn = tabOpener(sidePanel, { background, conversationId, isMobile });
 
       switch (type) {
         case 'workflow': {
@@ -609,9 +632,12 @@ export function AppHeader() {
           // (e.g. an older websearch tab from earlier in the
           // conversation) fires its own activate on the same tick,
           // ours can lose. Async setActiveTab wins by ordering.
-          window.setTimeout(() => {
-            try { sidePanel.setActiveTab(tabId); } catch { /* noop */ }
-          }, 0);
+          // Never beside a side-panel chat: the reader stays on the conversation.
+          if (!background) {
+            window.setTimeout(() => {
+              try { sidePanel.setActiveTab(tabId); } catch { /* noop */ }
+            }, 0);
+          }
           break;
         }
         case 'agent': {
@@ -621,9 +647,10 @@ export function AppHeader() {
             icon: <Bot className="w-4 h-4" />,
             content: <AgentPanelContent agentId={id} initialTab={AGENT_CONFIGURATION_TAB} />,
             preferredWidth: 0.35,
-            // Auto-open is gated by `isChatPage` - scope the tab so it doesn't survive
-            // navigation to non-chat pages (defense-in-depth for the agent-tab leak).
-            scope: ['/app/c/*', '/app/chat', '/app$'],
+            // Opened for a chat page's conversation: scope the tab so it doesn't survive
+            // navigation to non-chat pages (defense-in-depth for the agent-tab leak). Beside a
+            // side-panel chat it belongs to the page it was opened on, like that chat.
+            ...(background ? {} : { scope: ['/app/c/*', '/app/chat', '/app$'] }),
           });
           break;
         }
@@ -681,20 +708,29 @@ export function AppHeader() {
       window.removeEventListener('sidePanelAutoOpen', handleAutoOpen as EventListener);
       window.removeEventListener('agentBrowseLiveTabDisconnected', handleLiveTabDisconnected as EventListener);
     };
-  }, [isChatPage, sidePanel, isMobile, tAgentBrowse]);
+  }, [isChatPage, sidePanel, isMobile, tAgentBrowse, pageConversationId, presentingWorkflowPageId, applicationPageId]);
 
   // ============== AGENT PRESENTATION (action='present' on workflow/table/interface/agent/files) ==============
-  // On every page, unlike the chat-only auto-open above: see openPresentedView.
-  const presentingWorkflowPageId = normalizedPathname?.match(/^\/app\/workflow\/([^/]+)/)?.[1] ?? null;
+  // On every page, for every chat: see openPresentedView. Beside a side-panel chat, in the background.
   useEffect(() => {
     if (!sidePanel) return;
-    const handlePresent = (event: CustomEvent<PresentedView>) => {
-      const panel = isMobile ? { openTab: sidePanel.openTabDeferred } : sidePanel;
-      openPresentedView(panel, event.detail, { workflowPageId: presentingWorkflowPageId, isChatPage });
+    const handlePresent = (event: CustomEvent<AutoOpenVisualization>) => {
+      const { conversationId } = event.detail;
+      // Presented by a side-panel chat's agent: shown beside the conversation, not over it.
+      const background = opensInBackground(event.detail, pageConversationId);
+      const panel = { openTab: tabOpener(sidePanel, { background, conversationId, isMobile }) };
+      openPresentedView(panel, event.detail, {
+        // What is already on screen is never presented a second time: the page's workflow, or
+        // the one the host of this side-panel chat shows (the application page's canvas).
+        workflowPageId: presentingWorkflowPageId ?? (background ? hostWorkflowOf(conversationId) : null),
+        // The chat-page run views are the handler above's, unless a side-panel chat presented
+        // them: that one leaves them here, to open in the background.
+        isChatPage: !!isChatPage && !background,
+      });
     };
     window.addEventListener('sidePanelAutoOpen', handlePresent as EventListener);
     return () => window.removeEventListener('sidePanelAutoOpen', handlePresent as EventListener);
-  }, [sidePanel, isMobile, presentingWorkflowPageId, isChatPage]);
+  }, [sidePanel, isMobile, presentingWorkflowPageId, isChatPage, pageConversationId]);
 
   // Extract run ID from pathname (workflow routes only - application routes use snapshot-based context)
   const runId = pathname?.match(/\/workflow\/[^\/]+\/run\/([^\/]+)/)?.[1] || null;
@@ -715,6 +751,7 @@ export function AppHeader() {
 
   return (
     <>
+    <AgentWorkingTabsSettler />
     <div className="fixed top-4 right-4 z-[10000] space-y-2 pointer-events-none">
       {editToasts.map((toast) => (
         <div key={toast.id} className="pointer-events-auto">

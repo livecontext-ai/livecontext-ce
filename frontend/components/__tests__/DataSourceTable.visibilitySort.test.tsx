@@ -143,8 +143,13 @@ describe('DataSourceTable - visibility filter + sort re-query the server', () =>
     expect(screen.getByText('Private Table')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('common.filterByVisibility'), { target: { value: 'public' } });
-    await waitFor(() => expect(screen.queryByText('Private Table')).not.toBeInTheDocument());
-    expect(screen.getByText('Shared Table')).toBeInTheDocument();
+    // One wait for the whole filtered state: the rows are replaced by the loading skeleton while
+    // the new page loads, so "Private Table is gone" alone already holds mid-reload,
+    // before Shared Table is back.
+    await waitFor(() => {
+      expect(screen.queryByText('Private Table')).not.toBeInTheDocument();
+      expect(screen.getByText('Shared Table')).toBeInTheDocument();
+    });
     expect(mocks.getDataSourcesPage).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'public' }));
 
     fireEvent.change(screen.getByLabelText('common.filterByVisibility'), { target: { value: 'private' } });

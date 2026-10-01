@@ -201,15 +201,36 @@ class WorkflowBuilderToolDefinitionFactoryTest {
     }
 
     @Test
-    @DisplayName("it states that the two retry layers MULTIPLY, which is the one thing an author "
-            + "cannot deduce")
-    void nodePolicyStatesTheMultiplication() {
+    @DisplayName("it says agents are retried, which refusals are not, and where continueOnFailure is refused")
+    void nodePolicyNamesTheRetryAndContinueLimits() {
         String d = param("nodePolicy").description();
 
-        assertThat(d).contains("MULTIPLY");
+        assertThat(d).contains("agent nodes are retried too");
+        assertThat(d).contains("a tool step the catalog refused");
+        assertThat(d).contains("refused on decision, switch, option and loop nodes and on classify and guardrail agents");
+    }
+
+    @Test
+    @DisplayName("it states that the platform never retries a provider refusal, and how to retry "
+            + "instead")
+    void nodePolicyStatesThereIsNoPlatformRetry() {
+        String d = param("nodePolicy").description();
+
+        assertThat(d).contains("never re-sends a call a provider refused");
         assertThat(d)
-                .as("and that it is handled automatically when the node itself retries")
-                .contains("retryCount > 0 implies it");
+                .as("and the backoff that actually clears a per-minute limit")
+                .contains("60000");
+        assertThat(d).doesNotContain("providerRetryMaxWaitSec").doesNotContain("_provider_retries");
+    }
+
+    @Test
+    @DisplayName("it names retryOn 'rate_limit' as the safe choice for a node that writes, and the caps")
+    void nodePolicyDescribesRetryOnAndCaps() {
+        String d = param("nodePolicy").description();
+
+        assertThat(d).contains("'rate_limit'").contains("node that writes");
+        assertThat(d).contains("at most 10").contains("at most 60000");
+        assertThat(d).contains("Retry-After");
     }
 
     @Test

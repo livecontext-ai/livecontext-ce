@@ -6,7 +6,11 @@ import { fetchPublicProfile, fetchPublicationsByPublisher } from '@/lib/marketpl
 import PublicationCardSsr from '@/app/marketplace/_components/PublicationCardSsr';
 import { fetchPublicBadges, publicBadgeName } from '@/lib/marketplace/publicBadges';
 import { PublicBadgeShowcase } from '@/components/badges/PublicBadgeShowcase';
-import { VerifiedBadgeIcon } from '@/components/profile/VerifiedBadgeIcon';
+import { IdentityBadgeIcon } from '@/components/profile/IdentityBadgeIcon';
+import { PartnerTierChip } from '@/components/partner/PartnerTierChip';
+
+/** This page renders outside the [locale] tree with English copy, like the rest of it. */
+const PARTNER_TIER_LABEL = { silver: 'Silver partner', gold: 'Gold partner', platinum: 'Platinum partner' } as const;
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://livecontext.ai';
 
@@ -78,7 +82,11 @@ export default async function PublicProfilePage({
         <header className="mb-8">
           <div className="flex min-w-0 items-center gap-2">
             <h1 className="text-2xl font-semibold text-[var(--text-primary)] md:text-3xl">{name}</h1>
-            <VerifiedBadgeIcon verified={profile.verified} size="lg" />
+            <IdentityBadgeIcon verified={profile.verified} partner={profile.partner} size="lg" />
+            {/* The badge is one for every partner; the profile is where the tier is named. */}
+            {profile.partnerTier && (
+              <PartnerTierChip tier={profile.partnerTier} label={PARTNER_TIER_LABEL[profile.partnerTier]} />
+            )}
           </div>
           <p className="mt-1 text-sm text-[var(--text-muted)]">@{profile.handle}</p>
           {profile.bio && (
@@ -109,6 +117,7 @@ export default async function PublicProfilePage({
                 publication={publication}
                 headingLevel="h3"
                 publisherVerified={profile.verified}
+                publisherPartner={profile.partner}
               />
             ))}
           </div>

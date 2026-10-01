@@ -833,6 +833,10 @@ public class ConversationController {
      * none and keeps the rule-wide grant it has always written: there the approved call
      * resumes in place, in front of the person who approved it. {@code remember=true} is a
      * deliberate standing choice about the RULE, so it is never narrowed.
+     *
+     * <p>{@code conversationWide=true} is the card's "don't ask again in this conversation"
+     * checkbox: it persists {@code chatConfig.autoAuthorizeTools} and also lifts the gate for
+     * the rest of the turn already running, which read its grants before the box was ticked.
      */
     @PostMapping("/{conversationId}/tool-authorization/approve")
     public ResponseEntity<Map<String, Object>> approveToolAuthorization(
@@ -854,6 +858,14 @@ public class ConversationController {
             return ResponseEntity.badRequest().body(Map.of("error", "rule is required"));
         }
         boolean remember = request != null && Boolean.TRUE.equals(request.get("remember"));
+        // The card's "don't ask again in this conversation" checkbox: every sensitive rule,
+        // from now on, INCLUDING the rest of the turn that is running (see
+        // ToolApprovalGateResolver#grantConversationWideForRunningTurn).
+        boolean conversationWide = request != null && Boolean.TRUE.equals(request.get("conversationWide"));
+        if (conversationWide) {
+            toolAuthorizationApprovalService.enableAutoAuthorize(conversationId);
+            toolApprovalGateResolver.grantConversationWideForRunningTurn(conversationId);
+        }
         String askFingerprint = gateKeyOf(request, "askFingerprint");
         boolean scopedToOneAsk = false;
         // Release the parked call first, because whether one was released decides how this
@@ -865,7 +877,10 @@ public class ConversationController {
         // next turn ever consumes it and the grant would sit there authorizing the following
         // call of the same rule with no card at all. Releasing IS the authorization here.
         // "Toujours autoriser" is a deliberate standing choice and is persisted regardless.
-        if (remember || !released) {
+        // Nor with "don't ask again": the persisted "*" already covers the next turn, and a
+        // one-shot grant would outlive the user switching the toggle back off (an install they
+        // then cancelled, or a card rebuilt after a reload, would still run with no card).
+        if (remember || (!released && !conversationWide)) {
             String granted = remember ? rule : AuthorizationAsk.scopedGrant(rule, askFingerprint);
             scopedToOneAsk = !granted.equals(rule);
             toolAuthorizationApprovalService.approve(conversationId, granted, remember);
@@ -879,6 +894,7 @@ public class ConversationController {
             "conversationId", conversationId,
             "rule", rule,
             "remembered", remember,
+            "conversationWide", conversationWide,
             "parkedCallReleased", released
         ));
     }

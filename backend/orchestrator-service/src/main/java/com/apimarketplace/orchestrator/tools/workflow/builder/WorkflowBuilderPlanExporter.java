@@ -87,8 +87,26 @@ public class WorkflowBuilderPlanExporter {
         session.getTables().clear();
         session.getNotes().clear();
 
-        // Import triggers
+        // Import triggers. A form trigger's fields take the shape add_node gives them (ids,
+        // [{id, label, value}] options, defaultValue). What the canonicalizer would refuse on
+        // add_node is REPORTED here instead: a get_plan -> set_plan round trip of an older
+        // workflow must not start failing on a field it saved long ago.
         importList(plan, "triggers", session.getTriggers());
+        List<String> formFieldIssues = new ArrayList<>();
+        for (Map<String, Object> trigger : session.getTriggers()) {
+            if ("form".equals(trigger.get("type")) && trigger.get("params") instanceof Map<?, ?> params
+                    && params.containsKey("fields")) {
+                Map<String, Object> canonical = new LinkedHashMap<>((Map<String, Object>) params);
+                List<String> issues = FormFieldCanonicalizer.canonicalize(canonical);
+                if (!issues.isEmpty()) {
+                    Object label = trigger.get("label");
+                    formFieldIssues.add("Form trigger '" + label + "' was imported with fields add_node would "
+                            + "refuse: " + String.join("; ", issues) + ". Fix them with workflow(action='modify', "
+                            + "node='" + label + "', params={fields: [...]}), which checks them the way add_node does.");
+                }
+                trigger.put("params", canonical);
+            }
+        }
 
         // Import mcps (an AI node filed here gets the session spelling, as load gives it)
         importList(plan, "mcps", session.getMcps());
@@ -138,7 +156,7 @@ public class WorkflowBuilderPlanExporter {
         session.touch();
         sessionStore.save(session);
 
-        return buildSetPlanResult(session);
+        return buildSetPlanResult(session, formFieldIssues);
     }
 
     @SuppressWarnings("unchecked")
@@ -178,7 +196,7 @@ public class WorkflowBuilderPlanExporter {
         }
     }
 
-    private ToolExecutionResult buildSetPlanResult(WorkflowBuilderSession session) {
+    private ToolExecutionResult buildSetPlanResult(WorkflowBuilderSession session, List<String> formFieldIssues) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", "OK");
         result.put("message", "Plan imported successfully");
@@ -193,6 +211,7 @@ public class WorkflowBuilderPlanExporter {
         if (!deadEnds.isEmpty()) {
             warnings.add("Dead-end nodes (no outgoing connections): " + deadEnds.size());
         }
+        warnings.addAll(formFieldIssues);
         if (!warnings.isEmpty()) {
             result.put("warnings", warnings);
         }
@@ -361,7 +380,27 @@ public class WorkflowBuilderPlanExporter {
             plan.put("notes", notesList);
         }
 
+        stripRemovedProviderRetry(plan);
         return plan;
+    }
+
+    /** See {@link WorkflowPlanParser#withoutRemovedProviderRetry}. Entries are shallow copies, so the
+     * policy map is replaced, never mutated: the session keeps what was stored. */
+    @SuppressWarnings("unchecked")
+    private static void stripRemovedProviderRetry(Map<String, Object> plan) {
+        for (String arrayName : List.of("mcps", "agents", "cores", "interfaces", "tables")) {
+            if (!(plan.get(arrayName) instanceof List<?> entries)) continue;
+            for (Object entryObj : entries) {
+                if (!(entryObj instanceof Map<?, ?> m) || !m.containsKey(NodePolicy.JSON_KEY)) continue;
+                Map<String, Object> entry = (Map<String, Object>) m;
+                Object cleaned = WorkflowPlanParser.withoutRemovedProviderRetry(entry.get(NodePolicy.JSON_KEY));
+                if (cleaned == null) {
+                    entry.remove(NodePolicy.JSON_KEY);
+                } else {
+                    entry.put(NodePolicy.JSON_KEY, cleaned);
+                }
+            }
+        }
     }
 
     private String nodeIdToLabelRef(WorkflowBuilderSession session, String nodeId) {
@@ -475,12 +514,11 @@ public class WorkflowBuilderPlanExporter {
      *
      * <p>Without this, {@code set_plan} was the door that let a policy in that the other two
      * refused: the plan stored fine, {@code validate} passed, {@code describe} announced the block,
-     * and the engine ignored it. A caller has no way to see that, and the field it thought it set
-     * was the one that stops the platform multiplying its requests.
+     * and the engine ignored it. A caller has no way to see that.
      *
-     * <p>Refused here rather than at parse time on purpose: a plan already stored with such a block
-     * must stay OPENABLE, so {@code WorkflowPlanParser} drops the field with a warning instead of
-     * throwing. This is the door, not the wall.
+     * <p>The removed {@code providerRetryMaxWaitSec} is refused here rather than at parse time on
+     * purpose: a plan already stored with it must stay OPENABLE, so {@code WorkflowPlanParser}
+     * ignores the key. This is the door, not the wall.
      */
     @SuppressWarnings("unchecked")
     private void validateNodePolicies(Map<String, Object> plan, List<String> errors) {
@@ -500,13 +538,10 @@ public class WorkflowBuilderPlanExporter {
                         + "run while a note annotates the canvas. Put it on the node that does the work.");
             }
         }
-        // `mcps` is in this loop even though it is the one array allowed to carry a provider-retry
-        // budget: the SHAPE still has to be checked there. Leaving it out let a malformed policy
-        // (a negative retryCount, a non-numeric timeout) reach the session on the one node type the
-        // feature exists for, and the parser THROWS on it - so the workflow stored fine and could
+        // Every executed array is checked for SHAPE: a malformed policy (a negative retryCount, a
+        // non-numeric timeout) makes the parser THROW, so the workflow would store fine and could
         // then neither be opened nor run, with the error arriving on a later unrelated call.
         for (String arrayName : List.of("mcps", "agents", "cores", "interfaces", "tables")) {
-            boolean carriesProviderCalls = "mcps".equals(arrayName);
             Object raw = plan.get(arrayName);
             if (!(raw instanceof List<?> entries)) continue;
             for (Object entryObj : entries) {
@@ -515,6 +550,11 @@ public class WorkflowBuilderPlanExporter {
                 Object policyRaw = entry.get(NodePolicy.JSON_KEY);
                 if (policyRaw == null) continue;
                 String label = String.valueOf(entry.getOrDefault("label", entry.get("id")));
+                String removed = WorkflowPlanParser.removedProviderRetryRejection(label, policyRaw);
+                if (removed != null) {
+                    errors.add(removed);
+                    continue;
+                }
                 NodePolicy policy;
                 try {
                     policy = NodePolicy.fromMap(policyRaw, label);
@@ -522,15 +562,20 @@ public class WorkflowBuilderPlanExporter {
                     errors.add(e.getMessage());
                     continue;
                 }
-                String rejection = WorkflowPlanParser.providerRetryRejection(
-                        label, policy, carriesProviderCalls);
+                String rejection = policy.writeViolation(label);
+                if (rejection == null && policy.retryOn() != null && !"mcps".equals(arrayName)) {
+                    rejection = NodePolicyApplier.RETRY_ON_TOOL_STEPS_ONLY.apply(label);
+                }
+                if (rejection == null && "agents".equals(arrayName)) {
+                    rejection = WorkflowPlanParser.continueOnFailureRejectionForAgent(
+                        String.valueOf(entry.get("type")), policy, label);
+                }
                 if (rejection == null && "cores".equals(arrayName)) {
                     // The two rules the PARSER throws on. Storing a plan that carries one leaves a
                     // workflow that cannot be opened and cannot be run, with the error arriving on
-                    // some later unrelated call - strictly worse than the budget case this method
-                    // was written for, and the helpers are the ones this change extracted.
+                    // some later unrelated call. Plus the loop, which only the builder refuses.
                     String coreType = String.valueOf(entry.get("type"));
-                    rejection = WorkflowPlanParser.continueOnFailureRejection(coreType, policy, label);
+                    rejection = WorkflowPlanParser.continueOnFailureRejectionInBuilder(coreType, policy, label);
                     if (rejection == null) {
                         rejection = WorkflowPlanParser.executeOnceRejection(coreType, policy, label);
                     }

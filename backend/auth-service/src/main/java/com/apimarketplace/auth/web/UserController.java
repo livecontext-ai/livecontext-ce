@@ -42,6 +42,9 @@ public class UserController {
     private OnboardingService onboardingService;
 
     @Autowired
+    private com.apimarketplace.auth.service.AccountDeletionService accountDeletionService;
+
+    @Autowired
     private com.apimarketplace.auth.lifecycle.UserLifecycleContextService lifecycleContextService;
 
     /**
@@ -130,7 +133,8 @@ public class UserController {
     }
 
     /**
-     * Desactive le compte de l'utilisateur connecte
+     * Deletes the signed-in account: deactivated with a grace period, or purged at once for a
+     * test account (see AccountDeletionService). A failed immediate purge answers 500.
      */
     @DeleteMapping("/profile")
     public ResponseEntity<Void> deactivateMyAccount(
@@ -145,10 +149,13 @@ public class UserController {
                     return ResponseEntity.notFound().build();
                 }
 
-                userService.deactivateUser(userOpt.get());
+                accountDeletionService.requestDeletion(userOpt.get());
                 return ResponseEntity.ok().build();
             } catch (NumberFormatException e) {
                 return ResponseEntity.badRequest().build();
+            } catch (IllegalStateException immediatePurgeFailed) {
+                // Only a test account's immediate purge throws; it must not read as a success.
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
             }
         }
 
@@ -157,7 +164,11 @@ public class UserController {
             return ResponseEntity.notFound().build();
         }
 
-        userService.deactivateUser(userOpt.get());
+        try {
+            accountDeletionService.requestDeletion(userOpt.get());
+        } catch (IllegalStateException immediatePurgeFailed) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
         return ResponseEntity.ok().build();
     }
 

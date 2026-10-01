@@ -8,6 +8,7 @@ import com.apimarketplace.orchestrator.services.persistence.schema.NodeDefinitio
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
 import org.springframework.core.type.filter.AssignableTypeFilter;
@@ -34,6 +35,7 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -116,6 +118,9 @@ class NodeOutputSchemaCoherenceContractTest {
 
     private static final Pattern WHERE_TYPE_PATTERN =
         Pattern.compile("(?is)\\bWHERE\\s+type\\s*=\\s*'([^']+)'");
+
+    private static final Pattern WHERE_TYPE_IN_PATTERN =
+        Pattern.compile("(?is)\\bWHERE\\s+type\\s+IN\\s*\\(([^)]*)\\)");
 
     @Test
     @DisplayName("Every registered NodeSpec has an agent documentation output row")
@@ -419,31 +424,120 @@ class NodeOutputSchemaCoherenceContractTest {
         String statement,
         Map<String, Map<String, Object>> outputDocs
     ) throws IOException {
+        List<String> whereTypes = new ArrayList<>();
+        int whereIdx;
         Matcher matcher = WHERE_TYPE_PATTERN.matcher(statement);
-        if (!matcher.find()) {
+        Matcher inMatcher = WHERE_TYPE_IN_PATTERN.matcher(statement);
+        if (matcher.find()) {
+            whereTypes.add(matcher.group(1));
+            whereIdx = matcher.start();
+        } else if (inMatcher.find()) {
+            for (String item : splitTopLevel(inMatcher.group(1))) {
+                parseSqlString(item).ifPresent(whereTypes::add);
+            }
+            whereIdx = inMatcher.start();
+        } else {
             return;
         }
-        String whereType = matcher.group(1);
 
         String lower = statement.toLowerCase(Locale.ROOT);
         int setIdx = lower.indexOf("set");
-        int whereIdx = matcher.start();
         if (setIdx < 0 || whereIdx < setIdx) {
             return;
         }
 
         String setPart = statement.substring(setIdx + 3, whereIdx);
-        String type = extractAssignmentExpression(setPart, "type")
-            .flatMap(NodeOutputSchemaCoherenceContractTest::parseSqlString)
-            .orElse(whereType);
         Optional<String> outputExpression = extractAssignmentExpression(setPart, "outputs");
         if (outputExpression.isEmpty()) {
             return;
         }
+        Optional<String> renamedType = extractAssignmentExpression(setPart, "type")
+            .flatMap(NodeOutputSchemaCoherenceContractTest::parseSqlString);
+        List<String> types = renamedType.map(List::of).orElse(whereTypes);
 
-        Map<String, Object> current = outputDocs.getOrDefault(type, new LinkedHashMap<>());
-        Optional<Map<String, Object>> parsed = parseOutputExpression(outputExpression.get(), current);
-        parsed.ifPresent(outputs -> outputDocs.put(type, outputs));
+        for (String type : types) {
+            Map<String, Object> current = outputDocs.getOrDefault(type, new LinkedHashMap<>());
+            Optional<Map<String, Object>> parsed = parseOutputExpression(outputExpression.get(), current);
+            if (parsed.isEmpty()) {
+                // Skipping an UPDATE we cannot read is how V481 (warnings) and V486 (billed_credits)
+                // went unseen: their fields were documented, this replay dropped them, and the check
+                // reported a drift that did not exist in the database. Fail on the statement instead.
+                throw new IllegalArgumentException(
+                    "Unsupported node_type_documentation.outputs expression for type '" + type
+                        + "'; extend this parser: " + abbreviate(outputExpression.get()));
+            }
+            outputDocs.put(type, parsed.get());
+        }
+    }
+
+    private static String abbreviate(String text) {
+        String flat = text.replaceAll("\\s+", " ").trim();
+        return flat.length() <= 200 ? flat : flat.substring(0, 200) + "...";
+    }
+
+    /**
+     * Replays {@code jsonb_set(target, '{a,b}', value [, create_missing])} with PostgreSQL's
+     * semantics: an intermediate key that is missing or not an object makes it a no-op, and the
+     * last key is only created when create_missing is true (the default). The target may itself be
+     * {@code outputs}, {@code COALESCE(outputs, ...)} or another jsonb_set.
+     */
+    private static Map<String, Object> applyJsonbSet(String expression, Map<String, Object> current)
+        throws IOException {
+        int argsStart = expression.indexOf('(');
+        int argsEnd = findMatchingParen(expression, argsStart);
+        requireNothingAfter(expression, argsEnd, "jsonb_set");
+        List<String> args = splitTopLevel(expression.substring(argsStart + 1, argsEnd));
+        if (args.size() < 3) {
+            throw new IllegalArgumentException("jsonb_set needs 3 arguments: " + abbreviate(expression));
+        }
+
+        Map<String, Object> base = parseOutputExpression(args.get(0), current)
+            .orElseThrow(() -> new IllegalArgumentException(
+                "Unsupported jsonb_set target: " + abbreviate(args.get(0))));
+        List<String> path = parseSqlString(args.get(1))
+            .map(p -> p.replaceAll("^\\{|}$", ""))
+            .map(p -> List.of(p.split(",")).stream().map(String::trim).toList())
+            .orElseThrow(() -> new IllegalArgumentException(
+                "Unsupported jsonb_set path: " + abbreviate(args.get(1))));
+        boolean createMissing = args.size() < 4 || !args.get(3).trim().equalsIgnoreCase("false");
+
+        String valueExpression = args.get(2).trim().replaceAll("(?i)::jsonb$", "").trim();
+        Object value = null;
+        boolean valueParsed = false;
+        if (startsWithSqlString(valueExpression)) {
+            Optional<String> literal = parseSqlString(valueExpression);
+            if (literal.isPresent()) {
+                value = OBJECT_MAPPER.readValue(literal.get(), Object.class);
+                valueParsed = true;
+            }
+        }
+        if (!valueParsed && path.size() == 1) {
+            // A top-level key whose value we cannot read would still be a key the agent sees.
+            throw new IllegalArgumentException(
+                "Unsupported jsonb_set value for top-level key '" + path.get(0) + "': "
+                    + abbreviate(args.get(2)));
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>(base);
+        if (!valueParsed) {
+            // A computed value below a field (e.g. to_jsonb(...) on a description) leaves keys unchanged.
+            return result;
+        }
+        Map<String, Object> node = result;
+        for (int i = 0; i < path.size() - 1; i++) {
+            if (!(node.get(path.get(i)) instanceof Map<?, ?> child)) {
+                return result;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> copy = new LinkedHashMap<>((Map<String, Object>) child);
+            node.put(path.get(i), copy);
+            node = copy;
+        }
+        String last = path.get(path.size() - 1);
+        if (createMissing || node.containsKey(last)) {
+            node.put(last, value);
+        }
+        return result;
     }
 
     private static Optional<String> extractAssignmentExpression(String setPart, String columnName) {
@@ -461,7 +555,24 @@ class NodeOutputSchemaCoherenceContractTest {
         return Optional.empty();
     }
 
-    private static Optional<Map<String, Object>> parseOutputExpression(
+    /**
+     * Fails when anything but a {@code ::jsonb} cast follows the call that closes at
+     * {@code closeIdx}. Both callers replay ONLY the call itself, so a trailing
+     * {@code || '{"new_key": ...}'} (or {@code - 'old_key'}) would be dropped in silence and the
+     * replayed document would lack keys the database has, or keep keys it removed.
+     */
+    static void requireNothingAfter(String expression, int closeIdx, String function) {
+        String rest = expression.substring(closeIdx + 1).trim();
+        if (!TRAILING_CAST.matcher(rest).matches()) {
+            throw new IllegalArgumentException(
+                "Unconsumed content after " + function + "(...): " + abbreviate(rest)
+                    + "; extend this parser rather than drop it");
+        }
+    }
+
+    private static final Pattern TRAILING_CAST = Pattern.compile("(?i)(::\\s*jsonb)?");
+
+    static Optional<Map<String, Object>> parseOutputExpression(
         String expression,
         Map<String, Object> current
     ) throws IOException {
@@ -475,6 +586,28 @@ class NodeOutputSchemaCoherenceContractTest {
 
         if (startsWithSqlString(trimmed)) {
             return Optional.of(parseJsonObjectFromSqlLiteral(trimmed));
+        }
+
+        String lowerTrimmed = trimmed.toLowerCase(Locale.ROOT);
+        if (lowerTrimmed.startsWith("translate(outputs::text")) {
+            // Character-level rewrite of the whole document (V349 em-dash strip): keys are unchanged.
+            requireNothingAfter(trimmed, findMatchingParen(trimmed, trimmed.indexOf('(')), "translate");
+            return Optional.of(new LinkedHashMap<>(current));
+        }
+
+        if (lowerTrimmed.startsWith("coalesce")) {
+            int argsStart = trimmed.indexOf('(');
+            int argsEnd = findMatchingParen(trimmed, argsStart);
+            List<String> args = splitTopLevel(trimmed.substring(argsStart + 1, argsEnd));
+            if (!args.isEmpty() && args.get(0).trim().equalsIgnoreCase("outputs")) {
+                // COALESCE(outputs, '{}'::jsonb) || ... reads as outputs || ... on an existing row.
+                return parseOutputExpression("outputs" + trimmed.substring(argsEnd + 1), current);
+            }
+            return Optional.empty();
+        }
+
+        if (lowerTrimmed.startsWith("jsonb_set")) {
+            return Optional.of(applyJsonbSet(trimmed, current));
         }
 
         if (trimmed.toLowerCase(Locale.ROOT).startsWith("jsonb_build_object")) {
@@ -688,5 +821,68 @@ class NodeOutputSchemaCoherenceContractTest {
             }
         }
         throw new IllegalArgumentException("Unmatched parenthesis in SQL fragment: " + text.substring(openIdx));
+    }
+    @Nested
+    @DisplayName("migration replay parser: content after jsonb_set(...) or translate(...)")
+    class TrailingContentAfterACall {
+
+        private final Map<String, Object> current = Map.of("result", "x", "status", "y");
+
+        @Test
+        @DisplayName("jsonb_set followed by || '{...}' fails instead of dropping the merged keys")
+        void jsonbSetFollowedByAMergeFails() {
+            String expr = "jsonb_set(outputs, '{result}', '{\"type\":\"object\"}'::jsonb) || '{\"extra\":1}'::jsonb";
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> parseOutputExpression(expr, current));
+
+            assertTrue(error.getMessage().contains("Unconsumed content after jsonb_set(...)"), error.getMessage());
+        }
+
+        @Test
+        @DisplayName("jsonb_set followed by - 'key' fails instead of keeping the removed key")
+        void jsonbSetFollowedByARemovalFails() {
+            String expr = "jsonb_set(outputs, '{result}', '\"s\"'::jsonb) - 'status'";
+
+            assertThrows(IllegalArgumentException.class, () -> parseOutputExpression(expr, current));
+        }
+
+        @Test
+        @DisplayName("a nested jsonb_set target is checked too: its own trailing merge fails")
+        void nestedJsonbSetTargetWithTrailingContentFails() {
+            String expr = "jsonb_set(jsonb_set(outputs, '{a}', '1'::jsonb) || '{\"b\":2}', '{c}', '3'::jsonb)";
+
+            assertThrows(IllegalArgumentException.class, () -> parseOutputExpression(expr, current));
+        }
+
+        @Test
+        @DisplayName("translate(outputs::text ...) followed by || '{...}' fails")
+        void translateFollowedByAMergeFails() {
+            String expr = "translate(outputs::text, 'a', 'b')::jsonb || '{\"extra\":1}'::jsonb";
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> parseOutputExpression(expr, current));
+
+            assertTrue(error.getMessage().contains("Unconsumed content after translate(...)"), error.getMessage());
+        }
+
+        @Test
+        @DisplayName("a trailing ::jsonb cast (any case, any spacing) is consumed, not an error")
+        void trailingJsonbCastIsAccepted() throws IOException {
+            assertEquals(Set.of("result", "status"),
+                parseOutputExpression("translate(outputs::text, 'a', 'b')::JSONB", current).orElseThrow().keySet());
+            assertEquals(Set.of("result", "status", "added"),
+                parseOutputExpression("jsonb_set(outputs, '{added}', '1'::jsonb) :: jsonb", current)
+                    .orElseThrow().keySet());
+        }
+
+        @Test
+        @DisplayName("nothing after the call is accepted")
+        void nothingAfterTheCallIsAccepted() throws IOException {
+            assertEquals(Set.of("result", "status", "added"),
+                parseOutputExpression("jsonb_set(outputs, '{added}', '1')", current).orElseThrow().keySet());
+            assertEquals(Set.of("result", "status"),
+                parseOutputExpression("translate(outputs::text, 'a', 'b')", current).orElseThrow().keySet());
+        }
     }
 }

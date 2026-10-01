@@ -49,7 +49,7 @@ export function AgendaListView({ occurrences, timezone, focusScheduleId, onSelec
   if (groups.length === 0) return null;
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-theme">
+    <div className="min-h-0 flex-initial overflow-y-auto rounded-xl border border-theme">
       {groups.map(([key, group]) => (
         <section key={key}>
           <h3

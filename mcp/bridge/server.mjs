@@ -39,7 +39,7 @@ import { MistralAdapter } from './adapters/mistral-adapter.mjs';
 import { AgentStopReason } from './lib/agentStopReason.js';
 import { applyResultMapping } from './lib/stopReasonMapper.js';
 import { sharedPricingCache } from './lib/pricing.js';
-import { AgentBudgetGuard, TenantBudgetGuard, chainBudgetGuards } from './lib/budgetGuards.js';
+import { AgentBudgetGuard, TenantBudgetGuard, chainBudgetGuards, sumCacheCounters } from './lib/budgetGuards.js';
 import { internalSignedHeaders } from './lib/gatewayAuth.mjs';
 import { resolveInactivityMs } from './lib/inactivityResolver.mjs';
 import { createInactivityWatchdog } from './lib/inactivityWatchdog.mjs';
@@ -48,6 +48,7 @@ import { maxToolHoldSecondsFor } from './lib/toolHold.mjs';
 import { detectAll, detectOne, invalidateCache, CLI_IDS } from './cli-detector.mjs';
 import { collectCliHealthMetrics, createCliSnapshotCache } from './lib/cliHealth.mjs';
 import { extractToolResultAndMetadata } from './lib/toolContent.mjs';
+import { adapterHandlerErrorLine, announceRunFailure, isFailurePublishedByCaller } from './lib/runFailureEvent.mjs';
 
 // Per-process secret that authenticates the trusted `__BRIDGE_META__` channel. Minted ONCE
 // at startup and handed to the agent-cli MCP subprocess via env, so only content this bridge
@@ -388,6 +389,11 @@ app.post('/api/bridge/execute', async (req, res) => {
   // Absent ⇒ today's full-freedom behaviour is unchanged (direct claude-code/codex/... free).
   const restrictedToolset = !!(credentials && credentials.__restrictedToolset__ === true);
 
+  // Set by a caller that re-runs a failed turn on this SAME stream (the execution-link
+  // fallback): it publishes the stream's terminal event itself, so a bridge `error` would
+  // end the turn in the chat before the retried reply arrives. See lib/runFailureEvent.mjs.
+  const callerPublishesFailure = isFailurePublishedByCaller(credentials);
+
   // Select CLI adapter based on provider
   const adapter = getAdapter(provider);
   console.log(`[BRIDGE] Selected adapter: ${adapter.constructor.name} (provider=${provider || 'default'})`);
@@ -527,6 +533,7 @@ app.post('/api/bridge/execute', async (req, res) => {
       executionId,
       enabledModules,
       restrictedToolset,
+      callerPublishesFailure,
       approvedToolActions: (credentials && credentials.__approvedToolActions__) || [],
       // What kind of run this is, said by the dispatcher that knows. Lost here, every tool call
       // of the session looked like a person watching the chat: an unattended task's ask_user
@@ -547,12 +554,15 @@ app.post('/api/bridge/execute', async (req, res) => {
     // Build conversationHistory for observability recording
     const builtHistory = buildConversationHistory(prompt, result.toolResults, result.content);
 
-    // Build enhanced totalUsage with cache + reasoning token breakdown
-    let totalCacheCreation = 0, totalCacheRead = 0, totalCached = 0, totalReasoning = 0;
+    // Build enhanced totalUsage with cache + reasoning token breakdown (the same cache
+    // totals the budget guard priced during the run).
+    const {
+      cacheCreationTokens: totalCacheCreation,
+      cacheReadTokens: totalCacheRead,
+      cachedTokens: totalCached,
+    } = sumCacheCounters(result.perCallUsages);
+    let totalReasoning = 0;
     for (const call of result.perCallUsages || []) {
-      totalCacheCreation += call.cacheCreationInputTokens || 0;
-      totalCacheRead += call.cacheReadInputTokens || 0;
-      totalCached += call.cachedTokens || 0;
       totalReasoning += call.reasoningTokens || 0;
     }
     const enhancedUsage = {
@@ -610,6 +620,10 @@ app.post('/api/bridge/execute', async (req, res) => {
       metrics: {
         reasoningDurationMs: durationMs,
         streamCompletedEarly: false,
+        // Chat and workflow observability read the guard scope from metrics.budgetScope
+        // (the key AgentLoopService writes); the top-level budgetScope below serves the
+        // sub-agent path. Present only when a guard stopped the run.
+        ...(result.budgetScope ? { budgetScope: result.budgetScope } : {}),
       },
       usagePerIteration,
       iterationDurations,
@@ -624,7 +638,7 @@ app.post('/api/bridge/execute', async (req, res) => {
   } catch (e) {
     const durationMs = Date.now() - startTime;
     console.error(`[BRIDGE] Error: conv=${conversationId}, error=${e.message}, duration=${durationMs}ms`);
-    await publisher.publishError(e.message).catch(() => {});
+    await announceRunFailure(publisher, e.message, { callerPublishesFailure });
 
     res.status(500).json({
       success: false,
@@ -659,7 +673,7 @@ function isTrue(value) {
   return value === true || value === 'true';
 }
 
-async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeoutMs, inactivityMs, tenantId, publisher, attachments, isNewConversation, adapter, budgetGuard, provider, reasoningEffort, agentEntityId, effectiveOrgId, effectiveOrgRole, executionId, enabledModules, restrictedToolset, approvedToolActions, taskId, unattendedRun, requireToolAuthorization, agentDepth, workflowRunId }) {
+async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeoutMs, inactivityMs, tenantId, publisher, attachments, isNewConversation, adapter, budgetGuard, provider, reasoningEffort, agentEntityId, effectiveOrgId, effectiveOrgRole, executionId, enabledModules, restrictedToolset, callerPublishesFailure, approvedToolActions, taskId, unattendedRun, requireToolAuthorization, agentDepth, workflowRunId }) {
   // State tracking
   let fullContent = '';
   let numTurns = 0;
@@ -921,11 +935,15 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
       if (!budgetGuard || budgetExhausted || budgetCheckInFlight) return;
       const snapshotPrompt = usage.promptTokens || 0;
       const snapshotCompletion = usage.completionTokens || 0;
+      // Cache counters of every model call so far, so the guard prices a cache read at
+      // its cache price instead of the full input rate (~5x over on a Claude Code turn).
+      const cacheCounters = sumCacheCounters(perCallUsages);
       budgetCheckInFlight = (async () => {
         try {
           const result = await budgetGuard({
             promptTokens: snapshotPrompt,
             completionTokens: snapshotCompletion,
+            ...cacheCounters,
             iterations: numTurns || 1,
             provider: provider || adapter.getProviderName(),
             model: model || 'unknown',
@@ -1060,9 +1078,18 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
         // Log the FULL stack - adapter handler bugs used to be swallowed as
         // a one-line warning, hiding the root cause of prod regressions like
         // the 2026-04-08 tool-double-execution incident.
-        console.error(`[BRIDGE:handleMessage] ${adapter.getProviderName?.() || 'adapter'} threw on msg.type=${msg?.type}: ${e.stack || e.message}`);
-        // Surface to the run via publishError so the agent UI sees it too.
-        await publisher.publishError(`Adapter handler error: ${e.message}`).catch(() => {});
+        // Logged ONLY, never published on the stream: one message the adapter could not
+        // handle does not end the run, the CLI keeps going and the turn completes. The
+        // stream has no non-terminal error event, and a chat reads `error` as the end of
+        // the turn, so publishing one here made every later chunk of a reply that went on
+        // to succeed stream to nobody. A run that really fails is announced once, where it
+        // ends (announceRunFailure). The line's leading tag is the stable counting key.
+        console.error(adapterHandlerErrorLine({
+          provider: adapter.getProviderName?.(),
+          msgType: msg?.type,
+          streamId: publisher.streamId,
+          error: e,
+        }));
       }
     });
 
@@ -1146,6 +1173,10 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
         usage,
         error,
         stopReason,
+        // Which guard stopped the run ('tenant' | 'agent'), which the handler puts in the
+        // response (top level and metrics.budgetScope). It was never returned, so every
+        // bridge budget stop reached the backend with budget_scope NULL.
+        budgetScope,
         thinkingSections,
         orderedEntries,
         cliModel,
@@ -1164,7 +1195,7 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
 
       error = err.message;
       stopReason = AgentStopReason.ERROR;
-      await publisher.publishError(err.message).catch(() => {});
+      await announceRunFailure(publisher, err.message, { callerPublishesFailure });
 
       resolvePromise({
         success: false,

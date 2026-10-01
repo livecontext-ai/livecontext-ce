@@ -22,6 +22,8 @@ export type AnalyticsEvent =
   | 'landing_plan_clicked'
   | 'landing_pricing_cycle_toggled'
   | 'landing_faq_opened'
+  // A partner application reached the backend from the public /partners form.
+  | 'partner_application_submitted'
   // - Auth / onboarding (activation)
   | 'auth_login_succeeded'
   | 'auth_login_failed'

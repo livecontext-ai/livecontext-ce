@@ -116,10 +116,36 @@ public class AccountPurgeService {
     public static final String DEACTIVATE_OWNED_REWARD_CODES_SQL =
             "UPDATE auth.reward_code SET active = FALSE WHERE owner_user_id = ?";
 
-    /** V549: a purged partner's commissions still in their refund window are voided, never paid out. */
+    /** A personal offer cannot survive as a redeemable bearer code after its recipient is deleted. */
+    public static final String DEACTIVATE_PERSONAL_REWARD_CODES_SQL =
+            "UPDATE auth.reward_code SET active = FALSE WHERE recipient_user_id = ?";
+
+    /**
+     * V549: a purged partner's commissions still in their refund window are voided, never paid
+     * out. Lines already past it ({@code due_at} reached) are payable and stay so: the Partner
+     * Program Terms (clause 16.8) pay what was payable when the account was deleted.
+     */
     public static final String VOID_PARTNER_HOLD_COMMISSIONS_SQL =
             "UPDATE auth.partner_commission SET status = 'VOID', voided_at = now(), "
-                    + "void_reason = 'PARTNER_PURGED' WHERE partner_user_id = ? AND status = 'HOLD'";
+                    + "void_reason = 'PARTNER_PURGED' WHERE partner_user_id = ? AND status = 'HOLD' AND due_at > now()";
+
+    /** V553: an applicant's partner applications carry what they typed about their business: deleted. */
+    public static final String DELETE_PARTNER_APPLICATIONS_SQL =
+            "DELETE FROM auth.partner_application WHERE user_id = ?";
+
+    /** V553: applications a purged ADMIN decided keep their decision, without the reviewer. */
+    public static final String UNLINK_PARTNER_APPLICATION_REVIEWER_SQL =
+            "UPDATE auth.partner_application SET reviewed_by = NULL WHERE reviewed_by = ?";
+    /** V556: a purged partner's tier goes with the account. */
+    public static final String DELETE_PARTNER_STANDING_SQL =
+            "DELETE FROM auth.partner_standing WHERE user_id = ?";
+    /** V556: tiers a purged ADMIN granted stay granted, without naming the admin. */
+    public static final String UNLINK_PARTNER_STANDING_ADMIN_SQL =
+            "UPDATE auth.partner_standing SET updated_by_user_id = NULL WHERE updated_by_user_id = ?";
+    // V557: auth.partner_terms_acceptance is deliberately NOT purged. Each row is the evidence of
+    // the contract a partner accepted (version, time, address, browser), which the company keeps
+    // to establish or defend legal claims (GDPR art. 17(3)(e)) for the statutory period after the
+    // partnership ends, as the privacy policy states.
 
     @Transactional
     public boolean purgeUser(Long userId) {
@@ -190,6 +216,17 @@ public class AccountPurgeService {
         // commission lines stay: they are the record of what was redeemed and paid.
         exec(failures, DEACTIVATE_OWNED_REWARD_CODES_SQL, userId);
         exec(failures, VOID_PARTNER_HOLD_COMMISSIONS_SQL, userId);
+        exec(failures, DELETE_PARTNER_APPLICATIONS_SQL, userId);
+        exec(failures, UNLINK_PARTNER_APPLICATION_REVIEWER_SQL, userId);
+        exec(failures, DELETE_PARTNER_STANDING_SQL, userId);
+        exec(failures, UNLINK_PARTNER_STANDING_ADMIN_SQL, userId);
+        exec(failures, DEACTIVATE_PERSONAL_REWARD_CODES_SQL, userId);
+        // Personal offer state is account-bound. Remove children before attempts and the user;
+        // the inactive code retains its policy snapshot with a NULL recipient after deletion.
+        exec(failures, "DELETE FROM auth.reward_redemption WHERE redeemer_user_id = ? AND program = 'PERSONAL_UPGRADE'", userId);
+        exec(failures, "DELETE FROM auth.personal_offer_lifecycle WHERE user_id = ?", userId);
+        exec(failures, "DELETE FROM auth.personal_offer_checkout_attempt WHERE recipient_user_id = ?", userId);
+        exec(failures, "DELETE FROM auth.personal_offer_first_paid_purchase WHERE user_id = ?", userId);
         exec(failures, "DELETE FROM auth.user_roles WHERE user_id = ?", userId);
         exec(failures, "DELETE FROM auth.refresh_tokens WHERE user_id = ?", userId);
         exec(failures, "DELETE FROM auth.email_verification_codes WHERE user_id = ?", userId);

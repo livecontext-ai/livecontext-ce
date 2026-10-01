@@ -182,6 +182,42 @@ public final class GuardrailRuleEvaluator {
     public record Merged(boolean passed, List<String> violations, Map<String, Object> details, String sanitized) {}
 
     /**
+     * Whether these rules need the model at all, i.e. {@code evaluate(rules, ...).needsLlm()}
+     * whatever the content: which rules a pattern decides depends on their configuration alone.
+     * A guardrail that needs no model completes where it runs and never waits on the worker queue,
+     * so its node's timeoutMs bounds its execution like any other node's.
+     */
+    public static boolean needsModel(List<Map<String, Object>> rules) {
+        boolean decidedByPattern = false;
+        if (rules != null) {
+            for (Map<String, Object> rule : rules) {
+                if (rule == null || ruleId(rule) == null) continue;
+                String type = str(rule.get("type"));
+                Map<String, Object> config = configOf(rule);
+                if (judgedByModel(rule, type, config)) {
+                    return true;
+                }
+                if ("pii_detection".equals(type)) {
+                    List<String> piiTypes = piiTypes(config);
+                    if (piiTypes.contains("address")) {
+                        return true;
+                    }
+                    decidedByPattern |= piiTypes.stream().anyMatch(DETERMINISTIC_PII::contains);
+                } else {
+                    decidedByPattern = true;
+                }
+            }
+        }
+        return !decidedByPattern;
+    }
+
+    /** A rule the model judges whole: not a pattern type, or not configured as one. */
+    private static boolean judgedByModel(Map<String, Object> rule, String type, Map<String, Object> config) {
+        return config == null || type == null || !DETERMINISTIC_TYPES.contains(type)
+            || !hasTypedConfig(type, config) || isLegacyDescription(rule, type, config);
+    }
+
+    /**
      * Runs the deterministic rules.
      *
      * @param rules    the node's configured rules
@@ -202,8 +238,7 @@ public final class GuardrailRuleEvaluator {
                 String type = str(rule.get("type"));
                 String action = actionOf(rule);
                 Map<String, Object> config = configOf(rule);
-                if (config == null || type == null || !DETERMINISTIC_TYPES.contains(type)
-                        || !hasTypedConfig(type, config) || isLegacyDescription(rule, type, config)) {
+                if (judgedByModel(rule, type, config)) {
                     llmRules.add(new LlmRule(id, type, action, llmDescription(rule, type, config, resolver)));
                     continue;
                 }

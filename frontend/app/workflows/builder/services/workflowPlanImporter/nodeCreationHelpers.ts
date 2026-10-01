@@ -19,8 +19,8 @@ export function parsePosition(
   contextLabel?: string
 ): { position: XYPosition; useSavedPosition: boolean } {
   if (!position) {
-    // Return NaN so needsLayout() detects this node needs auto-layout.
-    // Dagre will calculate proper positions based on graph topology.
+    // NaN marks the node as unpositioned: the importer then lays the whole graph out
+    // with Dagre (see WorkflowPlanImporter, step 5).
     return { position: { x: NaN, y: NaN }, useSavedPosition: false };
   }
 
@@ -36,7 +36,7 @@ export function parsePosition(
   if (contextLabel) {
     console.warn(`[NodeCreation] Invalid position for ${contextLabel}, using calculated position`);
   }
-  // Return NaN so needsLayout() detects this node needs auto-layout.
+  // NaN marks the node as unpositioned, so the importer lays the whole graph out.
   return { position: { x: NaN, y: NaN }, useSavedPosition: false };
 }
 

@@ -2,11 +2,13 @@ package com.apimarketplace.conversation.controller.v3.chat;
 
 import com.apimarketplace.agent.client.AgentClient;
 import com.apimarketplace.conversation.service.ConversationHistoryService;
+import com.apimarketplace.conversation.streaming.StreamInterruptionService;
 import com.apimarketplace.conversation.streaming.StreamMetadata;
 import com.apimarketplace.conversation.streaming.StreamPubSubService;
 import com.apimarketplace.conversation.streaming.StreamStateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -24,6 +26,15 @@ public class StreamStopHandler {
     private final StreamPubSubService pubSubService;
     private final ConversationHistoryService conversationHistoryService;
     private final AgentClient agentClient;
+
+    /**
+     * Holds the one rescue claim every partial save takes. Optional on purpose: the CE monolith
+     * does not scan the {@code conversation.streaming} package, so the bean is absent there,
+     * and a required dependency would stop CE from booting. Nothing else saves a partial in
+     * CE, so Stop saves without the claim, exactly as before.
+     */
+    @Autowired(required = false)
+    private StreamInterruptionService streamInterruptionService;
 
     /**
      * Result of a stop operation.
@@ -70,10 +81,16 @@ public class StreamStopHandler {
 
             String streamId = metadata.streamId();
 
-            // Save partial content
+            // Save partial content - under the one rescue claim every saver takes. The stream
+            // state cannot keep a later rescue off this stream: the stopped producer's own
+            // finalize overwrites STOPPED_BY_USER, so without the claim a lost answer arriving
+            // after this Stop saved the same partial a second time.
             String partialContent = stateService.getFullContent(streamId).block();
             int savedPartialContent = 0;
-            if (partialContent != null && !partialContent.trim().isEmpty()) {
+            boolean hasPartial = partialContent != null && !partialContent.trim().isEmpty();
+            if (hasPartial && streamInterruptionService != null && !streamInterruptionService.claimRescue(streamId)) {
+                log.info("[STOP] Partial of stream {} already saved by another rescuer - not saving it twice", streamId);
+            } else if (hasPartial) {
                 // Persist the stream's REAL model, not a hardcoded "gpt-4" - otherwise every
                 // stopped turn is mis-bucketed as gpt-4 for per-model aggregation/observability.
                 String model = metadata.model() != null ? metadata.model() : "unknown";

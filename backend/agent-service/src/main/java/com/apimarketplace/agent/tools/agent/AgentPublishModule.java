@@ -196,6 +196,34 @@ public class AgentPublishModule implements ToolModule {
             return sb.toString();
         }
 
+        if ("CUSTOM_API_NOT_PUBLISHABLE".equals(code)) {
+            StringBuilder sb = new StringBuilder("Publish refused: ").append(e.getMessage());
+            if (body.get("customApis") instanceof List<?> customApis && !customApis.isEmpty()) {
+                sb.append(" Custom APIs used: ");
+                boolean first = true;
+                for (Object apiRaw : customApis) {
+                    if (!(apiRaw instanceof Map<?, ?> api)) continue;
+                    if (!first) sb.append(", ");
+                    first = false;
+                    Object name = api.get("apiName") != null ? api.get("apiName") : api.get("apiSlug");
+                    sb.append('"').append(name).append('"');
+                    if (api.get("toolIdentifiers") instanceof List<?> tools && !tools.isEmpty()) {
+                        sb.append(" (tools: ")
+                          .append(tools.stream().map(String::valueOf).reduce((a, b) -> a + ", " + b).orElse(""))
+                          .append(')');
+                    }
+                }
+                sb.append('.');
+            }
+            sb.append(" Fix: call `agent` with action=update and drop those tools from the agent's tool")
+              .append(" selection (use `catalog` search to find an equivalent shipped integration), or")
+              .append(" publish with visibility='PRIVATE' (upper case, the value is matched exactly),")
+              .append(" which keeps the agent in your own account where the custom API resolves. The same")
+              .append(" applies to any workflow or sub-agent the agent grants: the refusal lists every")
+              .append(" custom API found across that closure.");
+            return sb.toString();
+        }
+
         if ("AGENT_SNAPSHOT_TOO_LARGE".equals(code)) {
             StringBuilder sb = new StringBuilder("Publish refused: ").append(e.getMessage());
             if (body.get("breakdown") instanceof List<?> breakdown && !breakdown.isEmpty()) {

@@ -46,6 +46,23 @@ vi.mock('@/lib/hooks/smart-hooks-complete', () => ({
   }),
 }));
 
+// The modal embeds RewardCodeInline, which now reads the account's personal offer through
+// react-query. Same stub as the sibling InsufficientCreditsModal test: no offer, nothing
+// pending, so the tier / checkout behaviour below is tested on its own.
+vi.mock('@/lib/hooks/usePersonalOffer', () => ({
+  usePersonalOffer: () => ({
+    current: { status: 'NONE' },
+    preview: null,
+    candidateCode: null,
+    errorCode: null,
+    isLoading: false,
+    isError: false,
+    isAuthenticated: false,
+    refresh: vi.fn(),
+    clearCandidate: vi.fn(),
+  }),
+}));
+
 vi.mock('@/components/LoadingSpinner', () => ({
   default: () => <div data-testid="loading-spinner" />,
 }));

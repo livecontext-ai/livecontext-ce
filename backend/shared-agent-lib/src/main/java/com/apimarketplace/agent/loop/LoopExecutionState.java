@@ -1,6 +1,7 @@
 package com.apimarketplace.agent.loop;
 
 import com.apimarketplace.agent.domain.*;
+import com.apimarketplace.common.credit.LlmCacheTokens;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -212,6 +213,24 @@ public class LoopExecutionState {
 
     private static long orZero(Integer value) {
         return value != null ? value : 0L;
+    }
+
+    /** Cache counters of every completed iteration, for the budget guards' cost projection. */
+    public LlmCacheTokens getCacheTokensSoFar() {
+        return new LlmCacheTokens(totalCacheCreationTokens, totalCacheReadTokens, totalCachedTokens,
+            totalReasoningTokens);
+    }
+
+    /**
+     * Cache counters of the most recent completed iteration alone, the cache half of
+     * {@link #getLastIterationPromptTokens()}. {@link IterationContext#NO_CACHE} before the
+     * first iteration completes.
+     */
+    public LlmCacheTokens getLastIterationCacheTokens() {
+        if (usagePerIteration.isEmpty()) return IterationContext.NO_CACHE;
+        UsageInfo last = usagePerIteration.get(usagePerIteration.size() - 1);
+        return new LlmCacheTokens(last.cacheCreationInputTokens(), last.cacheReadInputTokens(),
+            last.cachedTokens(), last.reasoningTokens());
     }
 
     /** Completion tokens of the most recent completed iteration alone (V162). */

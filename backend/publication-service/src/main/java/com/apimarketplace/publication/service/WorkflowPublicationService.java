@@ -137,6 +137,16 @@ public class WorkflowPublicationService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.apimarketplace.publication.screening.ImageScreeningDecisionRepository imageScreeningDecisionRepository;
 
+    /**
+     * Refuses a SHARED publication (PUBLIC / UNLISTED) built on a tenant-private custom
+     * API. Field-injected with {@code required=false} like the helpers above so the
+     * existing 14-arg test constructions keep working; package-private so tests in this
+     * package can install a stub. Null means "no gate", which is exactly the behaviour
+     * every pre-existing test expects.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    CustomApiPublishGuard customApiPublishGuard;
+
     public WorkflowPublicationService(WorkflowPublicationRepository publicationRepository,
                                        PublicationSnapshotVersionRepository snapshotVersionRepository,
                                        PublicationReceiptRepository receiptRepository,
@@ -470,6 +480,15 @@ public class WorkflowPublicationService {
         }
         if (planSnapshot == null || planSnapshot.isEmpty()) {
             throw new IllegalArgumentException("Workflow has no plan to publish");
+        }
+
+        // A custom API is private to its owner's tenant, so a SHARED publication built on
+        // one is dead on arrival for every acquirer. Refused here, before enrichment, so
+        // the publish fails without having copied any file into the publication namespace.
+        // PRIVATE is exempt (same tenant, the API still resolves). Sub-workflow plans are
+        // only resolved during enrichment, so they are re-checked there.
+        if (customApiPublishGuard != null) {
+            customApiPublishGuard.assertPublishable(effectiveVisibility, planSnapshot, tenantId, organizationId);
         }
 
         // The enrichment below copies the plan's files into `_publications/{id}/`, so the id
@@ -836,6 +855,12 @@ public class WorkflowPublicationService {
 
         Map<String, Object> currentPlan = (Map<String, Object>) workflowData.get("plan");
         Map<String, Object> ownerApplicationSnapshot = null;
+        // Same custom-API gate as publishWorkflow: this path re-snapshots the CURRENT
+        // workflow, so a custom-API node added after the first publish is caught here,
+        // as is a visibility flip from PRIVATE to PUBLIC / UNLISTED.
+        if (customApiPublishGuard != null && currentPlan != null && !currentPlan.isEmpty()) {
+            customApiPublishGuard.assertPublishable(effectiveVisibility, currentPlan, tenantId, organizationId);
+        }
         if (currentPlan != null && !currentPlan.isEmpty()) {
             ownerApplicationSnapshot = enrichAndSetPlanSnapshot(publication, currentPlan, tenantId, organizationId,
                     (String) workflowData.get("tenantId"));
@@ -1003,14 +1028,29 @@ public class WorkflowPublicationService {
     public boolean isCallerInOwnerScope(WorkflowPublicationEntity publication,
                                          String tenantId,
                                          String organizationId) {
-        if (publication == null || tenantId == null) return false;
-        WorkflowPublicationEntity.OwnerType type = publication.getOwnerType();
-        String ownerId = publication.getOwnerId();
-        if (!publication.hasAssignedOwnerScope()) {
+        if (publication == null) return false;
+        return isInOwnerScope(publication.getOwnerType(), publication.getOwnerId(),
+                publication.getPublisherId(), tenantId, organizationId);
+    }
+
+    /**
+     * The owner-scope rule of {@link #isCallerInOwnerScope} on the three columns it reads, so a
+     * caller holding only those (a projection, see
+     * {@code WorkflowPublicationRepository#findOwnerScopeById}) applies the SAME rule instead of
+     * restating it. {@code SharedLinkResourceGuard} checks every share-link resolution with it,
+     * where loading the entity would pull the plan snapshot and the other JSONB columns.
+     */
+    public static boolean isInOwnerScope(WorkflowPublicationEntity.OwnerType ownerType,
+                                         String ownerId,
+                                         String publisherId,
+                                         String tenantId,
+                                         String organizationId) {
+        if (tenantId == null) return false;
+        if (!WorkflowPublicationEntity.hasAssignedOwnerScope(ownerType, ownerId)) {
             // Legacy or not-yet-persisted row - fall back to publisher_id equality.
-            return tenantId.equals(publication.getPublisherId());
+            return tenantId.equals(publisherId);
         }
-        return switch (type) {
+        return switch (ownerType) {
             case USER -> tenantId.equals(ownerId);
             case ORG -> organizationId != null
                     && !organizationId.isBlank()
@@ -1691,6 +1731,20 @@ public class WorkflowPublicationService {
         // namespace (same as the top-level plan does at line ~838).
         enrichPlanWithSubWorkflowData(planSnapshot, tenantId, organizationId, publication.getWorkflowId(), publication.getId());
 
+        // SECOND custom-API pass, on the ENRICHED plan. Enrichment is what turns two
+        // things into real catalog tool identifiers, so the pre-enrichment pass in the
+        // callers cannot see either: an agent node's granted tools (materialised as
+        // `agents[]._snapshot_agent_toolsConfig.tools` above - the raw plan only carries
+        // normalised `mcp:<label>` refs) and every sub-workflow plan
+        // (`_snapshot_subworkflows`). Both are shipped verbatim to the acquirer, so both
+        // must be gated. The first pass still earns its place: it fails the common case
+        // before any file is copied into the publication namespace. This one runs after
+        // `snapshotDataInputFiles`, so a refusal here leaves those copies behind (the DB
+        // row itself rolls back with the transaction).
+        if (customApiPublishGuard != null) {
+            customApiPublishGuard.assertPublishable(publication.getVisibility(), planSnapshot, tenantId, organizationId);
+        }
+
         Map<String, Object> ownerApplicationSnapshot = objectMapper.convertValue(planSnapshot,
                 new TypeReference<Map<String, Object>>() {});
 
@@ -1761,13 +1815,19 @@ public class WorkflowPublicationService {
         Map<String, Object> snapshot;
         try {
             snapshot = orchestratorClient.captureShowcaseSnapshot(sourceRunIdPublic, tenantId, organizationId, epochFilter);
+        } catch (OrchestratorInternalClient.ShowcaseEpochNotFoundException e) {
+            // A wrong epoch is the caller's to fix (400 with the reason), not a 500.
+            throw e;
         } catch (Exception e) {
             throw new IllegalStateException(
                     "Showcase snapshot capture failed for run=" + sourceRunIdPublic + ": " + e.getMessage(), e);
         }
         if (snapshot == null || snapshot.isEmpty()) {
             throw new IllegalStateException(
-                    "Showcase snapshot capture returned empty payload for run=" + sourceRunIdPublic);
+                    "Showcase snapshot capture returned empty payload for run=" + sourceRunIdPublic
+                            + ". Nothing was saved (no new publication, and no change to an existing one). "
+                            + "Retry; if it keeps failing, showcase another "
+                            + "successful run.");
         }
 
         // P0 fix: walk the captured run-state and re-namespace any FileRef

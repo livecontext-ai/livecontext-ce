@@ -120,7 +120,7 @@ public class CatalogToolsProvider implements ToolsProvider {
                     "register_api", "update_api", "delete_api", "list_custom_apis"))
                 .build(),
             stringParam("query", "Search keywords (for action='search'). E.g., 'send slack message'. API-scoped shorthand also works: '[gmail, slack] send message' or 'gmail, list messages'.", false),
-            stringParam("api", "Optional API filter for action='search'. One API name, slug, iconSlug, or provider, e.g. 'gmail'.", false),
+            stringParam("api", "Optional API filter for action='search'. One API name, slug, iconSlug, or provider, e.g. 'gmail'. Given without a query, the search lists that API's tools (up to limit).", false),
             arrayParam("apis", "Optional API filters for action='search'. Example: ['gmail','slack'].", false),
             intParam("limit", "Maximum results to return (for action='search', default: 10, max: 25)", false, 10),
             stringParam("tool_id", "Tool UUID (for action='execute' or 'response_schema')", false),
@@ -145,7 +145,7 @@ public class CatalogToolsProvider implements ToolsProvider {
             ToolParameter.builder()
                 .name("api_definition")
                 .description("""
-                    API definition object (for action='register_api', 'update_api').
+                    API definition object (for action='register_api', 'update_api'). A string holding the same JSON object is also accepted.
                     Required: apiName, baseUrl, endpoints (with name, endpoint, method, description, params, outputSchema).
                     outputSchema is REQUIRED on every endpoint: [{key, type, description, children?}] - defines the typed response shape.
                     Call catalog(action='help', topics=['register']) for full field reference, examples, and advanced features.""")

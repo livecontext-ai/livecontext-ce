@@ -81,27 +81,39 @@ public class AccountPurgeScheduler {
                                     + "but never restored the account; purging as scheduled.",
                             user.getId(), user.getLastLoginAt(), user.getDeactivatedAt());
                 }
-
-                // Capture email + name BEFORE purge deletes the rows
-                String email = user.getEmail();
-                String displayName = onboardingRepository.findByUserId(user.getId())
-                        .map(UserOnboarding::getDisplayName)
-                        .orElse(user.getFirstName());
-                // And the LANGUAGE, for the same reason and on the same line. The mailer resolves
-                // a locale by looking the address up, and this is the one mail sent AFTER the row
-                // it would look up has been deleted: without carrying it here, the last message a
-                // person ever receives from us is the one guaranteed to be in the wrong language.
-                String locale = user.getLocale();
-
-                boolean purged = purgeService.purgeUser(user.getId());
-                if (purged) {
-                    mailer.sendPurgeConfirmationEmail(email, displayName, locale);
-                    if (lifecycleEmails != null) lifecycleEmails.deleteContact(email);
-                    logger.info("Account purge: successfully purged user {} ({})", user.getId(), email);
-                }
+                purgeAccount(user);
             } catch (Exception e) {
                 logger.error("Account purge: failed to purge user {} ({})", user.getId(), user.getEmail(), e);
             }
         }
+    }
+
+    /**
+     * Purges one deactivated account and sends what follows a purge. Shared by the nightly pass
+     * and by the immediate deletion of a test account ({@link AccountDeletionService}), so a test
+     * account exercises exactly the code a real deletion runs 30 days later.
+     *
+     * @return true when the account was deleted, false when the purge declined it (reactivated)
+     * @throws RuntimeException when the purge failed; nothing was deleted in that case
+     */
+    public boolean purgeAccount(User user) {
+        // Capture email + name BEFORE purge deletes the rows
+        String email = user.getEmail();
+        String displayName = onboardingRepository.findByUserId(user.getId())
+                .map(UserOnboarding::getDisplayName)
+                .orElse(user.getFirstName());
+        // And the LANGUAGE, for the same reason and on the same line. The mailer resolves
+        // a locale by looking the address up, and this is the one mail sent AFTER the row
+        // it would look up has been deleted: without carrying it here, the last message a
+        // person ever receives from us is the one guaranteed to be in the wrong language.
+        String locale = user.getLocale();
+
+        boolean purged = purgeService.purgeUser(user.getId());
+        if (purged) {
+            mailer.sendPurgeConfirmationEmail(email, displayName, locale);
+            if (lifecycleEmails != null) lifecycleEmails.deleteContact(email);
+            logger.info("Account purge: successfully purged user {} ({})", user.getId(), email);
+        }
+        return purged;
     }
 }

@@ -214,7 +214,7 @@ class WorkflowBuilderProviderNodePolicyTest {
 
         provider.executeAddNode(
                 addNode(TOOL_ID, "Fetch Page", Map.of("url", "https://example.test"),
-                        Map.of("providerRetryMaxWaitSec", 0)),
+                        Map.of("retryCount", 1)),
                 TENANT_ID, CTX);
 
         assertThat(paramsSeenByCreator)
@@ -341,12 +341,12 @@ class WorkflowBuilderProviderNodePolicyTest {
 
         ToolExecutionResult result = provider.executeAddNode(
                 addNode(TOOL_ID, "Fetch Page", Map.of("url", "https://example.test"),
-                        Map.of("retryCount", 2, "providerRetryMaxWaitSec", 0)),
+                        Map.of("retryCount", 2, "retryBackoffMs", 60000)),
                 TENANT_ID, CTX);
 
         Map<String, Object> data = (Map<String, Object>) result.data();
         assertThat(data.get(NodePolicy.JSON_KEY))
-                .isEqualTo(Map.of("retryCount", 2, "providerRetryMaxWaitSec", 0));
+                .isEqualTo(Map.of("retryCount", 2, "retryBackoffMs", 60000L));
         assertThat(String.valueOf(data.get("node_policy_hint"))).contains("every run");
     }
 
@@ -422,18 +422,12 @@ class WorkflowBuilderProviderNodePolicyTest {
     }
 
     @Test
-    @DisplayName("a provider-retry budget on a node that calls no provider is refused, and the node "
-            + "is left runnable without it")
-    void providerBudgetOnANonToolNodeIsRefused() {
-        // Only StepNode carries this to the catalog. Accepted on a core node it would sit in the
-        // plan looking configured while the platform kept retrying underneath the author.
-        //
-        // Checked AFTER creation on purpose: whether a type makes a provider call cannot be read off
-        // the type (a tool arrives as a UUID, a prefixed UUID or apiSlug/toolSlug, and the switch
-        // treats an unrecognised type AS a tool), and a pre-creation guess refused the feature's
-        // primary use. So the node exists, without the policy, and the reply says exactly that.
-        creatorAddsADecisionCore();
-
+    @DisplayName("REGRESSION: the removed provider-retry budget is refused BEFORE any node is created, "
+            + "whatever the type")
+    void removedProviderBudgetIsRefusedBeforeCreation() {
+        // The platform no longer re-sends a refused provider call, so the knob reads nothing.
+        // Refused up front, on every type, so a caller that reads the failure and sends add_node
+        // again never ends up with two nodes. No creator is stubbed: none must be reached.
         ToolExecutionResult result = provider.executeAddNode(
                 addNode("decision", "Check", Map.of("conditions", "x"),
                         Map.of("providerRetryMaxWaitSec", 0)),
@@ -441,28 +435,10 @@ class WorkflowBuilderProviderNodePolicyTest {
 
         assertThat(result.success()).isFalse();
         assertThat(result.error())
-                .contains("catalog tool step only")
-                .contains("was created")
-                .contains("action='modify'");
-        assertThat(session.getCores().get(0))
-                .as("left policy-less, so the plan still parses and can be repaired with one modify")
-                .doesNotContainKey(NodePolicy.JSON_KEY);
-    }
-
-    @Test
-    @DisplayName("http_request is a CORE node, so it is refused too - the type that looks most "
-            + "like a provider call and is not a tool step")
-    void providerBudgetOnAnHttpRequestNodeIsRefused() {
-        creatorAddsACoreNode();
-
-        ToolExecutionResult result = provider.executeAddNode(
-                addNode("http_request", "Fetch Page", Map.of("url", "https://example.test"),
-                        Map.of("providerRetryMaxWaitSec", 0)),
-                TENANT_ID, CTX);
-
-        assertThat(result.success()).isFalse();
-        assertThat(result.error()).contains("catalog tool step only");
-        assertThat(createdCoreNode()).doesNotContainKey(NodePolicy.JSON_KEY);
+                .contains("never retries a provider refusal")
+                .contains("retryBackoffMs")
+                .contains("No node was created");
+        assertThat(session.getCores()).isEmpty();
     }
 
     @Test
@@ -481,37 +457,15 @@ class WorkflowBuilderProviderNodePolicyTest {
     }
 
     @Test
-    @DisplayName("REGRESSION: a tool referenced by apiSlug/toolSlug accepts the budget")
-    void aSlugTypedToolAcceptsTheBudget() {
-        // add_node takes a tool as a UUID, as a prefixed UUID, or as apiSlug/toolSlug - and its
-        // switch treats every UNRECOGNISED type as a tool. A pre-creation check that tried to read
-        // "is this a tool" off the type refused this, the commonest hand-written form, and told the
-        // agent to move the setting onto the node it was trying to create.
-        creatorAddsAnMcpNode();
-
+    @DisplayName("REGRESSION: a tool step referenced by apiSlug/toolSlug refuses the removed budget too")
+    void aSlugTypedToolRefusesTheRemovedBudget() {
         ToolExecutionResult result = provider.executeAddNode(
                 addNode("gmail/list-messages", "Fetch Page", Map.of("q", "is:unread"),
                         Map.of("providerRetryMaxWaitSec", 0)),
                 TENANT_ID, CTX);
 
-        assertThat(result.success()).as(String.valueOf(result.error())).isTrue();
-        assertThat(createdNode().get(NodePolicy.JSON_KEY))
-                .isEqualTo(Map.of("providerRetryMaxWaitSec", 0));
-    }
-
-    @Test
-    @DisplayName("REGRESSION: a tool referenced by a PREFIXED uuid accepts it too")
-    void aPrefixedUuidToolAcceptsTheBudget() {
-        creatorAddsAnMcpNode();
-
-        ToolExecutionResult result = provider.executeAddNode(
-                addNode("mcp:" + TOOL_ID, "Fetch Page", Map.of("url", "https://example.test"),
-                        Map.of("providerRetryMaxWaitSec", 45)),
-                TENANT_ID, CTX);
-
-        assertThat(result.success()).as(String.valueOf(result.error())).isTrue();
-        assertThat(createdNode().get(NodePolicy.JSON_KEY))
-                .isEqualTo(Map.of("providerRetryMaxWaitSec", 45));
+        assertThat(result.success()).isFalse();
+        assertThat(result.error()).contains("no longer exists").contains("No node was created");
     }
 
     @Test

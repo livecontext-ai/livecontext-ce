@@ -2,7 +2,7 @@
 
 import { useCallback, useContext, useMemo, useState } from 'react';
 import { QueryClientContext } from '@tanstack/react-query';
-import { RewardApiService } from '@/lib/api/services/reward-api.service';
+import { RewardApiService, type RewardRedeemResult } from '@/lib/api/services/reward-api.service';
 import { ApiError } from '@/lib/api/api-client';
 import { clearPendingRewardCode, readPendingRewardCode } from '@/lib/lifecycle/pendingRewardCode';
 import { redeemErrorKey, useRedeemSuccessMessage } from './redeemMessages';
@@ -26,6 +26,7 @@ export function useRedeemCode() {
   const [submitting, setSubmitting] = useState(false);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [successText, setSuccessText] = useState<string | null>(null);
+  const [lastResult, setLastResult] = useState<RewardRedeemResult | null>(null);
 
   const forgetIfPending = (code: string) => {
     if (typeof window === 'undefined') return;
@@ -39,10 +40,12 @@ export function useRedeemCode() {
       setSubmitting(true);
       setErrorKey(null);
       setSuccessText(null);
+      setLastResult(null);
       try {
         const result = await rewardApi.redeem(code);
         forgetIfPending(code);
         setSuccessText(describeSuccess(result));
+        setLastResult(result);
         if (queryClient) void queryClient.invalidateQueries();
         return true;
       } catch (e) {
@@ -58,5 +61,5 @@ export function useRedeemCode() {
 
   const clearError = useCallback(() => setErrorKey(null), []);
 
-  return { redeem, submitting, errorKey, successText, clearError };
+  return { redeem, submitting, errorKey, successText, lastResult, clearError };
 }

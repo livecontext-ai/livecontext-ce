@@ -185,6 +185,11 @@ public class WorkflowPublicationController {
         } catch (IllegalArgumentException e) {
             logger.warn("Bad request publishing workflow: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (PublicationValidationException e) {
+            // Structured publish refusal (custom API referenced): 422 with the
+            // machine-readable body so the modal and MCP tool name the offending APIs.
+            logger.warn("Workflow publish refused ({}): {}", e.getErrorCode(), e.getMessage());
+            return ResponseEntity.unprocessableEntity().body(e.toBody());
         } catch (PublicationPendingReviewException e) {
             // Pending-review guard (re-publish blocked). A client-state conflict,
             // not a server fault - return 409 so the frontend fails fast (5xx is
@@ -269,6 +274,11 @@ public class WorkflowPublicationController {
         } catch (IllegalArgumentException e) {
             logger.warn("Bad request updating publication: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (PublicationValidationException e) {
+            // Same structured refusal as the publish path (a re-share re-snapshots the
+            // current plan, so a custom API added since the first publish is caught here).
+            logger.warn("Publication update refused ({}): {}", e.getErrorCode(), e.getMessage());
+            return ResponseEntity.unprocessableEntity().body(e.toBody());
         } catch (Exception e) {
             logger.error("Error updating publication", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -481,11 +491,16 @@ public class WorkflowPublicationController {
             // workflow in place + "Publish update", while acquirers/anonymous stay
             // read-only. Never trust a client-side owner guess (ORG ownership).
             response.put("ownedByMe", isOwner);
-            if (!isOwner) {
+            if (!isOwner || isShareContext) {
                 // Strip publisher email - that's the actual harvesting risk.
                 // publisherId is kept so the marketplace avatar component can
                 // resolve /api/proxy/users/{publisherId}/avatar; the ID is
                 // already implicit in that request URL anyway.
+                //
+                // A share-link visitor is authenticated AS the owner, so isOwner is
+                // true for them, but they are an anonymous holder of the URL: the owner
+                // shared an application, not their address. No viewer screen reads
+                // this field, so dropping it costs the /s/{token} page nothing.
                 response.remove("publisherEmail");
             }
             if (isOwner || isSharedPublication || !isWorkflow) {

@@ -16,12 +16,14 @@ import com.apimarketplace.conversation.repository.MessageRepository;
 import com.apimarketplace.conversation.service.MessageService;
 import com.apimarketplace.conversation.service.PendingActionService;
 import com.apimarketplace.conversation.service.ToolResultService;
+import com.apimarketplace.conversation.service.approval.ToolApprovalGateResolver;
 import com.apimarketplace.conversation.service.approval.ToolAuthorizationApprovalService;
 import com.apimarketplace.conversation.service.ai.callback.AgentContextBuilder;
 import com.apimarketplace.conversation.service.ai.callback.ToolCallClassifier;
 import com.apimarketplace.conversation.service.ai.schema.HelpSeenRegistry;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
 import com.apimarketplace.common.event.EventBus;
+import com.apimarketplace.conversation.streaming.StreamInterruptionService;
 import com.apimarketplace.conversation.streaming.StreamStateService;
 import com.apimarketplace.conversation.streaming.StreamingOutput;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -82,6 +84,15 @@ public class ConversationAgentService {
      */
     @Autowired(required = false)
     private BridgeStreamHeartbeat bridgeStreamHeartbeat;
+
+    /**
+     * Saves a streamed reply whose producer's answer never reached this service (see
+     * {@link #endWithRescuedReply}). Optional for the same reason as
+     * {@link #bridgeStreamHeartbeat}: the existing unit-test constructors stay untouched; it is
+     * a same-module {@code @Service}, always present at runtime.
+     */
+    @Autowired(required = false)
+    private StreamInterruptionService streamInterruptionService;
 
     /**
      * Optional queue producer - wired only when {@code scaling.agent.queue.enabled=true}.
@@ -146,6 +157,10 @@ public class ConversationAgentService {
      */
     @Autowired
     private ToolAuthorizationApprovalService toolAuthorizationApprovalService;
+
+    /** Clears the running-turn "don't ask again" grant once a new turn has read the persisted one. */
+    @Autowired(required = false)
+    private ToolApprovalGateResolver toolApprovalGateResolver;
 
     @Autowired
     public ConversationAgentService(
@@ -530,9 +545,10 @@ public class ConversationAgentService {
      * <p>On failure we ALWAYS emit the {@code error} event because the bridge does not reliably emit
      * a terminal one: a soft failure ({@code success=false} body) or an unreachable bridge
      * ({@code BridgeClient.executeViaBridge} returns {@code null}) leaves the live bubble stuck
-     * otherwise. When the bridge DID already publish its own live {@code error} (an in-run adapter
-     * failure), this re-emits a second one - harmless because the terminal state is idempotent, and
-     * strictly preferable to risking a stuck stream by trying to guess whether the bridge emitted one.
+     * otherwise. When the bridge DID already publish its own live {@code error} (the run crashed
+     * inside the bridge, or its CLI could not be spawned), this re-emits a second one - harmless
+     * because the terminal state is idempotent, and strictly preferable to risking a stuck stream by
+     * trying to guess whether the bridge emitted one.
      */
     private void finalizeBridgeSyncStream(String streamId, String conversationId, String model,
                                           boolean success, String fullContent, String error) {
@@ -674,11 +690,28 @@ public class ConversationAgentService {
                 conversationId, streamId, dto.provider(), dto.model(),
                 (queueProducer != null && resultWaiter != null) ? "queue" : "http");
 
-            AgentExecutionResponseDto response = dispatchAgentExecution(dto, context.userRoles());
+            AgentExecutionResponseDto response;
+            try {
+                response = dispatchAgentExecution(dto, context.userRoles());
+            } catch (Exception lost) {
+                // The queue transport (the one cloud chat uses) THROWS where the HTTP client
+                // returns null: an await timeout, a Redis failure, an unreadable result. Same
+                // lost answer, same rescue, which also sets the cancel key unless the loop had
+                // COMPLETED. With nothing to rescue, the old ending: cancel key, error, [Error] row.
+                if (!endWithRescuedReply(request, dto, streamOutput, conversationId,
+                        "Agent execution error: " + lost.getMessage())) {
+                    setCancelKeyQuietly(streamId);
+                    handleExecutionError(lost, streamOutput, conversationId);
+                }
+                return;
+            }
 
             if (response == null) {
                 log.error("Agent-service returned null response for conversation: {}", conversationId);
-                streamOutput.sendError("Agent execution failed: no response from agent-service");
+                if (!endWithRescuedReply(request, dto, streamOutput, conversationId,
+                        "Agent execution failed: no response from agent-service")) {
+                    streamOutput.sendError("Agent execution failed: no response from agent-service");
+                }
                 return;
             }
 
@@ -686,7 +719,22 @@ public class ConversationAgentService {
                 response.success(), response.iterations(), response.durationMs(),
                 response.content() != null ? response.content().length() : 0);
 
-            persistRemoteResults(request, conversationId, response, streamId, dto.executionId());
+            // A failure that escaped the agent loop (and the queue worker's error envelope)
+            // comes back with no content at all, while the loop may have streamed a partial
+            // that the user watched: the answer is as good as lost for persistence. With
+            // nothing buffered, the turn ends exactly as before (nothing to write, `done`).
+            if (!response.success() && response.hasNoVisibleOutput()
+                    && endWithRescuedReply(request, dto, streamOutput, conversationId,
+                        response.error() != null ? response.error() : "Agent execution failed")) {
+                recordObservability(request, context, response, conversationId);
+                return;
+            }
+
+            if (!persistRemoteResults(request, conversationId, response, streamId, dto.executionId())) {
+                // agent-service already published `done` and finalized the stream: the reply
+                // was on screen, and this write was its only way into the history.
+                rescueUnsavedReply(request, dto, streamId, conversationId);
+            }
             persistPendingActionIfNeeded(conversationId, response);
             // Credits are now consumed in agent-service during recordFromChat() to ensure
             // per-execution credit tracking. No double consumption.
@@ -794,7 +842,16 @@ public class ConversationAgentService {
             if (response == null) {
                 log.error("Bridge returned null response for conversation: {}", conversationId);
                 publishFleetExecutionCompleted(agentEntityId, executionId, "FAILED", 0, 0, 0, taskId);
-                streamOutput.sendError("Agent execution failed: no response from bridge");
+                // The bridge never advances the Redis stream state: it pushes chunks, never the
+                // stream hash, and only this method finalizes the stream (sendDone / sendError).
+                // So the state still reads what the turn started with (STREAMING, set by
+                // sendStreamId; CREATED if that write failed), never COMPLETED: a reply rescued
+                // after the bridge's HTTP answer was lost always ends as interrupted, never as
+                // `done`, even when the CLI had in fact finished.
+                if (!endWithRescuedReply(request, dto, streamOutput, conversationId,
+                        "Agent execution failed: no response from bridge")) {
+                    streamOutput.sendError("Agent execution failed: no response from bridge");
+                }
                 return;
             }
 
@@ -810,7 +867,9 @@ public class ConversationAgentService {
                 response.durationMs(),
                 taskId);
 
-            persistRemoteResults(request, conversationId, response, streamId, dto.executionId());
+            if (!persistRemoteResults(request, conversationId, response, streamId, dto.executionId())) {
+                rescueUnsavedReply(request, dto, streamId, conversationId);
+            }
             persistPendingActionIfNeeded(conversationId, response);
             // Bridge path has no ConversationRedisStreamingCallback, so emit
             // the WS event here so the web frontend shows the card in real-time.
@@ -897,6 +956,11 @@ public class ConversationAgentService {
                 toolAuthorizationApprovalService.resolveAndConsumeForTurn(conversationId);
             if (!approvedToolActions.isEmpty()) {
                 credentials.put("__approvedToolActions__", approvedToolActions);
+            }
+            // This turn now carries the persisted setting, so the grant that only existed for
+            // the PREVIOUS turn goes: switching the toggle off afterwards has to win.
+            if (toolApprovalGateResolver != null) {
+                toolApprovalGateResolver.clearConversationWideForRunningTurn(conversationId);
             }
         }
 
@@ -1016,9 +1080,14 @@ public class ConversationAgentService {
 
     /**
      * Persist remote execution results to the conversation database.
+     *
+     * @return false when the write failed, i.e. the reply is NOT in the history; true when it
+     *         was written or there was nothing to write. The assistant-message insert is the
+     *         last statement that can throw, and it runs in its own transaction, so a failure
+     *         here always means that row does not exist.
      */
     @SuppressWarnings("unchecked")
-    private void persistRemoteResults(ChatRequest request, String conversationId,
+    private boolean persistRemoteResults(ChatRequest request, String conversationId,
                                        AgentExecutionResponseDto response, String streamId, String executionId) {
         try {
             String content = response.content() != null ? response.content().trim() : "";
@@ -1031,7 +1100,7 @@ public class ConversationAgentService {
 
             if (!hasContent && !hasToolResults && !hasThinking) {
                 log.info("No content or tools to persist for remote conversation: {}", conversationId);
-                return;
+                return true;
             }
 
             // Build a lookup of tool results by toolCallId for O(1) access
@@ -1201,22 +1270,8 @@ public class ConversationAgentService {
                 toolCallsJson = objectMapper.writeValueAsString(toolCallsList);
             }
 
-            MessageDto messageDto = new MessageDto();
-            messageDto.setConversationId(conversationId);
-            messageDto.setRole("assistant");
-            messageDto.setContent(hasContent ? content : "");
-            messageDto.setToolCalls(toolCallsJson);
-            messageDto.setModel(response.model());
-            messageDto.setTimestamp(java.time.Instant.now().toString());
-            messageDto.setAgentId(request.getAgentId());
-            // Stamp the execution id (== agent_executions.id) so the Conversation
-            // Activity card can aggregate this turn by execution AND fetch the turn's
-            // observability metrics (tokens / iterations / credits / status). Null-safe:
-            // a caller that has no executionId passes null and grouping falls back to
-            // the turn boundary.
-            messageDto.setExecutionId(executionId);
-
-            messageService.addMessage(conversationId, messageDto);
+            addAssistantMessage(request, conversationId, hasContent ? content : "", toolCallsJson,
+                response.model(), executionId);
 
             log.info("Persisted remote execution results: conversationId={}, contentLen={}, toolEntries={}, thinkingSections={}",
                 conversationId, content.length(), toolCallsList.size(),
@@ -1226,10 +1281,124 @@ public class ConversationAgentService {
             // (role=assistant chokepoint) - no explicit call needed here. Every surface
             // (chat / workflow-agent / standalone-agent / sub-agent) reaches compaction
             // through that one path.
+            return true;
 
         } catch (Exception e) {
             log.error("Failed to persist remote execution results for conversation {}: {}",
                 conversationId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * The assistant row of a turn, written the one way both the normal persist and the rescue
+     * use. {@code MessageService.addMessage} runs in its own transaction and throws on failure,
+     * so a return means the row exists.
+     */
+    private void addAssistantMessage(ChatRequest request, String conversationId, String content,
+                                     String toolCallsJson, String model, String executionId) {
+        MessageDto messageDto = new MessageDto();
+        messageDto.setConversationId(conversationId);
+        messageDto.setRole("assistant");
+        messageDto.setContent(content);
+        messageDto.setToolCalls(toolCallsJson);
+        messageDto.setModel(model);
+        messageDto.setTimestamp(java.time.Instant.now().toString());
+        messageDto.setAgentId(request.getAgentId());
+        // Stamp the execution id (== agent_executions.id) so the Conversation
+        // Activity card can aggregate this turn by execution AND fetch the turn's
+        // observability metrics (tokens / iterations / credits / status). Null-safe:
+        // a caller that has no executionId passes null and grouping falls back to
+        // the turn boundary.
+        messageDto.setExecutionId(executionId);
+
+        messageService.addMessage(conversationId, messageDto);
+    }
+
+    /**
+     * End a streaming turn whose producer's answer is lost: agent-service or the bridge returned
+     * nothing, the queue await threw, or the answer is a failure envelope with no content. The
+     * reply may still have streamed: every chunk the producer published is buffered in Redis
+     * under the stream. Before this, such a turn got an {@code error} (or an empty {@code done})
+     * and was never written, so the user saw a reply that was not in the history on reload.
+     *
+     * <p>The buffered reply is saved first, then the terminal event follows what Redis says
+     * about the producer, because a partial must never end as a complete turn:
+     * <ul>
+     *   <li>COMPLETED: the producer finished (agent-service's direct loop finalizes before it
+     *       returns) and only its answer was lost, so the turn ends in {@code done}, as a
+     *       returned turn does;</li>
+     *   <li>ERROR: the producer failed; its partial is kept and the turn still ends in
+     *       {@code error};</li>
+     *   <li>anything else (still STREAMING or CREATED): the producer may still be running, e.g.
+     *       a bridge restarted mid-reply or a dropped connection to a live agent-service loop.
+     *       The turn ends as an interruption, like the drain / TTL rescue.</li>
+     * </ul>
+     * Short of COMPLETED, the cancel key is set as well, so a producer that is still running
+     * stops streaming, and billing, onto a turn that is already closed.
+     *
+     * @return false when nothing was saved and the stream was NOT ended: the caller ends the turn
+     *         the way that branch always did (an error, or the ordinary failure path)
+     */
+    private boolean endWithRescuedReply(ChatRequest request, AgentExecutionRequestDto dto,
+                                        StreamingOutput streamOutput, String conversationId, String error) {
+        String streamId = streamOutput.getCurrentStreamId();
+        Optional<StreamInterruptionService.BufferedReply> saved =
+            rescueUnsavedReply(request, dto, streamId, conversationId);
+        if (saved.isEmpty()) {
+            return false;
+        }
+        StreamInterruptionService.BufferedReply reply = saved.get();
+        if (reply.producerCompleted()) {
+            streamOutput.sendDone(reply.content(), dto.model(), dto.provider(), request.getUserId(), conversationId);
+            return true;
+        }
+        // The cancel key is written AFTER the stream is finalized, never before: the interrupted
+        // ending deletes the stream's keys (the cancel key with them) and the error ending
+        // shortens their expiry, and a producer only POLLS for the key, so a key written first
+        // was gone before a still-running loop or CLI could see it.
+        if (reply.producerFailed()) {
+            streamOutput.sendError(error);
+            setCancelKeyQuietly(streamId);
+        } else {
+            streamInterruptionService.endInterrupted(streamId, reply.content(), error, true);
+        }
+        return true;
+    }
+
+    /**
+     * Save the reply the stream buffered in Redis, when the normal write never happened. Called
+     * only on the branches where it did not (answer lost, or the write failed); the claim refuses
+     * a stream that a stop or an interruption already saved, so a reply is never written twice.
+     *
+     * <p>Text only: the buffer holds the streamed reply, not the tool calls. Those are written
+     * from the producer's answer, which is exactly what is missing here.
+     *
+     * @return the saved reply with the stream state read before the write; empty when nothing
+     *         was saved
+     */
+    private Optional<StreamInterruptionService.BufferedReply> rescueUnsavedReply(
+            ChatRequest request, AgentExecutionRequestDto dto, String streamId, String conversationId) {
+        if (streamInterruptionService == null || streamId == null || conversationId == null) {
+            return Optional.empty();
+        }
+        try {
+            Optional<StreamInterruptionService.BufferedReply> reply =
+                streamInterruptionService.claimUnsavedReply(streamId);
+            if (reply.isEmpty()) {
+                return Optional.empty();
+            }
+            // Trimmed like the normal write, so a rescued reply is stored as it would have been.
+            addAssistantMessage(request, conversationId, reply.get().content().trim(), null,
+                dto.model(), dto.executionId());
+            log.warn("[RESCUE] Saved the buffered reply of stream {} ({} chars, state {}) to conversation {}: "
+                    + "its producer's answer never reached conversation-service",
+                streamId, reply.get().content().length(), reply.get().state(), conversationId);
+            return reply;
+        } catch (Exception e) {
+            log.error("Failed to rescue the buffered reply of stream {} (conversation {}): {}",
+                streamId, conversationId, e.getMessage());
+            return Optional.empty();
         }
     }
 

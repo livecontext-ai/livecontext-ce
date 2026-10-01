@@ -24,8 +24,20 @@ export interface TooLargeBreakdownEntry {
   approxBytes?: number;
 }
 
+/**
+ * A custom API reached by the agent's tool grants (directly, or through a granted
+ * workflow / sub-agent). Custom APIs live only in the publisher's account, so a shared
+ * publication built on one is refused.
+ */
+export interface CustomApiRefDetail {
+  apiSlug: string;
+  apiName: string;
+  toolIdentifiers: string[];
+}
+
 export type ParsedPublishAgentError =
   | { kind: 'allAccess'; violations: AllAccessViolation[] }
+  | { kind: 'customApi'; customApis: CustomApiRefDetail[] }
   | {
       kind: 'tooLarge';
       sizeBytes?: number;
@@ -53,6 +65,20 @@ export function parsePublishAgentError(err: unknown, fallbackMessage: string): P
       .filter((v) => v.families.length > 0);
     if (violations.length > 0) {
       return { kind: 'allAccess', violations };
+    }
+  }
+
+  if (code === 'CUSTOM_API_NOT_PUBLISHABLE' && Array.isArray(details?.customApis)) {
+    const customApis: CustomApiRefDetail[] = (details!.customApis as unknown[])
+      .filter((a): a is Record<string, unknown> => !!a && typeof a === 'object')
+      .map((a) => ({
+        apiSlug: String(a.apiSlug ?? ''),
+        apiName: String(a.apiName ?? a.apiSlug ?? ''),
+        toolIdentifiers: Array.isArray(a.toolIdentifiers) ? a.toolIdentifiers.map(String) : [],
+      }))
+      .filter((a) => !!a.apiName);
+    if (customApis.length > 0) {
+      return { kind: 'customApi', customApis };
     }
   }
 

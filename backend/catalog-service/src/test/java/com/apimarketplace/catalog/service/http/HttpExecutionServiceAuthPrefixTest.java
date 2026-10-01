@@ -78,7 +78,7 @@ class HttpExecutionServiceAuthPrefixTest {
                 .thenReturn(Optional.of(TOKEN));
         service = new HttpExecutionService(
                 apiToolParameterRepository, userCredentialService, encryptionService,
-                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine(2, 10_000L));
+                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine());
         CredentialModeContext.clear();
     }
 

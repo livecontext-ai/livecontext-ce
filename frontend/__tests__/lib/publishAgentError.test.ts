@@ -89,6 +89,53 @@ describe('parsePublishAgentError', () => {
     expect(parsed.breakdown[0].items).toBe(82000);
   });
 
+  it('parses a custom-API refusal into the typed APIs the modal lists', () => {
+    const err = apiError('CUSTOM_API_NOT_PUBLISHABLE', {
+      message: 'Custom APIs cannot be shared.',
+      customApis: [
+        { apiSlug: 'my-private-api', apiName: 'My Private API', toolIdentifiers: ['my-private-api/do-thing'] },
+        { apiSlug: 'other-api', apiName: 'Other API' },
+      ],
+    });
+
+    const parsed = parsePublishAgentError(err, 'fallback');
+
+    expect(parsed.kind).toBe('customApi');
+    if (parsed.kind !== 'customApi') return;
+    expect(parsed.customApis).toHaveLength(2);
+    expect(parsed.customApis[0]).toEqual({
+      apiSlug: 'my-private-api',
+      apiName: 'My Private API',
+      toolIdentifiers: ['my-private-api/do-thing'],
+    });
+    // A missing tool list is normalised to an empty array, never undefined:
+    // the modal maps over it unconditionally.
+    expect(parsed.customApis[1].toolIdentifiers).toEqual([]);
+  });
+
+  it('falls back to the slug when a custom-API entry has no name', () => {
+    const err = apiError('CUSTOM_API_NOT_PUBLISHABLE', {
+      message: 'refused',
+      customApis: [{ apiSlug: 'my-private-api' }],
+    });
+
+    const parsed = parsePublishAgentError(err, 'fallback');
+
+    expect(parsed.kind).toBe('customApi');
+    if (parsed.kind !== 'customApi') return;
+    expect(parsed.customApis[0].apiName).toBe('my-private-api');
+  });
+
+  it('degrades a custom-API refusal with no usable detail to generic (never an empty list screen)', () => {
+    expect(parsePublishAgentError(
+      apiError('CUSTOM_API_NOT_PUBLISHABLE', { message: 'refused' }), 'fallback',
+    )).toEqual({ kind: 'generic', message: 'refused' });
+
+    expect(parsePublishAgentError(
+      apiError('CUSTOM_API_NOT_PUBLISHABLE', { message: 'refused', customApis: [] }), 'fallback',
+    )).toEqual({ kind: 'generic', message: 'refused' });
+  });
+
   it('returns generic with the error message for unknown codes, and the fallback when no message', () => {
     expect(parsePublishAgentError({ message: 'plain failure' }, 'fallback')).toEqual({
       kind: 'generic',

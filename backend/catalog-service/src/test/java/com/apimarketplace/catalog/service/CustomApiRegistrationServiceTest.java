@@ -1140,6 +1140,30 @@ class CustomApiRegistrationServiceTest {
     }
 
     @Test
+    void registerCustomApiAcceptsIntegerOutputTypeAndStoresItAsNumber_bugB10() {
+        // Prod: register_api failed "Field 'id' on endpoint 'list_tools' has invalid type 'integer'"
+        // (11 calls). 'integer' is how JSON Schema and every param declaration spell a whole number,
+        // but the output layer has one numeric type and its readers compare the literal 'number'.
+        ObjectNode json = buildValidApiJson();
+        var outputSchema = (com.fasterxml.jackson.databind.node.ArrayNode)
+                json.path("endpoints").get(0).path("outputSchema");
+        outputSchema.removeAll();
+        outputSchema.addObject().put("key", "id").put("type", "integer").put("description", "id");
+        var wrapper = outputSchema.addObject().put("key", "items").put("type", "array").put("description", "items");
+        wrapper.putArray("children").addObject().put("key", "count").put("type", "Integer").put("description", "c");
+
+        ArgumentCaptor<ApiConfigurationRequest> captor = ArgumentCaptor.forClass(ApiConfigurationRequest.class);
+        when(apiService.processApiConfiguration(captor.capture(), eq("tenant-1"))).thenReturn(mockApiResponse());
+
+        assertDoesNotThrow(() -> service.registerCustomApi(json, "tenant-1"));
+
+        JsonNode stored = captor.getValue().mcpTools().get(0).outputSchema();
+        assertEquals("number", stored.get(0).path("type").asText(), "top-level integer is stored as number");
+        assertEquals("number", stored.get(1).path("children").get(0).path("type").asText(),
+                "nested integer is stored as number");
+    }
+
+    @Test
     void registerCustomApiRejectsInvalidNestedOutputSchemaType() {
         ObjectNode json = buildValidApiJson();
         var ep = (ObjectNode) json.path("endpoints").get(0);
@@ -2336,6 +2360,61 @@ class CustomApiRegistrationServiceTest {
 
         assertEquals(1, emitted.size(), "the api-level literal must survive");
         assertEquals("2023-06-01", emitted.get(0).defaultValue());
+    }
+
+    /**
+     * REGRESSION MCP 406 ("Client must accept both application/json and text/event-stream"),
+     * followed along the whole chain: the value an MCP server needs is registered, stored as a
+     * header parameter default, and reaches the wire in place of the preset application/json.
+     * The literal rule used to drop it at the first step, so nothing downstream ever saw it.
+     */
+    @Test
+    void mcpAcceptListIsRegisteredStoredAndSent() {
+        String mcpAccept = "application/json, text/event-stream";
+        ObjectNode json = buildValidApiJson();
+        json.putObject("requiredHeaders").put("Accept", mcpAccept);
+
+        // 1. register: the literal rule keeps it
+        when(apiService.processApiConfiguration(any(), eq("tenant-1"))).thenReturn(mockApiResponse());
+        service.registerCustomApi(json, "tenant-1");
+        ArgumentCaptor<ApiConfigurationRequest> request = ArgumentCaptor.forClass(ApiConfigurationRequest.class);
+        verify(apiService).processApiConfiguration(request.capture(), eq("tenant-1"));
+        assertEquals(1, request.getValue().mcpTools().get(0).headers().size(),
+                "the list form must survive registration");
+
+        // 2. store: the converter hands the header to the submission path, which writes it as
+        //    the header parameter's default_value
+        JsonNode headersNode = new ApiConfigurationConverter(objectMapper)
+                .toJsonNode(request.getValue()).findValue("headers");
+        assertNotNull(headersNode, "the converted configuration carries the tool's headers");
+        JsonNode toolData = objectMapper.createObjectNode().set("headers", headersNode);
+        org.springframework.jdbc.core.JdbcTemplate jdbc = mock(org.springframework.jdbc.core.JdbcTemplate.class);
+        ApiToolEntity toolEntity = new ApiToolEntity();
+        toolEntity.setId(UUID.randomUUID());
+        new com.apimarketplace.catalog.service.submission.ToolParameterService(jdbc)
+                .saveParameters(toolEntity, toolData, "get_items");
+        Object[] cols = mockingDetails(jdbc).getInvocations().stream()
+                .filter(inv -> String.valueOf((Object) inv.getArgument(0)).startsWith("INSERT INTO api_tool_parameters"))
+                .map(inv -> java.util.Arrays.copyOfRange(inv.getRawArguments(), 1, inv.getRawArguments().length))
+                .map(raw -> raw.length == 1 && raw[0] instanceof Object[] arr ? arr : raw)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no header row was written"));
+        assertEquals("header", cols[2]);
+        assertEquals("Accept", cols[3]);
+        assertEquals(mcpAccept, cols[8], "default_value is what the runtime sends");
+
+        // 3. send: the stored default replaces the preset Accept on the wire
+        ApiToolParameterEntity stored = new ApiToolParameterEntity();
+        stored.setName("Accept");
+        stored.setParameterType("header");
+        stored.setDefaultValue((String) cols[8]);
+        org.springframework.http.HttpHeaders sent = new org.springframework.http.HttpHeaders();
+        sent.set("Accept", "application/json");
+        ApiToolParameterRepository repo = mock(ApiToolParameterRepository.class);
+        when(repo.findByApiToolId(toolEntity.getId())).thenReturn(List.of(stored));
+        new com.apimarketplace.catalog.service.http.HttpExecutionService(repo, null, null, objectMapper, null,
+                null, null).applyHeaderParameters(sent, toolEntity, objectMapper.createArrayNode());
+        assertEquals(List.of(mcpAccept), sent.get("Accept"));
     }
 
     @Test

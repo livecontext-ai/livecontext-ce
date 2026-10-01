@@ -13,6 +13,8 @@ export interface AutoOpenVisualization {
   planVersion?: number;
   /** The conversation whose agent produced it, so a surface can tell its own chat's actions apart. */
   conversationId?: string;
+  /** Set by a click on a tool row (toAutoOpenDetail), never by the stream: open in front. */
+  userInitiated?: boolean;
   liveCoords?: {
     sessionId: string;
     cdpToken: string;
@@ -23,16 +25,17 @@ export interface AutoOpenVisualization {
   };
 }
 
-// Visualization types that auto-open a side-panel tab. 'interface' and
-// 'web_search' are intentionally excluded:
-//   - interface visualize → InterfacePreviewBlock renders the card inline; the
-//     side panel only opens when the user clicks that card.
-//   - web_search → results are shown as a favicon stack on the tool-call row
-//     (GroupedToolCard); no side panel at all.
+// Visualization types that auto-open a side-panel tab. 'web_search' is intentionally
+// excluded: its results are shown as a favicon stack on the tool-call row
+// (GroupedToolCard); no side panel at all.
+// 'interface' travels, but only a chat living IN the side panel opens it (as a background tab,
+// beside the conversation): a full-page chat renders the card inline (InterfacePreviewBlock)
+// and opens the panel only when the user clicks it (AppHeader handleAutoOpen).
 export const AUTO_OPEN_TYPES: readonly string[] = [
-  'workflow', 'table', 'datasource', 'application', 'agent', 'workflow_run', 'agent_browse', 'image_generation',
+  'workflow', 'table', 'datasource', 'interface', 'application', 'agent', 'workflow_run', 'agent_browse', 'image_generation',
   // Emitted only by action='present' (workflow, table, interface, agent, files): the agent choosing what the user
-  // looks at. Handled on EVERY page (AppHeader), unlike the chat-only types above.
+  // looks at. Handled on EVERY page (AppHeader). The types above open on chat pages, and on
+  // every page when a side-panel chat produced them (in the background, beside that chat).
   'present_application', 'present_run', 'present_table', 'present_workflow', 'present_interface', 'present_agent', 'present_file',
 ];
 

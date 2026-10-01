@@ -278,4 +278,34 @@ class InternalAgentControllerCloneFromSnapshotTest {
         // 0 must survive verbatim: a clone of a watchdog-disabled agent stays disabled.
         assertThat(agentCaptor.getValue().getInactivityTimeout()).isEqualTo(0);
     }
+
+    @Test
+    @DisplayName("regression: installing an app whose agent name is already used in the workspace succeeds under the free name")
+    void cloneFromSnapshotTakesTheFreeNameWhenTheNameIsTaken() {
+        // Pre-fix the publisher's name was inserted as-is: an existing active "Acquired Agent"
+        // in the installer's workspace made the insert hit the V269 unique index and the whole
+        // install failed. The name is not typed by the installer, so it is allocated instead.
+        UUID clonedAgentId = UUID.randomUUID();
+        when(agentService.allocateAgentName(ORG_ID, "Acquired Agent"))
+            .thenReturn("Acquired Agent (2)");
+        when(agentRepository.save(any(AgentEntity.class))).thenAnswer(invocation -> {
+            AgentEntity entity = invocation.getArgument(0);
+            entity.setId(clonedAgentId);
+            return entity;
+        });
+
+        Map<String, Object> cloneRequest = new java.util.HashMap<>();
+        cloneRequest.put("tenantId", TENANT_ID);
+        cloneRequest.put("organizationId", ORG_ID);
+        cloneRequest.put("publicationId", UUID.randomUUID().toString());
+        cloneRequest.put("name", "Acquired Agent");
+        cloneRequest.put("toolsConfig", Map.of());
+
+        ResponseEntity<Map<String, Object>> response = controller.cloneFromSnapshot(cloneRequest, request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        ArgumentCaptor<AgentEntity> agentCaptor = ArgumentCaptor.forClass(AgentEntity.class);
+        verify(agentRepository).save(agentCaptor.capture());
+        assertThat(agentCaptor.getValue().getName()).isEqualTo("Acquired Agent (2)");
+    }
 }

@@ -11,8 +11,8 @@ import { normalizeFieldOptions, normalizeFormField } from '../TriggerNodeCreator
  *
  * The importer now normalizes both the string-shorthand and the canonical
  * object form to {id, label, value}. Backend coercion in
- * TriggerCreator.coerceFieldOptions runs first on the
- * authoring path, but the importer is the single point of truth when a
+ * FormFieldCanonicalizer runs first on every authoring path (add_node, modify,
+ * set_plan), but the importer is the single point of truth when a
  * persisted plan is reloaded - defensive against legacy plans created
  * before the V161 backend fix landed.
  */

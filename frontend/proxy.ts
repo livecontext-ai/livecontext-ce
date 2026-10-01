@@ -112,6 +112,7 @@ export const PUBLIC_INDEX_SEGMENTS = [
   'local-mcp',
   'marketplace',
   'models',
+  'partners',
   'redeem',
   'status',
   'videos',

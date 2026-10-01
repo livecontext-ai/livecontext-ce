@@ -597,8 +597,8 @@ public class UnifiedExecutionEngine {
                 () -> executeNodeWithSplitAwareness(node, contextWithStart, runId, execution, eventService, item, itemIndex),
                 (annotatedFailure, attempt, maxAttempts) -> {
                     // Every NON-final failed attempt is surfaced through the ATTEMPT-AWARE
-                    // pipeline (emitNodeAttemptFailed): WS step event (+ step_data row in
-                    // non-loop contexts), annotated with policy_attempt / policy_max_attempts
+                    // pipeline (emitNodeAttemptFailed): a WS step event only (no step_data row),
+                    // annotated with policy_attempt / policy_max_attempts
                     // so the frontend can show "attempt k/N" - but WITHOUT any StateSnapshot /
                     // edge / workflow_epochs mutation and WITHOUT billing. Only the TERMINAL
                     // result (success or exhausted failure) flows through emitNodeComplete and
@@ -1377,12 +1377,45 @@ public class UnifiedExecutionEngine {
             // Each item result is persisted individually with its own item_index
             // In step-by-step mode, successors are handled via calculateReadyNodes, so pass null
             logger.info("[V2StepByStep] Executing node (split-aware): nodeId={}", nodeId);
+            // Per-node execution policy (retry / backoff), the same wrapping as the AUTOMATIC
+            // path's executeNodeCore. This is the path production runs take (execute, trigger
+            // fires, cron); until 2026-09-29 it applied only timeoutMs, so a node's retryCount
+            // was accepted, displayed and documented, and never ran (7 days of prod: 32k nodes
+            // executed here, 0 attempts retried). Non-final attempts go through the same
+            // attempt-aware pipeline as there: an event only (no row), no snapshot counts, no billing.
+            // A split fan-out summary is never retried (split_already_persisted guard): its items
+            // apply the policy themselves inside SplitAwareNodeExecutor.
             // Default disposition keeps the LEGACY call shape (zero change for pre-feature
             // callers and test doubles); only a per-item continuation walk threads options.
-            result = perItemContinuationWalk
-                ? splitAwareExecutor.execute(node, contextWithStart, runId, nodeMap, execution, item, itemIndex, null,
-                    options)
-                : splitAwareExecutor.execute(node, contextWithStart, runId, nodeMap, execution, item, itemIndex, null);
+            // continueOnFailure: the runner stamps the flag on the node's own final failure. It then
+            // suppresses the SKIPPED cascade below (shouldCascadeSkipFromResult), marks the outgoing
+            // edges COMPLETED (EdgeStatusEmitter), and ReadyNodeCalculator walks past this FAILED node
+            // to its successors, from the in-memory result here and from the persisted output after
+            // a context rebuild. A credit or plan gate refusal never goes through the runner, so it
+            // carries no flag and still stops everything below, as on the AUTOMATIC path.
+            com.apimarketplace.orchestrator.domain.workflow.NodePolicy policy =
+                nodePolicyRunner.resolve(contextWithStart.plan(), nodeId);
+            final ExecutionContext attemptContext = contextWithStart;
+            try {
+                result = nodePolicyRunner.run(policy, nodeId,
+                    () -> perItemContinuationWalk
+                        ? splitAwareExecutor.execute(node, attemptContext, runId, nodeMap, execution, item, itemIndex,
+                            null, options)
+                        : splitAwareExecutor.execute(node, attemptContext, runId, nodeMap, execution, item, itemIndex,
+                            null),
+                    (annotatedFailure, attempt, maxAttempts) -> {
+                        if (eventService != null) {
+                            eventService.emitNodeAttemptFailed(execution, node, annotatedFailure, item, itemIndex,
+                                attemptContext);
+                        }
+                    });
+            } catch (RuntimeException | Error e) {
+                throw e; // the node body only throws unchecked: legacy propagation preserved
+            } catch (Exception e) {
+                // Defensive, same as SplitAwareNodeExecutor.executeNodeBody: the runner's checked
+                // signature, never reached by a node body. Callers keep seeing unchecked only.
+                throw new RuntimeException(e.getMessage(), e);
+            }
         }
 
         // Override duration with engine-measured wall-clock time for non-yielding nodes.
@@ -1464,6 +1497,13 @@ public class UnifiedExecutionEngine {
         // Uses executeBackEdgeIteration which returns ready nodes instead of auto-traversing.
         // Only when no regular successors (decision nodes with iterate on one port must follow selected branch).
         List<ExecutionNode> stepNextNodes = node.getNextNodes(result);
+        if (stepNextNodes.isEmpty() && result.isFailure() && node instanceof BaseNode continuedNode
+                && ExecutionMetadataKeys.isContinueOnFailure(result.metadata())) {
+            // continueOnFailure: getNextNodes filters successors on a failure; the continuation
+            // restores them (same as the AUTOMATIC path's step 6b), so a forward successor is
+            // followed rather than the node being taken for the tail of a loop body.
+            stepNextNodes = continuedNode.getSuccessors();
+        }
         if (stepNextNodes.isEmpty() && backEdgeHandler.hasBackEdge(node, updatedContext.plan())) {
             Map<String, ExecutionNode> backEdgeNodeMap = buildNodeMapFromAllRoots(tree);
             StepByStepExecutionResult backEdgeResult = backEdgeHandler.executeBackEdgeIteration(

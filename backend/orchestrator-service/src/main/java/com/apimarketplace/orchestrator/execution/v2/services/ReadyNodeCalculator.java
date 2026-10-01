@@ -44,6 +44,49 @@ public class ReadyNodeCalculator {
     }
 
     /**
+     * Reads a FAILED split node's continuation from its rows (see {@link #continuesPastFailure}).
+     * Optional: without it (focused tests) only the stored output is read.
+     */
+    private com.apimarketplace.orchestrator.persistence.WorkflowStepDataRepository stepDataRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setStepDataRepository(
+            com.apimarketplace.orchestrator.persistence.WorkflowStepDataRepository stepDataRepository) {
+        this.stepDataRepository = stepDataRepository;
+    }
+
+    /**
+     * Whether a FAILED node lets traversal go on ({@code continueOnFailure}). Read from the node's
+     * stored output first. A rebuilt context holds ONE item's output for a split node, the first
+     * one, and when that item was routed elsewhere (a switch inside the split) its output is a
+     * SKIPPED envelope that carries no flag: the latest FAILED row of each item in this epoch then
+     * says whether any item continued (an earlier loop turn or an earlier run of the node never
+     * counts). Before that read, such a node's successors were neither run nor skipped and ended
+     * with no row at all.
+     */
+    private boolean continuesPastFailure(String nodeId, ExecutionContext context) {
+        if (ExecutionMetadataKeys.isContinueOnFailureStored(context.getStepOutput(nodeId).orElse(null))) {
+            return true;
+        }
+        if (stepDataRepository == null || context.runId() == null) {
+            return false;
+        }
+        try {
+            String key = com.apimarketplace.orchestrator.domain.workflow.DiagnosticFieldLimits.capWithCollisionHash(nodeId,
+                com.apimarketplace.orchestrator.domain.workflow.DiagnosticFieldLimits.NORMALIZED_KEY_MAX);
+            for (Object[] row : stepDataRepository.findFailedItemMetadataByEpoch(context.runId(), key, context.epoch())) {
+                if (row != null && row.length == 2 && ExecutionMetadataKeys.isContinueOnFailureStored(row[1])) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("[ReadyNodeCalculator] Could not read the continuation of FAILED node {} from its rows: {}",
+                nodeId, e.getMessage());
+        }
+        return false;
+    }
+
+    /**
      * Get the initial ready nodes for step-by-step mode.
      * Called when starting a workflow in step-by-step mode.
      *
@@ -296,6 +339,22 @@ public class ReadyNodeCalculator {
         // Exception: merge nodes downstream still need to be evaluated because they wait for
         // ALL predecessors to resolve (COMPLETED, FAILED, or SKIPPED all count as "resolved").
         if (context.isFailed(nodeId)) {
+            // continueOnFailure: the node failed for good but its policy asks traversal to go on.
+            // Its successors run as after any resolved predecessor (canExecute already counts a
+            // FAILED predecessor as done). The flag comes from the result itself (in memory right
+            // after execution, the persisted output after a context rebuild), never from the plan:
+            // a credit or plan gate refusal carries no flag and still stops everything below.
+            if (continuesPastFailure(nodeId, context)) {
+                List<ExecutionNode> continued = (node instanceof BaseNode baseNode)
+                    ? baseNode.getSuccessors()
+                    : node.getAllChildNodes();
+                logger.info("[ReadyNodeCalculator] Node {} FAILED with continueOnFailure - traversing {} successors: {}",
+                    nodeId, continued.size(), continued.stream().map(ExecutionNode::getNodeId).toList());
+                for (ExecutionNode child : continued) {
+                    collectReadyNodes(child, context, tree, readyNodes, visited);
+                }
+                return;
+            }
             logger.info("[ReadyNodeCalculator] Node {} FAILED - checking successors for merge nodes", nodeId);
             // Walk immediate successors (graph edges) to discover merge nodes that may now be ready.
             // Use BaseNode.getSuccessors() because getAllChildNodes() only works for branching nodes

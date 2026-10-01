@@ -594,15 +594,20 @@ curl http://localhost:8080/api/agent-tools | python -m json.tool | head -5
 
 | Container | Memory Limit | Measured (2026-09-28) |
 |-----------|-------------|---------------|
-| PostgreSQL | 256 MB | ~230 MB under load |
+| PostgreSQL | 512 MB | ~230 MB under load, more at peak (OOM-killed at 256 MB) |
 | Redis | 384 MB | a few MB |
 | MinIO | 256 MB | ~60 MB |
 | Bridge | 512 MB | ~30-60 MB |
 | Backend | 2048 MB | ~1.55 GB after startup, ~1.6 GB under load |
 | Frontend | none in the public compose (dev compose: 256 MB) | ~80-140 MB |
-| **Total** | **~3.5 GB + the frontend** | **~2-2.1 GB** |
+| **Total** | **~3.7 GB + the frontend** | **~2-2.1 GB** |
 
 The backend runs `-Xmx1024m` with ZGC: its heap grows to that full GiB, and Metaspace, code
 cache, direct buffers and threads add ~500 MB on top. Below a 2 GB limit the kernel kills it
 during startup and Docker restarts it in a loop.
+
+PostgreSQL runs with its default settings (128 MB `shared_buffers`), and the backend opens up to
+20 connections (`DB_POOL_SIZE`), each with its own working memory. At a 256 MB limit the kernel
+OOM-killed it 3 times during the e2e suite (2026-09-29), and the backend then saw "the database
+system is in recovery mode". 512 MB leaves room for that peak.
 

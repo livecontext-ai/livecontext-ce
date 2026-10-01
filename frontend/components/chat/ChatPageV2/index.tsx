@@ -34,6 +34,7 @@ import { usePrimeUserChatDefaults } from '@/hooks/useChatConfig';
 import { useStreaming } from '@/contexts/StreamingContext';
 import { useVisibleModels, AIModel, modelMatches } from '@/hooks/useModels';
 import { useAnchorScrollToBottom } from '@/lib/hooks/useAnchorScrollToBottom';
+import { useConversationResync } from '@/hooks/chat/useConversationResync';
 
 // Components
 import { ChatPageLayout } from '@/app/shared/components/ChatPageLayout';
@@ -67,7 +68,7 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
   const { toasts, addToast, removeToast } = useToast();
 
   // AI Models from backend (role-filtered: non-admins don't see CLI-bridge models)
-  const { models, defaultModel, isLoading: modelsLoading, error: modelsError } = useVisibleModels();
+  const { models, unlistedModels, defaultModel, isLoading: modelsLoading, error: modelsError } = useVisibleModels();
   // Only surface the no-provider empty state once the catalog has RESOLVED
   // empty - never while loading (flash) or on a fetch error (a transient
   // failure is not an onboarding state). Same contract as ModelPicker's gate.
@@ -89,6 +90,13 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
       iconSlug: PROVIDER_ICON_MAP[model.provider.toLowerCase()] || model.provider.toLowerCase(),
     }));
   }, [models]);
+  // The models the admin UNLISTED (V554): still available, shown in the menu's collapsed group.
+  const hiddenModels = useMemo(() => {
+    return (unlistedModels ?? []).map((model: AIModel) => ({
+      ...model,
+      iconSlug: PROVIDER_ICON_MAP[model.provider.toLowerCase()] || model.provider.toLowerCase(),
+    }));
+  }, [unlistedModels]);
 
   // Streaming context (single source of truth for streaming)
   const streaming = useStreaming();
@@ -279,6 +287,22 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
   const streamingRef = useRef(streaming);
   streamingRef.current = streaming;
 
+  // The page's silent re-read of the conversation on screen. Silent: the reader is watching this
+  // very conversation, so it must not repaint, and on failure nothing on screen changes (the live
+  // content stays and the next explicit load reconciles). (This also refreshes the conversation
+  // object, though loadConversationById serves it from the already-loaded sidebar list when it is
+  // there, so pendingAction is only truly refetched for a conversation the list does not know.)
+  const reconcileConversation = useCallback((convId: string) => {
+    if (!isAuthenticated || !isReady) return;
+    loadConversationAndMessages(convId, { silent: true }).catch((err) => {
+      console.warn('[ChatPageV2] Silent reconciliation failed:', err);
+    });
+  }, [loadConversationAndMessages, isAuthenticated, isReady]);
+
+  // Re-read on a WebSocket reconnect (even with no stream live), and on the reconnected stream's
+  // completion or error below. The send path's own callbacks live in useMessageHandlersV2.
+  const resync = useConversationResync(conversationIdFromParams || state.currentConversationId, reconcileConversation);
+
   useEffect(() => {
     if (!isExistingConversation || !conversationIdFromParams) return;
     // Wait until server active streams have been fetched before checking
@@ -303,23 +327,15 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
 
     reconnectionAttemptedRef.current = conversationIdFromParams;
 
+    // Reconcile the thread when the reconnected stream finishes, and when it reports an error
+    // (the reply may be saved regardless).
     currentStreaming.checkAndReconnect(conversationIdFromParams, {
-      onStreamComplete: (convId) => {
-        // Reconcile the thread now that the reconnected stream has finished. Silent: the reader
-        // is watching this very conversation, so it must not repaint. (This also refreshes the
-        // conversation object, though loadConversationById serves it from the already-loaded
-        // sidebar list when it is there, so pendingAction is only truly refetched for a
-        // conversation the list does not know about.)
-        loadConversationAndMessages(convId, { silent: true }).catch((err) => {
-          // Silent reconciliation: nothing on screen changes, including on failure. The live
-          // stream content stays visible and the next explicit load reconciles.
-          console.warn('[ChatPageV2] Post-stream reconciliation failed:', err);
-        });
-      },
+      onStreamComplete: resync.onStreamComplete,
+      onError: resync.onError,
     }).catch(err => {
       console.warn('[ChatPageV2] Reconnection check failed:', err);
     });
-  }, [isExistingConversation, conversationIdFromParams, streaming.serverStreamsLoaded, loadConversationAndMessages]);
+  }, [isExistingConversation, conversationIdFromParams, streaming.serverStreamsLoaded, resync]);
 
   // Load messages when navigating to conversation
   const loadedConversationRef = useRef<string | null>(null);
@@ -605,8 +621,9 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
   const agentAvatarUrl = state.agentAvatarUrl;
 
   const selectedModelData = useMemo(
-    () => availableModels.find((m) => modelMatches(m, selectedModel)),
-    [availableModels, selectedModel],
+    () => availableModels.find((m) => modelMatches(m, selectedModel))
+      ?? hiddenModels.find((m) => modelMatches(m, selectedModel)),
+    [availableModels, hiddenModels, selectedModel],
   );
 
   // Open the agent config in the right side panel, exactly like the header
@@ -638,6 +655,7 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
           selectedModel={selectedModel}
           selectedModelData={selectedModelData}
           availableModels={availableModels}
+          unlistedModels={hiddenModels}
           setSelectedModel={setSelectedModel}
           changeModelTitle={t('actions.changeModel')}
           noModelsLabel={modelsResolvedEmpty ? t('aiProviders.noProviderCta.noModels') : undefined}
@@ -656,7 +674,7 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
         />
       }
     />
-  ), [agentAvatarUrl, resolvedAgentId, handleOpenAgentPanel, agentName, showModelSelector, setShowModelSelector, selectedModel, selectedModelData, availableModels, setSelectedModel, t, state.reasoningEffort, state.setReasoningEffort, modelsResolvedEmpty]);
+  ), [agentAvatarUrl, resolvedAgentId, handleOpenAgentPanel, agentName, showModelSelector, setShowModelSelector, selectedModel, selectedModelData, availableModels, hiddenModels, setSelectedModel, t, state.reasoningEffort, state.setReasoningEffort, modelsResolvedEmpty]);
 
   const orbiConversationId = conversationIdFromParams || currentConversationId || null;
   // The conversation this page just started from Orbi's home (no agent). It is only loaded once

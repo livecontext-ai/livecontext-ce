@@ -61,7 +61,7 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/lib/api/error-utils', () => ({ is402Error: () => false, is413StorageError: () => false }));
 vi.mock('@/components/billing/InsufficientCreditsModal', () => ({ showInsufficientCreditsModal: vi.fn() }));
 vi.mock('@/components/billing/InsufficientStorageModal', () => ({ showInsufficientStorageModal: vi.fn() }));
-vi.mock('@/lib/websocket', () => ({ wsClient: { sendAction: vi.fn().mockResolvedValue(undefined) } }));
+vi.mock('@/lib/websocket', () => ({ wsClient: { onReconnected: () => () => {}, sendAction: vi.fn().mockResolvedValue(undefined) } }));
 vi.mock('@/app/workflows/builder/utils/labelNormalizer', () => ({
   normalizeLabel: (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''),
 }));

@@ -30,7 +30,11 @@ public final class ExamplesHelpProvider {
         result.put("set_plan", Map.of(
             "purpose", "Import a complete workflow structure (replaces current session)",
             "usage", "workflow(action='set_plan', plan={...})",
-            "validation", "Validates labels are unique, edges reference existing nodes",
+            "validation", "Validates labels are unique, edges reference existing nodes. Form trigger fields get "
+                + "the same shape add_node gives them; a field add_node would refuse is imported anyway and "
+                + "named in the response's warnings, and again by workflow(action='validate') until you fix "
+                + "it with modify; a warning never blocks the save. workflow(action='finish') refuses to save "
+                + "only while validation ERRORS remain: call validate first to see errors and warnings.",
             "use_case", "Bulk creation, restore from backup, duplicate workflow"
         ));
 

@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.controllers.notification;
 
+import com.apimarketplace.testsupport.SourceTrees;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -15,7 +16,6 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -128,12 +128,13 @@ class NotificationCategoryCoverageTest {
         }
     }
 
+    /**
+     * Main sources only, never a module's target/: the orchestrator shard runs another Maven
+     * lane at the same time, whose surefire deletes files there while a walk is inside.
+     */
     private static List<Path> mainSources() {
-        try (Stream<Path> tree = Files.walk(BACKEND)) {
-            return tree
-                    .filter(path -> path.toString().endsWith(".java"))
-                    .filter(path -> path.toString().replace('\\', '/').contains("/src/main/java/"))
-                    .toList();
+        try {
+            return SourceTrees.mainJavaSources(BACKEND);
         } catch (IOException ex) {
             throw new UncheckedIOException(ex);
         }

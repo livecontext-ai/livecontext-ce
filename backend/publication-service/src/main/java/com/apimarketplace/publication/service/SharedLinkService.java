@@ -17,9 +17,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -31,6 +33,7 @@ public class SharedLinkService {
     private static final Logger logger = LoggerFactory.getLogger(SharedLinkService.class);
 
     private final SharedLinkRepository repository;
+    private final SharedLinkResourceGuard resourceGuard;
 
     /**
      * Read-only plaintext fallback (reads) and heal (writes) for a link row still stored in clear (pre-2026-09-17).
@@ -40,36 +43,116 @@ public class SharedLinkService {
     @Autowired(required = false)
     private PublicationTokenAtRestBackfill tokenBackfill;
 
-    public SharedLinkService(SharedLinkRepository repository) {
+    public SharedLinkService(SharedLinkRepository repository, SharedLinkResourceGuard resourceGuard) {
         this.repository = repository;
+        this.resourceGuard = resourceGuard;
     }
 
     /**
-     * Register a shared link with quota enforcement (atomic, single transaction).
-     * Idempotent: returns existing active link if resourceToken already registered
-     * for the same organization. Handles race condition via catch on unique
-     * constraint violation.
+     * Register a shared link FOR A USER ({@code POST /api/publications/shared-links}): the link
+     * may only name a resource the caller holds, see {@link SharedLinkResourceGuard} for the rule
+     * per type. Checked first, before the idempotency lookup, so a caller cannot learn whether
+     * someone else's resource is already shared ("already in use") either.
+     *
+     * <p>Runs OUTSIDE a transaction: the ownership check asks the owning service over HTTP (in
+     * CE, a loopback call into this same JVM and connection pool), and a transaction opened here
+     * would hold a database connection for the length of that call. The registry work below then
+     * runs one repository call at a time, as it did inside one transaction under READ COMMITTED
+     * (where that transaction never made the count-then-insert atomic either).
+     *
+     * @throws SharedLinkResourceNotFoundException when the caller does not hold the resource, or
+     *         the resourceId is not the one that resource carries (answered 404, not 403, so a
+     *         probe cannot tell a foreign resource from a missing one)
+     * @throws IllegalArgumentException            on an unknown resource type
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public SharedLinkEntity register(String tenantId, String organizationId, String userPlan,
+                                     String resourceType, String resourceToken,
+                                     UUID resourceId, String title, String description) {
+        ResourceType type = ResourceType.valueOf(resourceType.toUpperCase(Locale.ROOT));
+        if (!resourceGuard.mayShare(type, tenantId, organizationId, resourceToken, resourceId)) {
+            throw new SharedLinkResourceNotFoundException();
+        }
+        if (type == ResourceType.APPLICATION) {
+            // The guard accepted a publication id however it was spelled; store its one canonical
+            // form, so the "one active link per resource token" slot and every exact comparison
+            // downstream (X-Share-Resource-Token) see the same string for the same publication.
+            resourceToken = UUID.fromString(resourceToken.trim()).toString();
+        }
+        for (SharedLinkEntity link : findAllActiveByResourceToken(resourceToken)) {
+            retireIfSquatting(link, tenantId, organizationId);
+        }
+        if (resourceId != null) {
+            repository.findByResourceIdAndIsActiveTrue(resourceId)
+                    .ifPresent(link -> retireIfSquatting(link, tenantId, organizationId));
+        }
+        return registerForOwningService(tenantId, organizationId, userPlan, resourceType, resourceToken,
+                resourceId, title, description);
+    }
+
+    /**
+     * The caller holds this resource (checked just before). An active link filed in ANOTHER
+     * workspace on the same resource token or resource id, whose own creator does NOT hold what
+     * it names, could only be created before creation was checked: it squats the one active slot
+     * each token and each resource id may have (the "already in use" check, and
+     * {@code uq_shared_links_active_resource_id}), so the rightful holder could never share. It is
+     * retired here, at the moment it gets in the way. A link whose creator does hold the resource
+     * (the same user's link filed from another workspace) is left alone, as before.
+     *
+     * <p>Only a verified holder can trigger this, and only for a link that fails the same rule its
+     * own creator would face today, so it can never deactivate a legitimate link.
+     */
+    private void retireIfSquatting(SharedLinkEntity link, String tenantId, String organizationId) {
+        if (ScopeGuard.isInStrictScope(tenantId, organizationId, link.getTenantId(), link.getOrganizationId())) {
+            return; // the caller's own workspace: idempotency below returns it
+        }
+        if (resourceGuard.mayShare(link.getResourceType(), link.getTenantId(), link.getOrganizationId(),
+                link.getResourceToken(), link.getResourceId())) {
+            return;
+        }
+        link.setActive(false);
+        repository.save(link);
+        logger.warn("Retired shared link id={} type={}: filed in another workspace on a resource its creator "
+                + "does not hold, it blocked the holder's share", link.getId(), link.getResourceType());
+    }
+
+    /**
+     * Register a shared link on behalf of the service that OWNS the resource, with quota
+     * enforcement (one transaction when called through the proxy, as the internal controller
+     * does; one transaction per repository call when {@link #register} calls it). Idempotent:
+     * returns existing active link if resourceToken already registered for the same
+     * organization. Handles race condition via catch on unique constraint violation.
+     *
+     * <p>NO ownership check, and deliberately so: only {@code /api/internal/shared-links/register}
+     * calls this, which the gateway never routes and CE serves on loopback only, and its callers
+     * are the owning services registering what they just created or opened (trigger-service for
+     * a new or rotated chat / form endpoint, agent-service for the conversation it just shared).
+     * Some register before their own transaction commits, where a look-up back into them would
+     * not find the row yet. A user-facing path MUST go through {@link #register} instead.
      *
      * @param organizationId nullable for backward-compat callers - when null the
      *                       idempotency + quota checks fall back to tenantId.
      *                       New code MUST pass a non-null orgId.
      */
-    public SharedLinkEntity register(String tenantId, String organizationId, String userPlan,
-                                     String resourceType, String resourceToken,
-                                     UUID resourceId, String title, String description) {
+    public SharedLinkEntity registerForOwningService(String tenantId, String organizationId, String userPlan,
+                                                     String resourceType, String resourceToken,
+                                                     UUID resourceId, String title, String description) {
         // Idempotency check - scoped to org (USER_SCOPED) when present, falling
         // back to tenant for legacy callers. Token IS globally unique on insert
         // path; this guards the cross-scope "token already in use" 1-row replay.
-        Optional<SharedLinkEntity> existing = findActiveByResourceToken(resourceToken);
-        if (existing.isPresent()) {
-            boolean sameScope = ScopeGuard.isInStrictScope(
-                    tenantId, organizationId,
-                    existing.get().getTenantId(), existing.get().getOrganizationId());
-            if (!sameScope) {
-                throw new IllegalArgumentException("Resource token already in use");
-            }
+        // Several active rows can share a token (see findAllActiveByResourceToken): the caller's
+        // own one wins, and any other workspace's one means the slot is taken.
+        List<SharedLinkEntity> existing = findAllActiveByResourceToken(resourceToken);
+        Optional<SharedLinkEntity> own = existing.stream()
+                .filter(link -> ScopeGuard.isInStrictScope(
+                        tenantId, organizationId, link.getTenantId(), link.getOrganizationId()))
+                .findFirst();
+        if (own.isPresent()) {
             logger.debug("Shared link already exists for resourceToken={}", LogSafePath.tokenPreview(resourceToken));
-            return existing.get();
+            return own.get();
+        }
+        if (!existing.isEmpty()) {
+            throw new SharedLinkResourceInUseException();
         }
 
         // Quota check - in the same transaction as the insert to prevent TOCTOU race
@@ -81,7 +164,7 @@ public class SharedLinkService {
             throw new SharedLinkLimitException(currentCount, maxPerUser);
         }
 
-        ResourceType type = ResourceType.valueOf(resourceType.toUpperCase());
+        ResourceType type = ResourceType.valueOf(resourceType.toUpperCase(Locale.ROOT));
 
         SharedLinkEntity entity = new SharedLinkEntity();
         entity.setToken(generateToken());
@@ -101,11 +184,12 @@ public class SharedLinkService {
         } catch (DataIntegrityViolationException e) {
             // Race condition: another thread created the link between our check and save
             logger.debug("Concurrent registration for resourceToken={}, returning existing", LogSafePath.tokenPreview(resourceToken));
-            return findActiveByResourceToken(resourceToken)
+            return findAllActiveByResourceToken(resourceToken).stream()
                     .filter(link -> ScopeGuard.isInStrictScope(
                             tenantId, organizationId,
                             link.getTenantId(), link.getOrganizationId()))
-                    .orElseThrow(() -> new IllegalArgumentException("Resource token already in use"));
+                    .findFirst()
+                    .orElseThrow(SharedLinkResourceInUseException::new);
         }
     }
 
@@ -119,6 +203,9 @@ public class SharedLinkService {
 
         SharedLinkEntity entity = opt.get();
         if (!entity.isActive()) return Optional.empty();
+        // A link naming a publication its owner does not hold resolves to nothing, like a
+        // deactivated one, and is not counted as an access (see getByToken).
+        if (!resourceGuard.isBoundToOwnedResource(entity)) return Optional.empty();
 
         // Check expiration if configured
         if (entity.getAccessConfig() != null) {
@@ -157,7 +244,20 @@ public class SharedLinkService {
     /**
      * Update shared link settings. Ownership check via organizationId when
      * provided (canonical USER_SCOPED path), else falls back to tenantId.
+     *
+     * <p>Switching an INACTIVE link back on is a creation in all but name, so it faces the same
+     * two rules as {@link #register}: the link must name a resource its creator holds (a squat
+     * retired by the holder's share must not come back through {@code PUT {isActive:true}}), and
+     * no other active link may hold the same resource token or resource id (two active rows on
+     * one token used to fail every later share and check of that resource). Runs outside a
+     * transaction for the same reason as {@code register}: the ownership check asks the owning
+     * service over HTTP.
+     *
+     * @throws SharedLinkResourceNotFoundException when reactivating a link its creator does not hold
+     * @throws SharedLinkResourceInUseException    when reactivating a link whose resource another
+     *                                             active link already holds
      */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public SharedLinkEntity update(String tenantId, String organizationId, UUID linkId, String title, String description,
                                    Map<String, Object> accessConfig, Boolean isActive) {
         SharedLinkEntity entity = repository.findById(linkId)
@@ -170,12 +270,34 @@ public class SharedLinkService {
             throw new IllegalArgumentException("Not authorized to update this shared link");
         }
 
+        if (Boolean.TRUE.equals(isActive) && !entity.isActive()) {
+            assertMayReactivate(entity);
+        }
+
         if (title != null) entity.setTitle(title);
         if (description != null) entity.setDescription(description);
         if (accessConfig != null) entity.setAccessConfig(accessConfig);
         if (isActive != null) entity.setActive(isActive);
 
         return repository.save(entity);
+    }
+
+    private void assertMayReactivate(SharedLinkEntity link) {
+        // The link's own creator identity: it is what the token authenticates as, and what
+        // retireIfSquatting judged when it switched the link off.
+        if (!resourceGuard.mayShare(link.getResourceType(), link.getTenantId(), link.getOrganizationId(),
+                link.getResourceToken(), link.getResourceId())) {
+            throw new SharedLinkResourceNotFoundException();
+        }
+        boolean tokenTaken = findAllActiveByResourceToken(link.getResourceToken()).stream()
+                .anyMatch(other -> !other.getId().equals(link.getId()));
+        boolean idTaken = link.getResourceId() != null
+                && repository.findByResourceIdAndIsActiveTrue(link.getResourceId())
+                        .filter(other -> !other.getId().equals(link.getId()))
+                        .isPresent();
+        if (tokenTaken || idTaken) {
+            throw new SharedLinkResourceInUseException();
+        }
     }
 
     /**
@@ -277,10 +399,21 @@ public class SharedLinkService {
 
     /**
      * Get shared link by token (for internal lookups that need tenantId).
+     *
+     * <p>This is the resolution every share-token consumer goes through: the CE edge
+     * ({@code MonolithSecurityConfig}), the cloud gateway ({@code /api/internal/shared-links/validate})
+     * and the public application API ({@code /by-token}, orchestrator's
+     * {@code PublicApplicationService}). So an APPLICATION link whose owner does not hold the
+     * publication it names (created before creation was checked, or a publication that left the
+     * owner's scope) is refused HERE, once, for all of them. Two of them cache a resolution for
+     * up to 60 s (the gateway's {@code ShareTokenResolutionService}, {@code PublicApplicationService}),
+     * which bounds how long a link keeps working after it stops being bound.
      */
     @Transactional(readOnly = true)
     public Optional<SharedLinkEntity> getByToken(String token) {
-        return findByPlainToken(token).filter(SharedLinkEntity::isActive);
+        return findByPlainToken(token)
+                .filter(SharedLinkEntity::isActive)
+                .filter(resourceGuard::isBoundToOwnedResource);
     }
 
     /**
@@ -301,6 +434,18 @@ public class SharedLinkService {
     private Optional<SharedLinkEntity> findActiveByResourceToken(String resourceToken) {
         return TokenAtRest.lookup(resourceToken, repository::findByResourceTokenHashAndIsActiveTrue,
                 t -> tokenBackfill == null ? Optional.empty() : tokenBackfill.findLegacy(PublicationTokenAtRestBackfill.SHARED_LINK_RESOURCE_TOKENS, t, t2 -> repository.findLegacyPlaintextResourceToken(t2).filter(SharedLinkEntity::isActive)));
+    }
+
+    /**
+     * Every active link on a resource token. Several can exist (the unique index that used to
+     * prevent it is on the encrypted column since V497), and each caller must see them all
+     * rather than fail on the second. A pre-hash row is still found through the plaintext
+     * fallback when no hashed row matches.
+     */
+    private List<SharedLinkEntity> findAllActiveByResourceToken(String resourceToken) {
+        List<SharedLinkEntity> byHash = repository
+                .findAllByResourceTokenHashAndIsActiveTrueOrderByCreatedAtAsc(TokenAtRest.hash(resourceToken));
+        return byHash.isEmpty() ? findActiveByResourceToken(resourceToken).stream().toList() : byHash;
     }
 
     @Transactional(readOnly = true)
@@ -472,6 +617,29 @@ public class SharedLinkService {
         SharedLinkConfigResponse config = new SharedLinkConfigResponse(maxPerUser, currentCount);
 
         return new SharedLinkCheckResponse(linkDto, config);
+    }
+
+    /**
+     * The caller asked for a link naming a resource they do not hold (or a resourceId that is not
+     * that resource's). Not an {@link IllegalArgumentException} on purpose: the controller maps
+     * that one to a 400 carrying the message, and this must read exactly like a missing resource.
+     */
+    public static class SharedLinkResourceNotFoundException extends RuntimeException {
+        public SharedLinkResourceNotFoundException() {
+            super("Resource not found");
+        }
+    }
+
+    /**
+     * Another workspace's active link already holds this resource token (or resource id). Still
+     * an {@link IllegalArgumentException}, so every existing mapping of "Resource token already
+     * in use" (400 on create) keeps answering exactly as before; update maps it explicitly,
+     * since it answers any other IllegalArgumentException with a bodyless 404.
+     */
+    public static class SharedLinkResourceInUseException extends IllegalArgumentException {
+        public SharedLinkResourceInUseException() {
+            super("Resource token already in use");
+        }
     }
 
     /**

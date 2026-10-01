@@ -130,7 +130,7 @@ export function TimeGridView({
   }, [periodKey, recenterSignal]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-theme">
+    <div className="flex min-h-0 flex-initial flex-col overflow-hidden rounded-xl border border-theme">
       <div
         className="grid shrink-0 border-b border-theme bg-theme-secondary"
         style={{ gridTemplateColumns: gridColumns(days.length) }}

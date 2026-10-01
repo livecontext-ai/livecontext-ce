@@ -28,6 +28,9 @@ export const WORKFLOW_PANEL_TAB_ID = 'workflow-panel';
 /** Its application twin, reserved for the same reason. */
 export const APPLICATION_PANEL_TAB_ID = 'application-panel';
 
+/** The pinned "AI Chat" tab of every page that does not host a chat of its own. */
+export const AI_CHAT_TAB_ID = 'ai-chat';
+
 /** The workspace agenda is a global panel surface, with a dedicated full-page counterpart. */
 export const AGENDA_PANEL_TAB_ID = 'agenda-panel';
 

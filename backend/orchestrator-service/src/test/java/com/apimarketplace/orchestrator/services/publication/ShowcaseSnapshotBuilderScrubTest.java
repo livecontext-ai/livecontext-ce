@@ -35,6 +35,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -127,9 +128,10 @@ class ShowcaseSnapshotBuilderScrubTest {
                 storageSkeletonService,
                 new ObjectMapper());
 
-        Optional<Map<String, Object>> snapshot = builder.capture("run-org", "tenant-owner", null, null);
+        ShowcaseSnapshotBuilder.CaptureOutcome outcome = builder.captureWithOutcome("run-org", "tenant-owner", null, null);
 
-        assertThat(snapshot).isEmpty();
+        assertThat(outcome.snapshot()).isEmpty();
+        assertThat(outcome.epochNotFound()).as("a scope mismatch is never reported as a missing epoch").isFalse();
         verify(interfaceClient, never()).getSnapshotsForRun(run.getId(), "tenant-owner", null);
     }
 
@@ -383,10 +385,40 @@ class ShowcaseSnapshotBuilderScrubTest {
                 storageSkeletonService,
                 new ObjectMapper());
 
-        Optional<Map<String, Object>> snapshot = builder.capture("run-invalid-epoch", "tenant-caller", "org-acme", 99);
+        ShowcaseSnapshotBuilder.CaptureOutcome outcome =
+                builder.captureWithOutcome("run-invalid-epoch", "tenant-caller", "org-acme", 99);
 
-        assertThat(snapshot).isEmpty();
+        assertThat(outcome.snapshot()).isEmpty();
+        // Bug A7: the one miss the publisher can correct is named, so publication-service can answer
+        // "that epoch is not in the run" instead of a 500 "empty payload".
+        assertThat(outcome.epochNotFound()).isTrue();
         verify(workflowResumeService, never()).reconstructStateForApi("run-invalid-epoch");
+    }
+
+    @Test
+    @DisplayName("A failing epoch probe is a server error, never EPOCH_NOT_FOUND (a DB hiccup must not say 'pick another epoch')")
+    void failingEpochProbeIsNotReportedAsMissingEpoch() {
+        WorkflowRunEntity run = new WorkflowRunEntity();
+        ReflectionTestUtils.setField(run, "id", UUID.randomUUID());
+        run.setRunIdPublic("run-probe-down");
+        run.setTenantId("tenant-owner");
+        run.setOrganizationId("org-acme");
+        when(workflowRunRepository.findByRunIdPublic("run-probe-down")).thenReturn(Optional.of(run));
+        DagState dag = new DagState(1, 0, 1, Map.of(1, EpochState.fresh()), Set.of());
+        when(stateSnapshotService.getSnapshot("run-probe-down"))
+                .thenReturn(StateSnapshot.empty().withDagState("trigger:start", dag));
+        when(workflowEpochService.listEpochTimestamps("run-probe-down"))
+                .thenThrow(new RuntimeException("connection reset"));
+        when(stepAggregationService.getAggregatedSteps("run-probe-down", 99)).thenReturn(Optional.of(List.of()));
+
+        ShowcaseSnapshotBuilder builder = new ShowcaseSnapshotBuilder(
+                workflowRunRepository, workflowResumeService, stateSnapshotService, workflowEpochService,
+                stepAggregationService, signalWaitRepository, interfaceRenderService, interfaceClient,
+                workflowStepDataRepository, storageSkeletonService, new ObjectMapper());
+
+        assertThatThrownBy(() -> builder.captureWithOutcome("run-probe-down", "tenant-caller", "org-acme", 99))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("epoch probe failed");
     }
 
     private static WorkflowRunState.StepState step(String nodeId, RunStatus status) {

@@ -3,6 +3,7 @@ package com.apimarketplace.agent.service.budget;
 import com.apimarketplace.agent.loop.GuardResult;
 import com.apimarketplace.agent.loop.IterationContext;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
+import com.apimarketplace.common.credit.LlmCacheTokens;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -79,7 +80,8 @@ class BudgetGuardParityTest {
         // Build the calculator with the fixture's rates.
         ModelCostCalculator calc = new ModelCostCalculator(
             fc.inputRate, fc.outputRate, fc.fixedCost,
-            fc.contextWindow, fc.maxOutputTokens);
+            fc.contextWindow, fc.maxOutputTokens,
+            fc.cacheReadRate, fc.cacheWriteRate);
 
         // Mock the credit client to return the fixture balance.
         CreditConsumptionClient creditClient = mock(CreditConsumptionClient.class);
@@ -96,7 +98,9 @@ class BudgetGuardParityTest {
             fc.completionTokens,
             fc.lastPromptTokens,
             fc.lastCompletionTokens,
-            100L);
+            100L,
+            fc.cacheTokens,
+            fc.lastCacheTokens);
 
         GuardResult result = guard.check(ctx);
 
@@ -129,6 +133,10 @@ class BudgetGuardParityTest {
         final BigDecimal fixedCost;
         final Integer contextWindow;
         final Integer maxOutputTokens;
+        final BigDecimal cacheReadRate;
+        final BigDecimal cacheWriteRate;
+        final LlmCacheTokens cacheTokens;
+        final LlmCacheTokens lastCacheTokens;
         final boolean requireCtxWindow;
         final boolean expectedProceed;
         final String expectedReasonContains;
@@ -148,11 +156,25 @@ class BudgetGuardParityTest {
             this.fixedCost = new BigDecimal(in.get("fixedCost").asText());
             this.contextWindow = in.get("contextWindow").isNull() ? null : in.get("contextWindow").asInt();
             this.maxOutputTokens = in.get("maxOutputTokens").isNull() ? null : in.get("maxOutputTokens").asInt();
+            // Cache inputs are optional in the fixture: counters default to 0, rates to null.
+            this.cacheReadRate = optionalDecimal(in, "cacheReadRate");
+            this.cacheWriteRate = optionalDecimal(in, "cacheWriteRate");
+            this.cacheTokens = new LlmCacheTokens(
+                in.path("cacheCreationTokens").asInt(0), in.path("cacheReadTokens").asInt(0),
+                in.path("cachedTokens").asInt(0), 0);
+            this.lastCacheTokens = new LlmCacheTokens(
+                in.path("lastCacheCreationTokens").asInt(0), in.path("lastCacheReadTokens").asInt(0),
+                in.path("lastCachedTokens").asInt(0), 0);
             this.requireCtxWindow = in.has("requireCtxWindow") && in.get("requireCtxWindow").asBoolean();
             this.expectedProceed = expected.get("proceed").asBoolean();
             this.expectedReasonContains = expected.has("reason_contains")
                 ? expected.get("reason_contains").asText()
                 : null;
+        }
+
+        private static BigDecimal optionalDecimal(JsonNode in, String field) {
+            JsonNode node = in.get(field);
+            return node == null || node.isNull() ? null : new BigDecimal(node.asText());
         }
 
         static FixtureCase from(JsonNode caseNode) {

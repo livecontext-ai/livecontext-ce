@@ -18,6 +18,12 @@ const ERROR_KEY_BY_CODE: Record<string, string> = {
   NOT_NEW_ACCOUNT: 'errors.notNewAccount',
   NOTHING_TO_GRANT: 'errors.nothingToGrant',
   CLOUD_LINK_REQUIRED: 'errors.cloudLinkRequired',
+  OFFER_UNAVAILABLE: 'errors.offerUnavailable',
+  OFFER_EXPIRED: 'errors.offerExpired',
+  OFFER_ALREADY_USED: 'errors.offerAlreadyUsed',
+  OFFER_NOT_ELIGIBLE: 'errors.offerNotEligible',
+  OFFER_CONFLICT: 'errors.offerConflict',
+  OFFER_CHECKOUT_ACTIVE: 'errors.offerCheckoutActive',
 };
 
 /** The `reward.redeem` message key for a typed server error code. */
@@ -34,6 +40,7 @@ export function useRedeemSuccessMessage(): (result: RewardRedeemResult) => strin
   const locale = useLocale();
   return useCallback(
     (result: RewardRedeemResult) => {
+      if (result.code === 'OFFER_READY') return t('personalOfferReady');
       if (result.code !== 'REDEEMED') return t('successPending');
       const credits = result.grantedCredits ?? 0;
       const creditsText = credits.toLocaleString(locale);

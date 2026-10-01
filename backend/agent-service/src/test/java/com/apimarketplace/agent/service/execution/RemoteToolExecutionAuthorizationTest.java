@@ -85,6 +85,52 @@ class RemoteToolExecutionAuthorizationTest {
     }
 
     @Test
+    @DisplayName("\"Don't ask again\" ticked during THIS turn lets the next sensitive call through with no card")
+    void conversationWideGrantOfTheRunningTurnProceeds() {
+        ToolApprovalGate gate = org.mockito.Mockito.mock(ToolApprovalGate.class);
+        org.mockito.Mockito.when(gate.isConversationWideApproved("conv-1")).thenReturn(true);
+        service.configureApprovalGateForTest(gate, null, null);
+
+        // The turn's own grants were read before the box was ticked: none here.
+        ToolResult result = service.checkToolAuthorization(
+                new ToolCall("call-next", "workflow", Map.of("action", "execute", "id", "wf-2"), null),
+                chatCredentials(), System.currentTimeMillis());
+
+        assertThat(result).isNull();
+    }
+
+    @Test
+    @DisplayName("The running-turn grant is only consulted for a gated chat call: exempt and non-sensitive calls never read it")
+    void conversationWideGrantNotReadOutsideTheGate() {
+        ToolApprovalGate gate = org.mockito.Mockito.mock(ToolApprovalGate.class);
+        service.configureApprovalGateForTest(gate, null, null);
+        Map<String, Object> exempt = chatCredentials();
+        exempt.put("__workflowRunId__", "run-1");
+
+        service.checkToolAuthorization(new ToolCall("call-a", "workflow", Map.of("action", "execute", "id", "wf-2"), null),
+                exempt, System.currentTimeMillis());
+        service.checkToolAuthorization(new ToolCall("call-b", "files", Map.of("action", "list"), null),
+                chatCredentials(), System.currentTimeMillis());
+
+        org.mockito.Mockito.verify(gate, org.mockito.Mockito.never()).isConversationWideApproved(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    @DisplayName("Without the running-turn grant the sensitive call still asks")
+    void noConversationWideGrantStillAsks() {
+        ToolApprovalGate gate = org.mockito.Mockito.mock(ToolApprovalGate.class);
+        org.mockito.Mockito.when(gate.isConversationWideApproved("conv-1")).thenReturn(false);
+        service.configureApprovalGateForTest(gate, null, null);
+
+        ToolResult result = service.checkToolAuthorization(
+                new ToolCall("call-next", "workflow", Map.of("action", "execute", "id", "wf-2"), null),
+                chatCredentials(), System.currentTimeMillis());
+
+        assertThat(result).isNotNull();
+        assertThat(result.metadata()).containsEntry("toolAuthorizationRequired", true);
+    }
+
+    @Test
     @DisplayName("A grant scoped to one ask lets THAT call through")
     void askScopedGrantCoversItsOwnCall() {
         Map<String, Object> args = Map.of("action", "execute", "id", "wf-1");

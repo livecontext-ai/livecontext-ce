@@ -470,6 +470,9 @@ public class WebSearchToolsProvider implements ToolsProvider {
             for (Map<String, Object> m : models) {
                 String mid = (String) m.get("id");
                 if (mid == null) continue;
+                // An unlisted model stays runnable (a stored llm block on it is not substituted)
+                // but is not offered: the platform admin stopped promoting it.
+                if (Boolean.TRUE.equals(m.get("unlisted"))) continue;
                 int order = m.get("displayOrder") instanceof Number n ? n.intValue() : 999;
                 flat.add(Map.of("provider", pname, "model", mid, "displayOrder", order));
             }

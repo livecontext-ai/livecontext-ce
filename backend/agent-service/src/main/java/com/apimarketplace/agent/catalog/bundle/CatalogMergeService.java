@@ -161,6 +161,7 @@ public class CatalogMergeService {
                 String rowSource = str(m.get("source"));
                 row.setSource(rowSource != null ? rowSource : opts.source());
                 applyFields(row, m, Collections.emptySet(), opts.partialUpdate());
+                applyUnlisted(row, m, Collections.emptySet(), opts);
                 // Insert-time `enabled` policy, per caller intent
                 // (opts.honorEnabledOnInsert - see MergeOptions):
                 //   • Feed sync (LiteLLM/OpenRouter, forSync=false): new models
@@ -274,6 +275,7 @@ public class CatalogMergeService {
                 applyProtect.add("enabled");
             }
             applyFields(row, m, applyProtect, opts.partialUpdate());
+            applyUnlisted(row, m, protect, opts);
             if (opts.bundleVersion() != null) row.setBundleVersion(opts.bundleVersion());
             row.setLastSyncedAt(now);
             // Un-deprecate: the incoming set still includes the model.
@@ -619,6 +621,29 @@ public class CatalogMergeService {
             return;
         }
         setIfUnprotected(protectedFields, "modalities", () -> row.setModalities(modalities));
+    }
+
+    /**
+     * V554: the listing decision a cloud admin made ({@code unlisted}: available, not offered).
+     *
+     * <p>Kept out of {@link #APPLIED_FIELD_NAMES} on purpose. That set is applied by every
+     * caller, and a feed sync (LiteLLM, OpenRouter) never carries the key: on its authoritative
+     * path an absent key would LIST again every model the admin unlisted, on the next refresh.
+     * Only a source that owns {@code enabled} ({@link MergeOptions#honorEnabledOnInsert()}: the
+     * signed bundle and the curated seed) owns the decision that qualifies it. On the bundle
+     * path the key's absence means "listed" (the payload emits it only when true); on the seed's
+     * partial path it means "untouched". A CE admin's own choice is in
+     * {@code user_modified_fields} and wins over both.
+     */
+    private static void applyUnlisted(ModelConfigOverrideEntity row, Map<String, Object> m,
+                                      Set<String> protectedFields, MergeOptions opts) {
+        if (!opts.honorEnabledOnInsert() || protectedFields.contains("unlisted")) {
+            return;
+        }
+        if (opts.partialUpdate() && !m.containsKey("unlisted")) {
+            return;
+        }
+        row.setUnlisted(Boolean.TRUE.equals(m.get("unlisted")));
     }
 
     private static void setIfUnprotected(Set<String> protectedFields, String field, Runnable action) {

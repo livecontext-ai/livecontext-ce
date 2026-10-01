@@ -1,11 +1,11 @@
 LiveContext Sustainable Use License 1.0
 
-Copyright (c) 2026 LiveContext
+Copyright (c) 2026 LiveContext SAS
 
-Licensor:        LiveContext
+Licensor:        LiveContext SAS
 
 Licensed Work:   LiveContext Community Edition and its source code.
-                 The Licensed Work is (c) 2026 LiveContext.
+                 The Licensed Work is (c) 2026 LiveContext SAS.
 
 1. Grant of rights
 
@@ -72,3 +72,42 @@ Licensed Work:   LiveContext Community Edition and its source code.
    CONDITIONS, EXPRESS OR IMPLIED, INCLUDING (WITHOUT LIMITATION)
    WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
    NON-INFRINGEMENT, AND TITLE.
+
+7. Additional permission: client deployments by service providers
+
+   This section grants permissions in addition to Section 1. It never
+   restricts them. Notwithstanding Section 2, if you are a service provider
+   (for example an agency, consultant, freelancer or systems integrator),
+   you may install, host, operate, configure, customize and maintain the
+   Licensed Work on behalf of a client, and charge that client for those
+   services (including hosting, setup, development, maintenance and
+   support), provided that all of the following conditions are met:
+
+   (a) Each deployment serves one client (an individual, or an
+       organization including its affiliates under common control) for
+       that client's own business purposes. The client's employees,
+       contractors, customers and end users may use the workflows,
+       automations, interfaces and applications the client operates on
+       that deployment.
+
+   (b) The deployment is not offered, marketed or made available to
+       parties other than that client as a workflow-automation, AI-agent
+       or application-building platform, whether multi-tenant,
+       self-service or white-labelled.
+
+   (c) Neither you nor the client sells, rents or otherwise provides
+       access to the Licensed Work itself as a product (for example
+       accounts, seats, workspaces or tenants of the Licensed Work) to
+       parties other than that client.
+
+   (d) You give the client a copy of this License, and the client's use
+       of the deployment remains subject to it.
+
+   A service provider that operates separate deployments for several
+   clients, each meeting the conditions above, is not providing a
+   competitive offering under Section 2 by doing so. Notwithstanding
+   Section 5, a failure to meet these conditions for one deployment
+   terminates the permissions of this Section 7 for that deployment only.
+   Building workflows, interfaces, templates or other content with the
+   Licensed Work, for yourself or for clients, is always permitted, and that content is not part of the Licensed Work,
+   except for any portion of the Licensed Work it contains or copies.

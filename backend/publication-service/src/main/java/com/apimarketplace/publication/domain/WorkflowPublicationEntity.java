@@ -280,6 +280,14 @@ public class WorkflowPublicationEntity {
     @Column(name = "rejection_reason", columnDefinition = "TEXT")
     private String rejectionReason;
 
+    /**
+     * When the creator's followers were told this listing went live (V551). Set once, on the
+     * first approval as PUBLIC, so a republish that goes back through review is not announced
+     * as new again.
+     */
+    @Column(name = "followers_notified_at")
+    private Instant followersNotifiedAt;
+
     public enum PublicationType { WORKFLOW, AGENT, TABLE, INTERFACE, SKILL }
     public enum PublicationStatus { ACTIVE, INACTIVE, PENDING_REVIEW, REJECTED }
     public enum PublicationVisibility { PUBLIC, PRIVATE, UNLISTED }
@@ -382,7 +390,15 @@ public class WorkflowPublicationEntity {
     }
 
     public boolean hasAssignedOwnerScope() {
-        return this.ownerType != null && this.ownerId != null && !this.ownerId.isBlank();
+        return hasAssignedOwnerScope(this.ownerType, this.ownerId);
+    }
+
+    /**
+     * The same test on the two columns alone, for a caller that read them through a projection
+     * rather than loading the entity (see {@code WorkflowPublicationService#isInOwnerScope}).
+     */
+    public static boolean hasAssignedOwnerScope(OwnerType ownerType, String ownerId) {
+        return ownerType != null && ownerId != null && !ownerId.isBlank();
     }
 
     @PreUpdate
@@ -825,6 +841,14 @@ public class WorkflowPublicationEntity {
 
     public void setReviewedAt(Instant reviewedAt) {
         this.reviewedAt = reviewedAt;
+    }
+
+    public Instant getFollowersNotifiedAt() {
+        return followersNotifiedAt;
+    }
+
+    public void setFollowersNotifiedAt(Instant followersNotifiedAt) {
+        this.followersNotifiedAt = followersNotifiedAt;
     }
 
     public String getRejectionReason() {

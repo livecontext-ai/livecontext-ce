@@ -6,7 +6,16 @@
  *   { proceed: false, scope, reason }       - trip the budgetExhausted sentinel
  *
  * The `usage` object is the running total observed from CLI usage events:
- *   { promptTokens, completionTokens, iterations, elapsedMs, provider, model }
+ *   { promptTokens, completionTokens, cacheCreationTokens, cacheReadTokens, cachedTokens,
+ *     iterations, elapsedMs, provider, model }
+ * The cache counters are read in the reporting provider's convention and priced at the
+ * cache rates (`PricingCache.costForUsage`), as the ledger debits them, and the
+ * projection keeps room for one cache miss (`cacheMissReserveForUsage`: the last call with
+ * everything it read written anew, 0 for the direct Anthropic API), which the cache-mix
+ * branches cannot see. Before
+ * 2026-09-30 they were not passed at all and every prompt token was priced at the input
+ * rate: a Claude Code turn, mostly cache reads, was projected at ~5x its debit and a
+ * free account's chat turn was killed after three or four model calls.
  *
  * The bridge polls these between iterations (or on every usage event) and SIGTERMs
  * the child process when one denies, then sets ctx.state.budgetExhausted = true so
@@ -28,6 +37,49 @@
 
 const LAST_DELTA_SAFETY_FACTOR = 2.0;
 
+/** The token counters a guard prices, read off a usage report (missing = 0). */
+const COUNTERS = ['promptTokens', 'completionTokens', 'cacheCreationTokens', 'cacheReadTokens', 'cachedTokens'];
+
+function countersOf(usage) {
+  const out = {};
+  for (const k of COUNTERS) out[k] = Number(usage && usage[k]) || 0;
+  return out;
+}
+
+/** Per-counter `current - previous`, floored at 0 (the delta of the latest iteration). */
+function deltaOf(current, previous) {
+  const out = {};
+  for (const k of COUNTERS) out[k] = Math.max(0, current[k] - (previous[k] || 0));
+  return out;
+}
+
+/** Per-counter average over `iterations`. */
+function averageOf(counters, iterations) {
+  const out = {};
+  for (const k of COUNTERS) out[k] = counters[k] / iterations;
+  return out;
+}
+
+const NO_COUNTERS = Object.freeze(countersOf(null));
+
+/**
+ * The cache counters of a run so far, summed from the adapters' per-call usage entries
+ * (`recordCallUsage`: cacheCreationInputTokens / cacheReadInputTokens / cachedTokens),
+ * under the key names the guards read.
+ *
+ * @param {Array<object>} perCallUsages
+ * @returns {{cacheCreationTokens:number, cacheReadTokens:number, cachedTokens:number}}
+ */
+export function sumCacheCounters(perCallUsages) {
+  let cacheCreationTokens = 0, cacheReadTokens = 0, cachedTokens = 0;
+  for (const call of perCallUsages || []) {
+    cacheCreationTokens += Number(call && call.cacheCreationInputTokens) || 0;
+    cacheReadTokens += Number(call && call.cacheReadInputTokens) || 0;
+    cachedTokens += Number(call && call.cachedTokens) || 0;
+  }
+  return { cacheCreationTokens, cacheReadTokens, cachedTokens };
+}
+
 /**
  * Per-agent budget guard. Projects the next iteration's cost from the running average
  * and denies if `consumedSoFar + projectedNext > budget`.
@@ -44,21 +96,24 @@ export class AgentBudgetGuard {
     /** Credits consumed in prior runs within the current budget window. */
     this.consumedSoFar = Number(consumedSoFar) || 0;
     this.pricing = pricing;
-    this._lastPromptTokens = 0;
-    this._lastCompletionTokens = 0;
+    /** Cumulative counters at the previous check, to derive the latest iteration's delta. */
+    this._lastCounters = NO_COUNTERS;
   }
 
   /** True when configured with a positive budget. */
   get enabled() { return this.budget > 0; }
 
   /**
-   * @param {{promptTokens:number, completionTokens:number, iterations:number, provider:string, model:string}} usage
+   * @param {{promptTokens:number, completionTokens:number, cacheCreationTokens?:number,
+   *          cacheReadTokens?:number, cachedTokens?:number, iterations:number,
+   *          provider:string, model:string}} usage - run totals; cache counters in the
+   *          reporting provider's convention
    * @returns {{proceed:boolean, scope?:string, reason?:string}}
    */
   check(usage) {
     if (!this.enabled) return { proceed: true };
-    const runCost = this.pricing.costFor(
-      usage.provider, usage.model, usage.promptTokens, usage.completionTokens);
+    const current = countersOf(usage);
+    const runCost = this.pricing.costForUsage(usage.provider, usage.model, current);
     const totalConsumed = this.consumedSoFar + runCost;
     if (totalConsumed > this.budget) {
       return {
@@ -72,19 +127,17 @@ export class AgentBudgetGuard {
     // deny any single iteration above half remaining budget - even when the next
     // call could be smaller. Wait until ≥ 2 samples before trusting projection.
     const iters = Math.max(1, usage.iterations || 1);
-    const lastDeltaPrompt = Math.max(0, (usage.promptTokens || 0) - this._lastPromptTokens);
-    const lastDeltaCompletion = Math.max(0, (usage.completionTokens || 0) - this._lastCompletionTokens);
-    this._lastPromptTokens = usage.promptTokens || 0;
-    this._lastCompletionTokens = usage.completionTokens || 0;
+    const lastDelta = deltaOf(current, this._lastCounters);
+    this._lastCounters = current;
 
     if (iters >= 2) {
-      const avgPrompt = (usage.promptTokens || 0) / iters;
-      const avgCompletion = (usage.completionTokens || 0) / iters;
-      const growthProj = this.pricing.costFor(
-        usage.provider, usage.model, avgPrompt, avgCompletion);
-      const lastDeltaProj = this.pricing.costFor(
-        usage.provider, usage.model, lastDeltaPrompt, lastDeltaCompletion) * LAST_DELTA_SAFETY_FACTOR;
-      let projectedNext = Math.max(growthProj, lastDeltaProj);
+      const growthProj = this.pricing.costForUsage(
+        usage.provider, usage.model, averageOf(current, iters));
+      const lastDeltaProj = this.pricing.costForUsage(
+        usage.provider, usage.model, lastDelta) * LAST_DELTA_SAFETY_FACTOR;
+      // The last call again on a cache miss: see TenantBudgetGuard.
+      const cacheMissProj = this.pricing.cacheMissReserveForUsage(usage.provider, usage.model, lastDelta);
+      let projectedNext = Math.max(growthProj, lastDeltaProj, cacheMissProj);
       const worstCase = this.pricing.worstCaseSingleIter(usage.provider, usage.model);
       if (Number.isFinite(worstCase)) {
         projectedNext = Math.max(projectedNext, worstCase);
@@ -93,7 +146,7 @@ export class AgentBudgetGuard {
         return {
           proceed: false,
           scope: 'agent',
-          reason: `agent budget would be exceeded by next iteration (${(totalConsumed + projectedNext).toFixed(4)} / ${this.budget}, growth=${growthProj.toFixed(2)}, lastDelta=${lastDeltaProj.toFixed(2)}, worstCase=${Number.isFinite(worstCase) ? worstCase.toFixed(2) : 'unknown'})`,
+          reason: `agent budget would be exceeded by next iteration (${(totalConsumed + projectedNext).toFixed(4)} / ${this.budget}, growth=${growthProj.toFixed(2)}, lastDelta=${lastDeltaProj.toFixed(2)}, cacheMiss=${cacheMissProj.toFixed(2)}, worstCase=${Number.isFinite(worstCase) ? worstCase.toFixed(2) : 'unknown'})`,
         };
       }
     }
@@ -126,22 +179,25 @@ export class TenantBudgetGuard {
     this.refreshEveryNIters = refreshEveryNIters;
     this.requireCtxWindow = requireCtxWindow;
     this._lastRefreshIter = 0;
-    this._lastPromptTokens = 0;
-    this._lastCompletionTokens = 0;
+    /** Cumulative counters at the previous check, to derive the latest iteration's delta. */
+    this._lastCounters = NO_COUNTERS;
   }
 
   /** True when configured with a positive balance and pricing cache. */
   get enabled() { return this.balance > 0 && !!this.pricing; }
 
   /**
-   * @param {{promptTokens:number, completionTokens:number, iterations:number, provider:string, model:string}} usage
+   * @param {{promptTokens:number, completionTokens:number, cacheCreationTokens?:number,
+   *          cacheReadTokens?:number, cachedTokens?:number, iterations:number,
+   *          provider:string, model:string}} usage - run totals; cache counters in the
+   *          reporting provider's convention
    * @returns {Promise<{proceed:boolean, scope?:string, reason?:string}>}
    */
   async check(usage) {
     if (!this.enabled) return { proceed: true };
 
-    const consumed = this.pricing.costFor(
-      usage.provider, usage.model, usage.promptTokens, usage.completionTokens);
+    const current = countersOf(usage);
+    const consumed = this.pricing.costForUsage(usage.provider, usage.model, current);
 
     // Adaptive refresh: when burn rate > 70% of balance, refresh every iter so a
     // stale snapshot can't hide a near-empty wallet across 5 iters of bursts.
@@ -184,20 +240,21 @@ export class TenantBudgetGuard {
 
     // Track last-iteration delta for projection. Mirror of Java
     // TenantBudgetGuard / IterationContext.lastIterationPromptTokens.
-    const lastDeltaPrompt = Math.max(0, (usage.promptTokens || 0) - this._lastPromptTokens);
-    const lastDeltaCompletion = Math.max(0, (usage.completionTokens || 0) - this._lastCompletionTokens);
-    this._lastPromptTokens = usage.promptTokens || 0;
-    this._lastCompletionTokens = usage.completionTokens || 0;
+    const lastDelta = deltaOf(current, this._lastCounters);
+    this._lastCounters = current;
 
     // Projection: max(growth, lastDelta × safety, worstCaseSingleIter). See class doc.
     const safeIters = Math.max(1, iters);
-    const avgPrompt = (usage.promptTokens || 0) / safeIters;
-    const avgCompletion = (usage.completionTokens || 0) / safeIters;
-    const growthProj = this.pricing.costFor(
-      usage.provider, usage.model, avgPrompt, avgCompletion);
-    const lastDeltaProj = this.pricing.costFor(
-      usage.provider, usage.model, lastDeltaPrompt, lastDeltaCompletion) * LAST_DELTA_SAFETY_FACTOR;
-    let projectedNext = Math.max(growthProj, lastDeltaProj);
+    const growthProj = this.pricing.costForUsage(
+      usage.provider, usage.model, averageOf(current, safeIters));
+    const lastDeltaProj = this.pricing.costForUsage(
+      usage.provider, usage.model, lastDelta) * LAST_DELTA_SAFETY_FACTOR;
+    // The last call again on a cache miss (everything it read written anew). The two
+    // branches above price the cache mix of past calls, where a read is ~0.1x input, so
+    // without this one miss could overdraw the balance by ~10x its projection. Zero for
+    // the direct Anthropic API (see PricingCache.cacheMissReserveForUsage).
+    const cacheMissProj = this.pricing.cacheMissReserveForUsage(usage.provider, usage.model, lastDelta);
+    let projectedNext = Math.max(growthProj, lastDeltaProj, cacheMissProj);
     const worstCase = this.pricing.worstCaseSingleIter(usage.provider, usage.model);
     if (Number.isFinite(worstCase)) {
       projectedNext = Math.max(projectedNext, worstCase);
@@ -206,7 +263,7 @@ export class TenantBudgetGuard {
       return {
         proceed: false,
         scope: 'tenant',
-        reason: `tenant balance ${this.balance} would be exceeded (consumed=${consumed.toFixed(4)} + next=${projectedNext.toFixed(4)} [growth=${growthProj.toFixed(2)}, lastDelta=${lastDeltaProj.toFixed(2)}, worstCase=${Number.isFinite(worstCase) ? worstCase.toFixed(2) : 'unknown'}])`,
+        reason: `tenant balance ${this.balance} would be exceeded (consumed=${consumed.toFixed(4)} + next=${projectedNext.toFixed(4)} [growth=${growthProj.toFixed(2)}, lastDelta=${lastDeltaProj.toFixed(2)}, cacheMiss=${cacheMissProj.toFixed(2)}, worstCase=${Number.isFinite(worstCase) ? worstCase.toFixed(2) : 'unknown'}])`,
       };
     }
     return { proceed: true };

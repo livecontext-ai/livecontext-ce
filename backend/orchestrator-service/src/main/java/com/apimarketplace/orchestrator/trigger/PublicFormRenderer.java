@@ -1,10 +1,13 @@
 package com.apimarketplace.orchestrator.trigger;
 
+import com.apimarketplace.orchestrator.tools.workflow.builder.FormFieldDefaults;
 import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -81,23 +84,31 @@ public class PublicFormRenderer {
         String type = asString(field.get("type"), "text").toLowerCase();
         boolean required = Boolean.TRUE.equals(field.get("required"));
         String placeholder = asString(field.get("placeholder"), "");
+        // The field's default is shown pre-filled, as the builder promises (defaultValue, or a
+        // `default` alias an older plan still carries). Never on a file input: a browser refuses it.
+        Object defaultValue = FormFieldDefaults.of(field);
+        Set<String> defaults = defaultValues(defaultValue);
+        String defaultText = defaults.size() == 1 ? defaults.iterator().next() : null;
 
         String inputHtml = switch (type) {
             case "textarea" -> "<textarea id=\"f_" + escapeHtml(fieldName) +
                     "\" name=\"" + escapeHtml(fieldName) + "\"" +
                     (required ? " required" : "") +
                     (placeholder.isEmpty() ? "" : " placeholder=\"" + escapeHtml(placeholder) + "\"") +
-                    " rows=\"4\"></textarea>";
-            case "select" -> renderSelect(fieldName, field, required, placeholder, false);
-            case "multiselect" -> renderSelect(fieldName, field, required, placeholder, true);
-            case "radio" -> renderChoiceGroup(fieldName, field, required, "radio");
-            case "checkboxgroup" -> renderChoiceGroup(fieldName, field, required, "checkbox");
+                    " rows=\"4\">" + (defaultText == null ? "" : escapeHtml(defaultText)) + "</textarea>";
+            case "select" -> renderSelect(fieldName, field, required, placeholder, false, defaults);
+            case "multiselect" -> renderSelect(fieldName, field, required, placeholder, true, defaults);
+            case "radio" -> renderChoiceGroup(fieldName, field, required, "radio", defaults);
+            case "checkboxgroup" -> renderChoiceGroup(fieldName, field, required, "checkbox", defaults);
             case "checkbox" -> "<label class=\"inline\"><input id=\"f_" + escapeHtml(fieldName) +
-                    "\" name=\"" + escapeHtml(fieldName) + "\" type=\"checkbox\" value=\"true\" />" +
+                    "\" name=\"" + escapeHtml(fieldName) + "\" type=\"checkbox\" value=\"true\"" +
+                    ("true".equals(defaultText) ? " checked" : "") + " />" +
                     (placeholder.isEmpty() ? "" : " " + escapeHtml(placeholder)) + "</label>";
             default -> "<input id=\"f_" + escapeHtml(fieldName) +
                     "\" name=\"" + escapeHtml(fieldName) + "\"" +
                     " type=\"" + escapeHtml(mapInputType(type)) + "\"" +
+                    (defaultText == null || "file".equals(mapInputType(type)) ? ""
+                            : " value=\"" + escapeHtml(defaultText) + "\"") +
                     (required ? " required" : "") +
                     (placeholder.isEmpty() ? "" : " placeholder=\"" + escapeHtml(placeholder) + "\"") +
                     " />";
@@ -119,7 +130,10 @@ public class PublicFormRenderer {
      * than emitting {@code <option>undefined</option>}.
      */
     private String renderSelect(String fieldName, Map<String, Object> field,
-                                boolean required, String placeholder, boolean multiple) {
+                                boolean required, String placeholder, boolean multiple, Set<String> defaults) {
+        List<Map<String, Object>> options = asOptionList(field.get("options"));
+        boolean defaultMatches = options.stream()
+                .anyMatch(opt -> defaults.contains(asString(opt.get("value"), "")));
         StringBuilder html = new StringBuilder();
         html.append("<select id=\"f_").append(escapeHtml(fieldName))
             .append("\" name=\"").append(escapeHtml(fieldName)).append("\"");
@@ -129,14 +143,16 @@ public class PublicFormRenderer {
         if (!multiple) {
             String firstLabel = placeholder.isEmpty() ? "Select…" : placeholder;
             html.append("<option value=\"\"")
-                .append(required ? " disabled selected" : "")
+                .append(required ? " disabled" : "")
+                .append(required && !defaultMatches ? " selected" : "")
                 .append(">").append(escapeHtml(firstLabel)).append("</option>");
         }
-        for (Map<String, Object> opt : asOptionList(field.get("options"))) {
+        for (Map<String, Object> opt : options) {
             String value = asString(opt.get("value"), "");
             String optLabel = asString(opt.get("label"), value);
             if (value.isEmpty()) continue;
-            html.append("<option value=\"").append(escapeHtml(value)).append("\">")
+            html.append("<option value=\"").append(escapeHtml(value)).append("\"")
+                .append(defaults.contains(value) ? " selected" : "").append(">")
                 .append(escapeHtml(optLabel)).append("</option>");
         }
         html.append("</select>");
@@ -150,7 +166,7 @@ public class PublicFormRenderer {
      * receives an array under the field name.
      */
     private String renderChoiceGroup(String fieldName, Map<String, Object> field,
-                                     boolean required, String inputType) {
+                                     boolean required, String inputType, Set<String> defaults) {
         StringBuilder html = new StringBuilder();
         html.append("<div class=\"choice-group\">");
         boolean first = true;
@@ -165,6 +181,7 @@ public class PublicFormRenderer {
                 .append("\" name=\"").append(escapeHtml(submitName))
                 .append("\" type=\"").append(escapeHtml(inputType))
                 .append("\" value=\"").append(escapeHtml(value)).append("\"")
+                .append(defaults.contains(value) ? " checked" : "")
                 .append(required && first && !multi ? " required" : "")
                 .append(" /> ").append(escapeHtml(optLabel)).append("</label>");
             first = false;
@@ -193,6 +210,20 @@ public class PublicFormRenderer {
             }
         }
         return result;
+    }
+
+    /** A field default as the option values it selects: a list gives several, anything else one. */
+    private static Set<String> defaultValues(Object defaultValue) {
+        if (defaultValue == null) return Set.of();
+        Set<String> values = new LinkedHashSet<>();
+        if (defaultValue instanceof List<?> list) {
+            for (Object item : list) {
+                if (item != null && !item.toString().isBlank()) values.add(item.toString());
+            }
+        } else {
+            values.add(defaultValue.toString());
+        }
+        return values;
     }
 
     private String mapInputType(String type) {

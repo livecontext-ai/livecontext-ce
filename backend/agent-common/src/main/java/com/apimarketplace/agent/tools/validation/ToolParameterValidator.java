@@ -151,7 +151,19 @@ public class ToolParameterValidator {
             default -> true; // Unknown type, skip validation
         };
 
-        if (!typeValid) {
+        if (!typeValid && "string".equalsIgnoreCase(expectedType)
+                && SlimSchemaInputCoercer.isIntegral(value)
+                && !SlimSchemaInputCoercer.isSafeIntegral(value)) {
+            // A whole number past 2^53-1 (smaller ones are turned into text by
+            // SlimSchemaInputCoercer before the tool pipeline validates): say why and what to
+            // send rather than a bare type mismatch, because the digits received may already
+            // be wrong.
+            builder.addError(paramName, "Parameter '" + paramName + "' must be sent as a string: "
+                    + value + " is too large to travel as a number without losing digits, so the "
+                    + "value received may already differ from the one intended. Send it quoted, "
+                    + "as the exact text of the id.",
+                    ToolErrorCode.INVALID_PARAMETER_TYPE);
+        } else if (!typeValid) {
             builder.addInvalidType(paramName, expectedType, value.getClass().getSimpleName());
         }
 

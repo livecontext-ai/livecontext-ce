@@ -661,10 +661,21 @@ public final class StateSnapshot {
      * is not globally skipped but individual items are.
      */
     public StateSnapshot incrementNodeCountsOnly(String nodeId, String status, int count) {
+        return incrementNodeCountsOnly(nodeId, status, count, 0L);
+    }
+
+    /**
+     * Same, carrying the duration of the ONE execution it counts ({@code count == 1}): the items of
+     * a split are counted one by one on this path, and without their durations the node's time in
+     * the run view stayed 0. A batch ({@code count > 1}) or a zero duration records no time.
+     */
+    public StateSnapshot incrementNodeCountsOnly(String nodeId, String status, int count, long durationMs) {
         if (count <= 0) return this;
         Map<String, NodeCounts> newNodes = new HashMap<>(nodes);
         NodeCounts current = newNodes.getOrDefault(nodeId, NodeCounts.zero());
-        newNodes.put(nodeId, current.incrementBy(status, count));
+        newNodes.put(nodeId, count == 1 && durationMs > 0
+            ? current.incrementWithTiming(status, durationMs)
+            : current.incrementBy(status, count));
         return fromDags(version, seq, dags, newNodes, edges);
     }
 

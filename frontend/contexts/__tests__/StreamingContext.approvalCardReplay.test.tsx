@@ -46,7 +46,7 @@ const subscribe = vi.fn<(...args: unknown[]) => () => void>((...args: unknown[])
   return unsub;
 });
 vi.mock('@/lib/websocket', () => ({ wsClient: { subscribe: (...args: unknown[]) => subscribe(...args) } }));
-vi.mock('@/lib/websocket/ws-client', () => ({ wsClient: { subscribe: (...args: unknown[]) => subscribe(...args) } }));
+vi.mock('@/lib/websocket/ws-client', () => ({ wsClient: { onReconnected: () => () => {}, subscribe: (...args: unknown[]) => subscribe(...args) } }));
 
 import { StreamingProvider, useStreaming } from '../StreamingContext';
 import { unifiedApiService } from '@/lib/api';

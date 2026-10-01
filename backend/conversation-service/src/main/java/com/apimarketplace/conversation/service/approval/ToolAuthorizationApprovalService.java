@@ -70,6 +70,36 @@ public class ToolAuthorizationApprovalService {
         return true;
     }
 
+    /**
+     * Persist the card's "don't ask again in this conversation" checkbox:
+     * {@code chatConfig.autoAuthorizeTools = true}, every other chatConfig key kept.
+     *
+     * <p>Written here, in the same request as the approval, rather than by a separate debounced
+     * config save from the browser: that save could land AFTER the turn the approval resumes
+     * had already read the setting, so the very next sensitive call raised a card again.
+     */
+    @Transactional
+    public boolean enableAutoAuthorize(String conversationId) {
+        if (conversationId == null) {
+            return false;
+        }
+        Optional<Conversation> convOpt = conversationRepository.findById(conversationId);
+        if (convOpt.isEmpty()) {
+            return false;
+        }
+        Conversation conversation = convOpt.get();
+        if (isAutoAuthorizeEnabled(conversation)) {
+            return true;
+        }
+        Map<String, Object> chatConfig = conversation.getChatConfig() == null
+                ? new HashMap<>() : new HashMap<>(conversation.getChatConfig());
+        chatConfig.put("autoAuthorizeTools", true);
+        conversation.setChatConfig(chatConfig);
+        conversationRepository.save(conversation);
+        log.info("Enabled auto-authorize for conversation {}", conversationId);
+        return true;
+    }
+
     /** Read-only union of always + once (no mutation). For inspection / tests. */
     @Transactional(readOnly = true)
     public Set<String> getActiveRules(String conversationId) {

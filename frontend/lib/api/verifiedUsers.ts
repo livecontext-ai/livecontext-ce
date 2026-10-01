@@ -2,13 +2,15 @@ import { IS_MANAGED_CLOUD } from '@/lib/edition';
 import { unifiedApiService } from '@/lib/api/unified-api-service';
 
 /**
- * Batching loader and cache for the verified badge.
+ * Batching loader and cache for the public badges shown next to a name: the blue
+ * verified check and the gold official-partner seal. One lookup answers both, so a
+ * name that carries either costs the same single request.
  *
- * <p>The badge is rendered next to a name, and names come in lists: a marketplace
- * grid, a review thread, a DM sidebar. Asking per name would mean one request per
- * card. Every call made inside the same frame is therefore collected and answered by
- * ONE request, and each answer is then cached for the life of the page, so scrolling
- * a card out and back costs nothing.
+ * <p>Badges are rendered next to names, and names come in lists: a marketplace grid,
+ * a review thread, a DM sidebar. Asking per name would mean one request per card.
+ * Every call made inside the same frame is therefore collected and answered by ONE
+ * request, and each answer is then cached for the life of the page, so scrolling a
+ * card out and back costs nothing.
  *
  * <p>Deliberately NOT react-query. The badge decorates cards that render in trees
  * with no {@code QueryClientProvider} (the chat highlights row, the applications
@@ -17,8 +19,16 @@ import { unifiedApiService } from '@/lib/api/unified-api-service';
  * keeps {@code UserActionMenu} off a required query client.
  *
  * <p>Failure is silent and closed: a badge lookup must never take a page down, so a
- * failed batch resolves everyone in it as unverified rather than rejecting.
+ * failed batch resolves everyone in it as carrying no badge rather than rejecting.
  */
+
+/** What one user carries. */
+export interface BadgeFlags {
+  verified: boolean;
+  partner: boolean;
+}
+
+const NO_BADGE: BadgeFlags = Object.freeze({ verified: false, partner: false });
 
 /**
  * How long to keep collecting ids before firing. One frame: long enough that a whole
@@ -35,14 +45,14 @@ const BATCH_WINDOW_MS = 16;
  */
 export const MAX_IDS_PER_REQUEST = 100;
 
-type Waiter = (verified: boolean) => void;
+type Waiter = (flags: BadgeFlags) => void;
 
 /**
- * Answers already known, so a re-render never re-asks. Verified status changes about
- * as often as someone gets verified, and the page is reloaded far more often than
- * that, so a session-lifetime cache is the right staleness.
+ * Answers already known, so a re-render never re-asks. Badge status changes about as
+ * often as someone gets verified or becomes a partner, and the page is reloaded far
+ * more often than that, so a session-lifetime cache is the right staleness.
  */
-const resolved = new Map<string, boolean>();
+const resolved = new Map<string, BadgeFlags>();
 
 const pending = new Map<string, Waiter[]>();
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -54,11 +64,12 @@ async function flush(): Promise<void> {
 
   const ids = Array.from(batch.keys());
   const verified = new Set<string>();
+  const partners = new Set<string>();
   /**
-   * Ids whose request failed. They resolve `false` like everyone else - a badge lookup
-   * must never take a page down - but they are NOT written to the cache: a cached
-   * `false` is permanent for the life of the page, so one transient 5xx would erase
-   * every badge on the platform until a full reload, silently.
+   * Ids whose request failed. They resolve to no badge like everyone else - a badge
+   * lookup must never take a page down - but they are NOT written to the cache: a
+   * cached answer is permanent for the life of the page, so one transient 5xx would
+   * erase every badge on the platform until a full reload, silently.
    */
   const unanswered = new Set<string>();
 
@@ -70,8 +81,9 @@ async function flush(): Promise<void> {
   await Promise.all(
     chunks.map(async (chunk) => {
       try {
-        const found = await unifiedApiService.getVerifiedUserIds(chunk);
-        found.forEach((id) => verified.add(String(id)));
+        const found = await unifiedApiService.getUserBadges(chunk);
+        (found?.verified ?? []).forEach((id) => verified.add(String(id)));
+        (found?.partners ?? []).forEach((id) => partners.add(String(id)));
       } catch {
         // Fail closed for this render, and retry on the next one.
         chunk.forEach((id) => unanswered.add(id));
@@ -80,37 +92,37 @@ async function flush(): Promise<void> {
   );
 
   batch.forEach((waiters, id) => {
-    const flag = verified.has(id);
+    const flags: BadgeFlags = { verified: verified.has(id), partner: partners.has(id) };
     if (!unanswered.has(id)) {
-      resolved.set(id, flag);
+      resolved.set(id, flags);
     }
-    waiters.forEach((resolve) => resolve(flag));
+    waiters.forEach((resolve) => resolve(flags));
   });
 }
 
 /**
- * The answer already held for this user, or undefined when it has not been asked yet.
- * Lets a component paint a known badge on its FIRST render instead of flashing it in
- * a tick later.
+ * The badges already known for this user, or undefined when not asked yet. Lets a
+ * component paint a known badge on its FIRST render instead of flashing it in a tick
+ * later.
  */
-export function cachedVerifiedFlag(userId: string): boolean | undefined {
-  if (!IS_MANAGED_CLOUD || !userId) return false;
+export function cachedBadges(userId: string): BadgeFlags | undefined {
+  if (!IS_MANAGED_CLOUD || !userId) return NO_BADGE;
   return resolved.get(userId);
 }
 
 /**
- * Whether this user carries the verified badge, resolved through the shared batch.
- * Always false on a self-hosted deployment, without issuing a request.
+ * The badges this user carries, resolved through the shared batch. Never a badge on a
+ * self-hosted deployment, and no request issued there.
  */
-export function loadVerifiedFlag(userId: string): Promise<boolean> {
+export function loadBadges(userId: string): Promise<BadgeFlags> {
   if (!IS_MANAGED_CLOUD || !userId) {
-    return Promise.resolve(false);
+    return Promise.resolve(NO_BADGE);
   }
   const known = resolved.get(userId);
   if (known !== undefined) {
     return Promise.resolve(known);
   }
-  return new Promise<boolean>((resolve) => {
+  return new Promise<BadgeFlags>((resolve) => {
     const waiters = pending.get(userId);
     if (waiters) {
       waiters.push(resolve);
@@ -121,6 +133,16 @@ export function loadVerifiedFlag(userId: string): Promise<boolean> {
       timer = setTimeout(() => { void flush(); }, BATCH_WINDOW_MS);
     }
   });
+}
+
+/** The verified half of {@link cachedBadges}. */
+export function cachedVerifiedFlag(userId: string): boolean | undefined {
+  return cachedBadges(userId)?.verified;
+}
+
+/** The verified half of {@link loadBadges}. */
+export function loadVerifiedFlag(userId: string): Promise<boolean> {
+  return loadBadges(userId).then((flags) => flags.verified);
 }
 
 /** Test seam: drop the cache so each case starts from a cold page. */

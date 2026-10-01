@@ -633,10 +633,41 @@ public class PublicationClient {
             ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     url, HttpMethod.POST, entity, new ParameterizedTypeReference<>() {});
             return response.getBody();
+        } catch (HttpClientErrorException.BadRequest e) {
+            // publication-service answers 400 only for an IllegalArgumentException, i.e. a request the
+            // caller can correct (a showcase epoch the run does not have, a missing version...). Surface
+            // it as one, with the service's own sentence, so tool callers classify it as an input error
+            // instead of an execution failure. Every other status keeps the generic wrap below.
+            String reason = errorOf(e);
+            log.warn("Publish workflow refused (400): {}", reason);
+            throw new IllegalArgumentException(reason, e);
+        } catch (HttpClientErrorException.UnprocessableEntity e) {
+            // 422 = structured refusal (e.g. the plan references a tenant-private custom
+            // API). The body carries a stable code plus the offending detail, so callers
+            // render an actionable message instead of "422 Unprocessable Entity". Same
+            // contract as publishAgent below.
+            PublicationValidationException typed =
+                    PublicationValidationException.fromResponseBody(e.getResponseBodyAsString(), e);
+            log.warn("Publish workflow refused ({}): {}", typed.getErrorCode(), typed.getMessage());
+            throw typed;
         } catch (Exception e) {
             log.error("Failed to publish workflow: {}", e.getMessage());
             throw new RuntimeException("Failed to publish workflow: " + e.getMessage(), e);
         }
+    }
+
+    /** The {@code error} field of a JSON error body, else the exception's own message. */
+    @SuppressWarnings("unchecked")
+    private static String errorOf(HttpClientErrorException e) {
+        try {
+            Map<String, Object> body = LIMIT_MAPPER.readValue(e.getResponseBodyAsByteArray(), Map.class);
+            if (body.get("error") instanceof String text && !text.isBlank()) {
+                return text;
+            }
+        } catch (Exception ignored) {
+            // not JSON: fall through
+        }
+        return e.getMessage();
     }
 
     // ========== Shared Links ==========

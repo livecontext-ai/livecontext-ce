@@ -8,6 +8,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.autoconfigure.flyway.FlywayMigrationStrategy;
+import org.springframework.boot.context.TypeExcludeFilter;
 import org.springframework.context.annotation.AnnotationBeanNameGenerator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
@@ -57,6 +58,11 @@ import java.util.Set;
         "com.apimarketplace.sse"
     },
     excludeFilters = {
+        // A @ComponentScan declared here replaces the one @SpringBootApplication carries, and with it
+        // Boot's TypeExcludeFilter: a @SpringBootTest context would then scan the test classes too (and a
+        // slice test such as @WebMvcTest would load every component). Same filter as
+        // ConversationServiceApplication; inert at runtime.
+        @ComponentScan.Filter(type = FilterType.CUSTOM, classes = TypeExcludeFilter.class),
         // Exclude individual service Application classes to avoid multiple @SpringBootApplication
         @ComponentScan.Filter(type = FilterType.REGEX,
             pattern = "com\\.apimarketplace\\..+\\..+Application"),

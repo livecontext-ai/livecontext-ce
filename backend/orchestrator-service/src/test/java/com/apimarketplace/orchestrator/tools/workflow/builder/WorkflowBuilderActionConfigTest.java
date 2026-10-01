@@ -157,4 +157,40 @@ class WorkflowBuilderActionConfigTest {
                     .doesNotContain(readAction);
         }
     }
+
+    @Test
+    @DisplayName("regression: the unknown-action list names every action the tool documents (get_run, runs, get... were missing)")
+    void documentedActions_coverEveryActionTheToolDescribes() {
+        // Prod 2026-09: "Unknown action: list_runs. Allowed: [...]" listed PRIMARY_ACTIONS only,
+        // so get, list, runs, get_run, wait_run, get_node_output, get_plan and set_plan looked
+        // non-existent although the tool's own action parameter documents them.
+        var factory = new WorkflowBuilderToolDefinitionFactory(
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.service.NodeLibraryService.class));
+        String description = factory.buildToolDefinition().parameters().stream()
+                .filter(p -> "action".equals(p.name())).findFirst().orElseThrow().description();
+        String list = description.substring("Action: ".length(), description.indexOf(". "));
+        java.util.List<String> described = java.util.Arrays.stream(list.split(","))
+                .map(String::trim).filter(a -> !a.isEmpty()).toList();
+
+        assertThat(described).contains("get_run", "runs", "get");
+        assertThat(WorkflowBuilderActionConfig.DOCUMENTED_ACTIONS).containsAll(described);
+        assertThat(WorkflowBuilderActionConfig.ALL_ACTIONS).containsAll(WorkflowBuilderActionConfig.DOCUMENTED_ACTIONS);
+    }
+
+    @Test
+    @DisplayName("the legacy 'create' stays valid but is not advertised (the agent is steered to finish)")
+    void documentedActions_excludeLegacyCreate() {
+        assertThat(WorkflowBuilderActionConfig.DOCUMENTED_ACTIONS).doesNotContain("create").contains("finish");
+        assertThat(WorkflowBuilderActionConfig.ALL_ACTIONS).contains("create");
+        assertThat(WorkflowBuilderActionConfig.DOCUMENTED_ACTIONS).doesNotHaveDuplicates();
+    }
+
+    @Test
+    @DisplayName("regression: hallucinated update_node and list_runs resolve to modify and runs")
+    void observedHallucinatedActions_areAliased() {
+        assertThat(WorkflowBuilderActionConfig.isValidAction("update_node")).isTrue();
+        assertThat(WorkflowBuilderActionConfig.resolveAlias("update_node")).isEqualTo("modify");
+        assertThat(WorkflowBuilderActionConfig.isValidAction("list_runs")).isTrue();
+        assertThat(WorkflowBuilderActionConfig.resolveAlias("list_runs")).isEqualTo("runs");
+    }
 }

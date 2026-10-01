@@ -61,7 +61,7 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * <p>Lives in migration-service, on {@link FlywayTestSupport}, so it runs against CI's
  * {@code services: postgres} rather than a container: the ARC runners have no Docker socket.
- * It is named in the "Flyway migration guards" step of ci.yml; a regression test that runs in
+ * It runs with its whole module in the Backend Tests job of ci.yml; a regression test that runs in
  * no job is a comment. Every scratch database and role it creates is dropped again, because
  * that CI Postgres and a developer's are the same server for several of these tests.
  */

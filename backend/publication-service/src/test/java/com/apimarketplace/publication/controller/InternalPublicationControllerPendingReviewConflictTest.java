@@ -114,6 +114,21 @@ class InternalPublicationControllerPendingReviewConflictTest {
         assertThat(response.getStatusCode().value()).isEqualTo(500);
     }
 
+    @Test
+    @DisplayName("Bug A7: publishWorkflow with a showcase epoch missing from the run → 400 naming the epoch (was 500)")
+    void publishWorkflowMissingShowcaseEpochIsBadRequest() {
+        when(publicationService.publishWorkflow(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), anyBoolean(), any(), any()))
+                .thenThrow(new OrchestratorInternalClient.ShowcaseEpochNotFoundException("run-1", 7));
+
+        ResponseEntity<?> response = controller.publishWorkflow(
+                Map.of("workflowId", UUID.randomUUID().toString()), TENANT, null);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(400);
+        assertThat((String) asErrorBody(response).get("error")).contains("Showcase epoch 7 does not exist in run run-1");
+    }
+
     @SuppressWarnings("unchecked")
     private static Map<String, Object> asErrorBody(ResponseEntity<?> response) {
         return (Map<String, Object>) response.getBody();

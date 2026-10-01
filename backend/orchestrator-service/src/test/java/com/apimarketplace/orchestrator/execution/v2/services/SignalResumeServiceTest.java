@@ -3406,4 +3406,66 @@ class SignalResumeServiceTest {
             verify(mockStepByStepService, never()).executeNode(eq(runId), eq("core:join"), any(), anyInt());
         }
     }
+    /**
+     * A queued agent at the tail of a loop body: its async delivery advances the loop. A failure
+     * filters the node's successors out, and a continued one restores them (as the synchronous
+     * path does), so only a node with no forward successor is a loop tail.
+     */
+    @Nested
+    @DisplayName("advanceLoopBackEdgeForAsyncCompletedNode() - after a continued failure")
+    class AdvanceLoopAfterAContinuedFailure {
+
+        private final com.apimarketplace.orchestrator.execution.v2.engine.ExecutionTree tree =
+            mock(com.apimarketplace.orchestrator.execution.v2.engine.ExecutionTree.class);
+        private final com.apimarketplace.orchestrator.domain.workflow.WorkflowExecution loadedExecution =
+            mock(com.apimarketplace.orchestrator.domain.workflow.WorkflowExecution.class);
+        private final com.apimarketplace.orchestrator.execution.v2.nodes.BaseNode failedNode =
+            mock(com.apimarketplace.orchestrator.execution.v2.nodes.BaseNode.class);
+        private final com.apimarketplace.orchestrator.execution.v2.nodes.NodeExecutionResult continued =
+            new com.apimarketplace.orchestrator.execution.v2.nodes.NodeExecutionResult("agent:writer",
+                com.apimarketplace.orchestrator.domain.execution.NodeStatus.FAILED, Map.of(), java.util.Optional.of("down"),
+                Map.of(com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE, true),
+                5L);
+
+        @BeforeEach
+        void loaded() {
+            when(mockExecutionCacheManager.loadTreeAndExecution("run-1")).thenReturn(
+                new com.apimarketplace.orchestrator.execution.v2.cache.ExecutionCacheManager.LoadedExecution(tree, loadedExecution));
+            when(mockNodeSearchService.buildNodeMapFromAllRoots(tree))
+                .thenReturn(Map.of("agent:writer", failedNode));
+            when(failedNode.getNextNodes(continued)).thenReturn(java.util.List.of());
+        }
+
+        @Test
+        @DisplayName("REGRESSION: a continued failure with a successor is not a loop tail: its successors run, the loop does not turn")
+        void successorRestoredMeansNotATail() {
+            when(failedNode.getSuccessors()).thenReturn(java.util.List.of(
+                mock(com.apimarketplace.orchestrator.execution.v2.nodes.ExecutionNode.class)));
+
+            java.util.Set<String> ready = resumeService.advanceLoopBackEdgeForAsyncCompletedNode(
+                "run-1", "0", "agent:writer", 0, 1, "trigger:start", continued);
+
+            assertThat(ready).isEmpty();
+            verifyNoInteractions(mockBackEdgeHandler);
+        }
+
+        @Test
+        @DisplayName("a continued failure at the tail of a loop body reaches the loop's back-edge")
+        void tailOfALoopBodyReachesTheBackEdge() {
+            when(failedNode.getSuccessors()).thenReturn(java.util.List.of());
+            com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext context =
+                mock(com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext.class);
+            com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan plan =
+                mock(com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan.class);
+            when(context.plan()).thenReturn(plan);
+            when(mockStepByStepContextManager.getOrCreateContextWithTriggerData(
+                "run-1:0", tree, "0", 0, "agent:writer", 1, "trigger:start")).thenReturn(context);
+            when(mockBackEdgeHandler.hasBackEdge(failedNode, plan)).thenReturn(false);
+
+            resumeService.advanceLoopBackEdgeForAsyncCompletedNode(
+                "run-1", "0", "agent:writer", 0, 1, "trigger:start", continued);
+
+            verify(mockBackEdgeHandler).hasBackEdge(failedNode, plan);
+        }
+    }
 }

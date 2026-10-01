@@ -482,9 +482,15 @@ public class AgentRemoteExecutionService {
         // A linked run also forces the bridge into restricted "API mode": only the platform
         // MCP tools, empty cwd (no AGENTS.md/CLAUDE.md), no account/CLI leak - so nothing
         // reveals which CLI executed it. Direct (non-link) bridge runs stay unrestricted.
+        // A linked run is also the one run whose failure is re-run on the SAME stream (see
+        // handleBridgeFailurePreStream), so the bridge is told not to announce that failure:
+        // a chat reads `error` as the end of the turn and dropped the whole retried reply.
+        // Whoever gets this response publishes the stream's terminal event (the fallback's
+        // own callback, or the chat / workflow caller), exactly as for a successful run.
         AgentExecutionRequestDto dispatchRequest = executionRoute != null
             ? request.withExecutionTarget(executionRoute.executionProvider(), executionRoute.executionModel())
                      .withRestrictedToolset(true)
+                     .withCallerPublishingFailure(true)
             : request;
         agentActivityPublisher.publishExecutionStarted(
             agentEntityId, executionId, request.model(), source, taskId);

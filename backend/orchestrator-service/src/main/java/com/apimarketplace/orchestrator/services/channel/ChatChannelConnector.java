@@ -129,6 +129,20 @@ public interface ChatChannelConnector {
     }
 
     /**
+     * The destination a typed chat id names, as the provider identifies it, asked once the account
+     * is verified and before anything is stored.
+     *
+     * <p>A person types what they see: on Slack that is "#ops", while every Slack call that edits a
+     * message, and every press that comes back, speaks in the conversation id ("C0123..."). Stored
+     * as typed, the test message fails and the row can never match an answer. Telegram's "@name"
+     * is the same trap: it delivers, and every press comes back with the numeric id. The default
+     * keeps the id as given, with no title and no type, for a provider whose typed id is its id.
+     */
+    default Outcome<ChatCandidate> resolveDestination(String tenantId, Long credentialId, String chatId) {
+        return Outcome.of(new ChatCandidate(chatId, null, null, null));
+    }
+
+    /**
      * Whether a press tells us WHO pressed, in terms an allow-list can check.
      *
      * <p>False for a provider whose buttons are links (Teams): the decision page knows the link,

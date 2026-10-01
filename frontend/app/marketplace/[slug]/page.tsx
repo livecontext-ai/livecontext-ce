@@ -8,14 +8,14 @@ import {
   fetchPublicationBySlug,
   fetchPublicationReviews,
   fetchShowcaseRender,
-  fetchVerifiedPublisherHandles,
+  fetchPublisherBadgeHandles,
 } from '@/lib/marketplace/publicPublications';
 import { isIndexable, marketplacePath, metaDescription } from '@/lib/marketplace/indexability';
 import { listingJsonLd } from '@/lib/marketplace/listingJsonLd';
 import { buildPublicGraph } from '@/lib/marketplace/publicPlanGraph';
 import { WorkflowNodeIcons } from '@/components/WorkflowNodeIcons';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
-import { VerifiedBadgeIcon } from '@/components/profile/VerifiedBadgeIcon';
+import { IdentityBadgeIcon } from '@/components/profile/IdentityBadgeIcon';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { Flag, Play, Star } from 'lucide-react';
 import { fetchVideoForMarketplaceSlug } from '@/app/videos/_lib/publicVideos';
@@ -106,12 +106,12 @@ export default async function MarketplaceListingPage({
   // or exposes anonymously. Neither is allowed to take the page down: a missing
   // showcase or an unreadable plan simply drops its section.
   const graph = buildPublicGraph(publication.planSnapshot);
-  const [showcase, reviewPage, verifiedPublishers, film] = await Promise.all([
+  const [showcase, reviewPage, publisherBadges, film] = await Promise.all([
     publication.hasShowcase ? fetchShowcaseRender(publication.id) : Promise.resolve(null),
     fetchPublicationReviews(publication.id),
     // One author on this page. Public reviews carry no reviewer identity at all
     // (stripped server-side), so no badge is resolvable for them by design.
-    fetchVerifiedPublisherHandles([publication.publisherHandle]),
+    fetchPublisherBadgeHandles([publication.publisherHandle]),
     // The film that demonstrates THIS listing, if one exists. Best-effort like
     // the showcase beside it: the section disappears, the page does not. The
     // link goes both ways on purpose, because this is the page where someone
@@ -120,7 +120,9 @@ export default async function MarketplaceListingPage({
     fetchVideoForMarketplaceSlug(slug),
   ]);
   const publisherVerified = !!publication.publisherHandle
-    && verifiedPublishers.has(publication.publisherHandle.toLowerCase());
+    && publisherBadges.verified.has(publication.publisherHandle.toLowerCase());
+  const publisherPartner = !!publication.publisherHandle
+    && publisherBadges.partners.has(publication.publisherHandle.toLowerCase());
 
   const url = `${SITE_URL}${marketplacePath(slug)}`;
 
@@ -168,12 +170,12 @@ export default async function MarketplaceListingPage({
               // is otherwise private and the URL would 404.
               <Link href={`/u/${publication.publisherHandle}`} className="inline-flex items-center gap-1 no-underline hover:underline">
                 by {publication.publisherName}
-                <VerifiedBadgeIcon verified={publisherVerified} />
+                <IdentityBadgeIcon verified={publisherVerified} partner={publisherPartner} />
               </Link>
             ) : (
               <span className="inline-flex items-center gap-1">
                 by {publication.publisherName}
-                <VerifiedBadgeIcon verified={publisherVerified} />
+                <IdentityBadgeIcon verified={publisherVerified} partner={publisherPartner} />
               </span>
             ))}
           {publication.categoryName && <span>{publication.categoryName}</span>}
@@ -287,7 +289,7 @@ export default async function MarketplaceListingPage({
             <div className="min-w-0">
               <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-[var(--text-primary)]">
                 <span className="truncate">{publication.publisherName ?? 'Anonymous publisher'}</span>
-                <VerifiedBadgeIcon verified={publisherVerified} />
+                <IdentityBadgeIcon verified={publisherVerified} partner={publisherPartner} />
               </p>
               {/* Only linked when the publisher has a public handle: their
                   profile is otherwise private and the URL would 404. */}

@@ -55,7 +55,7 @@ class HttpExecutionServiceDeleteBodyTest {
         lenient().when(apiToolParameterRepository.findByApiToolId(any())).thenReturn(List.of());
         service = new HttpExecutionService(
                 apiToolParameterRepository, userCredentialService, encryptionService,
-                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine(2, 10_000L));
+                objectMapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine());
     }
 
     private ApiToolEntity tool(String method) {

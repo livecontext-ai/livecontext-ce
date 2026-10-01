@@ -38,7 +38,7 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping("/api/agents")
-public class AgentController {
+public class AgentController implements com.apimarketplace.agent.config.AgentNameConflictSource {
 
     private static final Logger logger = LoggerFactory.getLogger(AgentController.class);
 

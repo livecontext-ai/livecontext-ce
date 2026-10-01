@@ -276,4 +276,21 @@ class WorkflowBuilderLoaderStoredPlanResyncTest {
         // From now on it is compared like any session.
         assertThat(loader.resyncWithStoredPlan(session)).isFalse();
     }
+
+    @Test
+    @DisplayName("discard forgets the conversation's remembered workflow, so 'no active session' never offers to reopen what was discarded")
+    void discardForgetsRememberedWorkflow() {
+        WorkflowBuilderSession session = new WorkflowBuilderSession();
+        session.setSessionId("wb_discard");
+        session.setTenantId("tenant-1");
+        session.setConversationId("conv-1");
+        session.setWorkflowName("Draft");
+        session.setLoadedWorkflowId(WORKFLOW_ID.toString());
+
+        var result = loader.executeDiscard(session);
+
+        assertThat(result.success()).isTrue();
+        verify(sessionStore).delete("wb_discard");
+        verify(sessionStore).forgetLastWorkflow("tenant-1", "conv-1", WORKFLOW_ID.toString());
+    }
 }

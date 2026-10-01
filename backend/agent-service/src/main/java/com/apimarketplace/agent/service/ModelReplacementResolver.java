@@ -47,6 +47,12 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>otherwise the platform default model.</li>
  * </ol>
  *
+ * <p>An UNLISTED model (V554) is enabled, so rule 1 leaves it alone: whatever uses it keeps
+ * running on it, and the replacement an admin may have set for it is kept but not applied
+ * until the model is switched off again. It is also a valid replacement TARGET (it is
+ * listed by {@link ModelCatalogService#listAvailableModels()}, which carries unlisted models
+ * because they stay runnable).
+ *
  * <p>Execution-link TARGETS go through {@link #explicitReplacementIfDisabled} instead, which
  * applies rule 2 only: an admin commonly disables a CLI bridge row to hide it from users
  * while still routing a linked model onto it, so a disabled target with no replacement of its

@@ -52,7 +52,9 @@ public class InternalSharedLinkController {
                 organizationId = headerOrganizationId;
             }
 
-            SharedLinkEntity link = sharedLinkService.register(
+            // The owning service vouches for the resource (see registerForOwningService): this
+            // path is internal-only, and the user-facing create checks ownership instead.
+            SharedLinkEntity link = sharedLinkService.registerForOwningService(
                     tenantId, organizationId, userPlan, resourceType, resourceToken, resourceId, title, description);
 
             return ResponseEntity.ok(Map.of(
@@ -105,18 +107,22 @@ public class InternalSharedLinkController {
     @GetMapping("/by-token/{token}")
     public ResponseEntity<?> getByToken(@PathVariable String token) {
         return sharedLinkService.getByToken(token)
-                .map(link -> ResponseEntity.ok(Map.of(
-                        "id", link.getId().toString(),
-                        "token", link.getToken(),
-                        "resourceType", link.getResourceType().name(),
-                        "resourceToken", link.getResourceToken(),
-                        "resourceId", link.getResourceId() != null ? link.getResourceId().toString() : "",
-                        "tenantId", link.getTenantId(),
-                        "title", link.getTitle() != null ? link.getTitle() : "",
-                        "description", link.getDescription() != null ? link.getDescription() : "",
-                        "isActive", link.isActive(),
-                        "metadata", link.getMetadata() != null ? link.getMetadata() : Map.of()
-                )))
+                .map(link -> {
+                    Map<String, Object> body = new LinkedHashMap<>();
+                    body.put("id", link.getId().toString());
+                    body.put("token", link.getToken());
+                    body.put("resourceType", link.getResourceType().name());
+                    body.put("resourceToken", link.getResourceToken());
+                    body.put("resourceId", link.getResourceId() != null ? link.getResourceId().toString() : "");
+                    body.put("tenantId", link.getTenantId());
+                    // The link owner's workspace: /app/public binds the link's resourceId to it.
+                    body.put("organizationId", link.getOrganizationId() != null ? link.getOrganizationId() : "");
+                    body.put("title", link.getTitle() != null ? link.getTitle() : "");
+                    body.put("description", link.getDescription() != null ? link.getDescription() : "");
+                    body.put("isActive", link.isActive());
+                    body.put("metadata", link.getMetadata() != null ? link.getMetadata() : Map.of());
+                    return ResponseEntity.ok(body);
+                })
                 .orElse(ResponseEntity.notFound().build());
     }
 

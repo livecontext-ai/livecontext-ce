@@ -43,13 +43,33 @@ describe('selectLiveChannelIds', () => {
       .toEqual(['conv-done']);
   });
 
-  it('drops a stopped or errored stream - the two statuses that can actually occur here', () => {
+  it('drops a stopped stream, and an error with no stream behind it (a refused send)', () => {
     // Not a made-up status: SingleStreamState.status is exactly
-    // streaming | completed | stopped | error, and these are the two to exclude.
+    // streaming | completed | stopped | error.
     expect(selectLiveChannelIds(new Map([withStatus('conv-stopped', 'stopped')]), undefined))
       .toEqual([]);
     expect(selectLiveChannelIds(new Map([withStatus('conv-error', 'error')]), undefined))
       .toEqual([]);
+  });
+
+  it('keeps listening to a live stream that reported an error, so its later reply still lands', () => {
+    // An execution-link fallback publishes `error` and retries the turn under the SAME stream;
+    // dropping the channel on the error threw away the content and the `done` that followed.
+    const streams = new Map<string, { status: StreamingStatus; streamId: string | null }>([
+      ['conv-fallback', { status: 'error', streamId: 'sid-1' }],
+    ]);
+
+    expect(selectLiveChannelIds(streams, undefined)).toEqual(['conv-fallback']);
+  });
+
+  it('releases the channel of an error the server confirmed as the end of the turn', () => {
+    // Kept, it would hold a slot, request a snapshot on every resubscribe and cost REST reads
+    // on every reconnect, for a turn that is over.
+    const streams = new Map<string, { status: StreamingStatus; streamId: string | null; errorSettled?: boolean }>([
+      ['conv-failed', { status: 'error', streamId: 'sid-1', errorSettled: true }],
+    ]);
+
+    expect(selectLiveChannelIds(streams, undefined)).toEqual([]);
   });
 
   it('adds the streams the server reports active after a reload, without duplicating', () => {

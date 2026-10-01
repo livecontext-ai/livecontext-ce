@@ -94,6 +94,36 @@ class RewardServiceTest {
     }
 
     @Test
+    @DisplayName("A personal upgrade code cannot be consumed by the ordinary redeem path")
+    void personalCodeCannotBeRedeemedBeforePayment() {
+        RewardCode code = new RewardCode();
+        code.setId(300L);
+        code.setCode("PERSONALCODE2345");
+        code.setProgram(RewardProgram.PERSONAL_UPGRADE);
+        when(codeRepository.findByCodeIgnoreCase("PERSONALCODE2345")).thenReturn(Optional.of(code));
+
+        var outcome = service.redeem(1L, "PERSONALCODE2345");
+
+        assertThat(outcome.status()).isEqualTo(RewardService.RedeemStatus.UNKNOWN_CODE);
+        verify(codeRepository, never()).tryReserveRedemption(anyLong());
+        verify(redemptionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("A payable personal checkout blocks a new referral without consuming it")
+    void personalCheckoutBlocksReferralRedeem() {
+        when(codeRepository.findByCodeIgnoreCase("ABCD2345")).thenReturn(Optional.of(referralCode(2L)));
+        PersonalOfferService personal = mock(PersonalOfferService.class);
+        when(personal.hasPayableReservation(1L)).thenReturn(true);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "personalOffers", personal);
+
+        var outcome = service.redeem(1L, "ABCD2345");
+
+        assertThat(outcome.status()).isEqualTo(RewardService.RedeemStatus.OFFER_CHECKOUT_IN_PROGRESS);
+        verify(codeRepository, never()).tryReserveRedemption(anyLong());
+    }
+
+    @Test
     @DisplayName("redeem: inactive code is NOT_REDEEMABLE")
     void redeemInactive() {
         RewardCode rc = referralCode(2L);

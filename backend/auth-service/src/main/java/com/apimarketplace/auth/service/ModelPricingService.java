@@ -281,6 +281,7 @@ public class ModelPricingService {
         BigDecimal inputRate = pricing.getInputRate();
         BigDecimal prompt = BigDecimal.valueOf(Math.max(0, usage.promptTokens()));
         ProviderFamily family = ProviderFamily.of(provider);
+        CacheRates cacheRates = cacheRates(provider, pricing);
         switch (family) {
             case ANTHROPIC_API, ANTHROPIC_CLI -> {
                 BigDecimal write = BigDecimal.valueOf(Math.max(0, usage.cacheCreationTokens()));
@@ -291,34 +292,59 @@ public class ModelPricingService {
                         ? prompt.subtract(write).subtract(read).max(BigDecimal.ZERO)
                         : prompt;
                 return base.multiply(inputRate)
-                        .add(write.multiply(rateFor(pricing.getCacheWriteRate(), inputRate, anthropicCacheWriteMultiplier)))
-                        .add(read.multiply(rateFor(pricing.getCacheReadRate(), inputRate, anthropicCacheReadMultiplier)));
-            }
-            case OPENAI -> {
-                return weightedCachedSubset(prompt, cachedSubset(usage, false), inputRate,
-                        rateFor(pricing.getCacheReadRate(), inputRate, openaiCachedMultiplier));
-            }
-            case DEEPSEEK -> {
-                return weightedCachedSubset(prompt, cachedSubset(usage, false), inputRate,
-                        rateFor(pricing.getCacheReadRate(), inputRate, deepseekCachedMultiplier));
+                        .add(write.multiply(cacheRates.cacheWriteRate()))
+                        .add(read.multiply(cacheRates.cacheReadRate()));
             }
             case GOOGLE_API, GOOGLE_CLI -> {
                 // Direct API reports cached content in cachedTokens; the gemini-cli
                 // bridge maps it into cacheReadTokens. Either way it is a subset of
                 // promptTokens - take the larger of the two (never both populated).
                 return weightedCachedSubset(prompt, cachedSubset(usage, true), inputRate,
-                        rateFor(pricing.getCacheReadRate(), inputRate, geminiCachedMultiplier));
+                        cacheRates.cacheReadRate());
             }
             default -> {
-                // No family, so no multiplier to guess with: an unpriced model keeps the
-                // legacy "cached input costs full rate" behaviour (OTHER_CACHED_MULTIPLIER
-                // = 1). But when the catalog DOES know this model's cache price - qwen,
-                // moonshot, minimax and every future OpenAI-compatible vendor - the cached
-                // subset is billed at it instead of at full input rate.
+                // OpenAI-shaped, DeepSeek and unknown providers all report a cached SUBSET
+                // of the prompt; they differ only in the fallback weight cacheRates applies
+                // when the model has no cache price of its own (OTHER keeps the legacy
+                // "cached input costs full rate" behaviour, weight 1).
                 return weightedCachedSubset(prompt, cachedSubset(usage, false), inputRate,
-                        rateFor(pricing.getCacheReadRate(), inputRate, OTHER_CACHED_MULTIPLIER));
+                        cacheRates.cacheReadRate());
             }
         }
+    }
+
+    /**
+     * A model's per-1M price for one cache-read token and one cache-write token, before the
+     * cloud multiplier.
+     *
+     * <p>{@code cacheWriteRate} equals the input rate for every family that is not billed off
+     * a cache-write counter (see {@link CacheRateFallback#modelCacheWritePriceApplies()}).
+     */
+    public record CacheRates(BigDecimal cacheReadRate, BigDecimal cacheWriteRate) {}
+
+    /**
+     * The cache prices the ledger charges for {@code provider}'s {@code pricing} row: the
+     * model's own {@code cache_read_rate} / {@code cache_write_rate} when the catalogue
+     * publishes one, else the input rate times the provider family's fallback weight.
+     *
+     * <p>The debit ({@link #weightedInputRateTokens}) and the pricing snapshot the budget
+     * guards read both go through this one method, so a guard can never project a cached
+     * token at a price the ledger does not charge. (The browser's pre-flight estimate
+     * resolves the same rule from the weights {@link #cacheRateFallbacks()} publishes.)
+     * It was not always so:
+     * the snapshot published no cache price at all, the guards priced every cache read at
+     * the full input rate, and a Claude Code chat turn (mostly cache reads) was projected
+     * at about five times its real debit and killed after three or four model calls on a
+     * free account (2026-09-30).
+     */
+    public CacheRates cacheRates(String provider, ModelPricing pricing) {
+        CacheRateFallback fallback = cacheRateFallback(ProviderFamily.of(provider));
+        BigDecimal inputRate = pricing.getInputRate();
+        BigDecimal read = rateFor(pricing.getCacheReadRate(), inputRate, fallback.cacheReadWeight());
+        BigDecimal write = fallback.modelCacheWritePriceApplies()
+                ? rateFor(pricing.getCacheWriteRate(), inputRate, fallback.cacheWriteWeight())
+                : inputRate;
+        return new CacheRates(read, write);
     }
 
     /**

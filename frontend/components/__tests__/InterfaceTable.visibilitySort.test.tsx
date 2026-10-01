@@ -134,8 +134,13 @@ describe('InterfaceTable - visibility filter + sort re-query the server', () => 
     expect(screen.getByText('Private Interface')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('common.filterByVisibility'), { target: { value: 'public' } });
-    await waitFor(() => expect(screen.queryByText('Private Interface')).not.toBeInTheDocument());
-    expect(screen.getByText('Shared Interface')).toBeInTheDocument();
+    // One wait for the whole filtered state: the rows are replaced by the loading skeleton while
+    // the new page loads, so "Private Interface is gone" alone already holds mid-reload,
+    // before Shared Interface is back.
+    await waitFor(() => {
+      expect(screen.queryByText('Private Interface')).not.toBeInTheDocument();
+      expect(screen.getByText('Shared Interface')).toBeInTheDocument();
+    });
     expect(mocks.getInterfacesPage).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'public' }));
 
     fireEvent.change(screen.getByLabelText('common.filterByVisibility'), { target: { value: 'private' } });

@@ -389,17 +389,26 @@ export default function WorkflowsPage() {
           rowHeaders
           head={['Field', 'Default', 'What it does']}
           rows={[
-            ['retryCount', '0', 'additional attempts after a failure; total attempts = retryCount + 1'],
-            ['retryBackoffMs', '0', 'delay between attempts; blocks only the executing branch or item'],
+            ['retryCount', '0', 'additional attempts after a failure, at most 10; total attempts = retryCount + 1'],
+            [
+              'retryBackoffMs',
+              '0',
+              "delay between attempts, at most 60000 (60 seconds); blocks only the executing branch or item. When the provider's refusal carries a Retry-After, the longer of the two is used",
+            ],
+            [
+              'retryOn',
+              'absent',
+              "integration steps only, with retryCount above 0. Absent: every failure is retried except a refusal no retry changes: a request the provider refused outright (a 4xx other than 408, 425 and 429 that is not a rate limit), or one the platform refused (missing credits, a budget reached, a plan that does not include the integration, a credential it cannot pick, a tool that no longer exists). 'rate_limit': only a rate limit is retried (429, 503, or a 4xx with a Retry-After or a message saying it is a rate limit, e.g. rate limit, too many requests, throttled, request limit reached; a Retry-After on a 5xx does not count)",
+            ],
             [
               'continueOnFailure',
               'false',
-              'on final failure the node is still marked FAILED, but its successors run instead of being skipped',
+              'when every attempt fails, the node stays FAILED and the run ends as it would without this setting, but the next nodes run instead of being skipped, whatever started the run (execute, a trigger, a schedule or the Run button), unless the failure is a refusal for missing credits or a budget; inside a Split, a failed item goes on to the next nodes',
             ],
             [
               'timeoutMs',
               '0 (no limit)',
-              'a limit per attempt; on expiry the attempt fails and retries apply',
+              'a limit per attempt; on expiry the attempt fails and retries apply. On an agent node it bounds the wait for the answer, a wait in the queue or for a person the agent asked included',
             ],
             [
               'executeOnce',
@@ -419,9 +428,23 @@ export default function WorkflowsPage() {
           cancelled or rolled back.
         </Callout>
         <p>
+          <strong>The platform never re-sends a refused call on its own</strong>: retrying is this policy&apos;s
+          job. For a provider that limits requests per minute, use a <code>retryBackoffMs</code> that outlasts
+          the window (60000). When the provider says how long to wait (Retry-After), the step waits that long
+          if it is longer than the backoff; a provider asking for longer than 60 seconds
+          ends the retries, because every wait holds a worker: a window of minutes or hours belongs to a
+          schedule. <code>retryOn: &apos;rate_limit&apos;</code> is safer
+          on a step that publishes or writes: it does not re-send after a timeout or most server errors, which
+          the provider may already have applied, although a 503 can still arrive after a write went through.
+          An <strong>HTTP Request</strong> node does not fail on an HTTP error (it completes with the status in
+          its output), so its HTTP errors are never retried: branch on its status instead. When retries stop
+          early, the result says why in <code>policy_retry_stopped</code>.
+        </p>
+        <p>
           Some combinations are rejected up front instead of failing at run time: <code>continueOnFailure</code> on If /
-          else, Switch, or Option; <code>executeOnce</code> on Split, Aggregate, Merge, or While; and any
-          negative value.
+          else, Switch, Option, While, Classify, or Guardrail; <code>executeOnce</code> on Split, Aggregate, Merge, or While;{' '}
+          <code>retryOn</code> on anything but an integration step or without retries; a value above a cap; and
+          any negative value.
         </p>
 
         <h2>Execution modes and node statuses</h2>

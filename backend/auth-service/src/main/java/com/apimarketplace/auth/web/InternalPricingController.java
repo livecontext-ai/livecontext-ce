@@ -49,7 +49,8 @@ public class InternalPricingController {
      *   "version": "2026-04-07T11:42:00Z",
      *   "rates": [
      *     { "provider": "openai", "model": "gpt-4o", "inputRate": 0.005, "outputRate": 0.015,
-     *       "fixedCost": 0.0, "contextWindow": 128000, "maxOutputTokens": 16384 },
+     *       "fixedCost": 0.0, "contextWindow": 128000, "maxOutputTokens": 16384,
+     *       "cacheReadRate": 0.0025, "cacheWriteRate": 0.005 },
      *     ...
      *   ]
      * }
@@ -59,9 +60,13 @@ public class InternalPricingController {
      * currency unit as the {@code subscription.remaining_credits} balance.
      * {@code contextWindow} +
      * {@code maxOutputTokens} (V162) drive {@code worstCaseSingleIter} in budget
-     * guards; both may be {@code null} for legacy/unknown rows. Consumers must
-     * tolerate missing fields (forward+backward compat tested by
-     * {@code PricingSnapshotBackwardCompatTest}).</p>
+     * guards; both may be {@code null} for legacy/unknown rows.
+     * {@code cacheReadRate} / {@code cacheWriteRate} are the per-1M prices the ledger
+     * charges for one cache-read / cache-write token ({@link ModelPricingService#cacheRates}),
+     * after the same multiplier; a consumer reading an older snapshot without them prices
+     * cache tokens as before (the guards keep their pre-change formula). Consumers must
+     * tolerate missing fields ({@code PricingSnapshotClientCacheRatesTest} parses a
+     * snapshot with and without them).</p>
      */
     @GetMapping("/snapshot")
     public ResponseEntity<Map<String, Object>> snapshot() {
@@ -90,6 +95,14 @@ public class InternalPricingController {
                 p.getFixedCost() != null ? p.getFixedCost() : BigDecimal.ZERO));
         row.put("contextWindow", p.getContextWindow());
         row.put("maxOutputTokens", p.getMaxOutputTokens());
+        // The prices the ledger charges for one cached token, so a guard projects a cache
+        // read at its real price instead of the full input rate (about 5x too high on a
+        // Claude Code turn, which is mostly cache reads).
+        ModelPricingService.CacheRates cacheRates = pricingService.cacheRates(p.getProvider(), p);
+        row.put("cacheReadRate", pricingService.applyCloudLlmBillingMultiplier(
+                p.getProvider(), p.getModel(), cacheRates.cacheReadRate()));
+        row.put("cacheWriteRate", pricingService.applyCloudLlmBillingMultiplier(
+                p.getProvider(), p.getModel(), cacheRates.cacheWriteRate()));
         return row;
     }
 }

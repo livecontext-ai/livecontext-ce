@@ -75,7 +75,7 @@ class HttpExecutionServiceSubResourceTokenTest {
     void setUp() {
         mapper = new ObjectMapper();
         service = new HttpExecutionService(apiToolParameterRepository, userCredentialService,
-                encryptionService, mapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine(2, 10_000L));
+                encryptionService, mapper, jdbcTemplate, restTemplate, new ErrorPolicyEngine());
     }
 
     private ApiEntity fbApi() {

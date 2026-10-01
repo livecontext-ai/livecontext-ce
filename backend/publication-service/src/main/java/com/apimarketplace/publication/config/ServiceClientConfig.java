@@ -25,9 +25,17 @@ public class ServiceClientConfig {
     @Value("${services.datasource-url:http://localhost:8088}")
     private String datasourceUrl;
 
+    @Value("${services.catalog-url:http://localhost:8081}")
+    private String catalogUrl;
+
     @Bean
     public OrchestratorInternalClient orchestratorInternalClient() {
         return new OrchestratorInternalClient(orchestratorUrl);
+    }
+
+    @Bean
+    public CatalogInternalClient catalogInternalClient() {
+        return new CatalogInternalClient(catalogUrl);
     }
 
     @Bean

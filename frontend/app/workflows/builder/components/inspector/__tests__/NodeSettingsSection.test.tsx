@@ -35,16 +35,6 @@ const messages: AbstractIntlMessages = {
       executeOnceLabel: 'Execute once',
       executeOnceHelp: 'In a split, run for the first item only.',
       executeOnceBlockedTooltip: 'Not available on split, aggregate, merge or loop nodes.',
-      providerRetryLabel: 'Provider retry wait (seconds)',
-      providerRetryPlaceholder: 'Platform decides',
-      providerRetryHelp: 'Leave empty to let the platform wait out a rate limit.',
-      providerRetryHelpCededToNode: 'This node retries on its own, so the platform does not.',
-      providerRetryHelpBoundedByTimeout: "This node's timeout leaves {seconds}s for the platform.",
-      providerRetryHelpCappedByTimeout: "This node's timeout caps it at {seconds}s.",
-      providerRetryInfoDefault: 'Empty: the platform waits the delay the provider asked for.',
-      providerRetryInfoZero: '0: the call is never re-sent.',
-      providerRetryInfoCap: 'A longer wait is reduced to the platform budget.',
-      providerRetryInfoRunning: 'The node stays running while it waits.',
     },
     mock: {
       title: 'Mock output',
@@ -81,11 +71,7 @@ function makeNode(
   };
 }
 
-/**
- * A catalog tool step, which is what the plan emitter counts as one: the exclusions PLUS tool data.
- * Without the tool data a `flowNode` is not emitted as a `mcps` entry at all, so the provider-retry
- * control does not belong on it and the inspector does not offer it.
- */
+/** A catalog tool step, which is what the plan emitter counts as one: the exclusions PLUS tool data. */
 function makeToolNode(nodePolicy?: NodePolicy, id = 'tool-test-1'): Node<BuilderNodeData> {
   const node = makeNode('flowNode', 'action', nodePolicy, id);
   // The two fields toolData actually requires, so this is a shape the builder can really hold.
@@ -207,21 +193,22 @@ describe('NodeSettingsSection', () => {
     });
 
     it.each([
-      ['split', 'splitNode', 'split'],
-      ['aggregate', 'aggregateNode', 'aggregate'],
-      ['merge', 'mergeNode', 'merge'],
-      ['loop', 'whileGroupNode', 'loop'],
-    ])('disables Execute once with the blocked tooltip on %s nodes', (_label, type, kind) => {
-      const onUpdate = renderSection(makeNode(type, kind));
+      ['split', 'splitNode', 'split', false],
+      ['aggregate', 'aggregateNode', 'aggregate', false],
+      ['merge', 'mergeNode', 'merge', false],
+      ['loop', 'whileGroupNode', 'loop', true],
+    ])('disables Execute once with the blocked tooltip on %s nodes', (_label, type, kind, continueBlocked) => {
+      const onUpdate = renderSection(makeNode(type as string, kind as string));
       expandSection();
       const toggle = screen.getByRole('switch', { name: 'Execute once' }) as HTMLButtonElement;
       expect(toggle.disabled).toBe(true);
       expect(screen.getByTestId('node-settings-execute-once-blocked')).toBeTruthy();
       fireEvent.click(toggle);
       expect(onUpdate).not.toHaveBeenCalled();
-      // Continue on fail stays available on split coordinators
+      // Continue on fail stays available on split coordinators; a loop chooses its body or its
+      // exit, so a failed one would start both: blocked there, as the backend refuses it.
       const continueOnFail = screen.getByRole('switch', { name: 'Continue on fail' }) as HTMLButtonElement;
-      expect(continueOnFail.disabled).toBe(false);
+      expect(continueOnFail.disabled).toBe(continueBlocked);
     });
   });
 
@@ -410,203 +397,28 @@ describe('NodeSettingsSection', () => {
     });
   });
 
-  describe('provider retry budget', () => {
-    // The setting exists because the platform's retry and the author's MULTIPLY: a node that
-    // retries around a call the platform re-sends hits a rate-limited provider harder than a node
-    // that does nothing. So the two states that matter are "empty" (the platform decides) and "0"
-    // (never re-send), and the field is worthless if the UI cannot tell them apart or misreports
-    // which one is in force.
-    function providerRetryInput() {
-      return screen.getByTestId('node-settings-provider-retry') as HTMLInputElement;
-    }
+  describe('no provider retry budget (removed)', () => {
+    // The platform never re-sends a refused provider call any more, so there is nothing to bound.
 
-    it('is offered on a catalog tool step', () => {
+    it('offers no provider-retry field, even on a catalog tool step', () => {
       renderSection(makeToolNode());
-      expandSection();
-      expect(providerRetryInput()).toBeTruthy();
-    });
-
-    it('is NOT offered on a node the plan emitter would not make a tool step', () => {
-      // Same rule as the emitter, including its positive half: a flowNode with no tool data is not
-      // a `mcps` entry, so a value set here could never reach one.
-      renderSection(makeNode('flowNode', 'action'));
       expandSection();
       expect(screen.queryByTestId('node-settings-provider-retry')).toBeNull();
     });
 
-    it('is NOT offered on a control node', () => {
-      renderSection(makeNode('decisionNode', 'decision'));
+    it('a legacy budget stored on the node neither counts in the badge nor is written back', () => {
+      // A plan saved before the removal still carries the key. It must not auto-expand the section
+      // as "Settings (1)", and the next write must drop it.
+      const onUpdate = renderSection(
+        makeToolNode({ providerRetryMaxWaitSec: 30 } as unknown as NodePolicy)
+      );
+      expect(screen.getByTestId('node-settings-toggle').textContent).not.toContain('(');
+
       expandSection();
-      expect(screen.queryByTestId('node-settings-provider-retry')).toBeNull();
-    });
-
-    it('starts empty, and says the platform decides', () => {
-      renderSection(makeToolNode());
-      expandSection();
-      expect(providerRetryInput().value).toBe('');
-      expect(providerRetryInput().getAttribute('placeholder')).toBe('Platform decides');
-    });
-
-    it('writes 0 as a real value, not as "unset"', () => {
-      const onUpdate = renderSection(makeToolNode());
-      expandSection();
-
-      fireEvent.change(providerRetryInput(), { target: { value: '0' } });
-
-      const updated = onUpdate.mock.calls[0][0] as BuilderNodeData;
-      expect(updated.nodePolicy).toEqual({ providerRetryMaxWaitSec: 0 });
-    });
-
-    it('writes a positive budget', () => {
-      const onUpdate = renderSection(makeToolNode());
-      expandSection();
-
-      fireEvent.change(providerRetryInput(), { target: { value: '45' } });
-
-      const updated = onUpdate.mock.calls[0][0] as BuilderNodeData;
-      expect(updated.nodePolicy).toEqual({ providerRetryMaxWaitSec: 45 });
-    });
-
-    it('clearing the field removes the setting instead of writing 0', () => {
-      // Emptying a number input yields '', which the other numeric handlers read as 0. Here 0 is
-      // the OPPOSITE of empty, so reusing that handler would turn "let the platform decide" into
-      // "never retry" the moment a user cleared the box.
-      // No expandSection: a node that carries a policy starts EXPANDED, so clicking the header
-      // would collapse it and the field would not be in the document at all.
-      const onUpdate = renderSection(makeToolNode({ providerRetryMaxWaitSec: 30 }));
-
-      fireEvent.change(providerRetryInput(), { target: { value: '' } });
-
-      const updated = onUpdate.mock.calls[0][0] as BuilderNodeData;
-      expect(updated.nodePolicy).toBeUndefined();
-    });
-
-    it('clearing it keeps the other policy fields', () => {
-      const onUpdate = renderSection(makeToolNode({ retryCount: 2, providerRetryMaxWaitSec: 30 }));
-
-      fireEvent.change(providerRetryInput(), { target: { value: '' } });
+      fireEvent.change(screen.getByTestId('node-settings-retry-count'), { target: { value: '2' } });
 
       const updated = onUpdate.mock.calls[0][0] as BuilderNodeData;
       expect(updated.nodePolicy).toEqual({ retryCount: 2 });
-    });
-
-    it('editing the retry count PRESERVES a budget already set', () => {
-      // The interaction the design turns on: these two fields are read together, and a write that
-      // rebuilt the policy from the visible inputs would drop the one the author set deliberately.
-      const onUpdate = renderSection(makeToolNode({ providerRetryMaxWaitSec: 45 }));
-
-      fireEvent.change(screen.getByTestId('node-settings-retry-count'), { target: { value: '3' } });
-
-      const updated = onUpdate.mock.calls[0][0] as BuilderNodeData;
-      expect(updated.nodePolicy).toEqual({ retryCount: 3, providerRetryMaxWaitSec: 45 });
-    });
-
-    it('editing the timeout preserves it too', () => {
-      const onUpdate = renderSection(makeToolNode({ providerRetryMaxWaitSec: 0 }));
-
-      fireEvent.change(screen.getByTestId('node-settings-timeout'), { target: { value: '5000' } });
-
-      const updated = onUpdate.mock.calls[0][0] as BuilderNodeData;
-      expect(updated.nodePolicy).toEqual({ timeoutMs: 5000, providerRetryMaxWaitSec: 0 });
-    });
-
-    it('a node that retries itself is told the platform has already stood down', () => {
-      // Otherwise an author reads an empty field and assumes the platform is still retrying
-      // underneath their own retry, which is the multiplication this feature prevents.
-      renderSection(makeToolNode({ retryCount: 2 }));
-
-      expect(screen.getByText('This node retries on its own, so the platform does not.')).toBeTruthy();
-      expect(providerRetryInput().getAttribute('placeholder')).toBe('0');
-    });
-
-    it('a node with its OWN timeout is told what that leaves, not "platform decides"', () => {
-      // A 3s per-attempt timeout leaves 1s. Saying "the platform decides" there was false in the
-      // expensive direction: the author would believe a 5s Retry-After gets waited out when the
-      // attempt will be abandoned first.
-      renderSection(makeToolNode({ timeoutMs: 3000 }));
-
-      expect(screen.getByText("This node's timeout leaves 1s for the platform.")).toBeTruthy();
-      expect(providerRetryInput().getAttribute('placeholder')).toBe('1');
-    });
-
-    it('a timeout too short for any wait says 0, the state the field exists to make explicit', () => {
-      renderSection(makeToolNode({ timeoutMs: 1000 }));
-
-      expect(providerRetryInput().getAttribute('placeholder')).toBe('0');
-    });
-
-    it('an explicit budget overrides the ceded-to-node implication', () => {
-      renderSection(makeToolNode({ retryCount: 2, providerRetryMaxWaitSec: 45 }));
-
-      expect(screen.getByText('Leave empty to let the platform wait out a rate limit.')).toBeTruthy();
-      expect(providerRetryInput().value).toBe('45');
-    });
-
-    it('an explicit budget the node timeout will CAP says so, instead of showing a number that '
-      + 'will not be used', () => {
-      // The state the backend bound exists for, and the one the UI could not express: 45 typed,
-      // 1 applied. Showing 45 with the generic help is how a correct guard reads as a broken one -
-      // the author believes a 5s Retry-After gets waited out and the attempt is abandoned first.
-      renderSection(makeToolNode({ timeoutMs: 3000, providerRetryMaxWaitSec: 45 }));
-
-      expect(providerRetryInput().value).toBe('45');
-      expect(screen.getByText("This node's timeout caps it at 1s.")).toBeTruthy();
-    });
-
-    it('an explicit budget UNDER the ceiling is not reported as capped', () => {
-      renderSection(makeToolNode({ timeoutMs: 30000, providerRetryMaxWaitSec: 5 }));
-
-      expect(screen.getByText('Leave empty to let the platform wait out a rate limit.')).toBeTruthy();
-    });
-
-    it('is read-only in run mode, like every other setting', () => {
-      const onUpdate = renderSection(makeToolNode({ providerRetryMaxWaitSec: 0 }), vi.fn(), true);
-
-      expect(providerRetryInput().readOnly).toBe(true);
-      fireEvent.change(providerRetryInput(), { target: { value: '9' } });
-      expect(onUpdate).not.toHaveBeenCalled();
-    });
-
-    it('a negative entry changes nothing on a node that already has a budget', () => {
-      // A minus sign is a typo, not a decision. The node must already carry a policy for this to
-      // mean anything: on an empty node no write happens either way, so the guard would be
-      // untested. Reading '-3' as 0 would silently switch the platform retry off.
-      const onUpdate = renderSection(makeToolNode({ providerRetryMaxWaitSec: 45 }));
-
-      fireEvent.change(providerRetryInput(), { target: { value: '-3' } });
-
-      expect(onUpdate).not.toHaveBeenCalled();
-    });
-
-    it('a FRACTION does not become 0, which parseInt would have made it', () => {
-      // parseInt('0.5') is 0, and 0 on this field is not "under a second" - it is the switch that
-      // turns the platform retry off. A number input does not stop a fraction being typed.
-      const onUpdate = renderSection(makeToolNode({ providerRetryMaxWaitSec: 45 }));
-
-      fireEvent.change(providerRetryInput(), { target: { value: '0.5' } });
-
-      expect(onUpdate).not.toHaveBeenCalled();
-    });
-
-    it('explains what the states mean, since none of them is guessable', () => {
-      renderSection(makeToolNode());
-      expandSection();
-
-      fireEvent.click(screen.getByTestId('node-settings-provider-retry-info'));
-
-      expect(screen.getByText('Empty: the platform waits the delay the provider asked for.')).toBeTruthy();
-      expect(screen.getByText('0: the call is never re-sent.')).toBeTruthy();
-      expect(screen.getByText('A longer wait is reduced to the platform budget.')).toBeTruthy();
-      expect(screen.getByText('The node stays running while it waits.')).toBeTruthy();
-    });
-
-    it('a budget stored on a node that shows no such field is not counted in the badge', () => {
-      // Only reachable from a plan written before the tool actions began refusing it. Counting it
-      // produced "Settings (1)" on an auto-expanded section whose every visible control sat at its
-      // default, with nothing to explain the 1 and no way to clear it.
-      renderSection(makeNode('decisionNode', 'decision', { providerRetryMaxWaitSec: 0 }));
-
-      expect(screen.getByTestId('node-settings-toggle').textContent).not.toContain('(');
     });
   });
 });

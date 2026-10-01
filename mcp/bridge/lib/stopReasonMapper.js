@@ -100,6 +100,17 @@ export function resolveStopReason(providerName, msg, ctx) {
     return { reason: AgentStopReason.TIMEOUT, success: false };
   }
 
+  // Claude's result subtype can be "success" even for a rejected API request.
+  // The explicit error flag wins over that subtype, but never over a user stop,
+  // budget guard, or timeout above. Keep the diagnostic out of response content.
+  // Turn/token caps also carry is_error=true, but are intentional partial completions.
+  const isClaudeTruncation = msg?.subtype === 'error_max_turns' || msg?.subtype === 'error_max_tokens';
+  if (providerName === 'claude' && msg?.is_error === true && !isClaudeTruncation) {
+    const error = [msg.error, ...(Array.isArray(msg.errors) ? msg.errors : []), msg.result]
+      .find(value => typeof value === 'string' && value.trim()) || 'Claude API request failed';
+    return { reason: AgentStopReason.ERROR, success: false, error };
+  }
+
   // 2. CLI-reported subtype.
   const table = SUBTYPE_TABLE[providerName] || SUBTYPE_TABLE.claude;
   const subtype = msg?.subtype;

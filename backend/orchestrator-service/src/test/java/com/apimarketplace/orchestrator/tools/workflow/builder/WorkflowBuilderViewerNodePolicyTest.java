@@ -69,10 +69,10 @@ class WorkflowBuilderViewerNodePolicyTest {
     @DisplayName("a configured policy comes back with a hint saying how to change or clear it")
     void aConfiguredPolicyIsReadBack() {
         Map<String, Object> data = describe(sessionWithPolicy(
-                Map.of("retryCount", 2, "providerRetryMaxWaitSec", 0)));
+                Map.of("retryCount", 2, "retryBackoffMs", 60000)));
 
         assertThat(data.get(NodePolicy.JSON_KEY))
-                .isEqualTo(Map.of("retryCount", 2, "providerRetryMaxWaitSec", 0));
+                .isEqualTo(Map.of("retryCount", 2, "retryBackoffMs", 60000));
         assertThat(String.valueOf(data.get("node_policy_hint")))
                 .contains("nodePolicy={}")
                 .contains("action='modify'");
@@ -95,5 +95,15 @@ class WorkflowBuilderViewerNodePolicyTest {
         Map<String, Object> data = describe(sessionWithPolicy(Map.of()));
 
         assertThat(data).doesNotContainKey(NodePolicy.JSON_KEY);
+    }
+
+    @Test
+    @DisplayName("retryOn is read back by describe, so an agent sees which failures are retried")
+    void retryOnIsReadBack() {
+        Map<String, Object> data = describe(sessionWithPolicy(
+                Map.of("retryCount", 1, "retryOn", "rate_limit")));
+
+        assertThat(data.get(NodePolicy.JSON_KEY))
+                .isEqualTo(Map.of("retryCount", 1, "retryOn", "rate_limit"));
     }
 }

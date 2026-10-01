@@ -163,7 +163,7 @@ public class WorkflowBuilderProvider implements ToolsProvider {
         }
 
         if (!WorkflowBuilderActionConfig.isValidAction(action)) {
-            return ToolExecutionResult.failure(ToolErrorCode.INVALID_ENUM_VALUE, "Unknown action: " + action + ". Allowed: " + WorkflowBuilderActionConfig.PRIMARY_ACTIONS);
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_ENUM_VALUE, "Unknown action: " + action + ". Allowed: " + WorkflowBuilderActionConfig.DOCUMENTED_ACTIONS);
         }
 
         String canonicalAction = WorkflowBuilderActionConfig.resolveAlias(action);
@@ -386,7 +386,7 @@ public class WorkflowBuilderProvider implements ToolsProvider {
                 .orElse(ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Help module failed"));
             case "get" -> delegateCrud("get", params, tenantId, ctx);
             case "list" -> delegateCrud("list", params, tenantId, ctx);
-            case "delete" -> delegateCrud("delete", params, tenantId, ctx);
+            case "delete" -> executeDelete(params, tenantId, ctx);
             case "runs" -> delegateCrud("runs", params, tenantId, ctx);
             case "get_run" -> delegateCrud("get_run", params, tenantId, ctx);
             case "wait_run" -> delegateCrud("wait_run", params, tenantId, ctx);
@@ -1733,6 +1733,34 @@ public class WorkflowBuilderProvider implements ToolsProvider {
         if (descOverride != null && !descOverride.isBlank()) sr.session().setWorkflowDescription(descOverride);
 
         return resultEnricher.enrichResult(loader.executeSave(sr.session()), sr.session());
+    }
+
+    /**
+     * delete, then forget the workflow as this conversation's "last built" one, so a later
+     * "no active session" never offers to reload a workflow this conversation deleted.
+     */
+    private ToolExecutionResult executeDelete(Map<String, Object> params, String tenantId, ToolExecutionContext ctx) {
+        ToolExecutionResult result = delegateCrud("delete", params, tenantId, ctx);
+        if (result.success() && result.data() instanceof Map<?, ?> data && data.get("id") instanceof String deletedId) {
+            WorkflowBuilderSessionStore store = sessionManager.getSessionStore();
+            if (store != null) {
+                String conversationId = extractConversationId(ctx);
+                store.forgetLastWorkflow(tenantId, conversationId, deletedId);
+                // An open build session on the deleted workflow would write it back: every
+                // modifying action auto-saves the draft under the session's workflow id. Close it,
+                // exactly as discard does (the workflow it edited no longer exists). Only this
+                // conversation's session: without a conversation there is no session to scope to.
+                if (conversationId == null || conversationId.isBlank()) return result;
+                store.getSessionForConversation(tenantId, conversationId)
+                    .filter(s -> s.getLoadedWorkflowId() != null
+                        && s.getLoadedWorkflowId().trim().equalsIgnoreCase(deletedId.trim()))
+                    .ifPresent(s -> {
+                        buildLogger.logSessionEnd(s, "CLOSED (workflow deleted)");
+                        store.delete(s.getSessionId());
+                    });
+            }
+        }
+        return result;
     }
 
     private ToolExecutionResult delegateCrud(String action, Map<String, Object> params, String tenantId, ToolExecutionContext ctx) {

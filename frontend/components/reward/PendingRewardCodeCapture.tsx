@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { capturePendingRewardCode } from '@/lib/lifecycle/pendingRewardCode';
+import { capturePendingPersonalOffer } from '@/lib/lifecycle/pendingPersonalOffer';
 
 /**
  * Remembers a partner / creator code from the landing URL (`?lc_ref=CODE` on any page, or
@@ -11,6 +12,7 @@ import { capturePendingRewardCode } from '@/lib/lifecycle/pendingRewardCode';
 export default function PendingRewardCodeCapture() {
   useEffect(() => {
     capturePendingRewardCode(window);
+    capturePendingPersonalOffer(window);
   }, []);
   return null;
 }

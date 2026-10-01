@@ -282,17 +282,6 @@ ce-catalog-relay:
 # The catalog-import Job presents the same token (importer.catalog.admin-token).
 catalog:
   admin-token: ${CATALOG_ADMIN_TOKEN:}
-  # Retry of a provider's rate-limit refusal (ErrorPolicyEngine). These defaults are also the
-  # contract seed authors are validated against: scripts/api-migrations/validate_apis.py refuses
-  # a rule whose waitMs exceeds max-wait-ms, using the same 10000 as a literal
-  # (ERROR_POLICY_MAX_WAIT_MS). Lowering it here therefore makes already-validated rules stop
-  # waiting, silently: change both, or neither.
-  error-policy:
-    # 0 disables every retry, built-in and declared. The kill switch.
-    max-retries: ${CATALOG_ERROR_POLICY_MAX_RETRIES:2}
-    # Total time ONE call may spend sleeping, across its retries. Bounds the sleeping only: a
-    # retried call also pays for the extra request it makes.
-    max-wait-ms: ${CATALOG_ERROR_POLICY_MAX_WAIT_MS:10000}
   attachments:
     # Ceiling on the attachments of ONE call, measured on the encoded payload
     # (base64 inflates by a third). It is the platform's own limit and always

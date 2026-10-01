@@ -150,6 +150,8 @@ gateway:
       - /api/credits/
       - /api/credentials/oauth2/callback
       - /api/contact
+      # Daily sign-up canary identity: authenticated in SignupCanaryController by its own token.
+      - /api/signup-canary/
       - /api/auth/register
       - /api/auth/login
       - /api/auth/refresh

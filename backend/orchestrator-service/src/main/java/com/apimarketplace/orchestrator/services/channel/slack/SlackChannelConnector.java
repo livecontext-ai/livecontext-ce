@@ -15,8 +15,10 @@ import org.springframework.web.client.RestTemplate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /**
  * Slack half of the chat-channel feature, through the catalog's Slack integration.
@@ -44,6 +46,28 @@ public class SlackChannelConnector implements ChatChannelConnector {
     static final ToolRef TOOL_LIST_CONVERSATIONS = new ToolRef("slack/slack-list-conversations", 1);
     static final ToolRef TOOL_POST_MESSAGE = new ToolRef("slack/slack-post-message", 1);
     static final ToolRef TOOL_UPDATE_MESSAGE = new ToolRef("slack/slack-update-message", 1);
+    static final ToolRef TOOL_JOIN_CONVERSATION = new ToolRef("slack/slack-join-conversation", 1);
+
+    static final ToolRef TOOL_OPEN_CONVERSATION = new ToolRef("slack/slack-open-conversation", 1);
+
+    /**
+     * A conversation id as Slack writes it: C (channel), G (legacy private group), D (direct
+     * message), upper case, with at least one digit. Slack forces channel names to lower case, so
+     * an upper-case word is an id, and the digit keeps a name typed in capitals ("GENERAL") on the
+     * name lookup instead of storing it as an id nothing answers to.
+     */
+    private static final Pattern CONVERSATION_ID = Pattern.compile("^[CGD](?=[A-Z0-9]*\\d)[A-Z0-9]{6,}$");
+    /** A member id (U, or W on Enterprise Grid): a person, reached through their direct message. */
+    private static final Pattern MEMBER_ID = Pattern.compile("^[UW](?=[A-Z0-9]*\\d)[A-Z0-9]{6,}$");
+    /** Pages read before a listing stops, far above any workspace seen so far. */
+    static final int MAX_LIST_PAGES = 10;
+    /**
+     * Chats a discovery offers. A bot token lists EVERY public channel of the workspace, and a
+     * list of two thousand is not a choice anyone can make (nor one an agent's tool result can
+     * carry whole): the ones the app is already in and the direct messages come first, and a
+     * channel past the cap is still reachable by its #name.
+     */
+    static final int MAX_DISCOVERED_CHATS = 200;
 
     /** Slack's own limit on a section's text. */
     static final int SECTION_TEXT_MAX_CHARS = 3000;
@@ -126,33 +150,130 @@ public class SlackChannelConnector implements ChatChannelConnector {
 
     @Override
     public Outcome<List<ChatCandidate>> discoverChats(String tenantId, Long credentialId) {
-        Map<String, Object> params = new LinkedHashMap<>();
-        params.put("types", "public_channel,private_channel,im");
-        params.put("exclude_archived", true);
-        params.put("limit", 200);
-        return slackCall(TOOL_LIST_CONVERSATIONS, params, tenantId, credentialId).map(out -> {
-            List<ChatCandidate> chats = new ArrayList<>();
-            for (Map<String, Object> channel : CatalogCalls.listOf(out.get("channels"))) {
+        return listConversations("public_channel,private_channel,im", 200, tenantId, credentialId).map(found -> {
+            List<ChatCandidate> joined = new ArrayList<>();
+            List<ChatCandidate> joinable = new ArrayList<>();
+            for (Map<String, Object> channel : found) {
                 String id = str(channel.get("id"));
                 if (id == null) {
                     continue;
                 }
                 boolean direct = Boolean.TRUE.equals(channel.get("is_im"));
+                boolean member = !Boolean.FALSE.equals(channel.get("is_member"));
                 // A private channel the app is not in cannot be posted to, and listing it would
-                // offer a destination whose test message is refused.
-                if (!direct && Boolean.FALSE.equals(channel.get("is_member"))) {
+                // offer a destination whose test message is refused. A public one can: connecting
+                // it makes the app join it first (sendTest).
+                if (!direct && !member && Boolean.TRUE.equals(channel.get("is_private"))) {
                     continue;
                 }
                 String title = direct ? "Direct message" : "#" + str(channel.get("name"));
-                chats.add(new ChatCandidate(id, title, direct ? "private" : "channel",
-                        direct ? str(channel.get("user")) : null));
+                ChatCandidate candidate = new ChatCandidate(id, title, direct ? "private" : "channel",
+                        direct ? str(channel.get("user")) : null);
+                (direct || member ? joined : joinable).add(candidate);
             }
-            return Outcome.of(chats);
+            joined.addAll(joinable);
+            return Outcome.of(joined.size() > MAX_DISCOVERED_CHATS
+                    ? List.copyOf(joined.subList(0, MAX_DISCOVERED_CHATS)) : joined);
         });
     }
 
+    /**
+     * What a person typed, as Slack addresses it: "#ops" or "ops" becomes the channel's id, a
+     * member id ("U0123...") becomes the id of the direct message with that person, and an id is
+     * kept as it is.
+     *
+     * <p>People type the name they see in Slack, whose screens show no id without three clicks.
+     * Stored as typed, the destination can work once and still be wrong: Slack may accept a name
+     * or a member id for a new message, but an edit, and every press that comes back, speak in the
+     * conversation id, so the row would never match an answer and the buttons would stay live.
+     */
+    @Override
+    public Outcome<ChatCandidate> resolveDestination(String tenantId, Long credentialId, String chatId) {
+        if (CONVERSATION_ID.matcher(chatId).matches()) {
+            return Outcome.of(new ChatCandidate(chatId, null, null, null));
+        }
+        if (MEMBER_ID.matcher(chatId).matches()) {
+            return slackCall(TOOL_OPEN_CONVERSATION, Map.of("users", chatId), tenantId, credentialId).map(out -> {
+                String direct = out.get("channel") instanceof Map<?, ?> channel ? str(channel.get("id")) : null;
+                return direct != null
+                        ? Outcome.of(new ChatCandidate(direct, "Direct message", "private", chatId))
+                        : Outcome.<ChatCandidate>failed("Slack did not open a direct message with " + chatId + ".");
+            });
+        }
+        if (chatId.startsWith("@")) {
+            return Outcome.failed("Slack cannot be given a person as " + chatId + ". Choose their direct message "
+                    + "from the chats the app can see, or give their member ID (in their Slack profile: the "
+                    + "three dots, then Copy member ID).");
+        }
+        String name = (chatId.startsWith("#") ? chatId.substring(1) : chatId).trim();
+        String wanted = name.toLowerCase(Locale.ROOT);
+        return listConversations("public_channel,private_channel", 1000, tenantId, credentialId).map(found -> {
+            for (Map<String, Object> channel : found) {
+                String id = str(channel.get("id"));
+                if (id != null && (wanted.equals(lower(channel.get("name")))
+                        || wanted.equals(lower(channel.get("name_normalized"))))) {
+                    return Outcome.of(new ChatCandidate(id, "#" + str(channel.get("name")), "channel", null));
+                }
+            }
+            return Outcome.<ChatCandidate>failed("Slack has no channel named #" + name + " that the app can see. "
+                    + "Choose it from the chats the app can see, or give its id. A private channel needs the "
+                    + "app invited first: type /invite followed by the app name in that channel.");
+        });
+    }
+
+    /**
+     * Every conversation of these types, page after page.
+     *
+     * <p>Slack pages a listing with a cursor and a bot token sees EVERY public channel, so in a
+     * workspace of a few hundred channels the one the person wants is routinely past the first
+     * page. Reading one page answered "not found" about a channel that exists.
+     */
+    private Outcome<List<Map<String, Object>>> listConversations(String types, int pageSize, String tenantId,
+                                                                 Long credentialId) {
+        List<Map<String, Object>> found = new ArrayList<>();
+        String cursor = null;
+        for (int page = 0; page < MAX_LIST_PAGES; page++) {
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("types", types);
+            params.put("exclude_archived", true);
+            params.put("limit", pageSize);
+            if (cursor != null) {
+                params.put("cursor", cursor);
+            }
+            Outcome<Map<String, Object>> listed = slackCall(TOOL_LIST_CONVERSATIONS, params, tenantId, credentialId);
+            if (!listed.ok()) {
+                return Outcome.failed(listed.error());
+            }
+            found.addAll(CatalogCalls.listOf(listed.value().get("channels")));
+            cursor = nextCursor(listed.value());
+            if (cursor == null) {
+                break;
+            }
+        }
+        return Outcome.of(found);
+    }
+
+    /**
+     * The test message of a connect, which is the one moment the app joins a channel.
+     *
+     * <p>A public channel the person chose as a destination is one the app is meant to write in,
+     * and the app asks for {@code channels:join} for exactly this: sending them to type /invite
+     * for a step the app can take itself is the setup going wrong in their hands. The join comes
+     * FIRST and its answer is not needed: joining a channel the app is already in is a no-op,
+     * and a channel an app cannot join (a private one) is answered by the test message itself
+     * ("invite it"). Only here, never before an approval or a question: an administrator who
+     * removed the app from a channel must not see it walk back in on the next message.
+     */
     @Override
     public Outcome<Void> sendTest(String tenantId, Long credentialId, String chatId, String text) {
+        if (chatId.startsWith("C")) {
+            Outcome<Map<String, Object>> joined = slackCall(TOOL_JOIN_CONVERSATION, Map.of("channel", chatId),
+                    tenantId, credentialId);
+            if (!joined.ok()) {
+                logger.info("[chat-channel-slack] did not join the channel before its test message: {}",
+                        joined.error());
+            }
+        }
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("channel", chatId);
         params.put("text", text);
@@ -329,6 +450,18 @@ public class SlackChannelConnector implements ChatChannelConnector {
             }
             return Outcome.of(out);
         });
+    }
+
+    private static String nextCursor(Map<String, Object> out) {
+        if (out.get("response_metadata") instanceof Map<?, ?> metadata) {
+            String cursor = str(metadata.get("next_cursor"));
+            return cursor != null && !cursor.isBlank() ? cursor : null;
+        }
+        return null;
+    }
+
+    private static String lower(Object value) {
+        return value != null ? String.valueOf(value).toLowerCase(Locale.ROOT) : null;
     }
 
     static String explain(String code) {

@@ -149,8 +149,7 @@ public class CeCatalogCloudRelay {
                     request.getParameters(),
                     request.getExpand(),
                     request.getMaxItems(),
-                    request.getInlineBinaries(),
-                    request.getProviderRetryMaxWaitSeconds());
+                    request.getInlineBinaries());
             log.info("[CeCatalogCloudRelay] Relayed tool {}/{} to cloud: success={}",
                     apiSlug, toolSlug, relayed.isSuccess());
             return Optional.of(relayed);

@@ -7,6 +7,12 @@
 
 import { apiClient } from '../api-client';
 
+/** Follow state of a creator, as seen by the caller. */
+export interface CreatorFollowStatus {
+  following: boolean;
+  followerCount: number;
+}
+
 /**
  * The refinements the marketplace grid can ask the SERVER for.
  *
@@ -499,6 +505,22 @@ export class PublicationService {
       params: { page, size },
       skipAuth: true,
     });
+  }
+
+  /**
+   * Whether the caller follows this creator, and how many followers they have.
+   * Following a creator notifies you (bell) of each new listing they publish.
+   */
+  async getCreatorFollow(creatorId: string | number): Promise<CreatorFollowStatus> {
+    return apiClient.get<CreatorFollowStatus>(`/publications/creators/${creatorId}/follow`);
+  }
+
+  async followCreator(creatorId: string | number): Promise<CreatorFollowStatus> {
+    return apiClient.post<CreatorFollowStatus>(`/publications/creators/${creatorId}/follow`, {});
+  }
+
+  async unfollowCreator(creatorId: string | number): Promise<CreatorFollowStatus> {
+    return apiClient.delete<CreatorFollowStatus>(`/publications/creators/${creatorId}/follow`);
   }
 
   /**

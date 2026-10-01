@@ -1062,6 +1062,7 @@ export default function OnboardingPage() {
                       <input
                         key={index}
                         ref={el => { otpInputRefs.current[index] = el; }}
+                        data-testid={`onboarding-otp-${index}`}
                         type="text"
                         inputMode="numeric"
                         autoComplete="one-time-code"
@@ -1150,6 +1151,7 @@ export default function OnboardingPage() {
                 </label>
                 <div className="relative">
                   <Input
+                    data-testid="onboarding-display-name"
                     type="text"
                     value={data.displayName}
                     onChange={(e) => {
@@ -1296,6 +1298,7 @@ export default function OnboardingPage() {
                     <button
                       key={goal.value}
                       type="button"
+                      data-testid={`onboarding-goal-${goal.value}`}
                       aria-pressed={data.primaryGoal === goal.value}
                       onClick={() => setData(prev => ({ ...prev, primaryGoal: goal.value }))}
                       className={chipClass(data.primaryGoal === goal.value)}
@@ -1355,6 +1358,7 @@ export default function OnboardingPage() {
                     <button
                       key={option.value}
                       type="button"
+                      data-testid={`onboarding-previous-tool-${option.value}`}
                       aria-pressed={data.previousTool === option.value}
                       onClick={() => setData(prev => ({ ...prev, previousTool: option.value }))}
                       className={chipClass(data.previousTool === option.value)}
@@ -1375,6 +1379,7 @@ export default function OnboardingPage() {
                     <button
                       key={option.value}
                       type="button"
+                      data-testid={`onboarding-referral-${option.value}`}
                       aria-pressed={data.referralSource === option.value}
                       onClick={() => setData(prev => ({ ...prev, referralSource: option.value }))}
                       className={chipClass(data.referralSource === option.value)}
@@ -1432,6 +1437,7 @@ export default function OnboardingPage() {
             </Button>
 
             <Button
+              data-testid="onboarding-next"
               onClick={nextStep}
               disabled={
                 saving

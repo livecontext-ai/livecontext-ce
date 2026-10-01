@@ -27,7 +27,8 @@ import java.util.Optional;
  * customer's payment is refunded or disputed.
  *
  * <p>Attribution is the customer's single PARTNER redemption (first code wins, unique per
- * customer). The share is {@code payout_bps} of the invoice amount excluding tax, for
+ * customer). The share is the partner's rate (V556: the higher of the code's {@code payout_bps}
+ * and the partner's tier rate, see {@link PartnerTierService}) of the invoice amount excluding tax, for
  * {@code payout_months} counted from the customer's FIRST commissionable invoice. Each line
  * is held {@code hold_days} (the refund window) before it becomes payable. Money never
  * moves here: an admin settles payable lines and marks them PAID.
@@ -42,13 +43,16 @@ public class PartnerCommissionService {
     private final PartnerCommissionRepository commissionRepository;
     private final RewardRedemptionRepository redemptionRepository;
     private final RewardCodeRepository codeRepository;
+    private final PartnerTierService tierService;
 
     public PartnerCommissionService(PartnerCommissionRepository commissionRepository,
                                     RewardRedemptionRepository redemptionRepository,
-                                    RewardCodeRepository codeRepository) {
+                                    RewardCodeRepository codeRepository,
+                                    PartnerTierService tierService) {
         this.commissionRepository = commissionRepository;
         this.redemptionRepository = redemptionRepository;
         this.codeRepository = codeRepository;
+        this.tierService = tierService;
     }
 
     /**
@@ -86,6 +90,12 @@ public class PartnerCommissionService {
         Instant windowEnd = windowStart.atOffset(ZoneOffset.UTC).plusMonths(code.getPayoutMonths()).toInstant();
         if (!when.isBefore(windowEnd)) return RecordOutcome.WINDOW_ENDED;
 
+        // The tier is brought up to date first, so an invoice paid after the partner crossed a
+        // threshold already earns the higher rate. This invoice itself is not counted yet: it is
+        // inside its refund window.
+        int bps = tierService.effectiveRateBps(code.getPayoutBps(),
+                tierService.refresh(redemption.getOwnerUserId()).tier());
+
         PartnerCommission c = new PartnerCommission();
         c.setRedemptionId(redemption.getId());
         c.setRewardCodeId(code.getId());
@@ -94,8 +104,8 @@ public class PartnerCommissionService {
         c.setProviderInvoiceId(invoiceId);
         c.setBaseAmountMinor(baseAmountMinor);
         c.setCurrency(currency == null ? "usd" : currency.toLowerCase(Locale.ROOT));
-        c.setPayoutBps(code.getPayoutBps());
-        c.setCommissionMinor(commissionOf(baseAmountMinor, code.getPayoutBps()));
+        c.setPayoutBps(bps);
+        c.setCommissionMinor(commissionOf(baseAmountMinor, bps));
         c.setStatus(PartnerCommission.Status.HOLD);
         c.setInvoicePaidAt(when);
         c.setDueAt(when.plus(Math.max(0, code.getHoldDays()), ChronoUnit.DAYS));

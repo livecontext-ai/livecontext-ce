@@ -24,7 +24,8 @@ export type SubjectType =
   | 'ORG_INVITATION'
   | 'BADGE'
   | 'AGENT'
-  | 'BILLING';
+  | 'BILLING'
+  | 'PUBLICATION';
 
 /**
  * Single notification item - aggregated per (subjectId, category).

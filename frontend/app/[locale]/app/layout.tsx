@@ -28,6 +28,7 @@ import ProfileContextReporter from '@/components/lifecycle/ProfileContextReporte
 import PendingRewardCodeRedeemer from '@/components/reward/PendingRewardCodeRedeemer';
 import DisplayPreferencesGate from '@/components/lifecycle/DisplayPreferencesGate';
 import IncidentStrip from '@/components/app/IncidentStrip';
+import RealtimeConnectionNotice from '@/components/app/RealtimeConnectionNotice';
 import TwoFactorNudge from '@/components/app/TwoFactorNudge';
 import { IS_CE } from '@/lib/edition';
 
@@ -86,6 +87,9 @@ export default function AppLayout({
                         (a running canvas, an SSE stream). Cloud-only, like the
                         rest of the status feature. */}
                     {!IS_CE && <IncidentStrip />}
+                    {/* Live updates down for a while: says so, offers a reload. Both
+                        editions. Here, not in AppShell, for the reason given above. */}
+                    <RealtimeConnectionNotice />
                     {/* Team owner without two-factor: a one-time, dismissible suggestion.
                         Here for the same reason as the strip above. Cloud-only. */}
                     {!IS_CE && <TwoFactorNudge />}

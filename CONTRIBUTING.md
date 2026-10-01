@@ -38,25 +38,31 @@ cd ../frontend && npm install && npm run build
 - Reuse the shared API clients and helpers rather than calling the backend
   directly from the frontend.
 
-## Sign your commits (DCO)
+## Contributor License Agreement (CLA)
 
-We use the Developer Certificate of Origin (https://developercertificate.org). By
-signing off you certify that you wrote the change, or otherwise have the right to
-submit it under the project license. Add a sign-off line to every commit:
+Before your first pull request can be merged, you sign the
+[LiveContext Contributor License Agreement](CLA.md). You sign it once, with
+your GitHub account, and it covers all your future contributions.
 
-```bash
-git commit -s -m "your message"
+To sign, post this comment on your first pull request, with your GitHub account:
+
+```
+I have read the LiveContext Contributor License Agreement version 1.0 (CLA.md) and I agree to it.
 ```
 
-This appends a `Signed-off-by: Your Name <you@example.com>` line using your git
-identity.
+We check for it before merging. You sign once per version of the agreement. If
+your employer (or a client) has rights in what you write, see section 4 of the
+agreement; to sign on behalf of a company, see section 7 or write to
+oss@livecontext.ai.
 
 ## License of contributions
 
 LiveContext CE is licensed under the LiveContext Sustainable Use License 1.0,
-see [LICENSE](LICENSE). By contributing, you agree that your contributions are
-submitted under that same license, and you confirm this with the DCO sign-off
-described above.
+see [LICENSE](LICENSE) and the plain-language [licensing FAQ](LICENSING.md).
+You keep whatever rights you hold in your contributions. The CLA grants
+LiveContext a license to them that also allows distributing them under other
+terms (commercial editions, or a future change of the project license), which
+the Sustainable Use License alone would not allow.
 
 ## Reporting security issues
 

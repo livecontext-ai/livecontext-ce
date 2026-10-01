@@ -150,6 +150,31 @@ class ExecutionLinkDtoHelpersTest {
     }
 
     @Test
+    @DisplayName("withCallerPublishingFailure(true) adds the exact key the bridge matches, keeps the other markers, and never mutates the source")
+    void withCallerPublishingFailureAddsTheBridgeKey() {
+        AgentExecutionRequestDto base = requestDto("anthropic", "claude-opus-4-8").withRestrictedToolset(true);
+
+        AgentExecutionRequestDto flagged = base.withCallerPublishingFailure(true);
+
+        // The spelling is the contract with mcp/bridge/lib/runFailureEvent.mjs: a drift here is
+        // not a compile error, it is a bridge that announces a failure the caller is retrying.
+        assertThat(AgentExecutionRequestDto.CALLER_PUBLISHES_FAILURE_KEY).isEqualTo("__callerPublishesFailure__");
+        assertThat(flagged.credentials())
+            .containsEntry("__callerPublishesFailure__", true)
+            .containsEntry("__restrictedToolset__", true);
+        assertThat(flagged.provider()).isEqualTo(base.provider());
+        assertThat(flagged.executionId()).isEqualTo(base.executionId());
+        assertThat(base.credentials()).doesNotContainKey("__callerPublishesFailure__");
+    }
+
+    @Test
+    @DisplayName("withCallerPublishingFailure(false) is a no-op (same instance): a caller with no fallback keeps the bridge's own failure event")
+    void withCallerPublishingFailureFalseNoOp() {
+        AgentExecutionRequestDto base = requestDto("anthropic", "claude-opus-4-8");
+        assertThat(base.withCallerPublishingFailure(false)).isSameAs(base);
+    }
+
+    @Test
     @DisplayName("hasNoVisibleOutput is true for a bare failure (no content, no tools, no thinking)")
     void hasNoVisibleOutputTrueForBareFailure() {
         AgentExecutionResponseDto failure = new AgentExecutionResponseDto(

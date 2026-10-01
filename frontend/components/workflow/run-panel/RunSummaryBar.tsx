@@ -140,6 +140,8 @@ export function RunSummaryBar({
    * as wide as the widest. Switching epoch used to resize the whole bar (and the canvas pill
    * around it). Each layer carries its own calendar icon, and the shown one is centred in the
    * cell, so a short "7" sits right next to its icon instead of leaving a gap after it.
+   * Only the epoch layer uses tabular digits: putting `tabular-nums` on the chip itself when an
+   * epoch is picked re-shaped the digits of the reserved "(12)" too, and the chip moved by a pixel.
    */
   const allEpochsLabel = t('workflow.runSteps.allEpochsCount', { count: epochCount });
   const epochChipLabel = (
@@ -278,7 +280,7 @@ export function RunSummaryBar({
                     aria-controls={epochChipExpanded ? epochChipControls : undefined}
                     onClick={(e) => { e.stopPropagation(); onEpochChipClick(); }}
                     title={t('workflow.runInfo.epochNav.browse')}
-                    className={`flex items-center ${textCls} font-medium text-gray-600 dark:text-gray-300 ${selectedEpoch != null ? 'tabular-nums' : ''} whitespace-nowrap ${canvasChromeChipRadiusClass} px-1 -mx-1 transition-colors ${epochChipExpanded ? 'bg-gray-100 dark:bg-gray-700/60' : 'hover:bg-gray-100 dark:hover:bg-gray-700/60'}`}
+                    className={`flex items-center ${textCls} font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap ${canvasChromeChipRadiusClass} px-1 -mx-1 transition-colors ${epochChipExpanded ? 'bg-gray-100 dark:bg-gray-700/60' : 'hover:bg-gray-100 dark:hover:bg-gray-700/60'}`}
                   >
                     {epochChipLabel}
                   </button>
@@ -287,7 +289,7 @@ export function RunSummaryBar({
                     data-run-epoch-chip
                     data-all-epochs={selectedEpoch == null || undefined}
                     data-epoch-shown={selectedEpoch ?? 'all'}
-                    className={`flex items-center ${textCls} font-medium text-gray-600 dark:text-gray-300 ${selectedEpoch != null ? 'tabular-nums' : ''} whitespace-nowrap`}
+                    className={`flex items-center ${textCls} font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap`}
                   >
                     {epochChipLabel}
                   </span>

@@ -162,6 +162,26 @@ class AgentHelpModuleTest {
     }
 
     @Test
+    @DisplayName("help_models leaves UNLISTED models out (V554): still runnable, no longer offered")
+    @SuppressWarnings("unchecked")
+    void helpModelsHidesUnlisted() {
+        when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
+                new AvailableModel("openai", "gpt-5", "top", 1, null, null, false),
+                new AvailableModel("openai", "gpt-4o", "mid", 2, null, null, true)
+        ));
+
+        Optional<ToolExecutionResult> result = module.execute("help_models", Map.of(), "tenant-x", null);
+
+        Map<String, Object> data = (Map<String, Object>) result.orElseThrow().data();
+        assertThat((List<String>) data.get("pairs")).containsExactly("openai/gpt-5 (#1)");
+        assertThat((Integer) data.get("total_enabled"))
+                .as("the count must describe the list the agent reads, not the runnable set")
+                .isEqualTo(1);
+        // An agent reading an existing agent on the unlisted pair must not "correct" it.
+        assertThat((String) data.get("note")).contains("not listed here and is still valid");
+    }
+
+    @Test
     @DisplayName("help_models returns empty catalog when no models are enabled")
     @SuppressWarnings("unchecked")
     void helpModelsEmptyCatalog() {

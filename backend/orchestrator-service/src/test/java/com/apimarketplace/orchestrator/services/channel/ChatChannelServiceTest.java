@@ -109,6 +109,7 @@ class ChatChannelServiceTest {
         when(connector.storedAccountSetting(any(), any())).thenCallRealMethod();
         when(connector.setupInstructions(any(), any())).thenCallRealMethod();
         when(connector.normalizeChatId(any())).thenCallRealMethod();
+        when(connector.resolveDestination(anyString(), anyLong(), anyString())).thenCallRealMethod();
         when(connector.identifiesPresser()).thenCallRealMethod();
         when(connector.undeliveredHint()).thenCallRealMethod();
 
@@ -198,6 +199,64 @@ class ChatChannelServiceTest {
             verify(connector, never()).applyWebhook(anyString(), anyLong(), anyString());
             verify(botRepository, never()).save(any());
             verify(linkRepository, never()).save(any());
+            verify(connector, never()).sendTest(anyString(), anyLong(), anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("regression: a destination typed by name is stored and tested under the id the provider resolves it to")
+        void typedNameIsStoredAsTheResolvedId() {
+            // Prod 2026-09-30: "#tous-about" was stored and posted as typed, so the test message
+            // was refused and the row could never match a press, which speaks in the channel id.
+            botAnswers();
+            webhookSlotIsEmpty();
+            deliveryWorks();
+            when(connector.resolveDestination(TENANT, 9L, "#tous-about"))
+                    .thenReturn(Outcome.of(new ChatCandidate("C0C6FDRGYDN", "#tous-about", "channel", null)));
+            ArgumentCaptor<ChatChannelLinkEntity> saved = ArgumentCaptor.forClass(ChatChannelLinkEntity.class);
+
+            ConnectResult result = service.connect(TENANT, ORG,
+                    new ConnectRequest("telegram", 9L, "#tous-about", null, null, false));
+
+            assertThat(result.delivered()).isTrue();
+            verify(connector).sendTest(eq(TENANT), eq(9L), eq("C0C6FDRGYDN"), anyString());
+            verify(linkRepository, atLeastOnce()).save(saved.capture());
+            ChatChannelLinkEntity link = saved.getValue();
+            assertThat(link.getChatId()).isEqualTo("C0C6FDRGYDN");
+            assertThat(link.getChatTitle()).isEqualTo("#tous-about");
+            assertThat(link.getChatType()).isEqualTo("channel");
+        }
+
+        @Test
+        @DisplayName("a title the caller picked from discovery wins over the one the resolution found")
+        void callerTitleWinsOverTheResolvedOne() {
+            botAnswers();
+            webhookSlotIsEmpty();
+            deliveryWorks();
+            when(connector.resolveDestination(TENANT, 9L, "-100123"))
+                    .thenReturn(Outcome.of(new ChatCandidate("-100123", "resolved name", "private", null)));
+            ArgumentCaptor<ChatChannelLinkEntity> saved = ArgumentCaptor.forClass(ChatChannelLinkEntity.class);
+
+            connect();
+
+            verify(linkRepository, atLeastOnce()).save(saved.capture());
+            assertThat(saved.getValue().getChatTitle()).isEqualTo("Ops room");
+            assertThat(saved.getValue().getChatType()).isEqualTo("group");
+        }
+
+        @Test
+        @DisplayName("a destination the provider cannot resolve is refused before anything is stored or sent")
+        void unresolvableDestinationStoresNothing() {
+            botAnswers();
+            when(connector.resolveDestination(TENANT, 9L, "#nowhere"))
+                    .thenReturn(Outcome.failed("Slack has no channel named #nowhere that the app can see."));
+
+            assertThatThrownBy(() -> service.connect(TENANT, ORG,
+                    new ConnectRequest("telegram", 9L, "#nowhere", null, null, false)))
+                    .isInstanceOf(ChatChannelException.class)
+                    .hasMessageContaining("#nowhere");
+            verify(botRepository, never()).save(any());
+            verify(linkRepository, never()).save(any());
+            verify(connector, never()).applyWebhook(anyString(), anyLong(), anyString());
             verify(connector, never()).sendTest(anyString(), anyLong(), anyString(), anyString());
         }
 

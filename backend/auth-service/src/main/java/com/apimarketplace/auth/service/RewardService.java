@@ -78,6 +78,9 @@ public class RewardService {
      */
     private com.apimarketplace.auth.repository.UserRepository userRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private PersonalOfferService personalOffers;
+
     @org.springframework.beans.factory.annotation.Autowired
     public void setUserRepository(com.apimarketplace.auth.repository.UserRepository userRepository) {
         this.userRepository = userRepository;
@@ -133,7 +136,8 @@ public class RewardService {
         ALREADY_ATTRIBUTED, // the user is already attributed to a partner (first code wins)
         EMAIL_NOT_VERIFIED, // a code that grants credits or a plan waits for a verified email
         NOT_NEW_ACCOUNT,    // a partner code is for accounts created recently (new users it brought)
-        NOTHING_TO_GRANT    // a plan-only code this account cannot receive: refused, the use is kept
+        NOTHING_TO_GRANT,   // a plan-only code this account cannot receive: refused, the use is kept
+        OFFER_CHECKOUT_IN_PROGRESS
     }
 
     /**
@@ -233,6 +237,16 @@ public class RewardService {
 
         RewardCode rc = codeRepository.findByCodeIgnoreCase(code).orElse(null);
         if (rc == null) return RedeemResult.of(RedeemStatus.UNKNOWN_CODE);
+        if (rc.getProgram() == RewardProgram.PERSONAL_UPGRADE) {
+            // Personal codes are previews until a matching Stripe invoice is actually paid.
+            return RedeemResult.of(RedeemStatus.UNKNOWN_CODE);
+        }
+        if (rc.getProgram() == RewardProgram.REFERRAL || rc.getProgram() == RewardProgram.PARTNER) {
+            if (userRepository != null) userRepository.lockForPersonalOffer(redeemerUserId);
+            if (personalOffers != null && personalOffers.hasPayableReservation(redeemerUserId)) {
+                return RedeemResult.of(RedeemStatus.OFFER_CHECKOUT_IN_PROGRESS);
+            }
+        }
 
         Instant now = Instant.now();
         if (!rc.isRedeemableAt(now)) return RedeemResult.of(RedeemStatus.NOT_REDEEMABLE);
@@ -430,6 +444,7 @@ public class RewardService {
                 redemptionRepository.findByRedeemerUserIdAndStatus(redeemerUserId, RewardStatus.PENDING);
         Instant now = Instant.now();
         for (RewardRedemption r : pendings) {
+            if (r.getProgram() == RewardProgram.PERSONAL_UPGRADE) continue;
             RewardCode code = codeRepository.findById(r.getRewardCodeId()).orElse(null);
             if (code == null) continue;
             r.setStatus(RewardStatus.QUALIFIED);
@@ -471,8 +486,15 @@ public class RewardService {
         RewardRedemption r = redemptionRepository.lockByIdForUpdate(id).orElse(null);
         if (r == null || r.getStatus() != RewardStatus.QUALIFIED) return false;
         if (r.getRedeemerRewardAmount() != null && r.getRedeemerRewardAmount() > 0) {
-            String sid = SOURCE_TYPE_REWARD + "_" + r.getId() + "_REDEEMER";
-            grantOnce(r.getRedeemerUserId(), r.getRedeemerRewardAmount(), SOURCE_TYPE_REWARD, sid, "Referral reward (redeemer)");
+            boolean personal = r.getProgram() == RewardProgram.PERSONAL_UPGRADE;
+            String sid = personal ? "personal_offer:" + r.getId() + ":grant"
+                    : SOURCE_TYPE_REWARD + "_" + r.getId() + "_REDEEMER";
+            grantOnce(r.getRedeemerUserId(), r.getRedeemerRewardAmount(),
+                    personal ? SOURCE_TYPE_CODE : SOURCE_TYPE_REWARD, sid,
+                    personal ? "Personal upgrade offer" : "Referral reward (redeemer)");
+            if (personal && !ledgerRepository.existsBySourceId(sid)) {
+                throw new IllegalStateException("Personal offer ledger grant was not written: " + r.getId());
+            }
             r.setRewardSourceId(sid);
         }
         if (r.getOwnerUserId() != null && r.getOwnerRewardAmount() != null && r.getOwnerRewardAmount() > 0) {
@@ -538,7 +560,9 @@ public class RewardService {
             log.info("Reward revoked in-hold: redemption={} reason={}", r.getId(), reason);
         } else if (r.getStatus() == RewardStatus.RELEASED) {
             clawbackGrant(r.getRedeemerUserId(), r.getRedeemerRewardAmount(),
-                    SOURCE_TYPE_CLAWBACK + "_" + r.getId() + "_REDEEMER", reason);
+                    r.getProgram() == RewardProgram.PERSONAL_UPGRADE
+                            ? "personal_offer:" + r.getId() + ":clawback"
+                            : SOURCE_TYPE_CLAWBACK + "_" + r.getId() + "_REDEEMER", reason);
             // Only a credit owner reward (REFERRAL) is clawed back here; a PARTNER
             // payout is deferred to v2, so there is no credit grant to negate.
             if (r.getProgram() != RewardProgram.PARTNER) {
@@ -550,6 +574,39 @@ public class RewardService {
             redemptionRepository.save(r);
             log.info("Reward clawed back post-release: redemption={} reason={}", r.getId(), reason);
         }
+    }
+
+    /** Called only after the personal checkout's first positive subscription invoice is verified. */
+    @Transactional
+    public RewardRedemption qualifyPersonalPaid(RewardCode code, java.util.UUID attemptId,
+                                                String subscriptionId, String invoiceId,
+                                                int bonusCredits, Instant paidAt) {
+        RewardRedemption existing = redemptionRepository
+                .findByRedeemerUserIdAndCampaignKey(code.getRecipientUserId(), code.getCampaignKey()).orElse(null);
+        if (existing != null) return existing;
+        RewardRedemption row = new RewardRedemption();
+        row.setRewardCodeId(code.getId());
+        row.setRedeemerUserId(code.getRecipientUserId());
+        row.setProgram(RewardProgram.PERSONAL_UPGRADE);
+        row.setCampaignKey(code.getCampaignKey());
+        row.setOfferAttemptId(attemptId);
+        row.setQualifyingInvoiceId(invoiceId);
+        row.setStatus(RewardStatus.QUALIFIED);
+        row.setProviderSubscriptionId(subscriptionId);
+        row.setRedeemedAt(paidAt);
+        row.setQualifiedAt(paidAt);
+        row.setReleaseDueAt(paidAt);
+        row.setRedeemerRewardAmount(bonusCredits);
+        row.setOwnerRewardAmount(0);
+        row.setActive(true);
+        return redemptionRepository.saveAndFlush(row);
+    }
+
+    @Transactional
+    public void clawbackPersonalByInvoice(String invoiceId, String reason) {
+        if (invoiceId == null) return;
+        redemptionRepository.findByQualifyingInvoiceIdAndProgram(invoiceId, RewardProgram.PERSONAL_UPGRADE)
+                .ifPresent(row -> clawbackRedemption(row.getId(), reason));
     }
 
     private void grantOnce(Long userId, int amount, String sourceType, String sourceId, String desc) {

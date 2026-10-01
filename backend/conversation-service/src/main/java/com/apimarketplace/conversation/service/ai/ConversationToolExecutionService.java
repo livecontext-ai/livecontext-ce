@@ -837,14 +837,43 @@ public class ConversationToolExecutionService implements ToolExecutionService {
                 return executeVariablesList(toolCall, tenantId, organizationId, organizationRole, startTime);
             case "set_variable":
                 return executeSetVariable(toolCall, tenantId, organizationId, organizationRole, startTime);
+            case "help":
+                return executeCredentialHelp(toolCall, startTime);
             default:
                 return ToolResult.builder()
                     .toolCall(toolCall)
                     .success(false)
-                    .error("'action' must be one of: list, variables, set_variable, require. "
+                    .error("'action' must be one of: "
+                        + String.join(", ", com.apimarketplace.agent.prompt.ConversationToolDefinitions.CREDENTIAL_ACTIONS) + ". "
                         + "Example: credential(action=\"list\")")
                     .durationMs(System.currentTimeMillis() - startTime)
                     .build();
+        }
+    }
+
+    /**
+     * credential(action='help') - the tool's own reference. Every other tool answers help, so agents
+     * call it first; this one used to refuse it as an unknown action.
+     */
+    private ToolResult executeCredentialHelp(ToolCall toolCall, long startTime) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("tool", "credential");
+        result.put("actions", com.apimarketplace.agent.prompt.ConversationToolDefinitions.CREDENTIAL_ACTIONS);
+        result.put("reference", com.apimarketplace.agent.prompt.ConversationToolDefinitions.credentialToolReference());
+        try {
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(true)
+                .content(objectMapper.writeValueAsString(result))
+                .durationMs(System.currentTimeMillis() - startTime)
+                .build();
+        } catch (Exception e) {
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(false)
+                .error("Failed to build help: " + e.getMessage())
+                .durationMs(System.currentTimeMillis() - startTime)
+                .build();
         }
     }
 

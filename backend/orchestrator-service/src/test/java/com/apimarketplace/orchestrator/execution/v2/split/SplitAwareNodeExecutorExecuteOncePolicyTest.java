@@ -34,6 +34,7 @@ import java.util.concurrent.Executors;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -171,9 +172,12 @@ class SplitAwareNodeExecutorExecuteOncePolicyTest {
         verify(nodeCompletionService).batchIncrementSkippedCountsAndEmit(
             eq(execution), eq(NODE_ID), anyString(), eq(2), anyInt(), any());
 
-        // Item 0's terminal result went through the normal completion pipeline
-        verify(nodeCompletionService).emitNodeComplete(
+        // Item 0's terminal result went through the completion pipeline. No traverser: this is
+        // the step-by-step fan-out, persisted per item with the node-level mark written ONCE at
+        // the end (SplitAwareNodeExecutorStepByStepAggregateTest).
+        verify(nodeCompletionService).emitNodeCompletePerItem(
             eq(execution), eq(node), any(), any(), eq(0), any());
+        verify(nodeCompletionService).recordSplitOutcome(eq(RUN_ID), any(), eq(NODE_ID), anyInt(), eq(1L), eq(0L));
     }
 
     @Test

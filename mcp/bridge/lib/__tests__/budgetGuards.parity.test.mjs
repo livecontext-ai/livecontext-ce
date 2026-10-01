@@ -50,6 +50,8 @@ async function runCase(c) {
     fixedCost: i.fixedCost,
     contextWindow: i.contextWindow,
     maxOutputTokens: i.maxOutputTokens,
+    cacheReadRate: i.cacheReadRate ?? null,
+    cacheWriteRate: i.cacheWriteRate ?? null,
   }]);
 
   // Mock refreshBalance to return the fixture's balance once. Iterations >=
@@ -69,12 +71,21 @@ async function runCase(c) {
   // directly via IterationContext; JS tracks cumulative state and computes
   // delta = current - prior. Pre-seeding ensures the same effective lastDelta
   // value drives the projection in both runners.
-  guard._lastPromptTokens = (i.promptTokens || 0) - (i.lastPromptTokens || 0);
-  guard._lastCompletionTokens = (i.completionTokens || 0) - (i.lastCompletionTokens || 0);
+  // The cache counters follow the same rule (optional in the fixture, 0 when absent).
+  guard._lastCounters = {
+    promptTokens: (i.promptTokens || 0) - (i.lastPromptTokens || 0),
+    completionTokens: (i.completionTokens || 0) - (i.lastCompletionTokens || 0),
+    cacheCreationTokens: (i.cacheCreationTokens || 0) - (i.lastCacheCreationTokens || 0),
+    cacheReadTokens: (i.cacheReadTokens || 0) - (i.lastCacheReadTokens || 0),
+    cachedTokens: (i.cachedTokens || 0) - (i.lastCachedTokens || 0),
+  };
 
   const result = await guard.check({
     promptTokens: i.promptTokens,
     completionTokens: i.completionTokens,
+    cacheCreationTokens: i.cacheCreationTokens || 0,
+    cacheReadTokens: i.cacheReadTokens || 0,
+    cachedTokens: i.cachedTokens || 0,
     iterations: i.iterations,
     provider: i.provider,
     model: i.model,

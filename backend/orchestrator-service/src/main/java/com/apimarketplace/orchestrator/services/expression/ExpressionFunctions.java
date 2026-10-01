@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.services.expression;
 
 import java.text.NumberFormat;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -549,12 +550,22 @@ public final class ExpressionFunctions {
         }
     }
 
+    // An explicit pattern, not LocalDateTime.toString(): toString() drops ":00" when the seconds are
+    // zero, so once a minute now() returned "2026-09-30T07:36" instead of "2026-09-30T07:36:00".
+    private static final DateTimeFormatter ISO_SECONDS = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss");
+
     /**
      * Get current datetime as ISO string in UTC (e.g. "2026-03-04T15:30:45").
+     * Always an ISO local date-time with the seconds present, even when they are zero.
      * Works with formatdate(): formatdate(now(), 'dd/MM/yyyy HH:mm')
      */
     public static String now() {
-        return LocalDateTime.now(ZoneOffset.UTC).truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+        return now(Clock.systemUTC());
+    }
+
+    /** now() read from the given clock, so a test can pin the instant. Always rendered in UTC. */
+    static String now(Clock clock) {
+        return LocalDateTime.now(clock.withZone(ZoneOffset.UTC)).format(ISO_SECONDS);
     }
 
     /**

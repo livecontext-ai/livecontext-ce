@@ -158,7 +158,7 @@ class InterfaceScreenshotServiceImplTest {
         @Test
         @DisplayName("Render throws → empty, no HTTP / upload")
         void renderExceptionIsSwallowed() {
-            when(renderService.resolveTemplateSnapshot(eq(INTERFACE_UUID), eq(RUN_ID), eq(TENANT), eq(EPOCH)))
+            when(renderService.resolveTemplateSnapshot(eq(INTERFACE_UUID), eq(RUN_ID), eq(TENANT), eq(EPOCH), eq(0), isNull()))
                 .thenThrow(new RuntimeException("render boom"));
 
             Optional<FileRef> result = newService(RENDERER_URL)
@@ -171,7 +171,7 @@ class InterfaceScreenshotServiceImplTest {
         @Test
         @DisplayName("Render returns empty snapshot → empty result, no HTTP / upload (defensive guard for interfaces with no html template)")
         void renderEmptySnapshotIsSwallowed() {
-            when(renderService.resolveTemplateSnapshot(eq(INTERFACE_UUID), eq(RUN_ID), eq(TENANT), eq(EPOCH)))
+            when(renderService.resolveTemplateSnapshot(eq(INTERFACE_UUID), eq(RUN_ID), eq(TENANT), eq(EPOCH), eq(0), isNull()))
                 .thenReturn(Optional.empty());
 
             Optional<FileRef> result = newService(RENDERER_URL)
@@ -189,7 +189,7 @@ class InterfaceScreenshotServiceImplTest {
         @Test
         @DisplayName("Sidecar 5xx → RestClientException is caught, returns empty, no upload")
         void sidecarErrorIsSwallowed() {
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt())).thenReturn(Optional.of(sampleSnapshot()));
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class))).thenReturn(Optional.of(sampleSnapshot()));
             when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                 .thenThrow(new RestClientException("connection refused"));
 
@@ -203,7 +203,7 @@ class InterfaceScreenshotServiceImplTest {
         @Test
         @DisplayName("Sidecar returns null body → empty, no upload")
         void sidecarEmptyBodyIsSwallowed() {
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt())).thenReturn(Optional.of(sampleSnapshot()));
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class))).thenReturn(Optional.of(sampleSnapshot()));
             when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                 .thenReturn(new ResponseEntity<>(null, HttpStatus.OK));
 
@@ -221,7 +221,7 @@ class InterfaceScreenshotServiceImplTest {
             FileRef uploaded = FileRef.of("tenant-1/wf/run/interface:my_form/my_form_screenshot_epoch_0_spawn_0.png",
                 "my_form_screenshot_epoch_0_spawn_0.png", "image/png", png.length);
 
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt())).thenReturn(Optional.of(sampleSnapshot()));
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class))).thenReturn(Optional.of(sampleSnapshot()));
             when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                 .thenReturn(new ResponseEntity<>(png, HttpStatus.OK));
             stubWorkflowLookup();
@@ -246,7 +246,7 @@ class InterfaceScreenshotServiceImplTest {
             byte[] png = "fake-png-bytes".getBytes();
             FileRef uploaded = FileRef.of("k", "n.png", "image/png", png.length);
 
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                 .thenReturn(new ResponseEntity<>(png, HttpStatus.OK));
@@ -285,7 +285,7 @@ class InterfaceScreenshotServiceImplTest {
         @SuppressWarnings("unchecked")
         void requestsFullPageCapture() {
             byte[] png = "png".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor =
                 ArgumentCaptor.forClass(HttpEntity.class);
@@ -314,7 +314,7 @@ class InterfaceScreenshotServiceImplTest {
         /** @param format the format the INTERFACE declares (null = none), as seen by the service. */
         private ArgumentCaptor<HttpEntity<Map<String, Object>>> stubSuccessfulScreenshotFlow(String format) {
             byte[] png = "png".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshotWithFormat(format)));
             @SuppressWarnings("unchecked")
             ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor =
@@ -386,7 +386,7 @@ class InterfaceScreenshotServiceImplTest {
         @SuppressWarnings("unchecked")
         private ArgumentCaptor<HttpEntity<Map<String, Object>>> stubFlowWithSnapshot(ResolvedTemplateSnapshot snapshot) {
             byte[] png = "png".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(snapshot));
             ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor =
                 ArgumentCaptor.forClass(HttpEntity.class);
@@ -470,7 +470,7 @@ class InterfaceScreenshotServiceImplTest {
             byte[] pdf = "%PDF-1.4 fake".getBytes();
             FileRef uploaded = FileRef.of("k", "n.pdf", "application/pdf", pdf.length);
 
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                 .thenReturn(new ResponseEntity<>(pdf, HttpStatus.OK));
@@ -501,7 +501,7 @@ class InterfaceScreenshotServiceImplTest {
         @SuppressWarnings("unchecked")
         void requestTargetsPdfEndpointWithFormatAndLandscape() {
             byte[] pdf = "%PDF".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
             ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = ArgumentCaptor.forClass(HttpEntity.class);
@@ -528,7 +528,7 @@ class InterfaceScreenshotServiceImplTest {
         @SuppressWarnings("unchecked")
         void nullFormatDefaultsToA4() {
             byte[] pdf = "%PDF".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = ArgumentCaptor.forClass(HttpEntity.class);
             when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
@@ -593,7 +593,7 @@ class InterfaceScreenshotServiceImplTest {
 
             private Optional<FileRef> renderWithHeaders(HttpHeaders headers) {
                 byte[] mp4 = "fake-mp4-bytes".getBytes();
-                when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                     .thenReturn(Optional.of(sampleSnapshot()));
                 when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                     .thenReturn(new ResponseEntity<>(mp4, headers, HttpStatus.OK));
@@ -685,7 +685,7 @@ class InterfaceScreenshotServiceImplTest {
             @DisplayName("A clip over video-max-bytes is dropped (Optional.empty) rather than uploaded")
             void oversizedClipIsDropped() {
                 byte[] huge = new byte[64];
-                when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                     .thenReturn(Optional.of(sampleSnapshot()));
                 when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                     .thenReturn(new ResponseEntity<>(huge, HttpStatus.OK));
@@ -735,7 +735,7 @@ class InterfaceScreenshotServiceImplTest {
             byte[] mp4 = "fake-mp4-bytes".getBytes();
             FileRef uploaded = FileRef.of("k", "n.mp4", "video/mp4", mp4.length);
 
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                 .thenReturn(new ResponseEntity<>(mp4, HttpStatus.OK));
@@ -770,7 +770,7 @@ class InterfaceScreenshotServiceImplTest {
         @SuppressWarnings("unchecked")
         void requestTargetsVideoEndpointWithPresetAndDuration() {
             byte[] mp4 = "mp4".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
             ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = ArgumentCaptor.forClass(HttpEntity.class);
@@ -799,7 +799,7 @@ class InterfaceScreenshotServiceImplTest {
         @SuppressWarnings("unchecked")
         void presetAndDurationDefaultsAndClamps() {
             byte[] mp4 = "mp4".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = ArgumentCaptor.forClass(HttpEntity.class);
             when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
@@ -829,7 +829,7 @@ class InterfaceScreenshotServiceImplTest {
         @DisplayName("Oversized recording (> videoMaxBytes) → empty, no upload (storage guard)")
         void oversizedVideoSkipsUpload() {
             byte[] big = new byte[64];
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                 .thenReturn(new ResponseEntity<>(big, HttpStatus.OK));
@@ -845,7 +845,7 @@ class InterfaceScreenshotServiceImplTest {
         @Test
         @DisplayName("Sidecar failure → RestClientException swallowed, empty result (best-effort)")
         void sidecarErrorIsSwallowedForVideo() {
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                 .thenThrow(new RestClientException("recording timed out"));
@@ -894,7 +894,7 @@ class InterfaceScreenshotServiceImplTest {
             // raw plan string - the service is the last line of defence. Forwarding 'cinema'
             // would 400 at the sidecar and silently drop the output.
             byte[] mp4 = "mp4".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = ArgumentCaptor.forClass(HttpEntity.class);
             when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
@@ -916,7 +916,7 @@ class InterfaceScreenshotServiceImplTest {
         @SuppressWarnings("unchecked")
         void modeAndFpsDefaultsAndForwarding() {
             byte[] mp4 = "mp4".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = ArgumentCaptor.forClass(HttpEntity.class);
             when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
@@ -989,7 +989,7 @@ class InterfaceScreenshotServiceImplTest {
         /** @param format the format the INTERFACE declares (null = none), as seen by the service. */
         private ArgumentCaptor<HttpEntity<Map<String, Object>>> stubSuccessfulVideoFlow(String format) {
             byte[] mp4 = "mp4".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshotWithFormat(format)));
             ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor =
                 ArgumentCaptor.forClass(HttpEntity.class);
@@ -1144,7 +1144,7 @@ class InterfaceScreenshotServiceImplTest {
         @DisplayName("Run not found → empty, no upload (avoids leaking screenshots under wrong workflow scope)")
         void runNotFoundSkipsUpload() {
             byte[] png = "fake".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt())).thenReturn(Optional.of(sampleSnapshot()));
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class))).thenReturn(Optional.of(sampleSnapshot()));
             when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                 .thenReturn(new ResponseEntity<>(png, HttpStatus.OK));
             when(workflowRunRepository.findWorkflowIdByRunIdPublic(RUN_ID)).thenReturn(Optional.empty());
@@ -1166,7 +1166,7 @@ class InterfaceScreenshotServiceImplTest {
             // findWorkflowIdByRunIdPublic does a JPQL field access - no proxy initialization.
             byte[] png = "fake-png".getBytes();
             FileRef uploaded = FileRef.of("tenant-1/key", "x.png", "image/png", png.length);
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt())).thenReturn(Optional.of(sampleSnapshot()));
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class))).thenReturn(Optional.of(sampleSnapshot()));
             when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                 .thenReturn(new ResponseEntity<>(png, HttpStatus.OK));
             stubWorkflowLookup();
@@ -1185,7 +1185,7 @@ class InterfaceScreenshotServiceImplTest {
         @DisplayName("Upload throws → empty (best-effort)")
         void uploadExceptionIsSwallowed() {
             byte[] png = "fake".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt())).thenReturn(Optional.of(sampleSnapshot()));
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class))).thenReturn(Optional.of(sampleSnapshot()));
             when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                 .thenReturn(new ResponseEntity<>(png, HttpStatus.OK));
             stubWorkflowLookup();
@@ -1235,7 +1235,7 @@ class InterfaceScreenshotServiceImplTest {
                 mock(com.apimarketplace.common.scaling.lock.DistributedSemaphore.class);
             when(sem.tryAcquire(eq("screenshot:sidecar"), eq(4), anyString())).thenReturn(true);
             byte[] png = "fake-png".getBytes();
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.of(sampleSnapshot()));
             when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
                 .thenReturn(new ResponseEntity<>(png, HttpStatus.OK));
@@ -1257,7 +1257,7 @@ class InterfaceScreenshotServiceImplTest {
             com.apimarketplace.common.scaling.lock.DistributedSemaphore sem =
                 mock(com.apimarketplace.common.scaling.lock.DistributedSemaphore.class);
             when(sem.tryAcquire(eq("screenshot:sidecar"), eq(4), anyString())).thenReturn(true);
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenThrow(new RuntimeException("render boom"));
 
             Optional<FileRef> result = newServiceWithSemaphore(sem, 4)
@@ -1298,13 +1298,70 @@ class InterfaceScreenshotServiceImplTest {
 
             // Release the held permit and verify the next call can proceed.
             real.release("screenshot:sidecar", "other-owner");
-            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
                 .thenReturn(Optional.empty()); // empty snapshot is enough to validate flow
 
             Optional<FileRef> next = newServiceWithSemaphore(real, 1)
                 .capture(TENANT, RUN_ID, EPOCH, NODE_ID, INTERFACE_UUID);
             assertTrue(next.isEmpty()); // still empty (no snapshot) but render WAS called this time
-            verify(renderService).resolveTemplateSnapshot(any(), any(), any(), anyInt());
+            verify(renderService).resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class));
+        }
+    }
+
+    /**
+     * A capture is produced DURING one execution of the interface node, so the page must be
+     * resolved for that execution's (epoch, spawn, itemIndex). Before the fix every capture
+     * resolved the epoch only, and inside a split the page was drawn from whichever item row
+     * sorted first (the highest index, SKIPPED rows included): the reply preview for item 0 of a
+     * 5-mail batch showed item 4's sender and subject. The snapshot is stubbed EMPTY here so the
+     * test asks one question only, which coordinates the page is resolved for.
+     */
+    @Nested
+    @DisplayName("Item-scoped page resolution (split regression)")
+    class ItemScopedResolution {
+
+        @Test
+        @DisplayName("a PNG capture resolves the page for THIS item's epoch, spawn and index, not the epoch's first row")
+        void screenshotResolvesThePageForTheCapturedItem() {
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
+                .thenReturn(Optional.empty());
+
+            newService(RENDERER_URL).capture(TENANT, RUN_ID, /* epoch */ 2, /* spawn */ 3, /* itemIndex */ 4, NODE_ID, INTERFACE_UUID);
+
+            verify(renderService).resolveTemplateSnapshot(eq(INTERFACE_UUID), eq(RUN_ID), eq(TENANT), eq(2), eq(3), eq(4));
+        }
+
+        @Test
+        @DisplayName("a PDF capture resolves the page for THIS item, through the same pipeline as the PNG")
+        void pdfResolvesThePageForTheCapturedItem() {
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
+                .thenReturn(Optional.empty());
+
+            newService(RENDERER_URL).capturePdf(TENANT, RUN_ID, 2, 3, 4, NODE_ID, INTERFACE_UUID, "A4", false);
+
+            verify(renderService).resolveTemplateSnapshot(eq(INTERFACE_UUID), eq(RUN_ID), eq(TENANT), eq(2), eq(3), eq(4));
+        }
+
+        @Test
+        @DisplayName("a video recording resolves the page for THIS item, through the same pipeline as the PNG")
+        void videoResolvesThePageForTheCapturedItem() {
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
+                .thenReturn(Optional.empty());
+
+            newService(RENDERER_URL).captureVideo(TENANT, RUN_ID, 2, 3, 4, NODE_ID, INTERFACE_UUID, "vertical", 30, null, null);
+
+            verify(renderService).resolveTemplateSnapshot(eq(INTERFACE_UUID), eq(RUN_ID), eq(TENANT), eq(2), eq(3), eq(4));
+        }
+
+        @Test
+        @DisplayName("the legacy epoch-only capture carries no item (spawn 0, null index), so it keeps the epoch-level page")
+        void legacyCaptureWithoutAnItemKeepsTheEpochLevelPage() {
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt(), anyInt(), nullable(Integer.class)))
+                .thenReturn(Optional.empty());
+
+            newService(RENDERER_URL).capture(TENANT, RUN_ID, EPOCH, NODE_ID, INTERFACE_UUID);
+
+            verify(renderService).resolveTemplateSnapshot(eq(INTERFACE_UUID), eq(RUN_ID), eq(TENANT), eq(EPOCH), eq(0), isNull());
         }
     }
 }

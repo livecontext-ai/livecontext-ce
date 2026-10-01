@@ -105,7 +105,7 @@ public class ApiEntity {
     /**
      * Ordered error-classification rules from the seed ({@code errorPolicy}), read by
      * {@link com.apimarketplace.catalog.service.http.ErrorPolicyEngine}. NULL for almost every
-     * API: the built-in 429/503 retry needs no declaration.
+     * API. Wording only: the platform never re-sends a refused call.
      */
     @Column("error_policy")
     private JsonbString errorPolicy;

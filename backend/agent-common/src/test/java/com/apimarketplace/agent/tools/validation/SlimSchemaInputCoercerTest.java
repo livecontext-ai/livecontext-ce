@@ -245,6 +245,85 @@ class SlimSchemaInputCoercerTest {
         }
 
         @Test
+        @DisplayName("regression: a whole number for a string param becomes its text, so the validator accepts workflow pin version=3")
+        void integralForStringParam_becomesText_andValidates() {
+            // Prod 2026-09: workflow(action='pin', version=3) failed with
+            // "Parameter 'version' expected type string but got Integer".
+            ToolParameter version = ToolParameter.builder().name("version").type("string").build();
+            stubTool("workflow", List.of(version));
+
+            Map<String, Object> out = coercer.coerce("workflow", Map.of("version", 3, "big", 5L));
+
+            assertThat(out.get("version")).isEqualTo("3");
+            ToolParameterValidator validator = new ToolParameterValidator(registry);
+            assertThat(validator.validate("workflow", out).isValid()).isTrue();
+            // Pre-fix shape, for contrast: the raw Integer is what the validator refused.
+            assertThat(validator.validate("workflow", Map.of("version", 3)).isValid()).isFalse();
+        }
+
+        @Test
+        @DisplayName("exactly 2^53-1 (and its negative) become text; a caller-supplied string is untouched")
+        void atSafeLimit_becomesText_stringUntouched() {
+            stubTool("t", List.of(
+                    ToolParameter.builder().name("a").type("string").build(),
+                    ToolParameter.builder().name("b").type("string").build(),
+                    ToolParameter.builder().name("c").type("string").build(),
+                    ToolParameter.builder().name("d").type("string").build()));
+
+            Map<String, Object> out = coercer.coerce("t", Map.of(
+                    "a", 9_007_199_254_740_991L,
+                    "b", -9_007_199_254_740_991L,
+                    "c", new java.math.BigInteger("9007199254740991"),
+                    "d", "1234567890123456789"));
+
+            assertThat(out).containsEntry("a", "9007199254740991")
+                    .containsEntry("b", "-9007199254740991")
+                    .containsEntry("c", "9007199254740991")
+                    .containsEntry("d", "1234567890123456789");
+        }
+
+        @Test
+        @DisplayName("regression: a number past 2^53-1 (a 19-digit chat id already rounded by a JS hop) is NOT turned into text and is refused asking for a string")
+        void aboveSafeLimit_keptAndRefusedWithExplicitMessage() {
+            // 1234567890123456789 through a JavaScript bridge arrives as 1234567890123456800:
+            // converting it to text would silently accept the WRONG id.
+            ToolParameter chatId = ToolParameter.builder().name("chat_id").type("string").build();
+            stubTool("t", List.of(chatId));
+
+            for (Object big : List.<Object>of(9_007_199_254_740_992L, 1234567890123456800L,
+                    -9_007_199_254_740_992L, new java.math.BigInteger("98765432109876543210"))) {
+                Map<String, Object> out = coercer.coerce("t", Map.of("chat_id", big));
+                assertThat(out.get("chat_id")).as("kept as sent: %s", big).isSameAs(big);
+
+                ValidationResult result = new ToolParameterValidator(registry).validate("t", out);
+                assertThat(result.isValid()).isFalse();
+                assertThat(result.formatErrors())
+                        .contains("chat_id").contains("must be sent as a string").contains("losing digits");
+            }
+        }
+
+        @Test
+        @DisplayName("fractions and booleans for a string param are NOT converted (ambiguous text), so still refused")
+        void fractionAndBooleanForStringParam_untouched() {
+            stubTool("t", List.of(
+                    ToolParameter.builder().name("a").type("string").build(),
+                    ToolParameter.builder().name("b").type("string").build()));
+
+            Map<String, Object> out = coercer.coerce("t", Map.of("a", 1.5, "b", true));
+
+            assertThat(out.get("a")).isEqualTo(1.5);
+            assertThat(out.get("b")).isEqualTo(true);
+        }
+
+        @Test
+        @DisplayName("a whole number for an integer param is left as a number (only string params are widened)")
+        void integralForIntegerParam_untouched() {
+            stubTool("t", List.of(ToolParameter.builder().name("limit").type("integer").build()));
+
+            assertThat(coercer.coerce("t", Map.of("limit", 7)).get("limit")).isEqualTo(7);
+        }
+
+        @Test
         @DisplayName("null value inside map stays null (missing keys not added)")
         void nullValueIsNoop() {
             stubTool("table", List.of(ToolParameter.builder().name("limit").type("integer").build()));

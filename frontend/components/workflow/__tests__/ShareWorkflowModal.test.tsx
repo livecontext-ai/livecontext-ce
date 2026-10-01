@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   unpublishWorkflow: vi.fn(),
   prePublishScan: vi.fn(),
   useInterfaceRender: vi.fn(),
+  findCustomApiRefs: vi.fn(),
 }));
 
 vi.mock('next-intl', () => ({
@@ -70,6 +71,14 @@ vi.mock('@/hooks/useUserProfile', () => ({
 
 vi.mock('@/lib/api', () => ({
   orchestratorApi: mocks,
+}));
+
+// The modal asks catalog-service which of the plan's tools are backed by a CUSTOM
+// (account-private) API, because those cannot be shared.
+vi.mock('@/lib/api/orchestrator/custom-api.service', () => ({
+  customApiService: {
+    findRefs: (...args: unknown[]) => mocks.findCustomApiRefs(...args),
+  },
 }));
 
 vi.mock('@/app/workflows/builder/hooks/useInterfaces', () => ({
@@ -132,6 +141,8 @@ describe('PublishWorkflowModal', () => {
       currentVersion: 1,
     });
     mocks.getVersion.mockResolvedValue({ plan: { interfaces: [], tables: [], triggers: [] } });
+    // Default: no custom API in the plan. The custom-API tests override this.
+    mocks.findCustomApiRefs.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -594,6 +605,113 @@ describe('PublishWorkflowModal', () => {
     await screen.findByText('noInterfaceCannotShare');
     // ...and the user cannot advance past Step 1 (interface required to share).
     expect(screen.getByRole('button', { name: /next/i })).toBeDisabled();
+  });
+
+  // A custom API exists only in the publisher's own account, so publication-service
+  // refuses to SHARE anything built on one. The wizard says so on the visibility step,
+  // where the fix is, and lets Private through (same account, the API still resolves).
+  describe('custom API in the plan', () => {
+    const IFACE = '44444444-4444-4444-4444-444444444444';
+
+    /** Walk the wizard to step 3, where visibility is chosen. */
+    async function goToVisibilityStep() {
+      const next1 = await screen.findByRole('button', { name: /next/i });
+      await waitFor(() => expect(next1).toBeEnabled());
+      fireEvent.click(next1);
+      const next2 = await screen.findByRole('button', { name: /next/i });
+      await waitFor(() => expect(next2).toBeEnabled());
+      fireEvent.click(next2);
+      await screen.findByRole('button', { name: /publish/i });
+    }
+
+    function renderWithCustomApiPlan() {
+      mocks.getPublicationByWorkflowId.mockResolvedValue(null);
+      mocks.getWorkflowRuns.mockResolvedValue([
+        {
+          id: 'run-uuid',
+          runId: 'run-1',
+          status: 'COMPLETED',
+          startedAt: '2026-05-26T12:00:00Z',
+          planVersion: 1,
+          totalNodes: 2,
+          executionMode: 'automatic',
+        },
+      ]);
+      mocks.getVersion.mockResolvedValue({
+        plan: {
+          interfaces: [{ id: IFACE, label: 'Main interface' }],
+          tables: [],
+          triggers: [],
+          mcps: [{ id: 'my-private-api/do-thing', label: 'Call it' }],
+        },
+      });
+      return render(
+        <PublishWorkflowModal
+          isOpen
+          workflowId="workflow-1"
+          workflowName="Custom API workflow"
+          workflowDescription="desc"
+          onClose={vi.fn()}
+        />,
+      );
+    }
+
+    it('blocks a PUBLIC share and explains why, sending the plan tool ids to the lookup', async () => {
+      mocks.findCustomApiRefs.mockResolvedValue([
+        { apiSlug: 'my-private-api', apiName: 'My Private API', toolIdentifiers: ['my-private-api/do-thing'] },
+      ]);
+
+      renderWithCustomApiPlan();
+      await goToVisibilityStep();
+
+      await screen.findByText('customApiCannotShare');
+      expect(screen.getByRole('button', { name: /publish/i })).toBeDisabled();
+      await waitFor(() => {
+        expect(mocks.findCustomApiRefs).toHaveBeenCalledWith(['my-private-api/do-thing']);
+      });
+      expect(mocks.publishWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('lets the same workflow through once Private is selected (own account, the API still resolves)', async () => {
+      mocks.findCustomApiRefs.mockResolvedValue([
+        { apiSlug: 'my-private-api', apiName: 'My Private API', toolIdentifiers: ['my-private-api/do-thing'] },
+      ]);
+
+      renderWithCustomApiPlan();
+      await goToVisibilityStep();
+      await screen.findByText('customApiCannotShare');
+
+      fireEvent.click(screen.getByText('Private'));
+
+      await waitFor(() => {
+        expect(screen.queryByText('customApiCannotShare')).not.toBeInTheDocument();
+      });
+      expect(screen.getByRole('button', { name: /publish/i })).toBeEnabled();
+    });
+
+    it('does not block when every tool is a shipped catalog integration', async () => {
+      mocks.findCustomApiRefs.mockResolvedValue([]);
+
+      renderWithCustomApiPlan();
+      await goToVisibilityStep();
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /publish/i })).toBeEnabled();
+      });
+      expect(screen.queryByText('customApiCannotShare')).not.toBeInTheDocument();
+    });
+
+    it('does not block when the lookup itself fails - the backend gate still applies', async () => {
+      mocks.findCustomApiRefs.mockRejectedValue(new Error('catalog unreachable'));
+
+      renderWithCustomApiPlan();
+      await goToVisibilityStep();
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /publish/i })).toBeEnabled();
+      });
+      expect(screen.queryByText('customApiCannotShare')).not.toBeInTheDocument();
+    });
   });
 
   // The publish confirmation must render INSIDE the wizard (banner) and keep the

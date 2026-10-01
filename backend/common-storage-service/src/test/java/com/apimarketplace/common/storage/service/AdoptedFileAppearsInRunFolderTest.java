@@ -44,7 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AdoptedFileAppearsInRunFolderTest {
 
     private static final String TENANT = "1";
-    private static final String WORKFLOW = "wf-xai-video-sequence";
+    private static final String WORKFLOW = "7a1c2e3d-4b5f-4a6e-8d9c-0b1a2c3d4e5f";
     private static final String RUN = "run-12";
     private static final String STEP = "mcp:elevenlabs_tts";
 

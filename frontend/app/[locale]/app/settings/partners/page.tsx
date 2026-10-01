@@ -13,13 +13,17 @@ import { Label } from '@/components/ui/label';
 import Toast, { useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api/api-client';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
+import { PARTNER_TERMS_VERSION } from '@/lib/partners/terms';
 import { PARTNER_LINK_PARAM } from '@/lib/lifecycle/pendingRewardCode';
 import {
   partnerAdminApi,
-  type AmountsByCurrency,
   type PartnerCodeRow,
   type PartnerProgramDefaults,
 } from '@/lib/api/services/partner-admin-api.service';
+import { formatAmounts, formatPercent } from '@/lib/partners/formatAmounts';
+import { PartnerTierChip } from '@/components/partner/PartnerTierChip';
+import { parsePercent } from '@/lib/partners/parsePercent';
+import { PartnerApplicationsSection } from './PartnerApplicationsSection';
 
 const OVERVIEW_KEY = ['admin', 'partner-program'];
 
@@ -65,6 +69,22 @@ export default function PartnersAdminPage() {
   const setActive = useMutation({
     mutationFn: ({ id, active }: { id: number; active: boolean }) => partnerAdminApi.setActive(id, active),
     onSuccess: refresh,
+    onError: fail,
+  });
+  const grantFounder = useMutation({
+    mutationFn: (id: number) => partnerAdminApi.grantFounder(id),
+    onSuccess: () => {
+      addToast({ type: 'success', title: t('toasts.founderTitle'), message: t('toasts.founderMessage'), duration: 6000 });
+      void refresh();
+    },
+    onError: fail,
+  });
+  const endFounder = useMutation({
+    mutationFn: (id: number) => partnerAdminApi.endFounder(id),
+    onSuccess: () => {
+      addToast({ type: 'success', title: t('toasts.founderEndedTitle'), message: t('toasts.founderEndedMessage'), duration: 6000 });
+      void refresh();
+    },
     onError: fail,
   });
   const markPaid = useMutation({
@@ -151,6 +171,8 @@ export default function PartnersAdminPage() {
         </div>
       </div>
 
+      <PartnerApplicationsSection onDecided={refresh} onError={fail} notify={addToast} founderOpen={overview.data?.founder_open ?? false} />
+
       {defaults && (
         <div className="grid gap-6 lg:grid-cols-2">
           <CreatorCodeForm defaults={defaults} onCreated={refresh} onError={fail} onDone={(code) => {
@@ -191,7 +213,10 @@ export default function PartnersAdminPage() {
                     onCopy={copy}
                     onToggle={() => setActive.mutate({ id: row.id, active: !row.active })}
                     onMarkPaid={() => markPaid.mutate(row.id)}
-                    busy={setActive.isPending || markPaid.isPending}
+                    founderOpen={overview.data?.founder_open ?? false}
+                    onGrantFounder={() => grantFounder.mutate(row.id)}
+                    onEndFounder={() => endFounder.mutate(row.id)}
+                    busy={setActive.isPending || markPaid.isPending || grantFounder.isPending || endFounder.isPending}
                   />
                 ))}
               </tbody>
@@ -203,23 +228,8 @@ export default function PartnersAdminPage() {
   );
 }
 
-/** "12.00 USD, 3.50 EUR" in the app locale; empty string when nothing. */
-function formatAmounts(amounts: AmountsByCurrency | undefined, locale: string): string {
-  if (!amounts) return '';
-  return Object.entries(amounts)
-    .filter(([, minor]) => minor > 0)
-    .map(([currency, minor]) => {
-      try {
-        return (minor / 100).toLocaleString(locale, { style: 'currency', currency: currency.toUpperCase() });
-      } catch {
-        return `${(minor / 100).toLocaleString(locale)} ${currency.toUpperCase()}`;
-      }
-    })
-    .join(', ');
-}
-
 function CodeRow({
-  row, locale, link, onCopy, onToggle, onMarkPaid, busy,
+  row, locale, link, onCopy, onToggle, onMarkPaid, founderOpen, onGrantFounder, onEndFounder, busy,
 }: {
   row: PartnerCodeRow;
   locale: string;
@@ -227,12 +237,19 @@ function CodeRow({
   onCopy: (text: string) => void;
   onToggle: () => void;
   onMarkPaid: () => void;
+  founderOpen: boolean;
+  onGrantFounder: () => void;
+  onEndFounder: () => void;
   busy: boolean;
 }) {
   const t = useTranslations('partnerProgram');
+  const [confirmFounder, setConfirmFounder] = useState(false);
+  const [confirmEndFounder, setConfirmEndFounder] = useState(false);
   const credits = row.credits.toLocaleString(locale);
+  // The rate the partner's next commission earns: the tier can lift it above the code's own rate.
+  const rate = row.effective_commission_percent ?? row.commission_percent ?? 0;
   const benefit = row.kind === 'partner'
-    ? t('list.partnerBenefit', { credits, percent: row.commission_percent ?? 0, months: row.commission_months ?? 0 })
+    ? t('list.partnerBenefit', { credits, percent: formatPercent(rate, locale), months: row.commission_months ?? 0 })
     : row.plan_code
       ? t('list.creatorBenefitPlan', { credits, plan: row.plan_code, days: row.plan_days })
       : t('list.creatorBenefitCredits', { credits });
@@ -248,6 +265,29 @@ function CodeRow({
           {row.owner_email ? ` · ${row.owner_email}` : ''}
           {row.label ? ` · ${row.label}` : ''}
         </div>
+        {row.standing && (
+          <div className="mt-1 flex flex-wrap items-center gap-1" data-testid="partner-code-tier">
+            <PartnerTierChip tier={row.standing.tier} label={t(`list.tiers.${row.standing.tier}`)} />
+            {row.standing.founder && <PartnerTierChip tier="platinum" label={t('list.founder')} />}
+          </div>
+        )}
+        {row.kind === 'partner' && (
+          row.terms_accepted_version && row.terms_accepted_at ? (
+            // An older version still binds the partner (payouts go through), but they are due to
+            // accept the current one: flagged so the admin can follow up.
+            <div
+              className={row.terms_accepted_version === PARTNER_TERMS_VERSION ? 'text-xs text-theme-secondary' : 'text-xs text-amber-600'}
+              data-testid="partner-code-terms"
+            >
+              {t(row.terms_accepted_version === PARTNER_TERMS_VERSION ? 'list.termsAccepted' : 'list.termsOutdated', {
+                version: row.terms_accepted_version,
+                date: formatUtcDate(row.terms_accepted_at, { locale }),
+              })}
+            </div>
+          ) : (
+            <div className="text-xs text-amber-600" data-testid="partner-code-terms">{t('list.termsMissing')}</div>
+          )
+        )}
         {!row.active && <div className="text-xs text-amber-600">{t('list.inactive')}</div>}
         {row.valid_until && (
           <div className="text-xs text-theme-secondary">{t('list.validUntil', { date: formatUtcDate(row.valid_until, { locale }) })}</div>
@@ -280,6 +320,30 @@ function CodeRow({
           </Button>
           {row.kind === 'partner' && payable && (
             <Button size="sm" disabled={busy} onClick={onMarkPaid}>{t('list.markPaid')}</Button>
+          )}
+          {/* A lifetime rate: two clicks, so a stray one cannot grant it. */}
+          {row.kind === 'partner' && founderOpen && row.standing && !row.standing.founder && (
+            confirmFounder ? (
+              <Button size="sm" disabled={busy} onClick={() => { setConfirmFounder(false); onGrantFounder(); }}>
+                {t('list.confirmFounder')}
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmFounder(true)}>
+                {t('list.makeFounder')}
+              </Button>
+            )
+          )}
+          {/* Ending it can lower the rate (terms 7.5): two clicks as well, at any time. */}
+          {row.kind === 'partner' && row.standing?.founder && (
+            confirmEndFounder ? (
+              <Button size="sm" variant="destructive" disabled={busy} onClick={() => { setConfirmEndFounder(false); onEndFounder(); }}>
+                {t('list.confirmEndFounder')}
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmEndFounder(true)}>
+                {t('list.endFounder')}
+              </Button>
+            )
           )}
         </div>
       </td>
@@ -390,6 +454,7 @@ function PartnerCodeForm({ defaults, onCreated, onError, onDone }: {
   const [months, setMonths] = useState(String(defaults.commissionMonths));
   const [holdDays, setHoldDays] = useState(String(defaults.holdDays));
   const [maxUses, setMaxUses] = useState('');
+  const parsedPercent = parsePercent(percent);
 
   const create = useMutation({
     mutationFn: () => partnerAdminApi.createPartnerCode({
@@ -397,7 +462,8 @@ function PartnerCodeForm({ defaults, onCreated, onError, onDone }: {
       code: code.trim() || undefined,
       label: label.trim() || undefined,
       audience_credits: intOrUndefined(credits),
-      commission_percent: percent.trim() === '' ? undefined : Number(percent),
+      // Never a bare Number(): "12,5" would become NaN, then null over JSON, then the default rate.
+      commission_percent: parsedPercent.ok ? parsedPercent.value : undefined,
       commission_months: intOrUndefined(months),
       hold_days: intOrUndefined(holdDays),
       max_uses: intOrUndefined(maxUses),
@@ -414,7 +480,13 @@ function PartnerCodeForm({ defaults, onCreated, onError, onDone }: {
 
   return (
     <form
-      onSubmit={(e) => { e.preventDefault(); create.mutate(); }}
+      onSubmit={(e) => {
+        e.preventDefault();
+        // Enter in any field submits the form even while the button is disabled: guard here too,
+        // or an invalid rate is sent as "no override" and the code gets the default rate.
+        if (!parsedPercent.ok) return;
+        create.mutate();
+      }}
       className="bg-theme-secondary rounded-xl p-6 space-y-4"
     >
       <div>
@@ -436,12 +508,19 @@ function PartnerCodeForm({ defaults, onCreated, onError, onDone }: {
           <Input id="partner-label" value={label} onChange={(e) => setLabel(e.target.value)} className="h-9 text-sm" />
         </div>
         <NumberField id="partner-credits" label={t('fields.audienceCredits')} value={credits} onChange={setCredits} hint={t('fields.creditsHint')} />
-        <NumberField id="partner-percent" label={t('fields.commissionPercent')} value={percent} onChange={setPercent} />
+        <NumberField
+          id="partner-percent"
+          label={t('fields.commissionPercent')}
+          value={percent}
+          onChange={setPercent}
+          // A rate below the partner's tier rate would silently have no effect: say how it combines.
+          hint={parsedPercent.ok ? t('fields.commissionTierHint') : t('errors.invalid_percent')}
+        />
         <NumberField id="partner-months" label={t('fields.commissionMonths')} value={months} onChange={setMonths} />
         <NumberField id="partner-hold" label={t('fields.holdDays')} value={holdDays} onChange={setHoldDays} hint={t('fields.holdDaysHint')} />
         <NumberField id="partner-max-uses" label={t('fields.partnerMaxUses')} value={maxUses} onChange={setMaxUses} hint={t('fields.partnerMaxUsesHint')} />
       </div>
-      <Button type="submit" size="sm" disabled={create.isPending || !email.trim()}>{t('partner.submit')}</Button>
+      <Button type="submit" size="sm" disabled={create.isPending || !email.trim() || !parsedPercent.ok}>{t('partner.submit')}</Button>
     </form>
   );
 }

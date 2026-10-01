@@ -3,8 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('@/lib/edition', () => ({ IS_MANAGED_CLOUD: true }));
 
 const getVerifiedUserIds = vi.fn();
+// The loader asks for both badges in one call; these cases are about its batching and
+// caching, so they drive the verified half and leave the partner half empty.
 vi.mock('@/lib/api/unified-api-service', () => ({
-  unifiedApiService: { getVerifiedUserIds: (ids: Array<string | number>) => getVerifiedUserIds(ids) },
+  unifiedApiService: {
+    getUserBadges: async (ids: Array<string | number>) => ({ verified: await getVerifiedUserIds(ids), partners: [] }),
+  },
 }));
 
 import { __resetVerifiedUserCache, cachedVerifiedFlag, loadVerifiedFlag } from '../verifiedUsers';

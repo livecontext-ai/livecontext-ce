@@ -59,19 +59,22 @@ class PublicationPurgeFollowerPostgresTest {
         jdbc.execute("DROP TABLE IF EXISTS publication.publication_receipts");
         jdbc.execute("DROP TABLE IF EXISTS publication.workflow_publications");
         jdbc.execute("DROP TABLE IF EXISTS publication.purge_cursor");
+        jdbc.execute("DROP TABLE IF EXISTS publication.creator_follows");
         jdbc.execute("CREATE TABLE publication.workflow_publications (id UUID PRIMARY KEY, owner_type VARCHAR(8) NOT NULL, owner_id VARCHAR(64) NOT NULL)");
         // The production constraint, verbatim in spirit: RESTRICT, not CASCADE.
         jdbc.execute("CREATE TABLE publication.image_screening_decisions (id BIGSERIAL PRIMARY KEY, "
                 + "publication_id UUID NOT NULL REFERENCES publication.workflow_publications(id) ON DELETE RESTRICT)");
         jdbc.execute("CREATE TABLE publication.publication_receipts (id BIGSERIAL PRIMARY KEY, organization_id VARCHAR(64) NOT NULL)");
         jdbc.execute("CREATE TABLE publication.purge_cursor (id SMALLINT PRIMARY KEY CHECK (id = 1), last_seq BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())");
+        jdbc.execute("CREATE TABLE publication.creator_follows (follower_id VARCHAR(255) NOT NULL, creator_id VARCHAR(255) NOT NULL, "
+                + "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (follower_id, creator_id))");
         jdbc.update("INSERT INTO publication.purge_cursor (id) VALUES (1)");
         follower = new PublicationPurgeFollower(jdbc, mock(AuthClient.class), false);
     }
 
     @BeforeEach
     void reset() {
-        jdbc.execute("TRUNCATE publication.image_screening_decisions, publication.publication_receipts, publication.workflow_publications");
+        jdbc.execute("TRUNCATE publication.image_screening_decisions, publication.publication_receipts, publication.workflow_publications, publication.creator_follows");
     }
 
     private UUID publication(String ownerType, String ownerId, boolean screened) {
@@ -109,5 +112,16 @@ class PublicationPurgeFollowerPostgresTest {
         assertThatCode(() -> follower.purgeUser("42")).doesNotThrowAnyException();
 
         assertThat(jdbc.queryForList("SELECT id FROM publication.workflow_publications", UUID.class)).containsExactly(keep);
+    }
+
+    @Test
+    @DisplayName("A USER purge drops the account's follows in both directions and keeps everyone else's")
+    void userPurgeDropsFollowsBothWays() {
+        jdbc.update("INSERT INTO publication.creator_follows (follower_id, creator_id) VALUES ('42', '7'), ('8', '42'), ('8', '7')");
+
+        follower.purgeUser("42");
+
+        assertThat(jdbc.queryForList("SELECT follower_id || '->' || creator_id FROM publication.creator_follows", String.class))
+                .containsExactly("8->7");
     }
 }

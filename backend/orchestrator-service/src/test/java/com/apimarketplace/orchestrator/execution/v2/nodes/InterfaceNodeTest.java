@@ -926,7 +926,7 @@ class InterfaceNodeTest {
         void toggleOnWithFullSnapshotEmitsAllThreeFields() {
             InterfaceRenderService mockRenderService = mock(InterfaceRenderService.class);
             when(mockRenderService.resolveTemplateSnapshot(eq(UUID.fromString(INTERFACE_UUID)),
-                eq("run-1"), eq("tenant-1"), anyInt()))
+                eq("run-1"), eq("tenant-1"), anyInt(), anyInt(), anyInt()))
                 .thenReturn(Optional.of(snapshotWith("<h1>Welcome Alice</h1>", "h1{color:red}", "console.log('hi')")));
             InterfaceNode node = new InterfaceNode("interface:form", INTERFACE_UUID, Map.of(), false, false, true);
             ServiceRegistry registry = mock(ServiceRegistry.class);
@@ -944,10 +944,35 @@ class InterfaceNodeTest {
         }
 
         @Test
+        @DisplayName("Toggle on inside a split → rendered_* is resolved for THIS item's epoch, spawn and index, not another item's")
+        void renderedSourceIsResolvedForTheItemBeingExecuted() {
+            // Regression: the epoch-only resolution took the epoch's first interface row, which in
+            // a split is the highest item index (SKIPPED rows included), so item 0's rendered_html
+            // carried item 4's data. Three DIFFERENT non-zero values so no argument can stand in
+            // for another.
+            InterfaceRenderService mockRenderService = mock(InterfaceRenderService.class);
+            when(mockRenderService.resolveTemplateSnapshot(any(UUID.class), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+                .thenReturn(Optional.of(snapshotWith("<p>item 7</p>", null, null)));
+            InterfaceNode node = new InterfaceNode("interface:form", INTERFACE_UUID, Map.of(), false, false, true);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceRenderService()).thenReturn(mockRenderService);
+            node.acceptServices(registry);
+            ExecutionContext itemContext = ExecutionContext.create(
+                "run-1", "workflow-run-1", "tenant-1", "item-7", 7,
+                "trigger:webhook", 5, 2, Map.of(), mockPlan);
+
+            node.execute(itemContext);
+
+            verify(mockRenderService).resolveTemplateSnapshot(
+                eq(UUID.fromString(INTERFACE_UUID)), eq("run-1"), eq("tenant-1"), eq(5), eq(2), eq(7));
+        }
+
+        @Test
         @DisplayName("Toggle on + snapshot has null CSS/JS → only rendered_html emitted (no-CSS, no-JS interface)")
         void toggleOnWithNullCssAndJsEmitsOnlyHtml() {
             InterfaceRenderService mockRenderService = mock(InterfaceRenderService.class);
-            when(mockRenderService.resolveTemplateSnapshot(any(UUID.class), anyString(), anyString(), anyInt()))
+            when(mockRenderService.resolveTemplateSnapshot(any(UUID.class), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(Optional.of(snapshotWith("<p>plain</p>", null, null)));
             InterfaceNode node = new InterfaceNode("interface:form", INTERFACE_UUID, Map.of(), false, false, true);
             ServiceRegistry registry = mock(ServiceRegistry.class);
@@ -968,7 +993,7 @@ class InterfaceNodeTest {
         @DisplayName("Toggle on + resolveTemplateSnapshot returns empty (interface has no html template) → no rendered_* fields")
         void toggleOnWithEmptySnapshotEmitsNothing() {
             InterfaceRenderService mockRenderService = mock(InterfaceRenderService.class);
-            when(mockRenderService.resolveTemplateSnapshot(any(UUID.class), anyString(), anyString(), anyInt()))
+            when(mockRenderService.resolveTemplateSnapshot(any(UUID.class), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(Optional.empty());
             InterfaceNode node = new InterfaceNode("interface:form", INTERFACE_UUID, Map.of(), false, false, true);
             ServiceRegistry registry = mock(ServiceRegistry.class);
@@ -986,7 +1011,7 @@ class InterfaceNodeTest {
         @DisplayName("Toggle on + resolveTemplateSnapshot throws → all rendered_* fields absent, workflow continues (continue-on-failure regression guard)")
         void toggleOnWithRenderExceptionContinuesWithoutFields() {
             InterfaceRenderService mockRenderService = mock(InterfaceRenderService.class);
-            when(mockRenderService.resolveTemplateSnapshot(any(UUID.class), anyString(), anyString(), anyInt()))
+            when(mockRenderService.resolveTemplateSnapshot(any(UUID.class), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
                 .thenThrow(new RuntimeException("DB exploded"));
             InterfaceNode node = new InterfaceNode("interface:form", INTERFACE_UUID, Map.of(), false, false, true);
             ServiceRegistry registry = mock(ServiceRegistry.class);
@@ -1017,7 +1042,7 @@ class InterfaceNodeTest {
 
             assertFalse(result.output().containsKey("rendered_html"));
             verify(mockRenderService, never()).resolveTemplateSnapshot(any(UUID.class),
-                anyString(), anyString(), anyInt());
+                anyString(), anyString(), anyInt(), anyInt(), anyInt());
         }
 
         @Test
@@ -1041,7 +1066,7 @@ class InterfaceNodeTest {
             // Repeat a 1-char string to overshoot the cap by exactly 1 char.
             String oversized = "a".repeat(InterfaceNode.MAX_RENDERED_FIELD_CHARS + 1);
             InterfaceRenderService mockRenderService = mock(InterfaceRenderService.class);
-            when(mockRenderService.resolveTemplateSnapshot(any(UUID.class), anyString(), anyString(), anyInt()))
+            when(mockRenderService.resolveTemplateSnapshot(any(UUID.class), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(Optional.of(snapshotWith(oversized, "h1{}", "var x=1")));
             InterfaceNode node = new InterfaceNode("interface:form", INTERFACE_UUID, Map.of(), false, false, true);
             ServiceRegistry registry = mock(ServiceRegistry.class);
@@ -1071,7 +1096,7 @@ class InterfaceNodeTest {
             when(mockScreenshotService.capture(any(), any(), anyInt(), anyInt(), any(), any(), any()))
                 .thenReturn(Optional.of(captured));
             InterfaceRenderService mockRenderService = mock(InterfaceRenderService.class);
-            when(mockRenderService.resolveTemplateSnapshot(any(UUID.class), anyString(), anyString(), anyInt()))
+            when(mockRenderService.resolveTemplateSnapshot(any(UUID.class), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(Optional.of(snapshotWith("<h1>both</h1>", null, null)));
             InterfaceNode node = new InterfaceNode("interface:form", INTERFACE_UUID, Map.of(), false, true, true);
             ServiceRegistry registry = mock(ServiceRegistry.class);
@@ -1531,6 +1556,82 @@ class InterfaceNodeTest {
             String reported = String.valueOf(resolved.get("variableMappingError"));
             assertTrue(reported.length() < 300, "a stack-trace-sized message must not be persisted whole");
             assertTrue(reported.contains("5000 chars"), "and the reader must be told what was cut");
+        }
+    }
+
+    /**
+     * Each capture is the page of ONE execution, so the node must hand the capture service that
+     * execution's (epoch, spawn, itemIndex). This is the entry path of the split bug (a reply
+     * preview for item 0 drawn from item 4's data). Three DIFFERENT non-zero values so no
+     * argument can stand in for another.
+     */
+    @Nested
+    @DisplayName("execute() - captures carry THIS item's coordinates")
+    class CaptureItemCoordinates {
+
+        private static final String INTERFACE_UUID = "11111111-2222-3333-4444-555555555555";
+
+        private ExecutionContext itemContext() {
+            return ExecutionContext.create(
+                "run-1", "workflow-run-1", "tenant-1", "item-7", 7,
+                "trigger:webhook", 5, 2, Map.of(), mockPlan);
+        }
+
+        private InterfaceNode node(boolean screenshot, boolean pdf, boolean video) {
+            return new InterfaceNode("interface:form", INTERFACE_UUID, Map.of(), false,
+                screenshot, false, pdf, null, false,
+                video, null, null, null, null);
+        }
+
+        private ServiceRegistry registryWith(InterfaceScreenshotService screenshotService) {
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getInterfaceScreenshotService()).thenReturn(screenshotService);
+            return registry;
+        }
+
+        @Test
+        @DisplayName("the PNG capture is asked for this item's epoch, spawn and index")
+        void screenshotCarriesTheItemsCoordinates() {
+            InterfaceScreenshotService screenshotService = mock(InterfaceScreenshotService.class);
+            when(screenshotService.capture(any(), any(), anyInt(), anyInt(), any(), any(), any()))
+                .thenReturn(Optional.empty());
+            InterfaceNode node = node(true, false, false);
+            node.acceptServices(registryWith(screenshotService));
+
+            node.execute(itemContext());
+
+            verify(screenshotService).capture(eq("tenant-1"), eq("run-1"), eq(5), eq(2), eq(7),
+                eq("interface:form"), eq(UUID.fromString(INTERFACE_UUID)));
+        }
+
+        @Test
+        @DisplayName("the PDF capture is asked for this item's epoch, spawn and index")
+        void pdfCarriesTheItemsCoordinates() {
+            InterfaceScreenshotService screenshotService = mock(InterfaceScreenshotService.class);
+            when(screenshotService.capturePdf(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), anyBoolean()))
+                .thenReturn(Optional.empty());
+            InterfaceNode node = node(false, true, false);
+            node.acceptServices(registryWith(screenshotService));
+
+            node.execute(itemContext());
+
+            verify(screenshotService).capturePdf(eq("tenant-1"), eq("run-1"), eq(5), eq(2), eq(7),
+                eq("interface:form"), eq(UUID.fromString(INTERFACE_UUID)), any(), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("the video recording is asked for this item's epoch, spawn and index")
+        void videoCarriesTheItemsCoordinates() {
+            InterfaceScreenshotService screenshotService = mock(InterfaceScreenshotService.class);
+            when(screenshotService.captureVideo(any(), any(), anyInt(), anyInt(), any(), any(), any(),
+                any(), any(), any(), any())).thenReturn(Optional.empty());
+            InterfaceNode node = node(false, false, true);
+            node.acceptServices(registryWith(screenshotService));
+
+            node.execute(itemContext());
+
+            verify(screenshotService).captureVideo(eq("tenant-1"), eq("run-1"), eq(5), eq(2), eq(7),
+                eq("interface:form"), eq(UUID.fromString(INTERFACE_UUID)), any(), any(), any(), any());
         }
     }
 }

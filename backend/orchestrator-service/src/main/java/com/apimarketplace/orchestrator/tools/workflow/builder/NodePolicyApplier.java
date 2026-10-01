@@ -16,9 +16,8 @@ import java.util.Optional;
  *
  * <p><b>Why this exists.</b> Until now {@code nodePolicy} could only be set by writing a whole
  * plan through {@code set_plan}, or by a person in the builder. So an agent could compose a
- * workflow that paces its own calls around a rate-limited provider and had no way to say
- * "and do not retry underneath me", the one instruction that keeps the two layers from
- * multiplying each other's requests.
+ * workflow around a rate-limited provider and had no way to say "retry this node, after this
+ * long", which is the only retry there is: the platform never re-sends a refused provider call.
  *
  * <p><b>Why the policy is LIFTED OUT of the call before anything else reads it.</b> It is not a
  * parameter of the node's own type. Left in place it would be refused as an unknown parameter by
@@ -133,9 +132,13 @@ public final class NodePolicyApplier {
         if (raw == null) {
             return null;
         }
+        String removed = WorkflowPlanParser.removedProviderRetryRejection("node", raw);
+        if (removed != null) {
+            return removed;
+        }
         try {
-            NodePolicy.fromMap(raw, "node");
-            return null;
+            // The caps are refused on WRITE only: the parser accepts a stored plan above them.
+            return NodePolicy.fromMap(raw, "node").writeViolation("node");
         } catch (IllegalArgumentException e) {
             return e.getMessage();
         }
@@ -163,6 +166,16 @@ public final class NodePolicyApplier {
         }
         return TRIGGER_OR_NOTE_REFUSAL;
     }
+
+    /**
+     * retryOn reads the HTTP status of the provider's answer, and only a catalog tool step fails
+     * with one: on any other node it would silently turn every retry off. Said the same way by
+     * add_node, modify and set_plan.
+     */
+    static final java.util.function.Function<String, String> RETRY_ON_TOOL_STEPS_ONLY = nodeKey ->
+            "Invalid nodePolicy for node '" + nodeKey + "': retryOn is only available on a tool step "
+            + "(a node that calls an integration), because only a tool step reports the provider's "
+            + "status. Leave retryOn out on this node; retryCount and retryBackoffMs still apply.";
 
     /** Said the same way wherever a policy is refused for landing on a non-executed node. */
     static final String TRIGGER_OR_NOTE_REFUSAL =
@@ -196,17 +209,22 @@ public final class NodePolicyApplier {
         } catch (IllegalArgumentException e) {
             return e.getMessage();
         }
-        // Only a catalog tool step carries this budget to the provider (StepNode is the one node
-        // that sends it). Accepting it anywhere else would store a setting nothing ever reads: the
-        // call succeeds, the plan carries the field, the platform keeps retrying underneath an
-        // author who asked it not to, and nothing anywhere says so.
-        String budgetRejection = WorkflowPlanParser.providerRetryRejection(
-                nodeId, parsed, LabelNormalizer.isMcpKey(nodeId));
-        if (budgetRejection != null) {
-            return budgetRejection;
+        // Refused rather than ignored: accepting it would report a setting nothing reads.
+        String removed = WorkflowPlanParser.removedProviderRetryRejection(nodeId, raw);
+        if (removed != null) {
+            return removed;
+        }
+        String overCap = parsed.writeViolation(nodeId);
+        if (overCap != null) {
+            return overCap;
+        }
+        if (parsed.retryOn() != null && !LabelNormalizer.isMcpKey(nodeId)) {
+            return RETRY_ON_TOOL_STEPS_ONLY.apply(nodeId);
         }
         String coreType = node == null ? null : String.valueOf(node.get("type"));
-        String rejection = WorkflowPlanParser.continueOnFailureRejection(coreType, parsed, nodeId);
+        String rejection = LabelNormalizer.isAgentKey(nodeId)
+            ? WorkflowPlanParser.continueOnFailureRejectionForAgent(coreType, parsed, nodeId)
+            : WorkflowPlanParser.continueOnFailureRejectionInBuilder(coreType, parsed, nodeId);
         if (rejection != null) {
             return rejection;
         }
@@ -279,11 +297,7 @@ public final class NodePolicyApplier {
         return ToolsProvider.ToolExecutionResult.success(enriched);
     }
 
-    /**
-     * The canonical block, with only the fields that carry a decision. Absent is not the same as
-     * zero for {@code providerRetryMaxWaitSec}: absent leaves the platform's retry in place, zero
-     * turns it off, so that one is written whenever it was set, including when it is 0.
-     */
+    /** The canonical block, with only the fields that carry a decision. */
     static Map<String, Object> toPlanMap(NodePolicy policy) {
         Map<String, Object> map = new LinkedHashMap<>();
         if (policy.retryCount() > 0) {
@@ -301,8 +315,8 @@ public final class NodePolicyApplier {
         if (policy.executeOnce()) {
             map.put("executeOnce", true);
         }
-        if (policy.providerRetryMaxWaitSec() != null) {
-            map.put("providerRetryMaxWaitSec", policy.providerRetryMaxWaitSec());
+        if (policy.retryOn() != null) {
+            map.put("retryOn", policy.retryOn());
         }
         return map;
     }

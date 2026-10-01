@@ -167,7 +167,7 @@ class SplitAwareNodeExecutorNodePolicyTest {
     }
 
     @Test
-    @DisplayName("no silent attempts: each per-item failed attempt goes through the ATTEMPT pipeline (emitNodeFailedAttempt) with attempt metadata; ONLY the terminal item result goes through emitNodeComplete")
+    @DisplayName("no silent attempts: each per-item failed attempt goes through the ATTEMPT pipeline (emitNodeFailedAttempt) with attempt metadata; ONLY the terminal item result goes through the completion pipeline")
     void failedAttemptPersistedPerItem() {
         stubSplitOfThreeItems();
         when(context.plan()).thenReturn(planWithPolicy(new NodePolicy(1, 0L, false)));
@@ -201,9 +201,11 @@ class SplitAwareNodeExecutorNodePolicyTest {
             .containsEntry(ExecutionMetadataKeys.POLICY_MAX_ATTEMPTS, 2);
 
         // ONLY the terminal per-item result of item 1 (COMPLETED retry) went through
-        // the full completion pipeline - counts/edges mutate once per item.
+        // the completion pipeline - counts/edges mutate once per item. No traverser here, so
+        // this is the step-by-step fan-out: per item, the node-level mark written once at the
+        // end (SplitAwareNodeExecutorStepByStepAggregateTest).
         ArgumentCaptor<NodeExecutionResult> terminalCaptor = ArgumentCaptor.forClass(NodeExecutionResult.class);
-        verify(nodeCompletionService, atLeastOnce()).emitNodeComplete(
+        verify(nodeCompletionService, atLeastOnce()).emitNodeCompletePerItem(
             eq(execution), eq(node), terminalCaptor.capture(), any(), eq(1), any());
         List<NodeExecutionResult> item1Terminal = terminalCaptor.getAllValues();
         assertThat(item1Terminal).hasSize(1);
@@ -325,6 +327,162 @@ class SplitAwareNodeExecutorNodePolicyTest {
         @SuppressWarnings("unchecked")
         List<String> errors = (List<String>) result.output().get(ExecutionMetadataKeys.SPLIT_ERRORS);
         assertThat(errors).anySatisfy(e -> assertThat(e).contains("Output payload lost"));
+    }
+
+    // =====================================================================
+    // continueOnFailure on the production (STEP_BY_STEP) path: per-item cascade,
+    // node-level summary and split routing (2026-09-29)
+    // =====================================================================
+
+    /** Item 1 fails for good, items 0 and 2 succeed. */
+    private TestNode nodeFailingItemOne() {
+        TestNode node = new TestNode(NODE_ID, NodeType.MCP);
+        node.setPredecessors(List.of(SPLIT_KEY));
+        node.setDynamicResult(ctx -> {
+            int idx = currentIndexOf(ctx);
+            return idx == 1
+                ? NodeExecutionResult.failure(NODE_ID, "always down")
+                : NodeExecutionResult.success(NODE_ID, Map.of("item", idx));
+        });
+        nodeMap.put(NODE_ID, node);
+        return node;
+    }
+
+    @Test
+    @DisplayName("REGRESSION: a continued split item gets NO per-item SKIPPED cascade (its descendants are about to run for it)")
+    void continuedItemIsNotCascaded() {
+        stubSplitOfThreeItems();
+        when(context.plan()).thenReturn(planWithPolicy(new NodePolicy(0, 0L, true)));
+        com.apimarketplace.orchestrator.execution.v2.services.V2SkipPropagationService skip =
+            mock(com.apimarketplace.orchestrator.execution.v2.services.V2SkipPropagationService.class);
+        executor.setSkipPropagationService(skip);
+        TestNode node = nodeFailingItemOne();
+
+        executor.execute(node, context, RUN_ID, nodeMap,
+            execution, new TriggerItem("item-1", 0, Map.of()), 0, null);
+
+        verify(skip, org.mockito.Mockito.never()).cascadeFailureToSuccessors(
+            any(), any(), anyInt(), anyInt(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any());
+    }
+
+    @Test
+    @DisplayName("without continueOnFailure the failed item still gets its per-item SKIPPED cascade (legacy kept)")
+    void uncontinuedItemIsCascaded() {
+        stubSplitOfThreeItems();
+        when(context.plan()).thenReturn(planWithPolicy(new NodePolicy(0, 0L, false)));
+        com.apimarketplace.orchestrator.execution.v2.services.V2SkipPropagationService skip =
+            mock(com.apimarketplace.orchestrator.execution.v2.services.V2SkipPropagationService.class);
+        executor.setSkipPropagationService(skip);
+        TestNode node = nodeFailingItemOne();
+
+        executor.execute(node, context, RUN_ID, nodeMap,
+            execution, new TriggerItem("item-1", 0, Map.of()), 0, null);
+
+        verify(skip).cascadeFailureToSuccessors(
+            eq(execution), eq(node), eq(1), anyInt(), any(), eq(true), eq("split_failure"));
+    }
+
+    @Test
+    @DisplayName("every item failed and every one continues: the node-level summary carries the flag (so the node does not cascade)")
+    void allFailedAllContinuedSummaryIsFlagged() {
+        stubSplitOfThreeItems();
+        when(context.plan()).thenReturn(planWithPolicy(new NodePolicy(0, 0L, true)));
+        TestNode node = new TestNode(NODE_ID, NodeType.MCP);
+        node.setPredecessors(List.of(SPLIT_KEY));
+        node.setDynamicResult(ctx -> NodeExecutionResult.failure(NODE_ID, "always down"));
+        nodeMap.put(NODE_ID, node);
+
+        NodeExecutionResult summary = executor.execute(node, context, RUN_ID, nodeMap);
+
+        assertThat(summary.status()).as("the node itself is still FAILED").isEqualTo(NodeStatus.FAILED);
+        assertThat(summary.output()).containsEntry(ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE, true);
+        assertThat(summary.metadata()).containsEntry(ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE, true);
+    }
+
+    @Test
+    @DisplayName("REGRESSION: an item the node returned SKIPPED has nothing to continue: the others' continued failures still flag the summary")
+    void skippedItemDoesNotBlockTheContinuedOnes() {
+        // It used to count as "not continued", so the node cascaded and dropped the continued items.
+        stubSplitOfThreeItems();
+        when(context.plan()).thenReturn(planWithPolicy(new NodePolicy(0, 0L, true)));
+        TestNode node = new TestNode(NODE_ID, NodeType.MCP);
+        node.setPredecessors(List.of(SPLIT_KEY));
+        node.setDynamicResult(ctx -> currentIndexOf(ctx) == 0
+            ? NodeExecutionResult.skipped(NODE_ID, "nothing to send for this item")
+            : NodeExecutionResult.failure(NODE_ID, "always down"));
+        nodeMap.put(NODE_ID, node);
+
+        NodeExecutionResult summary = executor.execute(node, context, RUN_ID, nodeMap);
+
+        assertThat(summary.status()).isEqualTo(NodeStatus.FAILED);
+        assertThat(summary.output()).containsEntry(ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE, true);
+        assertThat(summary.metadata()).containsEntry(ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE, true);
+    }
+
+    @Test
+    @DisplayName("a partial failure (some items succeed) is a COMPLETED summary and carries no flag")
+    void partialFailureSummaryIsNotFlagged() {
+        stubSplitOfThreeItems();
+        when(context.plan()).thenReturn(planWithPolicy(new NodePolicy(0, 0L, true)));
+        TestNode node = nodeFailingItemOne();
+
+        NodeExecutionResult summary = executor.execute(node, context, RUN_ID, nodeMap);
+
+        assertThat(summary.status()).isEqualTo(NodeStatus.COMPLETED);
+        assertThat(summary.output()).doesNotContainKey(ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE);
+        assertThat(summary.metadata()).doesNotContainKey(ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE);
+    }
+
+    @Test
+    @DisplayName("every item failed but one of them does NOT continue (its payload was lost): no flag, the node cascades as before")
+    void allFailedButNotAllContinuedSummaryIsNotFlagged() {
+        stubSplitOfThreeItems();
+        when(context.plan()).thenReturn(planWithPolicy(new NodePolicy(0, 0L, true)));
+        TestNode node = new TestNode(NODE_ID, NodeType.MCP);
+        node.setPredecessors(List.of(SPLIT_KEY));
+        // Items 0 and 1 fail for good (flagged by the runner); item 2 succeeds but its output is
+        // lost at persistence, which rewrites it into an UNFLAGGED failure. No traverser: the
+        // step-by-step fan-out persists each item through emitNodeCompletePerItem.
+        node.setDynamicResult(ctx -> currentIndexOf(ctx) == 2
+            ? NodeExecutionResult.success(NODE_ID, Map.of("item", 2))
+            : NodeExecutionResult.failure(NODE_ID, "always down"));
+        nodeMap.put(NODE_ID, node);
+        when(nodeCompletionService.emitNodeCompletePerItem(eq(execution), eq(node), any(), any(), anyInt(), any()))
+            .thenAnswer(inv -> ((int) inv.getArgument(4)) == 2
+                ? com.apimarketplace.orchestrator.services.completion.StepCompletionResult
+                    .persistedPayloadLost(Map.of(), Map.of(), "[storage] Output payload lost")
+                : com.apimarketplace.orchestrator.services.completion.StepCompletionResult
+                    .persisted(Map.of(), Map.of()));
+
+        NodeExecutionResult summary = executor.execute(node, context, RUN_ID, nodeMap,
+            execution, new TriggerItem("item-1", 0, Map.of()), 0, null);
+
+        assertThat(summary.status()).isEqualTo(NodeStatus.FAILED);
+        assertThat(summary.metadata()).doesNotContainKey(ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE);
+        assertThat(summary.output()).doesNotContainKey(ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE);
+    }
+
+    @Test
+    @DisplayName("REGRESSION: split routing reads the items that PASSED a predecessor (findPassedItemIndicesByEpoch), so a continued item still reaches the node below")
+    void routingReadsPassedItems() {
+        com.apimarketplace.orchestrator.persistence.WorkflowStepDataRepository repo =
+            mock(com.apimarketplace.orchestrator.persistence.WorkflowStepDataRepository.class);
+        SplitAwareNodeExecutor routingExecutor = new SplitAwareNodeExecutor(
+            contextManager, nodeCompletionService, null, null, repo, null, Executors.newFixedThreadPool(1));
+        try {
+            TestNode below = new TestNode("mcp:after", NodeType.MCP);
+            below.setPredecessors(List.of(NODE_ID));
+            // Item 1 FAILED with continueOnFailure: the query counts it as passed, with 0 and 2.
+            when(repo.findPassedItemIndicesByEpoch(RUN_ID, NODE_ID, 4)).thenReturn(List.of(0, 1));
+
+            java.util.Set<Integer> routed = routingExecutor.resolveRoutedItemIndices(below, RUN_ID, 3, 4, SPLIT_KEY + ":0");
+
+            assertThat(routed).containsExactlyInAnyOrder(0, 1);
+            verify(repo).findPassedItemIndicesByEpoch(RUN_ID, NODE_ID, 4);
+            verify(repo, org.mockito.Mockito.never()).findCompletedItemIndicesByEpoch(any(), any(), anyInt());
+        } finally {
+            routingExecutor.shutdown();
+        }
     }
 
     // =====================================================================

@@ -477,8 +477,10 @@ public class StreamPubSubService {
             return objectMapper.treeToValue(node, StreamEvent.StreamAwaitingApproval.class);
         } else if (node.has("partialContent")) {
             return objectMapper.treeToValue(node, StreamEvent.StreamStopped.class);
-        } else if (node.has("success") && node.has("resultId")) {
-            // ToolResult: has success + resultId (content fetched on demand)
+        } else if (node.has("success") && (node.has("resultId") || node.has("toolId"))) {
+            // ToolResult: success + its call's toolId (a ToolCall carries no success). Not
+            // resultId alone: a live result sends it as null, and a serializer that drops null
+            // map values (the self-hosted monolith's) removes the key, so the result was lost.
             return objectMapper.treeToValue(node, StreamEvent.ToolResult.class);
         } else if (node.has("toolName") && node.has("toolId") && node.has("arguments")) {
             // ToolCall: has toolName + toolId + arguments

@@ -91,3 +91,30 @@ describe('agendaErrorText', () => {
     });
   });
 });
+
+describe('agendaErrorText - resuming an agent whose name was taken meanwhile', () => {
+  // Resuming a paused agent re-activates it; if another active agent took its name, the
+  // server answers 409 AGENT_NAME_CONFLICT with the name and the first free one. The toast
+  // must say that in the user's language, not show the server's English sentence.
+  function nameConflict(suggestedName?: string): unknown {
+    return new ApiError("Agent x already uses the name 'Nova' in this workspace.", 409, 'AGENT_NAME_CONFLICT', {
+      error: 'AGENT_NAME_CONFLICT', name: 'Nova', ...(suggestedName ? { suggestedName } : {}),
+    });
+  }
+
+  it('names the taken name and the suggestion', () => {
+    expect(agendaErrorText(nameConflict('Nova (2)'))).toEqual({
+      key: 'errors.agentNameTaken', values: { name: 'Nova', suggestion: 'Nova (2)' },
+    });
+  });
+
+  it('still names the taken name when the server had no suggestion', () => {
+    expect(agendaErrorText(nameConflict())).toEqual({
+      key: 'errors.agentNameTakenNoSuggestion', values: { name: 'Nova' },
+    });
+  });
+
+  it('never shows the raw server sentence for it', () => {
+    expect(agendaErrorText(nameConflict('Nova (2)')).detail).toBeUndefined();
+  });
+});

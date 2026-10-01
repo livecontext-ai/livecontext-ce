@@ -78,11 +78,31 @@ public interface AgentRepository extends JpaRepository<AgentEntity, UUID> {
     @Query("SELECT a FROM AgentEntity a WHERE a.organizationId = :orgId ORDER BY a.createdAt DESC")
     List<AgentEntity> findByOrganizationIdForUpdateStrict(@Param("orgId") String orgId);
 
-    Optional<AgentEntity> findByTenantIdAndNameAndIsActiveTrue(String tenantId, String name);
-
     /** PR27 - strict-org active-by-name lookup. */
     @Query("SELECT a FROM AgentEntity a WHERE a.organizationId = :orgId AND a.name = :name AND a.isActive = true")
     Optional<AgentEntity> findByOrganizationIdStrictAndNameAndIsActiveTrue(@Param("orgId") String orgId, @Param("name") String name);
+
+    /**
+     * Names of the ACTIVE agents of one workspace that start with {@code prefix}, a LIKE pattern
+     * the caller has already escaped (backslash) and terminated with {@code %}. The one read
+     * {@code AgentService.allocateAgentName} makes to learn every name a "Name (n)" candidate
+     * could collide with under the V269 index.
+     */
+    @Query("SELECT a.name FROM AgentEntity a WHERE a.organizationId = :orgId AND a.isActive = true "
+            + "AND a.name LIKE :prefix ESCAPE '\\'")
+    List<String> findActiveNamesByOrganizationIdStrictAndNamePrefix(@Param("orgId") String orgId,
+                                                                    @Param("prefix") String prefix);
+
+    /**
+     * Links a just-created agent to its conversation, touching nothing else and only while no
+     * conversation is linked yet (written after the create committed, from a snapshot that may
+     * be stale). A bulk update: {@code updatedAt} is deliberately left alone, linking is not an
+     * edit. Returns the number of rows changed (1, or 0 when the row is gone or already linked).
+     */
+    @Modifying
+    @Query("UPDATE AgentEntity a SET a.conversationId = :conversationId "
+            + "WHERE a.id = :agentId AND a.conversationId IS NULL")
+    int linkConversationIfAbsent(@Param("agentId") UUID agentId, @Param("conversationId") UUID conversationId);
 
     // Retourne une liste car plusieurs agents peuvent avoir le même conversationId
     // On prendra le premier (le plus récent) dans le service

@@ -59,7 +59,9 @@ public final class WorkflowBuilderActionConfig {
     );
 
     /**
-     * Internal/hidden actions (not shown to LLM but still valid).
+     * Actions kept out of {@link #PRIMARY_ACTIONS} but still valid. Apart from {@code create},
+     * they are NOT hidden from the agent: the tool's {@code action} parameter documents every
+     * one of them, which is why the unknown-action error lists {@link #DOCUMENTED_ACTIONS}.
      */
     public static final List<String> HIDDEN_ACTIONS = List.of(
             "get_plan", "set_plan",
@@ -88,10 +90,34 @@ public final class WorkflowBuilderActionConfig {
             // Turning that slip into a terminal stop is not worth the convenience.
             Map.entry("stop", "stop_run"),
             Map.entry("cancel_run", "stop_run"),
+            // Names agents were observed inventing for an existing action (prod tool-call
+            // data, 2026-09): each has exactly one reading here, so it runs instead of
+            // failing with "Unknown action".
+            Map.entry("update_node", "modify"),
+            Map.entry("list_runs", "runs"),
             Map.entry("list_nodes", "describe"),
             Map.entry("show", "describe"),
             Map.entry("status", "describe")
     );
+
+    /**
+     * Every action the agent is told about: primary + the documented "hidden" ones, minus the
+     * legacy {@code create} (the agent is steered to {@code finish}). This is the list an
+     * unknown-action error must show. It used to show {@link #PRIMARY_ACTIONS} alone, which
+     * omitted get, list, runs, get_run, wait_run, get_node_output, get_plan and set_plan, so
+     * the error told the agent that actions it was documented to use did not exist.
+     */
+    public static final List<String> DOCUMENTED_ACTIONS = buildDocumentedActions();
+
+    private static List<String> buildDocumentedActions() {
+        List<String> documented = new java.util.ArrayList<>(PRIMARY_ACTIONS);
+        for (String action : HIDDEN_ACTIONS) {
+            if (!"create".equals(action) && !documented.contains(action)) {
+                documented.add(action);
+            }
+        }
+        return List.copyOf(documented);
+    }
 
     /**
      * All supported actions (primary + hidden + aliases) for validation.

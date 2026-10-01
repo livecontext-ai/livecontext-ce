@@ -56,6 +56,7 @@ public class UserService {
     private final StorageService storageService;
     private final AccountDeactivationMailer deactivationMailer;
     private final VerifiedAccountService verifiedAccountService;
+    private final PartnerBadgeService partnerBadgeService;
 
     /**
      * Lifecycle emails (Resend). A deactivated account's contact is deleted right away, so
@@ -76,7 +77,8 @@ public class UserService {
                        AgeValidator ageValidator,
                        StorageService storageService,
                        AccountDeactivationMailer deactivationMailer,
-                       VerifiedAccountService verifiedAccountService) {
+                       VerifiedAccountService verifiedAccountService,
+                       PartnerBadgeService partnerBadgeService) {
         this.userRepository = userRepository;
         this.onboardingRepository = onboardingRepository;
         this.userProfileRepository = userProfileRepository;
@@ -85,6 +87,7 @@ public class UserService {
         this.storageService = storageService;
         this.deactivationMailer = deactivationMailer;
         this.verifiedAccountService = verifiedAccountService;
+        this.partnerBadgeService = partnerBadgeService;
     }
 
     /**
@@ -339,6 +342,8 @@ public class UserService {
         // addressable by /app/u/{handle} instead of the numeric user/tenant id.
         UserProfileEntity p = profileOpt.orElseGet(() -> new UserProfileEntity(user.getId()));
         String handle = ensureHandle(p, publicDisplayName);
+        // Null when the account carries no partner badge, so it also answers "is a partner".
+        String partnerTier = partnerBadgeService.partnerTier(user, p);
         return Optional.of(new PublicProfileDto(
                 user.getId(),
                 publicDisplayName,
@@ -349,7 +354,9 @@ public class UserService {
                 p.isSearchIndexable(),
                 // The profile row is already in hand; the single-argument overload
                 // would re-read the row this method is standing on.
-                verifiedAccountService.isVerified(user, p)
+                verifiedAccountService.isVerified(user, p),
+                partnerTier != null,
+                partnerTier
         ));
     }
 

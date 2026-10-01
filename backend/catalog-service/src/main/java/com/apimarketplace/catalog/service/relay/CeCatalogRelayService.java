@@ -12,7 +12,6 @@ import com.apimarketplace.catalog.service.ToolExecutionManager;
 import com.apimarketplace.catalog.service.billing.CatalogToolBillingService;
 import com.apimarketplace.catalog.service.generation.RelayedGenerationMeasurement;
 import com.apimarketplace.catalog.service.http.CredentialModeContext;
-import com.apimarketplace.catalog.service.http.ProviderRetryContext;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
 import com.apimarketplace.common.credit.SourceIdBuilder;
 import com.apimarketplace.credential.client.CredentialClient;
@@ -231,11 +230,6 @@ public class CeCatalogRelayService {
         // to the pool.
         CredentialModeContext.setExplicitSource("platform");
         CredentialModeContext.setSelectedCredentialId(null);
-        // Second entry point into the execution funnel, so it owns the retry context exactly as
-        // the controller does. begin() also resets the RE-SEND COUNT, which does not self-heal the
-        // way the budget does: a count left on a pooled thread would be reported on the NEXT
-        // request through that thread, for a different tenant, as a re-send that never happened.
-        ProviderRetryContext.begin(request.getProviderRetryMaxWaitSeconds());
         try {
             response = catalogV1Service.executeTool(
                     toolId,
@@ -257,7 +251,6 @@ public class CeCatalogRelayService {
                     .build(), BigDecimal.ZERO);
         } finally {
             CredentialModeContext.clear();
-            ProviderRetryContext.clear();
         }
 
         if (response != null && response.isSuccess()) {
@@ -614,8 +607,6 @@ public class CeCatalogRelayService {
                 .expand(request.getExpand())
                 .maxItems(request.getMaxItems())
                 .inlineBinaries(request.getInlineBinaries())
-                // The install's node decided this; the cloud caps it at its own budget.
-                .providerRetryMaxWaitSeconds(request.getProviderRetryMaxWaitSeconds())
                 // Server-resolved, authoritative: never taken from CE input.
                 .credentialSource("platform")
                 .platformCredentialId(platformCredentialId)

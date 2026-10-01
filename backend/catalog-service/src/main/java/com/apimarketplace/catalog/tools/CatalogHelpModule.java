@@ -107,6 +107,7 @@ public class CatalogHelpModule implements ToolModule {
                 "1. catalog(action='search', query='gmail list messages') → get tool_id",
                 "2. If you know the API: catalog(action='search', api='gmail', query='list messages')",
                 "3. Multiple APIs: catalog(action='search', apis=['gmail','slack'], query='send message')",
+                "3b. List an API's tools: catalog(action='search', api='gmail') with no query returns up to limit (default 10, max 25) of its tools; add a query to find a specific operation",
                 "4. Inline shorthand: query='[gmail, slack] send message' or query='gmail, list messages'",
                 "5. catalog(action='execute', tool_id='<uuid>', params={...}) → execute"
             ),
@@ -262,14 +263,19 @@ public class CatalogHelpModule implements ToolModule {
                       + "sent automatically on every call, so nothing has to pass it: execute the tool without it. "
                       + "A value that changes per call is a param with location query/path/body/header instead.",
                 "example", Map.of("requiredHeaders", Map.of("anthropic-version", "2023-06-01")),
-                "accepted_values", "Short literals only: non-empty, at most 64 characters, no whitespace at all, no { } "
-                      + "placeholder. Anything longer or templated is documentation or a runtime template and is refused.",
+                "accepted_values", "Short literals only: non-empty, at most 64 characters, no { } placeholder, and no "
+                      + "whitespace except one space after a ';' or a ',' (application/vnd.x+json; version=3, "
+                      + "application/json, text/event-stream). Anything longer or templated is documentation or a "
+                      + "runtime template and is refused.",
                 "never_sent", "Headers the transport owns (Content-Type, Content-Length, Host, Connection, "
                       + "Transfer-Encoding, Accept-Encoding, plus the hop-by-hop ones: Expect, Upgrade, TE, "
                       + "Trailer, Keep-Alive, Proxy-Authenticate, Proxy-Authorization); the header the "
                       + "credential fills, which depends on this API's authType and auth[0].apiKeyConfig (see "
-                      + "auth_placement); and Accept, which the platform sets to application/json before a "
-                      + "declared header could apply.",
+                      + "auth_placement).",
+                "accept", "Accept defaults to application/json; a declared Accept replaces it. An MCP server "
+                      + "reached over HTTP answers 406 'Client must accept both application/json and "
+                      + "text/event-stream' until it gets requiredHeaders {Accept: 'application/json, text/event-stream'}; "
+                      + "its event-stream reply then comes back as the JSON-RPC response it carries.",
                 "a_refused_value_is_simply_absent", "A value the rules below refuse is not registered at all, "
                       + "and nothing says so at registration: the upstream then answers 4xx without naming the "
                       + "missing header. Check each value against accepted_values BEFORE registering. To confirm "
@@ -371,7 +377,7 @@ public class CatalogHelpModule implements ToolModule {
 
             Map.entry("output_schema", Map.of(
                 "description", "Typed response shape. Declares what fields the next workflow node will see.",
-                "allowed_types", "string | number | boolean | datetime | object | array | fileRef",
+                "allowed_types", "string | number | boolean | datetime | object | array | fileRef ('integer' is accepted and stored as number)",
                 "example", List.of(
                     Map.of("key", "users", "type", "array", "description", "List of users",
                         "children", List.of(

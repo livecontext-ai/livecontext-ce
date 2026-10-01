@@ -233,4 +233,217 @@ class StreamInterruptionServiceTest {
             verify(streamService).markStreamAsInterrupted("stream-1", "timeout");
         }
     }
+
+    @Nested
+    @DisplayName("claimUnsavedReply")
+    class ClaimUnsavedReply {
+
+        private static final String CLAIM_KEY = "stream:interrupt:claim:stream-1";
+
+        @Test
+        @DisplayName("regression: a stream its producer already COMPLETED is claimable - interrupt() skips terminal streams, so a lost agent-service answer lost the reply for good")
+        void claimsTheBufferedReplyOfACompletedStream() {
+            when(stateService.getMetadata("stream-1")).thenReturn(Mono.just(metadata(StreamState.COMPLETED)));
+            when(stateService.getFullContent("stream-1")).thenReturn(Mono.just("the whole answer"));
+
+            Optional<StreamInterruptionService.BufferedReply> reply = interruptionService.claimUnsavedReply("stream-1");
+
+            assertThat(reply).isPresent();
+            assertThat(reply.get().content()).isEqualTo("the whole answer");
+            // The state is handed back so the caller never presents a partial as complete.
+            assertThat(reply.get().state()).isEqualTo(StreamState.COMPLETED);
+            assertThat(reply.get().producerCompleted()).isTrue();
+            verify(valueOperations).setIfAbsent(eq(CLAIM_KEY), eq("1"), any(Duration.class));
+            // The caller writes the message and owns the terminal event: nothing is written,
+            // published, flipped or cleaned up here.
+            verifyNoInteractions(conversationHistoryService, pubSubService, streamService);
+            verify(stateService, never()).updateState(any(), any());
+            verify(stateService, never()).delete(any());
+        }
+
+        @Test
+        @DisplayName("a stream still STREAMING is claimable and reported as NOT completed (its producer may still be running)")
+        void streamingStreamIsReportedNotCompleted() {
+            when(stateService.getMetadata("stream-1")).thenReturn(Mono.just(metadata(StreamState.STREAMING)));
+            when(stateService.getFullContent("stream-1")).thenReturn(Mono.just("half an answer"));
+
+            StreamInterruptionService.BufferedReply reply = interruptionService.claimUnsavedReply("stream-1").orElseThrow();
+
+            assertThat(reply.state()).isEqualTo(StreamState.STREAMING);
+            assertThat(reply.producerCompleted()).isFalse();
+            assertThat(reply.producerFailed()).isFalse();
+        }
+
+        @Test
+        @DisplayName("a stream its producer ended in ERROR is claimable and reported as failed")
+        void errorStreamIsReportedFailed() {
+            when(stateService.getMetadata("stream-1")).thenReturn(Mono.just(metadata(StreamState.ERROR)));
+            when(stateService.getFullContent("stream-1")).thenReturn(Mono.just("partial of a failed run"));
+
+            StreamInterruptionService.BufferedReply reply = interruptionService.claimUnsavedReply("stream-1").orElseThrow();
+
+            assertThat(reply.producerFailed()).isTrue();
+            assertThat(reply.producerCompleted()).isFalse();
+        }
+
+        @Test
+        @DisplayName("nothing buffered: nothing claimed (a claim would hold off the TTL rescue for nothing)")
+        void blankBufferClaimsNothing() {
+            when(stateService.getMetadata("stream-1")).thenReturn(Mono.just(metadata(StreamState.STREAMING)));
+            when(stateService.getFullContent("stream-1")).thenReturn(Mono.just("  \n"));
+
+            assertThat(interruptionService.claimUnsavedReply("stream-1")).isEmpty();
+
+            verify(valueOperations, never()).setIfAbsent(anyString(), anyString(), any(Duration.class));
+        }
+
+        @Test
+        @DisplayName("a stream the user STOPPED is left alone: the stop handler already saved its partial")
+        void stoppedStreamIsNotClaimed() {
+            when(stateService.getMetadata("stream-1")).thenReturn(Mono.just(metadata(StreamState.STOPPED_BY_USER)));
+
+            assertThat(interruptionService.claimUnsavedReply("stream-1")).isEmpty();
+
+            verify(stateService, never()).getFullContent(any());
+            verify(valueOperations, never()).setIfAbsent(anyString(), anyString(), any(Duration.class));
+        }
+
+        @Test
+        @DisplayName("an INTERRUPTED stream is left alone: interrupt() already saved its partial")
+        void interruptedStreamIsNotClaimed() {
+            when(stateService.getMetadata("stream-1")).thenReturn(Mono.just(metadata(StreamState.INTERRUPTED)));
+
+            assertThat(interruptionService.claimUnsavedReply("stream-1")).isEmpty();
+
+            verify(stateService, never()).getFullContent(any());
+        }
+
+        @Test
+        @DisplayName("another rescuer holds the shared claim (a drain or TTL rescue): nothing handed out, never saved twice")
+        void claimHeldElsewhereHandsOutNothing() {
+            when(stateService.getMetadata("stream-1")).thenReturn(Mono.just(metadata(StreamState.STREAMING)));
+            when(stateService.getFullContent("stream-1")).thenReturn(Mono.just("partial"));
+            when(valueOperations.setIfAbsent(eq(CLAIM_KEY), eq("1"), any(Duration.class))).thenReturn(false);
+
+            assertThat(interruptionService.claimUnsavedReply("stream-1")).isEmpty();
+        }
+
+        @Test
+        @DisplayName("the claim takes the same key as interrupt(), so interrupt() backs off a stream this rescue already claimed")
+        void interruptBacksOffAfterAClaim() {
+            java.util.Set<String> claims = new java.util.HashSet<>();
+            when(valueOperations.setIfAbsent(anyString(), eq("1"), any(Duration.class)))
+                    .thenAnswer(inv -> claims.add(inv.getArgument(0)));
+            when(stateService.getMetadata("stream-1")).thenReturn(Mono.just(metadata(StreamState.STREAMING)));
+            when(stateService.getFullContent("stream-1")).thenReturn(Mono.just("partial"));
+
+            assertThat(interruptionService.claimUnsavedReply("stream-1")).isPresent();
+            assertThat(interruptionService.interrupt("stream-1", "heartbeat lost")).isFalse();
+
+            verifyNoInteractions(conversationHistoryService);
+        }
+
+        @Test
+        @DisplayName("an unreadable state does not block the claim (the claim still keeps it single), and is reported as unknown, never as completed")
+        void unreadableStateIsUnknownNotCompleted() {
+            when(stateService.getMetadata("stream-1")).thenReturn(Mono.error(new RuntimeException("redis blip")));
+            when(stateService.getFullContent("stream-1")).thenReturn(Mono.just("answer"));
+
+            StreamInterruptionService.BufferedReply reply = interruptionService.claimUnsavedReply("stream-1").orElseThrow();
+
+            assertThat(reply.state()).isNull();
+            assertThat(reply.producerCompleted()).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("endInterrupted")
+    class EndInterrupted {
+
+        @Test
+        @DisplayName("ends the stream as a cut-off turn: stopped event carrying the partial, INTERRUPTED, keys freed, DB row marked")
+        void endsTheStreamAsInterrupted() {
+            when(pubSubService.publishStopped("stream-1", "half an answer")).thenReturn(Mono.just(1L));
+            when(stateService.updateState("stream-1", StreamState.INTERRUPTED)).thenReturn(Mono.just(true));
+            when(stateService.delete("stream-1")).thenReturn(Mono.just(1L));
+
+            interruptionService.endInterrupted("stream-1", "half an answer", "no response from bridge");
+
+            verify(pubSubService).publishStopped("stream-1", "half an answer");
+            verify(stateService).updateState("stream-1", StreamState.INTERRUPTED);
+            verify(stateService).delete("stream-1");
+            verify(streamService).markStreamAsInterrupted("stream-1", "no response from bridge");
+            // Never the complete-turn event.
+            verify(pubSubService, never()).publishComplete(anyString(), anyString(), anyInt());
+        }
+    }
+
+    @Nested
+    @DisplayName("claimRescue")
+    class ClaimRescue {
+
+        @Test
+        @DisplayName("the first saver takes the claim; the next one is refused")
+        void firstSaverWinsTheNextIsRefused() {
+            java.util.Set<String> held = new java.util.HashSet<>();
+            when(valueOperations.setIfAbsent(anyString(), eq("1"), any(Duration.class)))
+                    .thenAnswer(inv -> held.add(inv.getArgument(0)));
+
+            assertThat(interruptionService.claimRescue("stream-1")).isTrue();
+            assertThat(interruptionService.claimRescue("stream-1")).isFalse();
+            assertThat(held).containsExactly("stream:interrupt:claim:stream-1");
+        }
+
+        @Test
+        @DisplayName("Redis cannot arbitrate: the caller may save (a duplicated save beats a lost reply)")
+        void redisFailureLetsTheCallerSave() {
+            when(valueOperations.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                    .thenThrow(new RuntimeException("Redis down"));
+
+            assertThat(interruptionService.claimRescue("stream-1")).isTrue();
+        }
+    }
+
+    /**
+     * The order of the cancel-key write against the key cleanup, on a state store that deletes
+     * and expires keys like the real one ({@link InMemoryStreamStateService}): a mock records
+     * the calls but cannot show that the cleanup removed the key written before it.
+     */
+    @Nested
+    @DisplayName("endInterrupted - cancel key order")
+    class CancelKeyOrder {
+
+        private InMemoryStreamStateService store;
+        private StreamInterruptionService service;
+
+        @BeforeEach
+        void realOrderStore() {
+            store = new InMemoryStreamStateService();
+            store.seed("stream-1", "conv-1", StreamState.STREAMING, "half an answer");
+            lenient().when(pubSubService.publishStopped(anyString(), anyString())).thenReturn(Mono.just(1L));
+            service = new StreamInterruptionService(store, pubSubService, conversationHistoryService,
+                    streamService, conversationRepository, stringRedisTemplate);
+        }
+
+        @Test
+        @DisplayName("regression: stopping the producer leaves the cancel key IN PLACE after the cleanup, with the Stop path's TTL - written before it, the key was deleted before any poller saw it")
+        void cancelKeySurvivesTheCleanup() {
+            service.endInterrupted("stream-1", "half an answer", "no response", true);
+
+            assertThat(store.hasStream("stream-1")).as("the stream keys are freed as before").isFalse();
+            assertThat(store.hasCancelKey("stream-1")).isTrue();
+            assertThat(store.cancelKeyTtl("stream-1")).isEqualTo(InMemoryStreamStateService.STOP_PATH_CANCEL_TTL);
+        }
+
+        @Test
+        @DisplayName("the mechanism: without stopping the producer (the drain / TTL rescue), the cleanup frees every key, a cancel key written BEFORE it included - the order that left a still-running producer billing")
+        void theCleanupDeletesACancelKeyWrittenBeforeIt() {
+            store.setCancelKey("stream-1").block();
+
+            service.endInterrupted("stream-1", "half an answer", "pod died");
+
+            assertThat(store.hasStream("stream-1")).isFalse();
+            assertThat(store.hasCancelKey("stream-1")).isFalse();
+        }
+    }
 }

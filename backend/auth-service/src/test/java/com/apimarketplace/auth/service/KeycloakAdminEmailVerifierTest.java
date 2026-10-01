@@ -286,4 +286,73 @@ class KeycloakAdminEmailVerifierTest {
 
         assertThatCode(() -> verifier.setUserLocale(PROVIDER_ID, "fr")).doesNotThrowAnyException();
     }
+
+    // ===== identityExists / createPasswordUser (resurrection guard + sign-up canary) =====
+
+    private static final String TOKEN_URL = KC + "/realms/livecontext/protocol/openid-connect/token";
+    private static final String USERS_URL = KC + "/admin/realms/livecontext/users";
+
+    @Test
+    @DisplayName("identityExists: 200 is true, 404 is false (the identity is gone)")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void identityExistsMapsFoundAndGone() {
+        stubToken(TOKEN_URL);
+        when(restTemplate.exchange(eq(USER_URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(new ResponseEntity<>(Map.of("id", PROVIDER_ID), HttpStatus.OK))
+                .thenThrow(org.springframework.web.client.HttpClientErrorException.create(
+                        HttpStatus.NOT_FOUND, "Not Found", null, null, null));
+
+        assertThat(verifier.identityExists(PROVIDER_ID)).contains(true);
+        assertThat(verifier.identityExists(PROVIDER_ID)).contains(false);
+    }
+
+    @Test
+    @DisplayName("identityExists: any other failure is UNKNOWN, never 'gone' (a Keycloak outage must not look like a deletion)")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void identityExistsUnknownOnOtherFailures() {
+        stubToken(TOKEN_URL);
+        when(restTemplate.exchange(eq(USER_URL), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenThrow(org.springframework.web.client.HttpServerErrorException.create(
+                        HttpStatus.SERVICE_UNAVAILABLE, "down", null, null, null));
+
+        assertThat(verifier.identityExists(PROVIDER_ID)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("createPasswordUser: 201 is CREATED, with the e-mail as username, unverified, a non-temporary password")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void createPasswordUserCreates() {
+        stubToken(TOKEN_URL);
+        ArgumentCaptor<HttpEntity> call = ArgumentCaptor.forClass(HttpEntity.class);
+        when(restTemplate.exchange(eq(USERS_URL), eq(HttpMethod.POST), call.capture(), eq(Void.class)))
+                .thenReturn(new ResponseEntity<>(HttpStatus.CREATED));
+
+        assertThat(verifier.createPasswordUser("canary@example.test", "pw-pw-pw-pw-pw-pw"))
+                .isEqualTo(KeycloakAdminEmailVerifier.CreateOutcome.CREATED);
+
+        Map<String, Object> body = (Map<String, Object>) call.getValue().getBody();
+        assertThat(body).containsEntry("username", "canary@example.test")
+                .containsEntry("email", "canary@example.test")
+                .containsEntry("enabled", true)
+                .containsEntry("emailVerified", false);
+        Map<String, Object> credential = ((java.util.List<Map<String, Object>>) body.get("credentials")).get(0);
+        assertThat(credential).containsEntry("temporary", false).containsEntry("value", "pw-pw-pw-pw-pw-pw");
+    }
+
+    @Test
+    @DisplayName("createPasswordUser: 409 is ALREADY_EXISTS, any other failure throws")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void createPasswordUserConflictAndFailure() {
+        stubToken(TOKEN_URL);
+        when(restTemplate.exchange(eq(USERS_URL), eq(HttpMethod.POST), any(HttpEntity.class), eq(Void.class)))
+                .thenThrow(org.springframework.web.client.HttpClientErrorException.create(
+                        HttpStatus.CONFLICT, "Conflict", null, null, null))
+                .thenThrow(org.springframework.web.client.HttpServerErrorException.create(
+                        HttpStatus.INTERNAL_SERVER_ERROR, "boom", null, null, null));
+
+        assertThat(verifier.createPasswordUser("canary@example.test", "pw"))
+                .isEqualTo(KeycloakAdminEmailVerifier.CreateOutcome.ALREADY_EXISTS);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> verifier.createPasswordUser("canary@example.test", "pw"))
+                .isInstanceOf(IllegalStateException.class);
+    }
 }

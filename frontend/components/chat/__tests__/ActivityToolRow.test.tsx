@@ -52,7 +52,7 @@ describe('ActivityToolRow', () => {
     const button = screen.getByRole('button');
     fireEvent.click(button);
     expect(events).toHaveLength(1);
-    expect(events[0].detail).toEqual({ type: 'table', id: 'tbl-1', title: 'Leads', runId: undefined });
+    expect(events[0].detail).toEqual({ type: 'table', id: 'tbl-1', title: 'Leads', runId: undefined, userInitiated: true });
   });
 
   it('opens the panel for a browser-agent (agent_browse) row', () => {

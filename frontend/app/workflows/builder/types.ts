@@ -205,38 +205,50 @@ export function createDefaultGuardrailRules(nodeId: string): GuardrailRule[] {
   ];
 }
 
+/** The only non-default value of `nodePolicy.retryOn`. */
+export type NodePolicyRetryOn = 'rate_limit';
+
 /**
  * Per-node execution policy - mirrors the backend `NodePolicy` record
  * (orchestrator `domain/workflow/NodePolicy.java`). Serialized verbatim as the
  * plan-level `nodePolicy` block on executable node entries (mcps / tables /
  * agents / cores / interfaces). Triggers and notes never carry one (the backend
- * parser ignores them). The BACKEND is the single validator - it rejects
- * negative values, `continueOnFailure` on decision/switch/option cores, and
- * `executeOnce` on split/aggregate/merge/loop cores. The UI only mirrors those
- * rules for gating (see `utils/nodePolicy.ts`).
+ * parser ignores them). The BACKEND decides: the plan parser rejects negative
+ * values, `continueOnFailure` on decision/switch/option cores and `executeOnce`
+ * on split/aggregate/merge/loop cores; `continueOnFailure` on a loop core or a
+ * classify/guardrail agent is refused by the builder tools and ignored at run
+ * time, so a plan saved another way still opens. The UI mirrors those rules for
+ * gating and strips a blocked field on save (see `utils/nodePolicy.ts`).
  *
  * All fields are optional; an absent field means "default" (= today's behavior).
  * A fully-default policy is represented by OMITTING the block entirely so plans
  * without a policy stay byte-identical.
  */
 export interface NodePolicy {
-  /** Additional attempts after a failed one (total attempts = retryCount + 1). */
+  /** Additional attempts after a failed one (total attempts = retryCount + 1), at most 10. */
   retryCount?: number;
-  /** Delay between attempts, in milliseconds. */
+  /**
+   * Delay between attempts, in milliseconds, at most 60000. The provider's own Retry-After
+   * is honoured when longer; one longer than both this backoff and 60 s ends the retries.
+   */
   retryBackoffMs?: number;
-  /** When ALL attempts fail, continue to successors instead of cascading SKIPPED. */
+  /**
+   * Which failures are retried (tool steps only, with retryCount > 0). Absent: every failure
+   * except a definite refusal, by the provider (HTTP 4xx other than 408/425/429 that is not a
+   * rate limit) or by the platform (missing credits, a budget reached). 'rate_limit': only when the provider signals a rate limit (429, 503, or a 4xx with a
+   * Retry-After or a rate-limit message; a Retry-After on a 5xx does not count).
+   */
+  retryOn?: NodePolicyRetryOn;
+  /**
+   * When ALL attempts fail, the node stays FAILED (and the run ends as it would without it) but
+   * its successors run instead of being SKIPPED, whatever started the run. Inside a split, a failed
+   * item goes on to the next nodes.
+   */
   continueOnFailure?: boolean;
   /** PER-ATTEMPT execution timeout in ms (0/absent = disabled). Best effort. */
   timeoutMs?: number;
   /** In a split context, execute only for split item 0; other items are SKIPPED. */
   executeOnce?: boolean;
-  /**
-   * How long ONE provider call made by this node may spend waiting out a rate-limit refusal,
-   * in seconds. Absent = the platform decides (it waits the delay the provider asked for).
-   * `0` = do not retry: the author paces the calls themselves, and the two layers would
-   * otherwise multiply.
-   */
-  providerRetryMaxWaitSec?: number;
 }
 
 /**

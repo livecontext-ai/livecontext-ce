@@ -416,6 +416,14 @@ public class AgentQueueWorkerService implements SmartLifecycle {
                 publishError(correlationId, "Workflow cancelled before agent execution started");
                 return;
             }
+            // The orchestrator already answered for this task: its nodePolicy.timeoutMs ran out while
+            // the task waited in the queue (it publishes that timeout on this task's result key).
+            // Running it now would spend tokens on an answer nobody reads.
+            if (isAlreadyAnswered(correlationId)) {
+                log.info("Task skipped (already answered: its wait bound ran out in the queue): correlationId={}, type={}",
+                    correlationId, task.agentType());
+                return;
+            }
 
             // Phase 3 MIGRATION_ORG_ID_NOT_NULL.md (2026-05-19) - bind org context from
             // the serialized DTO's credentials to the worker thread via TenantResolver.
@@ -552,6 +560,17 @@ public class AgentQueueWorkerService implements SmartLifecycle {
         } catch (Exception e) {
             // Last resort: publish minimal valid JSON
             publishResult(correlationId, "{\"success\":false,\"error\":\"serialization failed\"}");
+        }
+    }
+
+    /** Whether this task's result key already exists (fail-open: run the task when Redis cannot say). */
+    private boolean isAlreadyAnswered(String correlationId) {
+        if (correlationId == null) return false;
+        try {
+            return Boolean.TRUE.equals(redisTemplate.hasKey(RESULT_KEY_PREFIX + correlationId));
+        } catch (Exception e) {
+            log.debug("Failed to check the result key for correlationId={}: {}", correlationId, e.getMessage());
+            return false;
         }
     }
 

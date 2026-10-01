@@ -217,6 +217,38 @@ describe('TriggerRowActions', () => {
     }));
   });
 
+  it('resuming a paused agent whose name was taken meanwhile names the taken name and the free one', async () => {
+    // Resume re-activates the agent; another active agent may hold its name by now. The
+    // server answers 409 AGENT_NAME_CONFLICT; the row must say that, localized, not the
+    // generic "could not resume" nor the server's English sentence.
+    vi.mocked(setProductionResourcePaused).mockRejectedValue(Object.assign(
+      new Error("Agent x already uses the name 'Nova' in this workspace."),
+      {
+        status: 409, code: 'AGENT_NAME_CONFLICT',
+        details: { error: 'AGENT_NAME_CONFLICT', name: 'Nova', suggestedName: 'Nova (2)' },
+      },
+    ));
+    const onResult = vi.fn();
+    const paused = automation({ resourceType: 'AGENT', resourceId: 'agent-1', name: 'Nova', resourcePaused: true });
+    renderRow(paused, onResult);
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByText('resumeResource:{"type":"agent"}'));
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith(
+      'error', 'errors.agentNameTaken:{"name":"Nova","suggestion":"Nova (2)"}'));
+  });
+
+  it('any other resume failure keeps the generic message', async () => {
+    vi.mocked(setProductionResourcePaused).mockRejectedValue(new Error('boom'));
+    const onResult = vi.fn();
+    const paused = automation({ resourceType: 'AGENT', resourceId: 'agent-1', name: 'Nova', resourcePaused: true });
+    renderRow(paused, onResult);
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByText('resumeResource:{"type":"agent"}'));
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith('error', 'resourceToggleFailed:{"type":"agent"}'));
+  });
+
   it.each(REVEAL_SITUATIONS)(
     'shows the dots and stands the row down together: $situation',
     ({ menu, row }) => {

@@ -486,13 +486,43 @@ public class PublicApplicationService {
             }
         }
 
-        // Last resort: resourceId might be the workflowId
+        // Last resort: the link's resourceId, taken as the application's workflow ONLY when it is
+        // a clone of the publication this link names. publication-service only lets the owner
+        // name their own clone there now, but a link filed before that check could carry any
+        // workflow id, and loadWorkflow() below reads it with no scope of its own: this fallback
+        // (reached when the named publication has no workflowId, or its lookup failed) must not
+        // turn such a link into a read of someone else's workflow: it must be a clone of THAT
+        // publication, and a clone held by the link's own workspace (another acquirer's clone of
+        // the same publication is someone else's data too).
         String resourceId = (String) linkData.get("resourceId");
-        if (resourceId != null && !resourceId.isBlank()) {
-            return UUID.fromString(resourceId);
+        if (resourceId != null && !resourceId.isBlank() && publicationId != null) {
+            UUID candidate = UUID.fromString(resourceId);
+            String linkTenantId = (String) linkData.get("tenantId");
+            String linkOrgId = (String) linkData.get("organizationId");
+            boolean ownCloneOfThisPublication = workflowRepository.findById(candidate)
+                    .filter(wf -> wf.getSourcePublicationId() != null
+                            && wf.getSourcePublicationId().toString().equalsIgnoreCase(publicationId.trim()))
+                    .filter(wf -> isLinkOwnersWorkflow(linkTenantId, linkOrgId, wf))
+                    .isPresent();
+            if (ownCloneOfThisPublication) {
+                return candidate;
+            }
         }
 
         throw new IllegalStateException("Application resource not found");
+    }
+
+    /**
+     * The link owner's workspace holds this workflow: strict scope when the link names a
+     * workspace; a link filed before workspaces existed (no organization id) must at least be
+     * the workflow owner's own.
+     */
+    private static boolean isLinkOwnersWorkflow(String linkTenantId, String linkOrgId, WorkflowEntity wf) {
+        if (linkOrgId != null && !linkOrgId.isBlank()) {
+            return com.apimarketplace.common.scope.ScopeGuard.isInStrictScope(
+                    linkTenantId, linkOrgId, wf.getTenantId(), wf.getOrganizationId());
+        }
+        return linkTenantId != null && !linkTenantId.isBlank() && linkTenantId.equals(wf.getTenantId());
     }
 
     private WorkflowEntity loadWorkflow(UUID workflowId) {

@@ -16,6 +16,8 @@ public final class LifecycleEvents {
     public static final String BADGE_UNLOCKED = "badge.unlocked";
     /** The monthly activity recap of the previous calendar month. Sent by orchestrator. */
     public static final String RECAP_MONTHLY = "recap.monthly";
+    public static final String PERSONAL_OFFER_INITIAL_DUE = "personal_offer.initial_due";
+    public static final String PERSONAL_OFFER_REMINDER_DUE = "personal_offer.reminder_due";
 
     /** {@code kind} payload values of the checkout events. */
     public static final String KIND_SUBSCRIPTION = "subscription";

@@ -429,6 +429,73 @@ class UserResolutionServiceTest {
         }
     }
 
+    // ===== A purged account's still-valid token =====
+
+    @Nested
+    @DisplayName("token of a purged account (Keycloak identity deleted)")
+    class DeletedIdentity {
+
+        private static final String PROVIDER_ID = "0b6d6f0e-5a2b-4a47-9d0e-1c2d3e4f5a6b";
+
+        @Mock
+        private KeycloakAdminEmailVerifier keycloakAdmin;
+
+        @BeforeEach
+        void wireKeycloakAdmin() {
+            ReflectionTestUtils.setField(userResolutionService, "keycloakAdmin", keycloakAdmin);
+        }
+
+        @Test
+        @DisplayName("does NOT bootstrap a fresh account when Keycloak says the identity is gone (regression: purged accounts came back)")
+        void doesNotRecreatePurgedAccount() {
+            when(userRepository.findByProviderId(PROVIDER_ID)).thenReturn(Optional.empty());
+            when(keycloakAdmin.identityExists(PROVIDER_ID)).thenReturn(Optional.of(false));
+
+            UserResolutionResponse response =
+                    userResolutionService.resolveUser(PROVIDER_ID, buildTestJwt(PROVIDER_ID, "gone@test.com"));
+
+            assertThat(response).isNull();
+            verify(userRepository, never()).save(any(User.class));
+        }
+
+        @Test
+        @DisplayName("remembers a deleted identity, so a replaying client does not hit Keycloak on every request")
+        void remembersDeletedIdentity() {
+            when(userRepository.findByProviderId(PROVIDER_ID)).thenReturn(Optional.empty());
+            when(keycloakAdmin.identityExists(PROVIDER_ID)).thenReturn(Optional.of(false));
+            String jwt = buildTestJwt(PROVIDER_ID, "gone@test.com");
+
+            userResolutionService.resolveUser(PROVIDER_ID, jwt);
+            userResolutionService.resolveUser(PROVIDER_ID, jwt);
+
+            verify(keycloakAdmin, times(1)).identityExists(PROVIDER_ID);
+        }
+
+        @Test
+        @DisplayName("creates the account when the identity exists (a real first sign-in)")
+        void createsWhenIdentityExists() {
+            when(keycloakAdmin.identityExists(PROVIDER_ID)).thenReturn(Optional.of(true));
+
+            assertThat(userResolutionService.isDeletedIdentity(PROVIDER_ID)).isFalse();
+        }
+
+        @Test
+        @DisplayName("fails OPEN when Keycloak cannot answer: a Keycloak hiccup must not block real sign-ups")
+        void failsOpenWhenKeycloakUnknown() {
+            when(keycloakAdmin.identityExists(PROVIDER_ID)).thenReturn(Optional.empty());
+
+            assertThat(userResolutionService.isDeletedIdentity(PROVIDER_ID)).isFalse();
+        }
+
+        @Test
+        @DisplayName("without a Keycloak admin client (CE / embedded) the check is a no-op")
+        void noKeycloakAdminIsNoOp() {
+            ReflectionTestUtils.setField(userResolutionService, "keycloakAdmin", null);
+
+            assertThat(userResolutionService.isDeletedIdentity(PROVIDER_ID)).isFalse();
+        }
+    }
+
     // ===== canUserMakeRequest =====
 
     @Nested

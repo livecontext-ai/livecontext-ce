@@ -58,6 +58,7 @@ class PublicHandleUrlSafetyTest {
     @Mock private com.apimarketplace.common.storage.service.StorageService storageService;
     @Mock private AccountDeactivationMailer deactivationMailer;
     @Mock private VerifiedAccountService verifiedAccountService;
+    @Mock private PartnerBadgeService partnerBadgeService;
 
     private UserService userService;
 
@@ -65,7 +66,8 @@ class PublicHandleUrlSafetyTest {
     void setUp() {
         UsernameValidator usernameValidator = new UsernameValidator(userRepository);
         userService = new UserService(userRepository, onboardingRepository, userProfileRepository,
-                usernameValidator, ageValidator, storageService, deactivationMailer, verifiedAccountService);
+                usernameValidator, ageValidator, storageService, deactivationMailer, verifiedAccountService,
+                partnerBadgeService);
         when(userProfileRepository.existsByHandle(anyString())).thenReturn(false);
         when(userProfileRepository.findByHandle(anyString())).thenReturn(Optional.empty());
     }

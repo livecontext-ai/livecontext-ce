@@ -323,7 +323,11 @@ export function detectStreamEventType(data: Record<string, unknown>): string {
   if ('fullContent' in data && 'totalTokens' in data) return 'completed';
   if ('error' in data && 'errorCode' in data) return 'error';
   if ('partialContent' in data) return 'stopped';
-  if ('success' in data && 'resultId' in data) return 'tool_result';
+  // A tool result is `success` + its call's `toolId` (a tool_call carries no `success`). Not
+  // `resultId`: the live result sends it as null, and a serializer that drops null map values
+  // (the self-hosted monolith's) removes the key, which read every live tool result as a
+  // heartbeat: rows stayed pending, nothing followed the agent, no panel tab opened.
+  if ('success' in data && ('resultId' in data || 'toolId' in data)) return 'tool_result';
   if ('visualizationType' in data && 'visualizationId' in data) return 'visualization_ready';
   if ('screenshotIndex' in data && 'screenshotKey' in data) return 'fetch_screenshot';
   // AgentBrowseStep: live-view bootstrap from BrowserSessionLifecycleService.
@@ -343,6 +347,39 @@ export function detectStreamEventType(data: Record<string, unknown>): string {
   if ('thinking' in data) return 'thinking';
   if ('content' in data) return 'content';
   return 'heartbeat';
+}
+
+// ============== SERVER STREAM STATE ==============
+
+/** The parts of the server's stream-state answer (by conversation) that decide liveness. */
+export interface ServerStreamState {
+  streamId?: string | null;
+  state?: string | null;
+  hasActiveStream?: boolean;
+}
+
+/**
+ * Whether the server still runs the stream a surface is showing: the server's latest stream of
+ * the conversation IS that one (when the surface knows its id), and it is running or just
+ * created (created = started, nothing sent yet, which the server does not count as
+ * reconnectable). Anything else (completed, stopped, failed, parked on an approval, another
+ * stream, no stream at all) means no more events of it will come.
+ */
+export function isServerStreamLive(server: ServerStreamState | null | undefined, streamId?: string | null): boolean {
+  if (!server) return false;
+  if (streamId && server.streamId !== streamId) return false;
+  return !!server.hasActiveStream || server.state === 'CREATED';
+}
+
+/**
+ * Whether a conversation's saved thread holds the reply to its latest turn: its last message is
+ * the assistant's. The proof a turn is over when the stream-state endpoint answers "no stream",
+ * which on its own proves nothing: that is also its answer outside the strict workspace scope,
+ * and for every run through the bridge (workflow agent nodes, sub-agents, CLI models), which
+ * never registers its stream with conversation-service.
+ */
+export function threadEndsWithReply(thread: Array<{ role?: string }> | null | undefined): boolean {
+  return Array.isArray(thread) && thread.length > 0 && thread[thread.length - 1]?.role === 'assistant';
 }
 
 // ============== LOGGING ==============

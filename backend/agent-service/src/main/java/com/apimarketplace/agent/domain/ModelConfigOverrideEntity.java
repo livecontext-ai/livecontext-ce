@@ -274,6 +274,25 @@ public class ModelConfigOverrideEntity {
     private String replacementModel;
 
     /**
+     * V554: TRUE on an enabled row = available but not offered. The model leaves the picker
+     * lists and the platform-default pick, yet stays runnable, so what already uses it keeps
+     * running on it; and since the row stays enabled, its replacement above is kept but not
+     * applied. Ignored while {@code enabled = false}. Travels to CE in the bundle beside
+     * {@code enabled} (only when set), and a CE admin's own choice is protected there by
+     * {@code user_modified_fields}.
+     */
+    @Column(name = "unlisted", nullable = false)
+    private boolean unlisted = false;
+
+    /**
+     * Request-intake flag, same contract as {@link #freeTierEnabledExplicitlySet}: the column
+     * is a primitive NOT NULL boolean, so without it a save that omits the key would carry
+     * {@code false} and silently list the model again.
+     */
+    @Transient
+    private boolean unlistedExplicitlySet = false;
+
+    /**
      * V533: when an admin retired the model, null otherwise. A retired row is out of the catalog
      * until restored: the merge skips it, no bundle or seed ships it, the CE relay refuses it, and
      * DB triggers keep it {@code enabled=false} and undeletable (the row is the tombstone).
@@ -530,6 +549,13 @@ public class ModelConfigOverrideEntity {
     public String getRetiredBy() { return retiredBy; }
     public void setRetiredBy(String retiredBy) { this.retiredBy = retiredBy; }
 
+    public boolean isUnlisted() { return unlisted; }
+    public void setUnlisted(boolean unlisted) { this.unlisted = unlisted; }
+
+
+    public boolean isUnlistedExplicitlySet() { return unlistedExplicitlySet; }
+    public void setUnlistedExplicitlySet(boolean v) { this.unlistedExplicitlySet = v; }
+
     public boolean isReplacementExplicitlySet() { return replacementExplicitlySet; }
     public void setReplacementExplicitlySet(boolean replacementExplicitlySet) { this.replacementExplicitlySet = replacementExplicitlySet; }
 
@@ -540,5 +566,7 @@ public class ModelConfigOverrideEntity {
     public void setCustom(boolean custom) { this.custom = custom; }
 
     public Instant getCreatedAt() { return createdAt; }
+    /** For detached copies (the category overlay) only; the column is not updatable. */
+    public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 }

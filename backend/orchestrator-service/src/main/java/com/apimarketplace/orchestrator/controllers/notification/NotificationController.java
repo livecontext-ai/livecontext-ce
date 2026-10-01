@@ -59,6 +59,8 @@ public class NotificationController {
             "BRIDGE_LOW_CREDIT", "ORG_INVITATION_PENDING", "BUDGET_REACHED",
             "AGENT_AUTHORIZATION_UNREACHABLE",
             "CREDIT_LOW", "CREDIT_EXHAUSTED",
+            // Emitted by publication-service (CreatorFollowNotifier) to a followed creator's followers.
+            "CREATOR_PUBLISHED",
             BadgeNotificationEmitter.CATEGORY_BADGE_UNLOCKED);
 
     private final NotificationService notificationService;

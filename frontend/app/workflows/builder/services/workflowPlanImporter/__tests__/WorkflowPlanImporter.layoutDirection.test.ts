@@ -91,16 +91,15 @@ describe('WorkflowPlanImporter - reading direction', () => {
     expect(positionOf(result, 'Shape')).toEqual({ x: 0, y: 300 });
   });
 
-  it('places only the new node of a vertical plan, and places it below its neighbour', async () => {
+  it('lays a vertical plan with an agent-added node out again, still vertically', async () => {
     const result = await importPlan(
       chain([VERTICAL_POSITIONS[0], VERTICAL_POSITIONS[1], undefined], 'vertical'),
       { fallbackDirection: 'horizontal' },
     );
 
     expect(result.layoutDirection).toBe('vertical');
-    expect(result.laidOutFromScratch).toBe(false);
-    expect(positionOf(result, 'Shape')).toEqual({ x: 0, y: 300 });
-    expect(positionOf(result, 'Finish').y).toBeGreaterThan(300);
+    expect(result.laidOutFromScratch).toBe(true);
+    expect(flowsAlong(result, 'y')).toBe(true);
   });
 
   it('reports the fallback direction when the plan cannot be parsed', async () => {

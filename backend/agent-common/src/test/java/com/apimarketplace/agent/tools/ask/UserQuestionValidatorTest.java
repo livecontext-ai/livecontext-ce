@@ -20,6 +20,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayName("UserQuestionValidator - the shape of a question and of an answer")
 class UserQuestionValidatorTest {
 
+    /** Parses and discards the dropped-option report; the tests that read it use the two-arg form. */
+    private static List<UserQuestion> parse(Object raw) {
+        return UserQuestionValidator.parseQuestions(raw, new ArrayList<>());
+    }
+
+    private static List<UserQuestion> parse(Object raw, List<String> droppedOptions) {
+        return UserQuestionValidator.parseQuestions(raw, droppedOptions);
+    }
+
     private static Map<String, Object> option(String label, String description) {
         Map<String, Object> o = new HashMap<>();
         o.put("label", label);
@@ -47,7 +56,7 @@ class UserQuestionValidatorTest {
         @Test
         @DisplayName("A well-formed call yields the questions in order with their options")
         void wellFormed() {
-            List<UserQuestion> parsed = UserQuestionValidator.parseQuestions(List.of(
+            List<UserQuestion> parsed = parse(List.of(
                     toneQuestion(),
                     question("Channels", "Where?", true, option("X", null), option("LinkedIn", null), option("Mail", null))));
 
@@ -68,7 +77,7 @@ class UserQuestionValidatorTest {
             q.put("question", "How big?");
             q.put("options", List.of("Small", "Large"));
 
-            List<UserQuestion> parsed = UserQuestionValidator.parseQuestions(List.of(q));
+            List<UserQuestion> parsed = parse(List.of(q));
 
             assertThat(parsed.get(0).options()).extracting(UserQuestionOption::label).containsExactly("Small", "Large");
         }
@@ -80,18 +89,18 @@ class UserQuestionValidatorTest {
             q.remove("multiSelect");
             q.put("multi_select", "true");
 
-            assertThat(UserQuestionValidator.parseQuestions(List.of(q)).get(0).multiSelect()).isTrue();
+            assertThat(parse(List.of(q)).get(0).multiSelect()).isTrue();
         }
 
         @Test
         @DisplayName("No questions at all is rejected, and so is a non-list")
         void emptyOrNotAList() {
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of()))
+            assertThatThrownBy(() -> parse(List.of()))
                     .isInstanceOf(UserQuestionValidator.InvalidQuestionsException.class)
                     .hasMessageContaining("non-empty list");
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions("Tone?"))
+            assertThatThrownBy(() -> parse("Tone?"))
                     .isInstanceOf(UserQuestionValidator.InvalidQuestionsException.class);
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(null))
+            assertThatThrownBy(() -> parse(null))
                     .isInstanceOf(UserQuestionValidator.InvalidQuestionsException.class);
         }
 
@@ -102,7 +111,7 @@ class UserQuestionValidatorTest {
             for (int i = 0; i < UserQuestionValidator.MAX_QUESTIONS + 1; i++) {
                 five.add(question("Q" + i, "?", false, option("a", null), option("b", null)));
             }
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(five))
+            assertThatThrownBy(() -> parse(five))
                     .hasMessageContaining("holds 5 entries")
                     .hasMessageContaining("maximum is " + UserQuestionValidator.MAX_QUESTIONS);
         }
@@ -110,33 +119,100 @@ class UserQuestionValidatorTest {
         @Test
         @DisplayName("Option count below 2 or above 4 is rejected naming the question index")
         void optionCountBounds() {
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of(
+            assertThatThrownBy(() -> parse(List.of(
                     question("Tone", "?", false, option("only", null)))))
-                    .hasMessageContaining("questions[0].options holds 1 options");
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of(
+                    .hasMessageContaining("questions[0].options holds 1 option;");
+            assertThatThrownBy(() -> parse(List.of(
                     question("Tone", "?", false, option("a", null), option("b", null), option("c", null),
                             option("d", null), option("e", null)))))
                     .hasMessageContaining("questions[0].options holds 5 options");
         }
 
         @Test
-        @DisplayName("A declared 'Other' option is rejected: the card adds it itself")
-        void reservedOtherLabel() {
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of(
+        @DisplayName("Bug B14: a declared 'Autre' option is dropped and reported instead of failing the call")
+        void reservedOtherLabelIsDroppedAndReported() {
+            // Prod: ask_user failed "questions[0].options[3] 'Autre' is added automatically ... Remove it."
+            List<String> dropped = new ArrayList<>();
+            List<UserQuestion> parsed = parse(List.of(
+                    question("Ton", "?", false, option("Amical", null), option("Formel", null),
+                            option("Neutre", null), option("Autre", "Autre chose"))), dropped);
+
+            assertThat(parsed.get(0).options()).extracting(UserQuestionOption::label)
+                    .containsExactly("Amical", "Formel", "Neutre");
+            assertThat(dropped).containsExactly("questions[0].options[3] 'Autre'");
+        }
+
+        @Test
+        @DisplayName("A bare-string 'other' is dropped too, and does not count toward the 4-option cap")
+        void reservedBareStringDoesNotCountTowardTheCap() {
+            List<String> dropped = new ArrayList<>();
+            Map<String, Object> q = new HashMap<>();
+            q.put("header", "Pick");
+            q.put("question", "?");
+            q.put("options", List.of("a", "b", "c", "d", " other "));
+
+            List<UserQuestion> parsed = parse(List.of(q), dropped);
+
+            assertThat(parsed.get(0).options()).hasSize(4);
+            assertThat(dropped).hasSize(1);
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "''{0}'' is dropped")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {"Other", "autre", "OTRO", "outro", "Andere", "其他"})
+        @DisplayName("Every reserved label, in any case, is dropped and reported")
+        void everyReservedLabelIsDropped(String reserved) {
+            List<String> dropped = new ArrayList<>();
+            List<UserQuestion> parsed = parse(List.of(
+                    question("Q", "?", false, option("a", null), option("b", null), option(reserved, null))), dropped);
+
+            assertThat(parsed.get(0).options()).extracting(UserQuestionOption::label).containsExactly("a", "b");
+            assertThat(dropped).containsExactly("questions[0].options[2] '" + reserved + "'");
+        }
+
+        @Test
+        @DisplayName("A declared 'Other' with an over-long description is dropped, not refused for the description")
+        void reservedLabelWithLongDescriptionIsDropped() {
+            List<String> dropped = new ArrayList<>();
+            List<UserQuestion> parsed = parse(List.of(question("Q", "?", false, option("a", null), option("b", null),
+                    option("Other", "x".repeat(UserQuestionValidator.MAX_DESCRIPTION_LENGTH + 1)))), dropped);
+
+            assertThat(parsed.get(0).options()).hasSize(2);
+            assertThat(dropped).containsExactly("questions[0].options[2] 'Other'");
+        }
+
+        @Test
+        @DisplayName("A real option with an over-long description is still refused")
+        void realOptionWithLongDescriptionIsStillRefused() {
+            assertThatThrownBy(() -> parse(List.of(question("Q", "?", false, option("a", null),
+                    option("b", "x".repeat(UserQuestionValidator.MAX_DESCRIPTION_LENGTH + 1))))))
+                    .hasMessageContaining("questions[0].options[1].description is longer than");
+        }
+
+        @Test
+        @DisplayName("A label that only CONTAINS 'other' is a real option and is kept")
+        void labelContainingOtherIsKept() {
+            List<String> dropped = new ArrayList<>();
+            List<UserQuestion> parsed = parse(List.of(
+                    question("Q", "?", false, option("Another tone", null), option("Other people", null))), dropped);
+
+            assertThat(parsed.get(0).options()).hasSize(2);
+            assertThat(dropped).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Dropping 'Other' still enforces the 2-option minimum on what is left")
+        void droppingOtherStillEnforcesTheMinimum() {
+            assertThatThrownBy(() -> parse(List.of(
                     question("Tone", "?", false, option("Friendly", null), option("Other", null)))))
-                    .hasMessageContaining("questions[0].options[1]")
-                    .hasMessageContaining("added automatically");
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of(
-                    question("Ton", "?", false, option("Amical", null), option("autre", null)))))
-                    .hasMessageContaining("added automatically");
+                    .hasMessageContaining("questions[0].options holds 1 option besides 'Other'");
         }
 
         @Test
         @DisplayName("Duplicate headers and duplicate labels are rejected: they are how answers are matched back")
         void duplicates() {
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of(toneQuestion(), toneQuestion())))
+            assertThatThrownBy(() -> parse(List.of(toneQuestion(), toneQuestion())))
                     .hasMessageContaining("questions[1].header 'Tone' is used twice");
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of(
+            assertThatThrownBy(() -> parse(List.of(
                     question("Tone", "?", false, option("Same", null), option("same", null)))))
                     .hasMessageContaining("duplicate label");
         }
@@ -146,15 +222,15 @@ class UserQuestionValidatorTest {
         void missingText() {
             Map<String, Object> noHeader = toneQuestion();
             noHeader.put("header", "  ");
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of(noHeader)))
+            assertThatThrownBy(() -> parse(List.of(noHeader)))
                     .hasMessageContaining("questions[0].header is required");
 
             Map<String, Object> noQuestion = toneQuestion();
             noQuestion.remove("question");
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of(noQuestion)))
+            assertThatThrownBy(() -> parse(List.of(noQuestion)))
                     .hasMessageContaining("questions[0].question is required");
 
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of(
+            assertThatThrownBy(() -> parse(List.of(
                     question("Tone", "?", false, option("ok", null), Map.of("description", "no label")))))
                     .hasMessageContaining("questions[0].options[1].label is required");
         }
@@ -164,10 +240,10 @@ class UserQuestionValidatorTest {
         void questionAndDescriptionTooLong() {
             Map<String, Object> q = toneQuestion();
             q.put("question", "x".repeat(UserQuestionValidator.MAX_QUESTION_LENGTH + 1));
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of(q)))
+            assertThatThrownBy(() -> parse(List.of(q)))
                     .hasMessageContaining("questions[0].question is longer than " + UserQuestionValidator.MAX_QUESTION_LENGTH);
 
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of(question("Tone", "?", false,
+            assertThatThrownBy(() -> parse(List.of(question("Tone", "?", false,
                     option("a", "d".repeat(UserQuestionValidator.MAX_DESCRIPTION_LENGTH + 1)), option("b", null)))))
                     .hasMessageContaining("questions[0].options[0].description is longer than");
         }
@@ -177,7 +253,7 @@ class UserQuestionValidatorTest {
         void headerTooLong() {
             Map<String, Object> q = toneQuestion();
             q.put("header", "x".repeat(UserQuestionValidator.MAX_HEADER_LENGTH + 1));
-            assertThatThrownBy(() -> UserQuestionValidator.parseQuestions(List.of(q)))
+            assertThatThrownBy(() -> parse(List.of(q)))
                     .hasMessageContaining("longer than " + UserQuestionValidator.MAX_HEADER_LENGTH);
         }
     }
@@ -186,7 +262,7 @@ class UserQuestionValidatorTest {
     @DisplayName("parseAnswers")
     class ParseAnswers {
 
-        private final List<UserQuestion> questions = UserQuestionValidator.parseQuestions(List.of(
+        private final List<UserQuestion> questions = parse(List.of(
                 toneQuestion(),
                 question("Channels", "Where?", true, option("X", null), option("LinkedIn", null))));
 

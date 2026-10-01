@@ -55,6 +55,14 @@ class SharedLinkServiceTest {
     @Mock
     private SharedLinkRepository repository;
 
+    /**
+     * The ownership rule has its own suites (SharedLinkResourceGuardTest, and
+     * SharedLinkOwnershipRegressionTest through the real controller and service). Here it answers
+     * "yes" so each test exercises the registry logic it is about.
+     */
+    @Mock
+    private SharedLinkResourceGuard resourceGuard;
+
     private SharedLinkService service;
 
     private static final String TENANT_ID = "user|owner-001";
@@ -62,7 +70,9 @@ class SharedLinkServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new SharedLinkService(repository);
+        lenient().when(resourceGuard.mayShare(any(), any(), any(), any(), any())).thenReturn(true);
+        lenient().when(resourceGuard.isBoundToOwnedResource(any())).thenReturn(true);
+        service = new SharedLinkService(repository, resourceGuard);
     }
 
     // ──────────────── register: cross-scope idempotency rejection ────────────────
@@ -105,6 +115,66 @@ class SharedLinkServiceTest {
 
             assertThat(result).isSameAs(existing);
             verify(repository, never()).save(any());
+        }
+    }
+
+    // ──────────────── the two registration paths ────────────────
+
+    @Nested
+    @DisplayName("registration paths")
+    class RegistrationPaths {
+
+        @Test
+        @DisplayName("the internal path (owning services) never consults the ownership guard: they may register before their own commit")
+        void internalPathSkipsGuard() {
+            when(repository.findByResourceTokenHashAndIsActiveTrue(anyString())).thenReturn(Optional.empty());
+            when(repository.countByOrganizationIdStrict(ORG_ID)).thenReturn(0L);
+            when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            service.registerForOwningService(TENANT_ID, ORG_ID, "PRO", "CHAT", "ch_new", null, "t", "d");
+
+            org.mockito.Mockito.verifyNoInteractions(resourceGuard);
+        }
+
+        @Test
+        @DisplayName("an APPLICATION publication id is stored in its canonical form, however the caller spelled it")
+        void applicationTokenIsStoredCanonical() {
+            String canonical = "abcdef12-abcd-4ef0-abcd-abcdef123456";
+            when(repository.findByResourceTokenHashAndIsActiveTrue(anyString())).thenReturn(Optional.empty());
+            when(repository.countByOrganizationIdStrict(ORG_ID)).thenReturn(0L);
+            when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            SharedLinkEntity saved = service.register(TENANT_ID, ORG_ID, "PRO", "APPLICATION",
+                    " " + canonical.toUpperCase() + " ", null, "t", "d");
+
+            assertThat(saved.getResourceToken()).isEqualTo(canonical);
+            // The "already in use" slot was looked up under the same canonical form.
+            verify(repository, org.mockito.Mockito.atLeastOnce())
+                    .findByResourceTokenHashAndIsActiveTrue(TokenAtRest.hash(canonical));
+            verify(repository, never()).findByResourceTokenHashAndIsActiveTrue(
+                    TokenAtRest.hash(" " + canonical.toUpperCase() + " "));
+        }
+
+        @Test
+        @DisplayName("the user path refuses before touching the registry when the guard says no")
+        void userPathRefusesBeforeRegistry() {
+            when(resourceGuard.mayShare(any(), any(), any(), any(), any())).thenReturn(false);
+
+            assertThatThrownBy(() -> service.register(TENANT_ID, ORG_ID, "PRO", "chat", "ch_x", null, "t", "d"))
+                    .isInstanceOf(SharedLinkService.SharedLinkResourceNotFoundException.class);
+            org.mockito.Mockito.verifyNoInteractions(repository);
+        }
+
+        @Test
+        @DisplayName("register runs outside a transaction, so the owning-service HTTP lookups hold no DB connection")
+        void registerRunsOutsideTransaction() throws NoSuchMethodException {
+            org.springframework.transaction.annotation.Transactional tx = SharedLinkService.class
+                    .getMethod("register", String.class, String.class, String.class, String.class, String.class,
+                            UUID.class, String.class, String.class)
+                    .getAnnotation(org.springframework.transaction.annotation.Transactional.class);
+
+            assertThat(tx).isNotNull();
+            assertThat(tx.propagation()).isEqualTo(org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED);
         }
     }
 

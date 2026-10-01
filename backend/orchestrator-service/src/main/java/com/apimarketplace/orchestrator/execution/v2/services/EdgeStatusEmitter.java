@@ -285,6 +285,21 @@ public class EdgeStatusEmitter {
                 allSuccessors = nextNodes; // Fallback for nodes without successor tracking
             }
 
+            // continueOnFailure: traversal goes on past this failure, so its edges are TRAVERSED,
+            // not skipped (a SKIPPED edge into a node that then runs contradicts itself on the
+            // canvas). Still the single writer of these edges: COMPLETED here, never also SKIPPED.
+            if (ExecutionMetadataKeys.isContinueOnFailure(result.metadata())
+                    || ExecutionMetadataKeys.isContinueOnFailure(result.output())) {
+                logger.info("📊 [EdgeStatus] Node FAILED with continueOnFailure, marking {} outgoing edges COMPLETED: nodeId={}, itemIndex={}",
+                    allSuccessors.size(), sourceId, itemIndex);
+                for (ExecutionNode successor : allSuccessors) {
+                    String targetId = successor.getNodeId();
+                    edgeStatusService.markEdgeRunning(execution, sourceId, targetId, itemIndex, iteration);
+                    edgeStatusService.markEdgeCompleted(execution, sourceId, targetId, itemIndex, iteration);
+                }
+                return;
+            }
+
             logger.info("📊 [EdgeStatus] Node FAILED, marking {} direct outgoing edges as SKIPPED (node-level cascade is engine's responsibility): nodeId={}, itemIndex={}",
                 allSuccessors.size(), sourceId, itemIndex);
 

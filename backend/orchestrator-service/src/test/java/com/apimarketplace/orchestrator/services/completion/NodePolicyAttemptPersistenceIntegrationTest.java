@@ -75,11 +75,11 @@ import static org.mockito.Mockito.when;
  * <ul>
  *   <li>retry-then-success leaves {@code EpochState.failedNodeIds} clean and
  *       NodeCounts at completed=1/failed=0 - the attempt mutates NOTHING;</li>
- *   <li>each logical execution bills exactly ONE platform credit, including the
- *       retry-then-terminal-failure case where the terminal FAILED row dedupes
- *       onto the attempt row (persisted=false);</li>
- *   <li>loop context: attempts are WS-only - ONLY the terminal row reaches the
- *       persistence layer.</li>
+ *   <li>a non-final attempt never reaches the persistence layer, in a loop or not: the
+ *       ONLY row of a logical execution is its terminal one, carrying the final
+ *       attempt's annotation (an attempt row would claim the single FAILED slot of the
+ *       v6 index and drop it);</li>
+ *   <li>each logical execution bills exactly ONE platform credit.</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -119,6 +119,8 @@ class NodePolicyAttemptPersistenceIntegrationTest {
     private final Set<String> persistedRowKeys = new HashSet<>();
     private final List<String> persistedRowsInOrder = new ArrayList<>();
     private final List<String> insertAttempts = new ArrayList<>();
+    /** The results of the rows that landed, same order: what the database now says. */
+    private final List<StepExecutionResult> persistedResults = new ArrayList<>();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -163,6 +165,7 @@ class NodePolicyAttemptPersistenceIntegrationTest {
                 insertAttempts.add(key);
                 if (persistedRowKeys.add(key)) {
                     persistedRowsInOrder.add(key);
+                    persistedResults.add(res);
                     return StepPersistenceResult.success(UUID.randomUUID());
                 }
                 return StepPersistenceResult.duplicate(); // ON CONFLICT DO NOTHING
@@ -224,15 +227,16 @@ class NodePolicyAttemptPersistenceIntegrationTest {
         // ── Attempt 1 (FAILED, non-final) through the attempt pipeline ──
         nodeCompletionService.emitNodeFailedAttempt(execution, node, annotatedFailure(1, 2), item(), 0, context);
 
-        // Mid-state: the attempt row persisted (non-loop), but the snapshot is UNTOUCHED.
+        // Mid-state: nothing persisted, snapshot UNTOUCHED, but the attempt was reported.
         StateSnapshot afterAttempt = snapshot();
         assertThat(afterAttempt.getEpochState(TRIGGER_ID, EPOCH).getFailedNodeIds())
             .as("non-final attempt must NOT enter failedNodeIds (append-only set)")
             .isEmpty();
         assertThat(afterAttempt.getNodeCounts(NODE_ID).failed())
             .as("non-final attempt must NOT increment NodeCounts.failed").isZero();
-        assertThat(persistedRowsInOrder).containsExactly(
-            NODE_ID + "|" + TRIGGER_ID + "|0|0|" + EPOCH + "|0|FAILED");
+        assertThat(insertAttempts)
+            .as("a non-final attempt must not even attempt a step_data INSERT").isEmpty();
+        verify(eventPublisher, times(1)).emitStep(eq(RUN_ID), eq(NODE_ID), any(), any());
         verify(creditClient, times(0)).consumeCreditsAsync(
             anyString(), anyString(), anyString(), isNull(), isNull(), isNull(), isNull());
         verify(workflowEpochService, times(0)).recordNodeCount(anyString(), anyInt(), anyString(), anyString(), any());
@@ -247,9 +251,10 @@ class NodePolicyAttemptPersistenceIntegrationTest {
         assertThat(terminal.getNodeCounts(NODE_ID).completed()).isEqualTo(1);
         assertThat(terminal.getNodeCounts(NODE_ID).failed()).isZero();
 
-        // DB history: one FAILED attempt row + the terminal COMPLETED row (distinct status slot)
+        // REGRESSION: the only row is the COMPLETED one. An attempt row used to sit beside
+        // it, and the split aggregate (a count of rows by status) read that pair as a
+        // partial failure of a node that succeeded.
         assertThat(persistedRowsInOrder).containsExactly(
-            NODE_ID + "|" + TRIGGER_ID + "|0|0|" + EPOCH + "|0|FAILED",
             NODE_ID + "|" + TRIGGER_ID + "|0|0|" + EPOCH + "|0|COMPLETED");
 
         // Billing + per-epoch counter: exactly once, on the terminal attempt
@@ -260,17 +265,20 @@ class NodePolicyAttemptPersistenceIntegrationTest {
     }
 
     @Test
-    @DisplayName("retry-then-terminal-failure: terminal FAILED row dedupes onto the attempt row (v6 index) yet bills exactly once and marks failedNodeIds once")
-    void retryThenTerminalFailureBillsExactlyOnceDespiteRowDedup() {
-        // Attempt 1 (non-final) - persists THE single FAILED row slot
+    @DisplayName("REGRESSION: retry-then-terminal-failure persists the TERMINAL FAILED row (not attempt 1's), bills exactly once and marks failedNodeIds once")
+    void retryThenTerminalFailurePersistsTheTerminalRowAndBillsOnce() {
+        // Attempt 1 (non-final) - reported, never persisted
         nodeCompletionService.emitNodeFailedAttempt(execution, node, annotatedFailure(1, 2), item(), 0, context);
-        // Attempt 2 (terminal failure) - same v6 tuple (status=FAILED) → ON CONFLICT dropped
+        // Attempt 2 (terminal failure) - claims the FAILED slot itself
         nodeCompletionService.emitNodeComplete(execution, node, annotatedFailure(2, 2), item(), 0, context);
 
-        // The terminal insert was attempted and deduped
-        assertThat(insertAttempts).hasSize(2);
+        // Pre-fix the attempt row claimed the slot and this terminal row was ON-CONFLICT-dropped,
+        // so the database said "attempt 1/2" and lost the continueOnFailure flag readers route on.
+        assertThat(insertAttempts).hasSize(1);
         assertThat(persistedRowsInOrder).containsExactly(
             NODE_ID + "|" + TRIGGER_ID + "|0|0|" + EPOCH + "|0|FAILED");
+        assertThat(persistedResults).singleElement()
+            .satisfies(row -> assertThat(row.output()).containsEntry(ExecutionMetadataKeys.POLICY_ATTEMPT, 2));
 
         // Snapshot reflects ONE terminal failure (not one per attempt)
         StateSnapshot terminal = snapshot();
@@ -278,10 +286,8 @@ class NodePolicyAttemptPersistenceIntegrationTest {
         assertThat(terminal.getNodeCounts(NODE_ID).failed()).isEqualTo(1);
         assertThat(terminal.getNodeCounts(NODE_ID).completed()).isZero();
 
-        // Billing invariant: ONE credit for the logical execution - the deduped
-        // terminal failure must still bill (it is the only billing point; the
-        // attempt path never bills). Pre-fix this was ZERO (persisted=false skipped
-        // billing) - would fail on the unpatched orchestrator.
+        // Billing invariant: ONE credit for the logical execution, on the terminal row
+        // (the attempt path never bills).
         verify(creditClient, times(1)).consumeCreditsAsync(
             eq(TENANT), eq("WORKFLOW_NODE"), anyString(), isNull(), isNull(), isNull(), isNull());
     }
@@ -317,6 +323,100 @@ class NodePolicyAttemptPersistenceIntegrationTest {
         assertThat(terminal.getNodeCounts(NODE_ID).failed()).isEqualTo(1);
 
         // Terminal row persisted normally → billed once via the persisted branch
+        verify(creditClient, times(1)).consumeCreditsAsync(
+            eq(TENANT), eq("WORKFLOW_NODE"), anyString(), isNull(), isNull(), isNull(), isNull());
+    }
+
+    // ── Early stop: the runner ends the execution BEFORE its last planned attempt ──
+
+    /** A failed catalog step answer, as the runner reads it: http_status + nested catalog metadata. */
+    private static NodeExecutionResult providerFailure(int status, Long retryAfterSeconds) {
+        Map<String, Object> catalogMetadata = new HashMap<>();
+        if (retryAfterSeconds != null) {
+            catalogMetadata.put("retryAfterSeconds", retryAfterSeconds);
+        }
+        Map<String, Object> output = new HashMap<>();
+        output.put("http_status", status);
+        output.put("metadata", catalogMetadata);
+        return NodeExecutionResult.failureWithOutput(NODE_ID, "HTTP " + status, output, 5L);
+    }
+
+    /** Runs the REAL runner, wiring its attempts and its final result into the real completion layer. */
+    private void runThroughPolicy(com.apimarketplace.orchestrator.domain.workflow.NodePolicy policy,
+                                  java.util.Iterator<NodeExecutionResult> answers) throws Exception {
+        runThroughPolicy(policy, answers, millis -> { });
+    }
+
+    private void runThroughPolicy(com.apimarketplace.orchestrator.domain.workflow.NodePolicy policy,
+                                  java.util.Iterator<NodeExecutionResult> answers,
+                                  com.apimarketplace.orchestrator.execution.v2.engine.NodePolicyRunner.Sleeper sleeper)
+            throws Exception {
+        com.apimarketplace.orchestrator.execution.v2.engine.NodePolicyRunner runner =
+                new com.apimarketplace.orchestrator.execution.v2.engine.NodePolicyRunner(sleeper);
+        NodeExecutionResult terminal = runner.run(policy, NODE_ID, answers::next,
+                (failedAttempt, attempt, max) -> nodeCompletionService.emitNodeFailedAttempt(
+                        execution, node, failedAttempt, item(), 0, context));
+        nodeCompletionService.emitNodeComplete(execution, node, terminal, item(), 0, context);
+    }
+
+    @Test
+    @DisplayName("REGRESSION: a 503 then a permanent 400 stops at attempt 2 of 3 and is still billed exactly once")
+    void earlyStopOnPermanentRefusalBillsOnce() throws Exception {
+        runThroughPolicy(new com.apimarketplace.orchestrator.domain.workflow.NodePolicy(2, 0L, false),
+                List.of(providerFailure(503, null), providerFailure(400, null)).iterator());
+
+        // The only row is the terminal one (attempt 2, marked final).
+        assertThat(persistedRowsInOrder).containsExactly(
+            NODE_ID + "|" + TRIGGER_ID + "|0|0|" + EPOCH + "|0|FAILED");
+        assertThat(persistedResults).singleElement()
+            .satisfies(row -> assertThat(row.output()).containsEntry(ExecutionMetadataKeys.POLICY_ATTEMPT, 2));
+        verify(creditClient, times(1)).consumeCreditsAsync(
+            eq(TENANT), eq("WORKFLOW_NODE"), anyString(), isNull(), isNull(), isNull(), isNull());
+        assertThat(snapshot().getNodeCounts(NODE_ID).failed()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("REGRESSION: a provider asking to wait too long stops early and is still billed exactly once")
+    void earlyStopOnProviderWaitTooLongBillsOnce() throws Exception {
+        runThroughPolicy(new com.apimarketplace.orchestrator.domain.workflow.NodePolicy(2, 0L, false),
+                List.of(providerFailure(503, null), providerFailure(429, 3_600L)).iterator());
+
+        verify(creditClient, times(1)).consumeCreditsAsync(
+            eq(TENANT), eq("WORKFLOW_NODE"), anyString(), isNull(), isNull(), isNull(), isNull());
+    }
+
+    @Test
+    @DisplayName("a permanent refusal on the FIRST attempt persists normally and is billed once, not twice")
+    void firstAttemptRefusalBillsOnce() throws Exception {
+        runThroughPolicy(new com.apimarketplace.orchestrator.domain.workflow.NodePolicy(2, 0L, false),
+                List.of(providerFailure(404, null)).iterator());
+
+        assertThat(persistedRowsInOrder).containsExactly(
+            NODE_ID + "|" + TRIGGER_ID + "|0|0|" + EPOCH + "|0|FAILED");
+        verify(creditClient, times(1)).consumeCreditsAsync(
+            eq(TENANT), eq("WORKFLOW_NODE"), anyString(), isNull(), isNull(), isNull(), isNull());
+    }
+
+    @Test
+    @DisplayName("REGRESSION: a backoff interrupted after attempt 2 of 3 ends the execution and bills exactly once")
+    void interruptedBackoffBillsOnce() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger sleeps = new java.util.concurrent.atomic.AtomicInteger();
+        try {
+            runThroughPolicy(new com.apimarketplace.orchestrator.domain.workflow.NodePolicy(2, 1000L, false),
+                    List.of(providerFailure(503, null), providerFailure(503, null), providerFailure(503, null)).iterator(),
+                    millis -> {
+                        if (sleeps.incrementAndGet() == 2) {
+                            throw new InterruptedException("run cancelled");
+                        }
+                    });
+        } finally {
+            // The runner restores the interrupt flag; clear it so it cannot leak into the next test.
+            Thread.interrupted();
+        }
+
+        // Attempt 2 of 3 is the terminal one, and its row is the only one.
+        assertThat(persistedRowsInOrder).containsExactly(
+            NODE_ID + "|" + TRIGGER_ID + "|0|0|" + EPOCH + "|0|FAILED");
         verify(creditClient, times(1)).consumeCreditsAsync(
             eq(TENANT), eq("WORKFLOW_NODE"), anyString(), isNull(), isNull(), isNull(), isNull());
     }

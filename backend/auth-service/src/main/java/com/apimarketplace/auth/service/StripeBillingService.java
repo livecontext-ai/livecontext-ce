@@ -20,6 +20,7 @@ import com.apimarketplace.auth.service.util.BillingMDC;
 import com.stripe.StripeClient;
 import com.stripe.exception.CardException;
 import com.stripe.exception.InvalidRequestException;
+import com.stripe.exception.AuthenticationException;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Customer;
 import com.stripe.model.Invoice;
@@ -33,6 +34,7 @@ import com.stripe.param.InvoiceItemCreateParams;
 import com.stripe.param.SubscriptionScheduleReleaseParams;
 import com.stripe.param.SubscriptionUpdateParams;
 import com.stripe.param.checkout.SessionCreateParams;
+import com.stripe.param.InvoiceCreatePreviewParams;
 import com.apimarketplace.auth.domain.dto.PlanChangeResult;
 import lombok.Data;
 import org.slf4j.Logger;
@@ -84,6 +86,9 @@ public class StripeBillingService {
     /** At most one {@code checkout.started} per user and kind per 24 h, across every instance. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.apimarketplace.auth.lifecycle.CheckoutStartedThrottle checkoutStartedThrottle;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private PersonalOfferService personalOffers;
 
     @Value("${billing.stripe.successUrl}")
     private String checkoutSuccessUrl;
@@ -175,6 +180,11 @@ public class StripeBillingService {
     }
 
     public String createCheckoutSession(Long userId, String planCode, String billingCycle, int creditTierIndex) throws Exception {
+        return createCheckoutSession(userId, planCode, billingCycle, creditTierIndex, null, null);
+    }
+
+    public String createCheckoutSession(Long userId, String planCode, String billingCycle, int creditTierIndex,
+                                        Long personalOfferId, Integer offerVersion) throws Exception {
         // MDC logging for traceability
         BillingMDC.context(userId, null, "checkout").withPlanCode(planCode);
         BillingMDC.logStart(log, "Creating checkout session for plan {} ({}) creditTier={}", planCode, billingCycle, creditTierIndex);
@@ -190,10 +200,26 @@ public class StripeBillingService {
         CreditTierConstants.validateTierForPlan(creditTierIndex, normalizedPlanCode);
         int creditQuantity = CreditTierConstants.getCreditCost(creditTierIndex, normalizedPlanCode);
         String creditPriceId = priceCacheService.getCreditPriceId(normalizedPlanCode, billingCycle).orElse(null);
-
-        // Utiliser le cache au lieu de la configuration hardcodee
         String priceId = priceCacheService.getPriceId(normalizedPlanCode, billingCycle)
-                                          .orElseThrow(() -> new IllegalArgumentException("Plan non valide: " + planCode));
+                .orElseThrow(() -> new IllegalArgumentException("Plan non valide: " + planCode));
+        PersonalOfferService.PreparedCheckout prepared = null;
+        if (personalOfferId != null) {
+            if (personalOffers == null || offerVersion == null)
+                throw new PersonalOfferService.OfferException("OFFER_UNAVAILABLE");
+            if (subscriptionRepository.findActiveByUserId(userId)
+                    .map(subscription -> subscription.getProviderSubscriptionId() != null)
+                    .orElse(false))
+                throw new PersonalOfferService.OfferException("OFFER_ALREADY_USED");
+            if (creditQuantity > 0 && creditPriceId == null)
+                throw new PersonalOfferService.OfferException("PLAN_PACK_UNSUPPORTED");
+            prepared = personalOffers.prepareCheckout(userId, personalOfferId, offerVersion,
+                    normalizedPlanCode, creditTierIndex, billingCycle, priceId, creditPriceId);
+            if (prepared.reused() && prepared.attempt().getSessionUrl() != null) {
+                return prepared.attempt().getSessionUrl();
+            }
+            priceId = prepared.attempt().getPlanPriceId();
+            creditPriceId = prepared.attempt().getCreditPriceId();
+        }
 
         User user = userRepository.findById(userId)
                                   .orElseThrow(() -> new IllegalArgumentException("Utilisateur non trouve: " + userId));
@@ -235,6 +261,7 @@ public class StripeBillingService {
 
         // Si on a ENCORE une sub Stripe vivante, on traite upgrade/downgrade
         if (providerSubId != null) {
+            if (prepared != null) throw new PersonalOfferService.OfferException("OFFER_ALREADY_USED");
             // Devise guard
             String currentCurrency = getSubscriptionCurrency(stripeSub);
             String newCurrency = fetchPriceCurrency(priceId);
@@ -333,7 +360,16 @@ public class StripeBillingService {
         }
 
         // Ici : pas de sub Stripe vivante -> creer une session de Checkout
-        BillingCustomer bc = ensureValidStripeCustomer(user);
+        BillingCustomer bc;
+        try {
+            bc = ensureValidStripeCustomer(user);
+        } catch (StripeException | RuntimeException preparationFailure) {
+            // No Checkout create has been submitted by this call. The durable guard
+            // releases only an attempt without a positive preview or attached session;
+            // a retry after an uncertain create keeps its reservation.
+            if (prepared != null) personalOffers.failUnsubmittedPreview(prepared.attempt().getId());
+            throw preparationFailure;
+        }
 
         String successUrl = checkoutSuccessUrl + "&session_id={CHECKOUT_SESSION_ID}";
         String cancelUrl = checkoutCancelUrl;
@@ -342,10 +378,19 @@ public class StripeBillingService {
         
         // Generer un nonce pour masquer l'ID utilisateur
         String nonce = nonceUtil.generateNonce(userId);
+        String checkoutCustomerId = bc.getProviderCustomerId();
+        if (prepared != null) {
+            var identity = personalOffers.bindCheckoutIdentity(prepared.attempt().getId(), checkoutCustomerId, nonce);
+            checkoutCustomerId = identity.customerId();
+            nonce = identity.nonce();
+            if (prepared.attempt().getFirstInvoicePreviewAmount() == null)
+                verifyPositiveFirstInvoice(prepared.attempt().getId(), checkoutCustomerId,
+                        priceId, creditPriceId, creditQuantity);
+        }
         log.debug("Generated nonce for user {}: {}", userId, nonce);
         
         SessionCreateParams params = buildSessionParams(
-                bc.getProviderCustomerId(),
+                checkoutCustomerId,
                 priceId,
                 nonce,
                 planCode,
@@ -354,41 +399,104 @@ public class StripeBillingService {
                 cancelUrl,
                 creditPriceId,
                 creditQuantity,
-                creditTierIndex
+                creditTierIndex,
+                prepared == null ? null : prepared.attempt()
                                                        );
 
         try {
-            Session session = stripe.checkout().sessions().create(params);
+            Session session = prepared == null ? stripe.checkout().sessions().create(params)
+                    : stripe.checkout().sessions().create(params, RequestOptions.builder()
+                            .setIdempotencyKey("personal-offer-checkout:" + prepared.attempt().getId()).build());
+            if (prepared != null) personalOffers.attachSession(prepared.attempt().getId(), session.getId(),
+                    session.getUrl(), session.getExpiresAt() == null ? null
+                            : Instant.ofEpochSecond(session.getExpiresAt()));
             log.info("Checkout session creee (user={}, plan={}, session={})", userId, planCode, session.getId());
             emitCheckoutStarted(userId, normalizedPlanCode, com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_SUBSCRIPTION);
             return session.getUrl();
         } catch (InvalidRequestException e) {
-            if (isNoSuchCustomerError(e)) {
+            if (isDefiniteSessionRefusal(e) && isNoSuchCustomerError(e)) {
                 log.warn("Customer {} introuvable chez Stripe. Recreation + retry…", bc.getProviderCustomerId());
-                bc = recreateStripeCustomer(user, bc);
-                
-                // Regenerer le nonce pour le retry
-                String retryNonce = nonceUtil.generateNonce(userId);
-                log.debug("Generated retry nonce for user {}: {}", userId, retryNonce);
-                
-                SessionCreateParams retryParams = buildSessionParams(
-                        bc.getProviderCustomerId(),
-                        priceId,
-                        retryNonce,
-                        planCode,
-                        String.valueOf(bc.getId()),
-                        successUrl,
-                        cancelUrl,
-                        creditPriceId,
-                        creditQuantity,
-                        creditTierIndex
-                                                                    );
-                Session session = stripe.checkout().sessions().create(retryParams);
+                SessionCreateParams retryParams;
+                try {
+                    bc = recreateStripeCustomer(user, bc);
+                    String retryNonce = prepared == null ? nonceUtil.generateNonce(userId) : nonce;
+                    if (prepared != null) personalOffers.repairCheckoutCustomer(prepared.attempt().getId(),
+                            bc.getProviderCustomerId());
+                    if (prepared != null) verifyPositiveFirstInvoice(prepared.attempt().getId(),
+                            bc.getProviderCustomerId(), priceId, creditPriceId, creditQuantity);
+                    log.debug("Generated retry nonce for user {}: {}", userId, retryNonce);
+                    retryParams = buildSessionParams(
+                            bc.getProviderCustomerId(), priceId, retryNonce, planCode,
+                            String.valueOf(bc.getId()), successUrl, cancelUrl, creditPriceId,
+                            creditQuantity, creditTierIndex,
+                            prepared == null ? null : prepared.attempt());
+                } catch (StripeException | RuntimeException repairFailure) {
+                    // The first create was definitively refused and the repair create
+                    // has not yet been submitted. A reused attempt may contain an
+                    // earlier uncertain create, so keep that reservation untouched.
+                    if (prepared != null && !prepared.reused())
+                        personalOffers.failDefinitelyRejectedCheckout(prepared.attempt().getId());
+                    throw repairFailure;
+                }
+                Session session;
+                try {
+                    session = prepared == null ? stripe.checkout().sessions().create(retryParams)
+                            : stripe.checkout().sessions().create(retryParams, RequestOptions.builder()
+                                    .setIdempotencyKey("personal-offer-checkout:" + prepared.attempt().getId() + ":repair").build());
+                } catch (InvalidRequestException retryRefusal) {
+                    if (prepared != null && !prepared.reused() && isDefiniteSessionRefusal(retryRefusal))
+                        personalOffers.failDefinitelyRejectedCheckout(prepared.attempt().getId());
+                    throw retryRefusal;
+                } catch (AuthenticationException retryRefusal) {
+                    if (prepared != null && !prepared.reused())
+                        personalOffers.failDefinitelyRejectedCheckout(prepared.attempt().getId());
+                    throw retryRefusal;
+                }
+                if (prepared != null) personalOffers.attachSession(prepared.attempt().getId(), session.getId(),
+                        session.getUrl(), session.getExpiresAt() == null ? null
+                                : Instant.ofEpochSecond(session.getExpiresAt()));
                 log.info("Checkout session creee apres auto-reparation (user={}, session={})", userId, session.getId());
                 emitCheckoutStarted(userId, normalizedPlanCode, com.apimarketplace.auth.lifecycle.LifecycleEvents.KIND_SUBSCRIPTION);
                 return session.getUrl();
             }
+            if (prepared != null && !prepared.reused() && isDefiniteSessionRefusal(e))
+                personalOffers.failDefinitelyRejectedCheckout(prepared.attempt().getId());
             throw e;
+        } catch (AuthenticationException e) {
+            if (prepared != null && !prepared.reused())
+                personalOffers.failDefinitelyRejectedCheckout(prepared.attempt().getId());
+            throw e;
+        }
+    }
+
+    private boolean isDefiniteSessionRefusal(InvalidRequestException e) {
+        Integer status = e.getStatusCode();
+        String code = e.getCode();
+        return status != null && status >= 400 && status < 500 && status != 409 && status != 429
+                && (code == null || !code.toLowerCase(java.util.Locale.ROOT).startsWith("idempotency_"));
+    }
+
+    private void verifyPositiveFirstInvoice(java.util.UUID attemptId, String customerId,
+                                            String planPriceId, String creditPriceId, int creditQuantity) {
+        var details = InvoiceCreatePreviewParams.SubscriptionDetails.builder()
+                .addItem(InvoiceCreatePreviewParams.SubscriptionDetails.Item.builder()
+                        .setPrice(planPriceId).setQuantity(1L).build());
+        if (creditPriceId != null && creditQuantity > 0) {
+            details.addItem(InvoiceCreatePreviewParams.SubscriptionDetails.Item.builder()
+                    .setPrice(creditPriceId).setQuantity((long) creditQuantity).build());
+        }
+        try {
+            var preview = stripe.invoices().createPreview(InvoiceCreatePreviewParams.builder()
+                    .setCustomer(customerId).setSubscriptionDetails(details.build()).build());
+            Long amountDue = preview.getAmountDue();
+            if (amountDue == null || amountDue <= 0) {
+                personalOffers.failUnsubmittedPreview(attemptId);
+                throw new PersonalOfferService.OfferException("OFFER_FIRST_PAYMENT_REQUIRED");
+            }
+            personalOffers.markFirstInvoicePreview(attemptId, amountDue);
+        } catch (StripeException unavailable) {
+            personalOffers.failUnsubmittedPreview(attemptId);
+            throw new PersonalOfferService.OfferException("OFFER_PAYMENT_PREVIEW_UNAVAILABLE");
         }
     }
 
@@ -1179,7 +1287,8 @@ public class StripeBillingService {
     private boolean isNoSuchCustomerError(InvalidRequestException e) {
         String msg = e.getMessage() != null ? e.getMessage() : "";
         String code = e.getCode();
-        return msg.contains("No such customer") || "resource_missing".equals(code);
+        return msg.contains("No such customer")
+                || ("resource_missing".equals(code) && "customer".equals(e.getParam()));
     }
 
     /**
@@ -1427,7 +1536,8 @@ public class StripeBillingService {
             String cancelUrl,
             String creditPriceId,
             int creditQuantity,
-            int creditTierIndex
+            int creditTierIndex,
+            com.apimarketplace.auth.domain.PersonalOfferCheckoutAttempt offerAttempt
                                                            ) {
         var builder = SessionCreateParams.builder()
                                   .setMode(SessionCreateParams.Mode.SUBSCRIPTION)
@@ -1457,8 +1567,17 @@ public class StripeBillingService {
                                   // EU B2B reverse charge: collect + validate the customer's VAT
                                   // number at checkout; zero-rates the sale where applicable
                                   .setTaxIdCollection(SessionCreateParams.TaxIdCollection.builder()
-                                                                                          .setEnabled(true)
-                                                                                          .build());
+                                                                                 .setEnabled(true)
+                                                                                 .build());
+
+        if (offerAttempt != null) {
+            String attemptId = offerAttempt.getId().toString();
+            builder.putMetadata("personal_offer_attempt_id", attemptId)
+                    .putMetadata("personal_offer_id", offerAttempt.getRewardCodeId().toString())
+                    .setSubscriptionData(SessionCreateParams.SubscriptionData.builder()
+                            .putMetadata("personal_offer_attempt_id", attemptId).build())
+                    .setExpiresAt(offerAttempt.getSessionExpiresAt().getEpochSecond());
+        }
 
         // Add credit pack line item if quantity > 0
         if (creditPriceId != null && creditQuantity > 0) {

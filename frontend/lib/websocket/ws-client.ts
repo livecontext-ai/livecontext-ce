@@ -4,6 +4,8 @@ import type {
   ChannelHandler,
   HelloPayload,
   ChannelEventPayload,
+  GoawayPayload,
+  ErrorPayload,
 } from './ws-types';
 
 function isChannelEventPayload(payload: unknown): payload is ChannelEventPayload {
@@ -56,6 +58,18 @@ class WebSocketClient {
   // Status listeners (for useSyncExternalStore)
   private statusListeners: Set<() => void> = new Set();
 
+  // Resync listeners: told when a session is established AFTER an earlier one. Events
+  // published while no session existed are gone for good (the gateway keeps no backlog),
+  // so every surface that renders live state must re-read it from REST on this signal.
+  private reconnectListeners: Set<() => void> = new Set();
+  private hadSession = false;
+  // The re-subscribe frames of the current resync, not answered yet. Listeners are told only
+  // once this is empty: a REST re-read that ran before the server confirmed a subscription
+  // could miss a change published in between.
+  private pendingResyncIds: Set<string> | null = null;
+  private everConnected = false;
+  private lastFailure: 'goaway' | 'socket' | null = null;
+
   // Reconnection - backoff only. Reconnection is attempted INDEFINITELY (capped
   // backoff + jitter) so a real-time client always recovers from transient drops;
   // `intentionalClose` is the ONLY thing that stops it (logout / explicit teardown).
@@ -63,6 +77,11 @@ class WebSocketClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private static readonly MAX_BACKOFF_EXPONENT = 5; // 2^5 * 1s = 32s → capped to 30s
   private intentionalClose = false;     // true only after disconnect(); blocks reconnects
+  // Set by a goaway: the server asked us not to come back before this instant. Honoured by
+  // every path that would otherwise reconnect at once (focus, network back).
+  private goawayUntil = 0;
+  private static readonly DEFAULT_GOAWAY_RETRY_MS = 30000;
+  private static readonly GOAWAY_JITTER_MS = 5000;
   private connecting = false;           // guards the async token-fetch window in doConnect
   private lifecycleBound = false;       // online/visibility listeners attached once
 
@@ -78,7 +97,14 @@ class WebSocketClient {
 
   // Subscribe frames whose answer has not arrived yet, keyed by frame id. A subscription
   // is only real once the server acknowledges it; see sendSubscribe.
-  private pendingSubscribeAcks: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private pendingSubscribeAcks: Map<string, { timer: ReturnType<typeof setTimeout>; channel: string }> =
+    new Map();
+  // Channels the server refused because this socket holds too many. Still tracked (their
+  // handlers stay registered) and announced again as soon as a slot frees up.
+  private capacityRefused: Set<string> = new Set();
+  // Subscribe frames that re-announce a channel refused for capacity. Their `subscribed`
+  // answer ends a gap in that channel's events, which the page must re-read.
+  private capacityRetryIds: Set<string> = new Set();
   /**
    * Unanswered subscribes since the last answered one. Survives reconnects on purpose:
    * the whole point is to notice that rebuilding the connection is not helping, and every
@@ -137,6 +163,7 @@ class WebSocketClient {
     // the singleton permanently stuck and real-time events would never recover.
     this.intentionalClose = false;
     this.reconnectAttempt = 0;
+    this.goawayUntil = 0;
     this.bindLifecycleListeners();
     this.doConnect();
   }
@@ -147,6 +174,7 @@ class WebSocketClient {
    */
   disconnect(): void {
     this.intentionalClose = true;
+    this.hadSession = false; // the next connect() starts a new page lifetime, not a resync
     this.cleanup();
     this.setStatus('disconnected');
   }
@@ -159,6 +187,7 @@ class WebSocketClient {
   reconnect(): void {
     this.intentionalClose = false;
     this.reconnectAttempt = 0;
+    this.goawayUntil = 0;
     this.cleanup(); // drops the current socket (handlers nulled first → no onclose storm)
     this.doConnect();
   }
@@ -225,10 +254,12 @@ class WebSocketClient {
 
     if (handlers.size === 0) {
       this.channelHandlers.delete(channel);
+      if (this.capacityRefused.delete(channel)) return; // the server never held it
       // Send unsubscribe message to server. Unlike subscribe, a lost frame here is
       // harmless (a reconnect re-subscribes only what is still tracked), so this one
       // does not force a reconnect - it just uses the socket rather than the belief.
       this.sendUnsubscribe(channel);
+      this.retryCapacityRefused();
     }
   }
 
@@ -301,6 +332,32 @@ class WebSocketClient {
    */
   getStatusSnapshot = (): WsConnectionStatus => this._status;
 
+  /**
+   * Whether this page ever had a live session. Lives here, not in a component: a component
+   * remounts when the reader moves between layouts, and would forget.
+   */
+  get hasEverConnected(): boolean {
+    return this.everConnected;
+  }
+
+  /** Whether the last failed attempt was the server refusing us (goaway), not a lost socket. */
+  get lastFailureWasRefusal(): boolean {
+    return this.lastFailure === 'goaway';
+  }
+
+  /**
+   * Called every time a session is RE-established (a drop, a goaway, a workspace switch),
+   * never on the first session of the page, and when a channel the server had refused for
+   * capacity is finally accepted (it missed events too). It fires once every tracked channel
+   * has been re-announced AND the server has answered each of those subscribes (or its
+   * watchdog gave up on it), so a REST re-read here cannot miss a change published before
+   * the subscription existed.
+   */
+  onReconnected(listener: () => void): () => void {
+    this.reconnectListeners.add(listener);
+    return () => { this.reconnectListeners.delete(listener); };
+  }
+
   // ── Network / visibility recovery ──
   // Browsers throttle timers in background tabs and don't surface dropped sockets
   // promptly, so a pending backoff reconnect can stall. These listeners revive the
@@ -319,6 +376,7 @@ class WebSocketClient {
     // Guard on the REAL socket, never on `_status`: a zombie 'connected' is exactly the
     // state these listeners exist to rescue, and reading the belief made them refuse to.
     if (this.intentionalClose || this.isSocketOpen) return;
+    if (this.isHeldByGoaway) return; // the server's retry-after stands
     this.reconnectAttempt = 0; // network is back - recover at full speed
     this.reconnectNow();
   };
@@ -327,14 +385,21 @@ class WebSocketClient {
     if (this.intentionalClose) return;
     if (typeof document !== 'undefined'
         && document.visibilityState === 'visible'
-        && !this.isSocketOpen) {
+        && !this.isSocketOpen
+        && !this.isHeldByGoaway) {
       this.reconnectAttempt = 0;
       this.reconnectNow();
     }
   };
 
+  /** The server refused us and said when to come back: until then its scheduled retry stands. */
+  private get isHeldByGoaway(): boolean {
+    return Date.now() < this.goawayUntil;
+  }
+
   /** Cancel any pending backoff and attempt a connection immediately. */
   private reconnectNow(): void {
+    if (this.isHeldByGoaway) return;
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     this.doConnect();
   }
@@ -450,6 +515,11 @@ class WebSocketClient {
       case 'subscribed':
         // The only proof a subscription actually landed - see sendSubscribe's watchdog.
         this.settleSubscribeAck(envelope.ref);
+        if (envelope.ref && this.capacityRetryIds.delete(envelope.ref)) {
+          // Everything that channel published while it was refused is gone: same answer as
+          // a reconnect, re-read.
+          this.notifyReconnected();
+        }
         break;
       case 'unsubscribed':
         // Unsubscription confirmed - no action needed
@@ -467,15 +537,55 @@ class WebSocketClient {
         // Token refresh acknowledged
         break;
       case 'goaway':
-        this.disconnect();
+        this.handleGoaway(envelope.payload as GoawayPayload | undefined);
         break;
-      case 'error':
+      case 'error': {
         // A refusal is an ANSWER: the connection is alive and the server decided. Settle
         // the watchdog so a channel this user may not read cannot drive a reconnect loop.
-        this.settleSubscribeAck(envelope.ref);
+        const refused = this.settleSubscribeAck(envelope.ref);
+        if (envelope.ref) this.capacityRetryIds.delete(envelope.ref);
+        const error = envelope.payload as ErrorPayload | undefined;
+        // Refused for capacity, not for access: keep it and announce it again when a slot
+        // frees up. The message check covers a server that predates the code.
+        if (refused && this.channelHandlers.has(refused)
+            && (error?.code === 'max_subscriptions' || error?.message === 'Max subscriptions reached')) {
+          this.capacityRefused.add(refused);
+        }
         console.warn('[WS] Server error:', envelope.payload);
         break;
+      }
     }
+  }
+
+  /**
+   * The gateway refused this connection (the user holds too many). This used to call
+   * disconnect(), which latched the client off for the life of the page: the tab then
+   * received no event at all (in prod, a chat reply that never appeared and an app run that
+   * stayed "running" after it finished). Come back when the server says, not before: an
+   * immediate retry is exactly the hammering the refusal is about.
+   */
+  private handleGoaway(payload?: GoawayPayload): void {
+    const retryAfterMs = typeof payload?.retryAfterMs === 'number' && payload.retryAfterMs > 0
+      ? payload.retryAfterMs
+      : WebSocketClient.DEFAULT_GOAWAY_RETRY_MS;
+    console.warn(`[WS:client] server refused the connection (${payload?.reason ?? 'goaway'}); `
+      + `retrying in ${Math.round(retryAfterMs / 1000)}s`);
+    this.connecting = false;
+    this.cleanup(); // handlers are detached first, so the server's close does not re-enter here
+    // A refusal is a gap in the page's live updates even when it hits the page's FIRST socket
+    // (the gateway answers goaway instead of hello): the session that finally gets in must
+    // tell the page to re-read what it missed.
+    this.hadSession = true;
+    this.lastFailure = 'goaway';
+    // The retry is a reconnection, not a first attempt: doConnect then reports
+    // 'reconnecting' rather than 'connecting', so the outage stays visible across retries.
+    this.reconnectAttempt = Math.max(1, this.reconnectAttempt);
+    this.goawayUntil = Date.now() + retryAfterMs;
+    this.setStatus('reconnecting');
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.doConnect();
+    }, retryAfterMs + Math.random() * WebSocketClient.GOAWAY_JITTER_MS);
   }
 
   private handleHello(payload: HelloPayload): void {
@@ -501,8 +611,41 @@ class WebSocketClient {
     // treating it as a success is what turns a socket dying mid-handshake into a fast
     // loop: reset, fail, reconnect at attempt 0, reset again. Resetting on the first
     // thing the session actually carried makes the backoff mean what it says.
-    if (this.resubscribeAll()) {
+    const resubscribed = this.resubscribeAll();
+    if (resubscribed) {
       this.reconnectAttempt = 0;
+      if (this.hadSession) this.notifyWhenAnswered(resubscribed);
+      this.hadSession = true;
+      this.everConnected = true;
+      this.lastFailure = null;
+    }
+  }
+
+  /** Tell the reconnect listeners once every frame in `ids` has been answered (or given up on). */
+  private notifyWhenAnswered(ids: string[]): void {
+    if (ids.length === 0) {
+      this.pendingResyncIds = null;
+      this.notifyReconnected();
+      return;
+    }
+    this.pendingResyncIds = new Set(ids);
+  }
+
+  /** One re-subscribe of the current resync got its answer (or its watchdog gave up on it). */
+  private resyncFrameSettled(id: string): void {
+    if (!this.pendingResyncIds?.delete(id)) return;
+    if (this.pendingResyncIds.size > 0) return;
+    this.pendingResyncIds = null;
+    this.notifyReconnected();
+  }
+
+  private notifyReconnected(): void {
+    for (const listener of this.reconnectListeners) {
+      try {
+        listener();
+      } catch (err) {
+        console.error('[WS] reconnect listener failed', err);
+      }
     }
   }
 
@@ -612,6 +755,7 @@ class WebSocketClient {
     }
     // Always attempt recovery - a real-time client must never silently stay dead.
     // Only intentionalClose (logout/teardown) stops this.
+    this.lastFailure = 'socket';
     this.setStatus('reconnecting');
     this.scheduleReconnect();
   }
@@ -636,13 +780,18 @@ class WebSocketClient {
    * dies part-way through the loop, the channels after it would never be announced and
    * nothing would notice. Stop at the first frame that cannot leave and rebuild instead.
    *
-   * @returns whether every channel was announced - i.e. whether this session carried
-   *          anything at all, which is what the caller uses to decide if it counts as a
-   *          successful connection for backoff purposes.
+   * @returns the ids of the frames sent, or null when the socket died part-way - i.e.
+   *          whether this session carried anything at all, which is what the caller uses to
+   *          decide if it counts as a successful connection for backoff purposes.
    */
-  private resubscribeAll(): boolean {
+  private resubscribeAll(): string[] | null {
+    this.capacityRefused.clear(); // every tracked channel is announced again below
+    this.capacityRetryIds.clear();
+    const ids: string[] = [];
     for (const channel of this.channelHandlers.keys()) {
-      if (!this.sendSubscribe(channel, true)) {
+      const id = this.sendSubscribe(channel, true);
+      if (id !== null) ids.push(id);
+      if (id === null) {
         console.warn('[WS:client] socket died while re-announcing channels - reconnecting');
         // handleDisconnect, NOT recoverStaleConnection. This runs inside handleHello,
         // which has just set the status to 'connected' and reset the backoff counter, so
@@ -650,14 +799,14 @@ class WebSocketClient {
         // reconnect with NO delay - and since doConnect detaches the dead socket's
         // handlers, the onclose that would normally arm the backoff never fires either.
         // A socket that dies during its own handshake would then loop as fast as the
-        // network allows, straight into the gateway's per-user connection cap, whose
-        // goaway latches this client off entirely. Measured at 42 sockets with zero
+        // network allows, straight into the gateway's per-user connection cap (whose goaway
+        // used to latch this client off entirely). Measured at 42 sockets with zero
         // elapsed time before this line said handleDisconnect.
         this.handleDisconnect();
-        return false;
+        return null;
       }
     }
-    return true;
+    return ids;
   }
 
   /**
@@ -675,7 +824,7 @@ class WebSocketClient {
    * user may not read - which must NOT trigger a reconnect, or a denied channel would
    * loop forever.
    */
-  private sendSubscribe(channel: string, requestSnapshot?: boolean): boolean {
+  private sendSubscribe(channel: string, requestSnapshot?: boolean): string | null {
     const id = crypto.randomUUID();
     const envelope: WsEnvelope = {
       v: 1,
@@ -685,36 +834,54 @@ class WebSocketClient {
       ts: Date.now(),
       payload: requestSnapshot ? { requestSnapshot: true } : undefined,
     };
-    const sent = this.send(envelope);
-    if (sent) this.armSubscribeAckWatchdog(id, channel);
-    return sent;
+    if (!this.send(envelope)) return null;
+    this.armSubscribeAckWatchdog(id, channel);
+    return id;
   }
 
   private armSubscribeAckWatchdog(id: string, channel: string): void {
     const timer = setTimeout(() => {
       this.pendingSubscribeAcks.delete(id);
+      this.capacityRetryIds.delete(id);
       if (this.intentionalClose) return;
+      // A resync must not wait forever on a server that stays silent: re-read anyway.
+      this.resyncFrameSettled(id);
       console.warn(`[WS:client] no answer to subscribe ch=${channel} after `
         + `${WebSocketClient.SUBSCRIBE_ACK_TIMEOUT_MS}ms - the connection is not carrying traffic`);
       this.forceReconnect();
     }, WebSocketClient.SUBSCRIBE_ACK_TIMEOUT_MS);
-    this.pendingSubscribeAcks.set(id, timer);
+    this.pendingSubscribeAcks.set(id, { timer, channel });
   }
 
-  /** An answer arrived for a frame we were watching - `subscribed` or a refusal alike. */
-  private settleSubscribeAck(ref: string | undefined): void {
-    if (!ref) return;
-    const timer = this.pendingSubscribeAcks.get(ref);
-    if (!timer) return;
-    clearTimeout(timer);
+  /**
+   * An answer arrived for a frame we were watching - `subscribed` or a refusal alike.
+   * @returns the channel that frame announced, when it was one we were watching.
+   */
+  private settleSubscribeAck(ref: string | undefined): string | undefined {
+    if (!ref) return undefined;
+    const pending = this.pendingSubscribeAcks.get(ref);
+    if (!pending) return undefined;
+    clearTimeout(pending.timer);
     this.pendingSubscribeAcks.delete(ref);
     // An answer of any kind means the server is talking to us again.
     this.consecutiveAckTimeouts = 0;
+    this.resyncFrameSettled(ref);
+    return pending.channel;
   }
 
   private clearSubscribeAckWatchdogs(): void {
-    for (const timer of this.pendingSubscribeAcks.values()) clearTimeout(timer);
+    for (const { timer } of this.pendingSubscribeAcks.values()) clearTimeout(timer);
     this.pendingSubscribeAcks.clear();
+  }
+
+  /** A slot freed up on this socket: announce one channel the server refused for capacity. */
+  private retryCapacityRefused(): void {
+    if (this._status !== 'connected' || !this.isSocketOpen) return;
+    const next = this.capacityRefused.values().next();
+    if (next.done) return;
+    this.capacityRefused.delete(next.value);
+    const id = this.sendSubscribe(next.value, true);
+    if (id) this.capacityRetryIds.add(id);
   }
 
   /**
@@ -851,6 +1018,8 @@ class WebSocketClient {
       this.ws = null;
     }
     this.sessionId = null;
+    // Those frames belonged to the session being torn down; the next hello starts a new resync.
+    this.pendingResyncIds = null;
   }
 }
 

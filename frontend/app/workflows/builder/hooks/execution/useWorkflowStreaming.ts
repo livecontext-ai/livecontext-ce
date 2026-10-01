@@ -1,5 +1,5 @@
 import { useCallback, useRef } from 'react';
-import { useWorkflowRunContext } from '@/contexts/WorkflowRunContext';
+import { useOptionalWorkflowRunContext } from '@/contexts/WorkflowRunContext';
 import { useChannel } from '@/lib/websocket';
 import { getActivePublicPreview } from '@/contexts/PublicationSnapshotContext';
 
@@ -45,6 +45,15 @@ const INDIVIDUAL_EVENT_TYPES = new Set([
 ]);
 
 /**
+ * Payloads already handed to the run pipeline. Several surfaces can stream the same run at
+ * once (a chat run card and a builder canvas on that run): the socket client gives every
+ * handler of a channel the SAME payload object, and all of them feed the one manager of the
+ * run, so without this each event was applied once per surface (a failure toast twice, a
+ * decision recorded twice, a refresh per copy).
+ */
+const forwardedPayloads = new WeakSet<object>();
+
+/**
  * Custom hook to manage real-time updates for a workflow run via WebSocket.
  *
  * Subscribes to the WebSocket channel `workflow:run:{runId}` and forwards
@@ -59,13 +68,20 @@ export function useWorkflowStreaming(
   runId: string | undefined | null,
   enabled: boolean = true
 ) {
-  const runContext = useWorkflowRunContext();
+  // Optional: a chat run card can render where no run provider is mounted, and then it simply
+  // does not stream.
+  const runContext = useOptionalWorkflowRunContext();
   const lastProcessedRef = useRef<number>(0);
 
   // WebSocket channel handler - routes events by type
   const handleWsMessage = useCallback(
     (data: any) => {
       if (!runContext || !runId) return;
+
+      if (data && typeof data === 'object') {
+        if (forwardedPayloads.has(data)) return;
+        forwardedPayloads.add(data);
+      }
 
       // The inner payload from Redis has a "type" field identifying the event kind
       const eventType = data?.type as string | undefined;
@@ -98,7 +114,7 @@ export function useWorkflowStreaming(
   // as 3s/8s/30s subscription churn for active runs. Revert to the original
   // direct read of `getActivePublicPreview()`. The `useChannel` hook already
   // dedups when the resolved channel string is unchanged across renders.
-  const wsChannel = enabled && runId && !getActivePublicPreview() ? `workflow:run:${runId}` : null;
+  const wsChannel = enabled && runId && runContext && !getActivePublicPreview() ? `workflow:run:${runId}` : null;
   useChannel(wsChannel, handleWsMessage, { requestSnapshot: true });
 
   // Get current connection state

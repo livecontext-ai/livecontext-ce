@@ -185,6 +185,42 @@ class StateSnapshotTest {
         }
 
         /**
+         * REGRESSION (round-2 audit, 2026-09-29): the step-by-step split fan-out now counts its
+         * items on this path, which recorded no duration, so a split body node's time in the run
+         * view dropped to 0 (678 ms for table:claim_mail in prod before the change).
+         */
+        @Test
+        @DisplayName("REGRESSION: an item counted one by one keeps its duration; the node's time adds them up")
+        void incrementNodeCountsOnlyKeepsTheItemDuration() {
+            StateSnapshot updated = StateSnapshot.empty()
+                .incrementNodeCountsOnly("mcp:call", "COMPLETED", 1, 300L)
+                .incrementNodeCountsOnly("mcp:call", "FAILED", 1, 200L);
+
+            StateSnapshot.NodeCounts counts = updated.getNodeCounts("mcp:call");
+            assertEquals(1, counts.completed());
+            assertEquals(1, counts.failed());
+            assertEquals(500L, counts.totalExecutionTimeMs());
+            assertEquals(200L, counts.lastExecutionTimeMs());
+            assertTrue(counts.lastEndTimeMs() > 0);
+            assertFalse(updated.getCompletedNodeIds().contains("mcp:call"),
+                "still no EpochState mark: only the counts move");
+        }
+
+        @Test
+        @DisplayName("a batch (count > 1), a skip or a zero duration records no time")
+        void incrementNodeCountsOnlyRecordsNoTimeForABatchOrASkip() {
+            StateSnapshot updated = StateSnapshot.empty()
+                .incrementNodeCountsOnly("mcp:call", "SKIPPED", 3, 900L)
+                .incrementNodeCountsOnly("mcp:call", "SKIPPED", 1, 900L)
+                .incrementNodeCountsOnly("mcp:call", "COMPLETED", 1, 0L);
+
+            StateSnapshot.NodeCounts counts = updated.getNodeCounts("mcp:call");
+            assertEquals(4, counts.skipped());
+            assertEquals(1, counts.completed());
+            assertEquals(0L, counts.totalExecutionTimeMs());
+        }
+
+        /**
          * Regression - production runId run_<id> (2026-05-02): Gmail
          * Auto-Labeler split-async classify produced {@code NodeCounts.completed=5} for
          * 4 actual items because {@code recordSplitAggregateIfMissing} called the regular

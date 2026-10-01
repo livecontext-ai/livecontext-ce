@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { Node } from 'reactflow';
 import type { BuilderNodeData, NodePolicy } from '../../types';
 import { generateWorkflowPlan } from '../workflowPlanGenerator';
+import { sanitizeNodePolicy } from '../nodePolicy';
 
 /**
  * Regression tests for the nodePolicy round-trip on the GENERATOR side.
@@ -91,6 +92,38 @@ function triggerNode(id: string, nodePolicy?: NodePolicy): Node<BuilderNodeData>
     } as BuilderNodeData,
   };
 }
+
+describe('workflowPlanGenerator - retryOn round trip', () => {
+  // A stored plan entry is hydrated through sanitizeNodePolicy (what NodeCreationService does),
+  // lands on the builder node, and the generator re-emits it through attachNodePolicies.
+  const stored = { retryCount: 1, retryBackoffMs: 60000, retryOn: 'rate_limit' };
+
+  it('retryOn on a tool step survives hydrate -> node data -> emitted plan', () => {
+    const hydrated = sanitizeNodePolicy(stored);
+    const plan = generateWorkflowPlan([mcpNode('mcp-1', 'Post Update', hydrated)], []);
+
+    expect(plan.mcps[0].nodePolicy).toEqual({ retryCount: 1, retryBackoffMs: 60000, retryOn: 'rate_limit' });
+  });
+
+  it('retryOn is dropped on a node that is not a tool step (the backend would refuse it)', () => {
+    const hydrated = sanitizeNodePolicy(stored);
+    const plan = generateWorkflowPlan([transformNode('transform-1', 'Shape', hydrated)], []);
+
+    expect(plan.cores!.find((c) => c.type === 'transform')?.nodePolicy).toEqual({
+      retryCount: 1,
+      retryBackoffMs: 60000,
+    });
+  });
+
+  it('retryOn is dropped on a tool step without retries', () => {
+    const plan = generateWorkflowPlan(
+      [mcpNode('mcp-1', 'Post Update', sanitizeNodePolicy({ retryOn: 'rate_limit', timeoutMs: 5000 }))],
+      []
+    );
+
+    expect(plan.mcps[0].nodePolicy).toEqual({ timeoutMs: 5000 });
+  });
+});
 
 describe('workflowPlanGenerator - nodePolicy emission', () => {
   it('emits nodePolicy on mcp entries (was previously dropped on regeneration)', () => {

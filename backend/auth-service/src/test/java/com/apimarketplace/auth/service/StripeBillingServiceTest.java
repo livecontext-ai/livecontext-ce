@@ -10,6 +10,11 @@ import com.apimarketplace.auth.util.NonceUtil;
 import com.stripe.StripeClient;
 import com.stripe.exception.InvalidRequestException;
 import com.stripe.exception.StripeException;
+import com.stripe.exception.ApiConnectionException;
+import com.stripe.exception.ApiException;
+import com.stripe.exception.IdempotencyException;
+import com.stripe.exception.AuthenticationException;
+import com.stripe.exception.PermissionException;
 import com.stripe.model.Customer;
 import com.stripe.model.SubscriptionItem;
 import com.stripe.model.SubscriptionItemCollection;
@@ -21,6 +26,7 @@ import com.stripe.service.CheckoutService;
 import com.stripe.service.CustomerService;
 import com.stripe.service.PaymentMethodService;
 import com.stripe.service.PriceService;
+import com.stripe.service.InvoiceService;
 import com.stripe.service.SubscriptionService;
 import com.stripe.service.checkout.SessionService;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -28,6 +34,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
@@ -85,6 +93,9 @@ class StripeBillingServiceTest {
     private NonceUtil nonceUtil;
 
     @Mock
+    private PersonalOfferService personalOffers;
+
+    @Mock
     private com.apimarketplace.auth.repository.PendingCreditUpgradeRepository pendingCreditUpgradeRepository;
 
     /**
@@ -105,6 +116,9 @@ class StripeBillingServiceTest {
 
     @Mock
     private PriceService priceService;
+
+    @Mock
+    private InvoiceService invoiceService;
 
     @Mock
     private CheckoutService checkoutService;
@@ -210,6 +224,7 @@ class StripeBillingServiceTest {
         lenient().when(stripe.subscriptions()).thenReturn(subscriptionService);
         lenient().when(stripe.customers()).thenReturn(customerService);
         lenient().when(stripe.prices()).thenReturn(priceService);
+        lenient().when(stripe.invoices()).thenReturn(invoiceService);
         lenient().when(stripe.checkout()).thenReturn(checkoutService);
         lenient().when(checkoutService.sessions()).thenReturn(sessionService);
     }
@@ -263,6 +278,320 @@ class StripeBillingServiceTest {
             assertThat(result).isEqualTo("https://checkout.stripe.com/session123");
             verify(sessionService).create(any(SessionCreateParams.class));
             verify(billingCustomerRepository).findByUserId(USER_ID);
+        }
+
+        @Test
+        void personalCheckoutPinsSessionSelectionAndStripeIdempotencyKey() throws Exception {
+            ReflectionTestUtils.setField(stripeBillingService, "personalOffers", personalOffers);
+            User user = buildUser(USER_ID, "test@example.com");
+            BillingCustomer bc = buildBillingCustomer(1L, user, STRIPE_CUSTOMER_ID);
+            when(priceCacheService.getPriceId("PRO", "monthly")).thenReturn(Optional.of("price_current"));
+            when(priceCacheService.getCreditPriceId("PRO", "monthly")).thenReturn(Optional.of("price_pack_current"));
+            when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.empty());
+            when(billingCustomerRepository.findByUserId(USER_ID)).thenReturn(Optional.of(bc));
+            when(customerService.retrieve(STRIPE_CUSTOMER_ID)).thenReturn(mock(Customer.class));
+            when(nonceUtil.generateNonce(USER_ID)).thenReturn(NONCE_VALUE);
+            var attempt = new PersonalOfferCheckoutAttempt();
+            attempt.setId(java.util.UUID.randomUUID());
+            attempt.setRewardCodeId(50L);
+            attempt.setPlanPriceId("price_frozen");
+            attempt.setCreditPriceId("price_pack_frozen");
+            attempt.setSessionExpiresAt(java.time.Instant.now().plusSeconds(2100));
+            when(personalOffers.prepareCheckout(eq(USER_ID), eq(50L), eq(2), eq("PRO"), eq(1),
+                    eq("monthly"), eq("price_current"), eq("price_pack_current")))
+                    .thenReturn(new PersonalOfferService.PreparedCheckout(attempt, false));
+            when(personalOffers.bindCheckoutIdentity(eq(attempt.getId()), eq(STRIPE_CUSTOMER_ID), eq(NONCE_VALUE)))
+                    .thenReturn(new PersonalOfferService.CheckoutIdentity(STRIPE_CUSTOMER_ID, NONCE_VALUE));
+            var preview = new com.stripe.model.Invoice();
+            preview.setAmountDue(1000L);
+            when(invoiceService.createPreview(any(com.stripe.param.InvoiceCreatePreviewParams.class)))
+                    .thenReturn(preview);
+            Session session = mock(Session.class);
+            when(session.getId()).thenReturn("cs_offer");
+            when(session.getUrl()).thenReturn("https://checkout.stripe.com/offer");
+            when(sessionService.create(any(SessionCreateParams.class), any(com.stripe.net.RequestOptions.class)))
+                    .thenReturn(session);
+
+            String url = stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 1, 50L, 2);
+
+            assertThat(url).isEqualTo("https://checkout.stripe.com/offer");
+            var params = ArgumentCaptor.forClass(SessionCreateParams.class);
+            var options = ArgumentCaptor.forClass(com.stripe.net.RequestOptions.class);
+            verify(sessionService).create(params.capture(), options.capture());
+            assertThat(params.getValue().getExpiresAt()).isEqualTo(attempt.getSessionExpiresAt().getEpochSecond());
+            assertThat(params.getValue().getLineItems()).extracting(SessionCreateParams.LineItem::getPrice)
+                    .containsExactly("price_frozen", "price_pack_frozen");
+            assertThat(params.getValue().getSubscriptionData().getMetadata())
+                    .containsEntry("personal_offer_attempt_id", attempt.getId().toString());
+            assertThat(options.getValue().getIdempotencyKey())
+                    .isEqualTo("personal-offer-checkout:" + attempt.getId());
+            verify(personalOffers).attachSession(eq(attempt.getId()), eq("cs_offer"), anyString(), any());
+            verify(personalOffers).markFirstInvoicePreview(attempt.getId(), 1000L);
+        }
+
+        @Test
+        void personalCheckoutRejectsZeroPreviewBeforeCreatingStripeSession() throws Exception {
+            ReflectionTestUtils.setField(stripeBillingService, "personalOffers", personalOffers);
+            User user = buildUser(USER_ID, "test@example.com");
+            BillingCustomer bc = buildBillingCustomer(1L, user, STRIPE_CUSTOMER_ID);
+            when(priceCacheService.getPriceId("PRO", "monthly")).thenReturn(Optional.of("price_plan"));
+            when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.empty());
+            when(billingCustomerRepository.findByUserId(USER_ID)).thenReturn(Optional.of(bc));
+            when(customerService.retrieve(STRIPE_CUSTOMER_ID)).thenReturn(mock(Customer.class));
+            when(nonceUtil.generateNonce(USER_ID)).thenReturn(NONCE_VALUE);
+            var attempt = new PersonalOfferCheckoutAttempt();
+            attempt.setId(java.util.UUID.randomUUID());
+            attempt.setRewardCodeId(50L);
+            attempt.setPlanPriceId("price_plan");
+            attempt.setSessionExpiresAt(java.time.Instant.now().plusSeconds(2100));
+            when(personalOffers.prepareCheckout(eq(USER_ID), eq(50L), eq(2), eq("PRO"), eq(0),
+                    eq("monthly"), eq("price_plan"), isNull()))
+                    .thenReturn(new PersonalOfferService.PreparedCheckout(attempt, false));
+            when(personalOffers.bindCheckoutIdentity(eq(attempt.getId()), eq(STRIPE_CUSTOMER_ID), eq(NONCE_VALUE)))
+                    .thenReturn(new PersonalOfferService.CheckoutIdentity(STRIPE_CUSTOMER_ID, NONCE_VALUE));
+            var preview = new com.stripe.model.Invoice();
+            preview.setAmountDue(0L);
+            when(invoiceService.createPreview(any(com.stripe.param.InvoiceCreatePreviewParams.class)))
+                    .thenReturn(preview);
+
+            assertThatThrownBy(() -> stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 0, 50L, 2))
+                    .isInstanceOf(PersonalOfferService.OfferException.class)
+                    .hasMessage("OFFER_FIRST_PAYMENT_REQUIRED");
+            verify(personalOffers).failUnsubmittedPreview(attempt.getId());
+            verifyNoInteractions(sessionService);
+        }
+
+        @Test
+        void definiteSessionRefusalReleasesPersonalReservationAfterPositivePreview() throws Exception {
+            var attempt = readyPersonalAttemptForSessionCreation();
+            var refused = new InvalidRequestException("No such price: price_plan", "price",
+                    null, "resource_missing", 400, null);
+            when(sessionService.create(any(SessionCreateParams.class), any(com.stripe.net.RequestOptions.class)))
+                    .thenThrow(refused);
+
+            assertThatThrownBy(() -> stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 0, 50L, 2))
+                    .isSameAs(refused);
+
+            verify(personalOffers).markFirstInvoicePreview(attempt.getId(), 1000L);
+            verify(personalOffers).failDefinitelyRejectedCheckout(attempt.getId());
+            verify(customerService, never()).create(any(CustomerCreateParams.class));
+        }
+
+        @Test
+        void customerPreparationFailureBeforeSessionCreateReleasesUnpreviewedAttempt() throws Exception {
+            var attempt = readyPersonalAttemptForCustomerPreparation(false, null);
+            var unavailable = new ApiConnectionException("customer lookup timeout");
+            when(customerService.retrieve(STRIPE_CUSTOMER_ID)).thenThrow(unavailable);
+
+            assertThatThrownBy(() -> stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 0, 50L, 2))
+                    .isSameAs(unavailable);
+
+            verify(personalOffers).failUnsubmittedPreview(attempt.getId());
+            verify(personalOffers, never()).failDefinitelyRejectedCheckout(any());
+            verifyNoInteractions(sessionService, invoiceService);
+        }
+
+        @Test
+        void customerPreparationFailureOnReusedPreviewDoesNotReleasePossiblySubmittedSession() throws Exception {
+            var attempt = readyPersonalAttemptForCustomerPreparation(true, 1000L);
+            var unavailable = new ApiConnectionException("customer lookup timeout");
+            when(customerService.retrieve(STRIPE_CUSTOMER_ID)).thenThrow(unavailable);
+
+            assertThatThrownBy(() -> stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 0, 50L, 2))
+                    .isSameAs(unavailable);
+
+            verify(personalOffers).failUnsubmittedPreview(attempt.getId());
+            verify(personalOffers, never()).failDefinitelyRejectedCheckout(any());
+            verifyNoInteractions(sessionService, invoiceService);
+        }
+
+        @Test
+        void definiteRefusalOnReusedAttemptCannotDismissEarlierUncertainCreate() throws Exception {
+            var attempt = readyPersonalAttemptForSessionCreation(true);
+            var refused = new InvalidRequestException("No such price: price_plan", "price",
+                    null, "resource_missing", 400, null);
+            when(sessionService.create(any(SessionCreateParams.class), any(com.stripe.net.RequestOptions.class)))
+                    .thenThrow(refused);
+
+            assertThatThrownBy(() -> stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 0, 50L, 2))
+                    .isSameAs(refused);
+
+            verify(personalOffers, never()).failDefinitelyRejectedCheckout(attempt.getId());
+        }
+
+        @ParameterizedTest
+        @ValueSource(ints = {401, 403})
+        void authenticationOrPermissionRefusalReleasesPersonalReservation(int status) throws Exception {
+            var attempt = readyPersonalAttemptForSessionCreation();
+            StripeException refused = status == 401
+                    ? new AuthenticationException("bad key", null, "authentication_error", 401)
+                    : new PermissionException("forbidden", null, "permission_error", 403);
+            when(sessionService.create(any(SessionCreateParams.class), any(com.stripe.net.RequestOptions.class)))
+                    .thenThrow(refused);
+
+            assertThatThrownBy(() -> stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 0, 50L, 2))
+                    .isSameAs(refused);
+
+            verify(personalOffers).failDefinitelyRejectedCheckout(attempt.getId());
+        }
+
+        @ParameterizedTest
+        @ValueSource(ints = {0, 1, 2, 3, 4, 5})
+        void ambiguousSessionCreateNeverReleasesPersonalReservation(int failureKind) throws Exception {
+            var attempt = readyPersonalAttemptForSessionCreation();
+            StripeException uncertain = switch (failureKind) {
+                case 0 -> new ApiConnectionException("timeout");
+                case 1 -> new ApiException("server error", null, null, 500, null);
+                case 2 -> new IdempotencyException("key in use", null, "idempotency_error", 409);
+                case 3 -> new InvalidRequestException("key in use", null,
+                        null, "idempotency_error", 409, null);
+                case 4 -> new InvalidRequestException("rate limited", null,
+                        null, "rate_limit", 429, null);
+                default -> new InvalidRequestException("idempotency conflict", null,
+                        null, "idempotency_error", 400, null);
+            };
+            when(sessionService.create(any(SessionCreateParams.class), any(com.stripe.net.RequestOptions.class)))
+                    .thenThrow(uncertain);
+
+            assertThatThrownBy(() -> stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 0, 50L, 2))
+                    .isSameAs(uncertain);
+
+            verify(personalOffers, never()).failDefinitelyRejectedCheckout(attempt.getId());
+        }
+
+        @Test
+        void definiteRefusalOnCustomerRepairRetryReleasesPersonalReservation() throws Exception {
+            var attempt = readyPersonalAttemptForSessionCreation();
+            var noCustomer = new InvalidRequestException("No such customer: " + STRIPE_CUSTOMER_ID,
+                    "customer", null, "resource_missing", 404, null);
+            var noPrice = new InvalidRequestException("No such price: price_plan",
+                    "price", null, "resource_missing", 400, null);
+            Customer recreated = mock(Customer.class);
+            when(recreated.getId()).thenReturn("cus_repaired");
+            when(customerService.create(any(CustomerCreateParams.class))).thenReturn(recreated);
+            when(billingCustomerRepository.save(any(BillingCustomer.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(sessionService.create(any(SessionCreateParams.class), any(com.stripe.net.RequestOptions.class)))
+                    .thenThrow(noCustomer).thenThrow(noPrice);
+
+            assertThatThrownBy(() -> stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 0, 50L, 2))
+                    .isSameAs(noPrice);
+
+            verify(personalOffers).repairCheckoutCustomer(attempt.getId(), "cus_repaired");
+            verify(personalOffers).failDefinitelyRejectedCheckout(attempt.getId());
+        }
+
+        @Test
+        void customerRepairFailureBeforeSecondCreateReleasesNewAttempt() throws Exception {
+            var attempt = readyPersonalAttemptForSessionCreation();
+            var noCustomer = new InvalidRequestException("No such customer: " + STRIPE_CUSTOMER_ID,
+                    "customer", null, "resource_missing", 404, null);
+            var repairFailure = new ApiConnectionException("customer recreation timeout");
+            when(sessionService.create(any(SessionCreateParams.class), any(com.stripe.net.RequestOptions.class)))
+                    .thenThrow(noCustomer);
+            when(customerService.create(any(CustomerCreateParams.class))).thenThrow(repairFailure);
+
+            assertThatThrownBy(() -> stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 0, 50L, 2))
+                    .isSameAs(repairFailure);
+
+            verify(sessionService, times(1)).create(any(SessionCreateParams.class), any(com.stripe.net.RequestOptions.class));
+            verify(personalOffers).failDefinitelyRejectedCheckout(attempt.getId());
+        }
+
+        @Test
+        void customerRepairFailureOnReusedAttemptKeepsEarlierUncertainCreate() throws Exception {
+            var attempt = readyPersonalAttemptForSessionCreation(true);
+            var noCustomer = new InvalidRequestException("No such customer: " + STRIPE_CUSTOMER_ID,
+                    "customer", null, "resource_missing", 404, null);
+            var repairFailure = new ApiConnectionException("customer recreation timeout");
+            when(sessionService.create(any(SessionCreateParams.class), any(com.stripe.net.RequestOptions.class)))
+                    .thenThrow(noCustomer);
+            when(customerService.create(any(CustomerCreateParams.class))).thenThrow(repairFailure);
+
+            assertThatThrownBy(() -> stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 0, 50L, 2))
+                    .isSameAs(repairFailure);
+
+            verify(sessionService, times(1)).create(any(SessionCreateParams.class), any(com.stripe.net.RequestOptions.class));
+            verify(personalOffers, never()).failDefinitelyRejectedCheckout(attempt.getId());
+        }
+
+        @Test
+        void idempotencyConflictOnCustomerRepairRetryKeepsPersonalReservation() throws Exception {
+            var attempt = readyPersonalAttemptForSessionCreation();
+            var noCustomer = new InvalidRequestException("No such customer: " + STRIPE_CUSTOMER_ID,
+                    "customer", null, "resource_missing", 404, null);
+            var conflict = new InvalidRequestException("idempotency conflict", null,
+                    null, "idempotency_error", 409, null);
+            Customer recreated = mock(Customer.class);
+            when(recreated.getId()).thenReturn("cus_repaired");
+            when(customerService.create(any(CustomerCreateParams.class))).thenReturn(recreated);
+            when(billingCustomerRepository.save(any(BillingCustomer.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(sessionService.create(any(SessionCreateParams.class), any(com.stripe.net.RequestOptions.class)))
+                    .thenThrow(noCustomer).thenThrow(conflict);
+
+            assertThatThrownBy(() -> stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 0, 50L, 2))
+                    .isSameAs(conflict);
+
+            verify(personalOffers).repairCheckoutCustomer(attempt.getId(), "cus_repaired");
+            verify(personalOffers, never()).failDefinitelyRejectedCheckout(attempt.getId());
+        }
+
+        private PersonalOfferCheckoutAttempt readyPersonalAttemptForCustomerPreparation(boolean reused,
+                                                                                        Long previewAmount) {
+            ReflectionTestUtils.setField(stripeBillingService, "personalOffers", personalOffers);
+            User user = buildUser(USER_ID, "test@example.com");
+            BillingCustomer customer = buildBillingCustomer(1L, user, STRIPE_CUSTOMER_ID);
+            when(priceCacheService.getPriceId("PRO", "monthly")).thenReturn(Optional.of("price_plan"));
+            when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.empty());
+            when(billingCustomerRepository.findByUserId(USER_ID)).thenReturn(Optional.of(customer));
+            var attempt = new PersonalOfferCheckoutAttempt();
+            attempt.setId(java.util.UUID.randomUUID());
+            attempt.setRewardCodeId(50L);
+            attempt.setPlanPriceId("price_plan");
+            attempt.setSessionExpiresAt(java.time.Instant.now().plusSeconds(2100));
+            attempt.setFirstInvoicePreviewAmount(previewAmount);
+            when(personalOffers.prepareCheckout(eq(USER_ID), eq(50L), eq(2), eq("PRO"), eq(0),
+                    eq("monthly"), eq("price_plan"), isNull()))
+                    .thenReturn(new PersonalOfferService.PreparedCheckout(attempt, reused));
+            return attempt;
+        }
+
+        private PersonalOfferCheckoutAttempt readyPersonalAttemptForSessionCreation() throws Exception {
+            return readyPersonalAttemptForSessionCreation(false);
+        }
+
+        private PersonalOfferCheckoutAttempt readyPersonalAttemptForSessionCreation(boolean reused) throws Exception {
+            var attempt = readyPersonalAttemptForCustomerPreparation(reused, reused ? 1000L : null);
+            when(customerService.retrieve(STRIPE_CUSTOMER_ID)).thenReturn(mock(Customer.class));
+            when(nonceUtil.generateNonce(USER_ID)).thenReturn(NONCE_VALUE);
+            when(personalOffers.bindCheckoutIdentity(eq(attempt.getId()), eq(STRIPE_CUSTOMER_ID), eq(NONCE_VALUE)))
+                    .thenReturn(new PersonalOfferService.CheckoutIdentity(STRIPE_CUSTOMER_ID, NONCE_VALUE));
+            if (!reused) {
+                var preview = new com.stripe.model.Invoice();
+                preview.setAmountDue(1000L);
+                when(invoiceService.createPreview(any(com.stripe.param.InvoiceCreatePreviewParams.class)))
+                        .thenReturn(preview);
+            }
+            return attempt;
+        }
+
+        @Test
+        void personalCheckoutReusesReservedUrlWithoutCreatingAnotherStripeSession() throws Exception {
+            ReflectionTestUtils.setField(stripeBillingService, "personalOffers", personalOffers);
+            when(priceCacheService.getPriceId("PRO", "monthly")).thenReturn(Optional.of("price_current"));
+            var attempt = new PersonalOfferCheckoutAttempt();
+            attempt.setId(java.util.UUID.randomUUID());
+            attempt.setSessionUrl("https://checkout.stripe.com/existing");
+            when(personalOffers.prepareCheckout(eq(USER_ID), eq(50L), eq(2), eq("PRO"), eq(0),
+                    eq("monthly"), eq("price_current"), isNull()))
+                    .thenReturn(new PersonalOfferService.PreparedCheckout(attempt, true));
+
+            String url = stripeBillingService.createCheckoutSession(USER_ID, "PRO", "monthly", 0, 50L, 2);
+
+            assertThat(url).isEqualTo("https://checkout.stripe.com/existing");
+            verifyNoInteractions(sessionService);
         }
 
         private com.apimarketplace.auth.lifecycle.CheckoutStartedThrottle throttle;

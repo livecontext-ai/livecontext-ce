@@ -62,6 +62,22 @@ class CatalogRegisterModuleTest {
         assertFalse(result.get().success());
     }
 
+    /**
+     * The register description used to say a declared Accept "registers but is never sent", which
+     * stopped being true when a declared Accept started replacing the preset one. An agent that
+     * believed it could not fix the MCP 406 ("must accept both application/json and
+     * text/event-stream") by declaring the header.
+     */
+    @Test
+    void registerDescriptionSaysADeclaredAcceptIsSentWithTheMcpValue() {
+        var result = module.execute("register_api", Map.of(), "tenant-1", null);
+
+        String text = result.orElseThrow().error();
+        assertTrue(text.contains("A declared Accept replaces the platform's default (application/json)"), text);
+        assertTrue(text.contains("Accept: application/json, text/event-stream"), text);
+        assertFalse(text.contains("never sent"), text);
+    }
+
     @Test
     void registerApiSucceeds() {
         Map<String, Object> apiDef = Map.of(
@@ -222,6 +238,64 @@ class CatalogRegisterModuleTest {
 
         assertTrue(result.isPresent());
         assertTrue(result.get().success());
+    }
+
+    @Test
+    void updateApiAcceptsApiDefinitionSentAsJsonString_bugB13() {
+        // Prod: update_api failed "Invalid API update: Updates must be a JSON object" because the
+        // agent sent api_definition as a JSON string, which reached the service as a text node.
+        String apiId = UUID.randomUUID().toString();
+        when(registrationService.updateCustomApi(eq(apiId), any(), eq("tenant-1"))).thenReturn(mockApiResponse());
+
+        var result = module.execute("update_api",
+                Map.of("api_id", apiId, "api_definition", "{\"apiName\":\"Updated\",\"baseUrl\":\"https://x.test\"}"),
+                "tenant-1", null);
+
+        assertTrue(result.get().success());
+        var captor = org.mockito.ArgumentCaptor.forClass(com.fasterxml.jackson.databind.JsonNode.class);
+        verify(registrationService).updateCustomApi(eq(apiId), captor.capture(), eq("tenant-1"));
+        assertTrue(captor.getValue().isObject(), "the string must reach the service as the object it holds");
+        assertEquals("Updated", captor.getValue().path("apiName").asText());
+    }
+
+    @Test
+    void registerApiAcceptsApiDefinitionSentAsJsonString_bugB13() {
+        when(registrationService.registerCustomApi(any(), eq("tenant-1"))).thenReturn(mockApiResponse());
+
+        var result = module.execute("register_api",
+                Map.of("api_definition", "  {\"apiName\":\"Test\"}  "), "tenant-1", null);
+
+        assertTrue(result.get().success());
+        var captor = org.mockito.ArgumentCaptor.forClass(com.fasterxml.jackson.databind.JsonNode.class);
+        verify(registrationService).registerCustomApi(captor.capture(), eq("tenant-1"));
+        assertTrue(captor.getValue().isObject());
+    }
+
+    @Test
+    void registerApiRefusesNonObjectDefinitionWithAnExplicitMessage_bugB13() {
+        for (Object notAnObject : List.<Object>of("register my weather api", "[1,2]", List.of("a"))) {
+            var result = module.execute("register_api", Map.of("api_definition", notAnObject), "tenant-1", null);
+
+            assertFalse(result.get().success());
+            assertTrue(result.get().error().contains("api_definition must be a JSON object"),
+                    "got: " + result.get().error());
+        }
+        verify(registrationService, never()).registerCustomApi(any(), any());
+    }
+
+    @Test
+    void updateApiRefusesNonObjectDefinitionWithAnExplicitMessage_bugB13() {
+        // A string that is not JSON, or JSON that is not an object, is never reinterpreted: it is
+        // refused before the service, with the same explicit message register_api gives.
+        String apiId = UUID.randomUUID().toString();
+        for (Object notAnObject : List.<Object>of("rename it to Foo", "[1,2]", "\"quoted\"", List.of("a"))) {
+            var result = module.execute("update_api",
+                    Map.of("api_id", apiId, "api_definition", notAnObject), "tenant-1", null);
+            assertFalse(result.get().success());
+            assertTrue(result.get().error().startsWith("Invalid API update: api_definition must be a JSON object"),
+                    "got: " + result.get().error());
+        }
+        verify(registrationService, never()).updateCustomApi(any(), any(), any());
     }
 
     @Test

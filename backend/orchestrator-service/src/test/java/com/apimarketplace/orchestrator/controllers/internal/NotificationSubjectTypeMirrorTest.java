@@ -49,6 +49,7 @@ class NotificationSubjectTypeMirrorTest {
             "V459__user_badges.sql",
             "V518__notifications_agent_subject_type.sql",
             "V528__notification_delivery.sql",
+            "V551__creator_follows.sql",
     };
 
     @Test

@@ -1338,8 +1338,9 @@ class SpelEvaluatorTest {
 
             Object now = spelEvaluator.evaluate("#now()", context);
             assertTrue(now instanceof String, "now() should return String, got: " + (now != null ? now.getClass().getName() : "null"));
-            // now() returns ISO date-time string like "2026-03-05T16:00:00"
-            assertTrue(((String) now).matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2})?"),
+            // now() returns ISO date-time string like "2026-03-05T16:00:00", seconds always present
+            // (an optional seconds group here let the once-a-minute "2026-03-05T16:00" slip through)
+            assertTrue(((String) now).matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"),
                 "now() should return ISO date-time format, got: " + now);
 
             Object today = spelEvaluator.evaluate("#today()", context);

@@ -16,6 +16,7 @@ import type {
   AdminAssignPlanResponse,
   AdminGrantablePlanCode,
 } from '@/lib/api/services/quota-api.service';
+import PersonalOfferPolicySection from '@/components/billing/PersonalOfferPolicySection';
 
 type TargetMode = 'email' | 'id';
 
@@ -632,6 +633,7 @@ export default function AdminCreditsPage() {
           </div>
         </div>
       )}
+      <PersonalOfferPolicySection />
     </div>
   );
 }

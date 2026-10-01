@@ -320,6 +320,8 @@ const MIN_SHIMMER_MS = 600;
 export class RunStateStore {
   private state: RunState;
   private listeners: Set<StateListener> = new Set();
+  /** Listeners that follow the state without rendering the run (see {@link watch}). */
+  private watchers: Set<StateListener> = new Set();
   private runId: string;
   /** Tracks when each step first entered running state (for minimum shimmer duration). */
   private runningStartTimes: Map<string, number> = new Map();
@@ -1395,9 +1397,23 @@ export class RunStateStore {
     return this.listeners.size;
   }
 
+  /**
+   * Follow state changes WITHOUT counting as a surface that renders the run: not called with
+   * the current state on registration, and not counted by {@link getSubscriberCount}, which is
+   * what tells the manager whether the run is on screen (and so whether a surface showing it
+   * is the first one). For observers such as the run history, which only reacts to changes.
+   */
+  watch(listener: StateListener): () => void {
+    this.watchers.add(listener);
+    return () => {
+      this.watchers.delete(listener);
+    };
+  }
+
   private notifyListeners(): void {
 
     this.listeners.forEach(listener => listener(this.state));
+    this.watchers.forEach(listener => listener(this.state));
   }
 
   // --------------------------------------------------------------------------

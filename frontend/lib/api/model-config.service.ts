@@ -30,6 +30,16 @@ export interface ModelConfigEntry {
    */
   replacementProvider?: string;
   replacementModel?: string;
+  /**
+   * V554: available but not offered. Meaningful only while `enabled` is not false: the model
+   * leaves the pickers (the composer keeps it in a collapsed group), is never the default, and
+   * its replacement above is kept but not applied. Read it through {@link modelListingState}.
+   */
+  unlisted?: boolean;
+  /** ISO instant the catalogue gained this model (its row's creation). Absent for YAML-only rows. */
+  addedAt?: string;
+  /** Added in the last 14 days, the catalogue's initial fill excluded. Decided by the backend. */
+  isNew?: boolean;
   rateLimitTpm?: number | null;
   rateLimitRpm?: number | null;
   rateLimitTpmPerTenant?: number | null;
@@ -130,6 +140,8 @@ export interface ModelConfigOverrideInput {
   /** V515: replacement while disabled. Both null clears it (back to the platform default). */
   replacementProvider?: string | null;
   replacementModel?: string | null;
+  /** V554: true = available but not offered. `enabled` rides along only when the change crosses Off. */
+  unlisted?: boolean;
   modelId: string;
   enabled?: boolean;
   displayName?: string;

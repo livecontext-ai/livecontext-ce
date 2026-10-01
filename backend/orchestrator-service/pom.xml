@@ -14,6 +14,14 @@
     <name>Orchestrator Service</name>
     <description>Plan simulation and execution orchestrator</description>
 
+    <properties>
+        <!-- Where surefire writes its reports. CI runs the `execution` tests of this module at the
+             same time as its other tests (scripts/ci/backend-shards.json, `alongside`), and two
+             surefire runs must not share a reports directory; surefire has no user property for
+             it, so scripts/ci/backend_shards.py sets this one. Unchanged for any other run. -->
+        <surefire.reportsDirectory>${project.build.directory}/surefire-reports</surefire.reportsDirectory>
+    </properties>
+
     <dependencies>
         <!-- Agent Common (domain types, tool framework, registry) -->
         <!-- Shared scratch-Postgres gate for the SQL tests. Test scope only. -->
@@ -385,6 +393,7 @@
                     <parallel>none</parallel>
                     <forkCount>1</forkCount>
                     <reuseForks>true</reuseForks>
+                    <reportsDirectory>${surefire.reportsDirectory}</reportsDirectory>
                 </configuration>
             </plugin>
         </plugins>
@@ -452,7 +461,12 @@
                                  is cached and SHARED across classes in one JVM (reuseForks=true), so a
                                  backed-up exec queue from one class leaks into the next and times the
                                  heavier agent-in-fork tests out at the 30s poll. A fresh fork per class
-                                 isolates them: slower, but reliable enough to gate CI. -->
+                                 isolates them: slower, but reliable enough to gate CI.
+                                 One fork at a time, also in CI: two at once, each on its own Redis,
+                                 were measured on 2026-09-29 (run_<id>) and bought nothing.
+                                 Every class then took twice as long on a server already near its
+                                 8 cores, and the job burned about twice the CPU for the same
+                                 classes (cpu-sampler.sh: ~2,000-2,400 core-s against ~1,180). -->
                             <reuseForks>false</reuseForks>
                             <forkCount>1</forkCount>
                             <includes>

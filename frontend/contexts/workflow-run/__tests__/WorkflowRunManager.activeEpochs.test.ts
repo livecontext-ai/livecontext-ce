@@ -38,7 +38,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 vi.mock('@/lib/websocket', () => ({
-  wsClient: { sendAction: vi.fn().mockResolvedValue(undefined) },
+  wsClient: { onReconnected: () => () => {}, sendAction: vi.fn().mockResolvedValue(undefined) },
 }));
 
 vi.mock('@/app/workflows/builder/utils/labelNormalizer', () => ({

@@ -424,6 +424,10 @@ public class ToolExecutionManager {
                 //
                 // Caching is keyed off the post-dehydration tree (FileRef-only)
                 // so cache HITS never re-upload - same invariant as before.
+                // A TEXT body (the provider answered text, not JSON) the dehydrator may turn into
+                // a file reference as a whole when it looks like 64 KB+ of base64. Object
+                // projection would then drop that reference; it is placed like the text instead.
+                boolean textBody = resultData instanceof String;
                 if (!shouldKeepBinariesInline) {
                     dehydrationResult = binaryResponseHandler.dehydrateInlineBase64(
                             resultData, userId, context.getToolName());
@@ -445,7 +449,11 @@ public class ToolExecutionManager {
                 // DEFAULT projection of the same answer, set below, never the widened one. Only
                 // the cached (chat) path saves a skeleton, so nothing else pays for it.
                 Object skeletonData = null;
-                if (success && resultData != null && context.getOutputSchemaJson() != null) {
+                if (success && textBody && !(resultData instanceof String)
+                        && context.getOutputSchemaJson() != null) {
+                    resultData = toolExecutionOrchestrator.placeUnparsed(
+                            resultData, context.getOutputSchemaJson());
+                } else if (success && resultData != null && context.getOutputSchemaJson() != null) {
                     try {
                         if (callerSelectedFields && cacheEnabled) {
                             skeletonData = toolExecutionOrchestrator.projectResult(
@@ -584,18 +592,17 @@ public class ToolExecutionManager {
                 metadata.put("iconSlug", context.getIconSlug());
             }
             metadata.put("status", executionResult.getOrDefault("status", "unknown"));
-            // Only when it happened, so a call that went out once carries nothing new. The wait
-            // is inside this call, so the node stayed RUNNING and emitted nothing: this is the
-            // only thing that tells a reader afterwards that the provider refused and we came
-            // back, rather than the provider simply being slow.
-            int providerRetries = com.apimarketplace.catalog.service.http.ProviderRetryContext.getRetries();
-            if (providerRetries > 0) {
-                metadata.put("providerRetries", providerRetries);
-            }
-
             // Include httpStatus from HttpExecutionService (contains code and error)
             if (executionResult.containsKey("httpStatus")) {
                 metadata.put("httpStatus", executionResult.get("httpStatus"));
+            }
+            // How long the provider asked the caller to wait (any refusal carrying a Retry-After). The platform does not
+            // re-send; a node's retry and an agent's wait read this to come back on time.
+            Object retryAfter = executionResult.get(
+                    com.apimarketplace.catalog.service.http.HttpExecutionService.RETRY_AFTER_SECONDS);
+            if (retryAfter != null) {
+                metadata.put(com.apimarketplace.catalog.service.http.HttpExecutionService.RETRY_AFTER_SECONDS,
+                        retryAfter);
             }
             if (fromCache) {
                 metadata.put("cached", true);

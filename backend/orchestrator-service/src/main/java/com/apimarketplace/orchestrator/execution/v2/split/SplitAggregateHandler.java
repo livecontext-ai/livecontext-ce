@@ -194,7 +194,8 @@ public class SplitAggregateHandler {
         // `collect_urgents` returned COMPLETED with 5 urgent_lines entries.
         //
         // Resolve via SplitAwareNodeExecutor.resolveRoutedItemIndices which is
-        // DB-backed (findCompletedItemIndicesByEpoch), port-aware, and uses
+        // DB-backed (findPassedItemIndicesByEpoch: completed items, plus failed items whose
+        // node continues on failure), port-aware, and uses
         // UNION semantics for merge-like nodes - same routing model the rest
         // of the engine relies on. This is more resilient than reading from
         // splitContext.resultsByNode (in-memory cache, lost on restart).

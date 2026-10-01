@@ -289,6 +289,34 @@ public class WorkflowBuilderModifier {
                 + "load, and the workflow cannot then be opened to repair it.");
         }
 
+        // A form trigger's fields take add_node's shape (ids, [{id, label, value}] options,
+        // defaultValue, real field types), and what add_node refuses is refused here too:
+        // modify writes the very fields add_node does.
+        if (LabelNormalizer.isTriggerKey(nodeId) && "form".equals(node.get("type"))
+                && changes.get("params") instanceof Map<?, ?> formParams && formParams.containsKey("fields")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> canonical = new LinkedHashMap<>((Map<String, Object>) formParams);
+            List<String> fieldIssues = FormFieldCanonicalizer.canonicalize(canonical);
+            if (!fieldIssues.isEmpty()) {
+                return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                        FormFieldCanonicalizer.refusal(fieldIssues) + "\n\nNothing was changed on "
+                                + formatNodeRef(session, nodeId) + ".");
+            }
+            changes.put("params", canonical);
+            // The report compares what was asked with what landed. For these fields what was
+            // asked IS their canonical shape: an id or option shape the builder added is not
+            // "not applied", and reporting it as such tells the agent to file a false defect.
+            if (requestedByCaller.containsKey("fields")) {
+                requestedByCaller.put("fields", canonical.get("fields"));
+            }
+            if (requestedByCaller.get("params") instanceof Map<?, ?> askedParams && askedParams.containsKey("fields")) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> asked = new LinkedHashMap<>((Map<String, Object>) askedParams);
+                asked.put("fields", canonical.get("fields"));
+                requestedByCaller.put("params", asked);
+            }
+        }
+
         // Validate action_mapping references for interface nodes
         List<String> actionMappingWarnings = new ArrayList<>();
         if (LabelNormalizer.isInterfaceKey(nodeId) && changes.containsKey("actionMapping")) {

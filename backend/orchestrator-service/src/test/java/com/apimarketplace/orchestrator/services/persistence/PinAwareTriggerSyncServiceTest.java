@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -472,6 +473,92 @@ class PinAwareTriggerSyncServiceTest {
             verify(triggerClient).updateFormEndpointWorkflowReference(
                     eq(TENANT_ID), eq(formEndpointId), eq(WORKFLOW_ID), eq("Test Workflow"));
             verify(triggerClient).syncFormEndpointTriggerId(eq(WORKFLOW_ID), argThat(id -> id != null));
+        }
+
+        @Test
+        @DisplayName("The public form's copy of the fields gets the canonical shape: defaultValue, [{id, label, value}] options (2026-09-29)")
+        @SuppressWarnings("unchecked")
+        void formConfigPushedToPublicFormIsCanonical() {
+            WorkflowEntity workflow = buildWorkflow(null);
+            UUID formEndpointId = UUID.randomUUID();
+            Map<String, Object> params = new HashMap<>();
+            params.put("formEndpointId", formEndpointId.toString());
+            params.put("fields", List.of(
+                    Map.of("name", "theme", "type", "text", "required", true, "default", "Innovation"),
+                    Map.of("name", "tier", "type", "select", "options", List.of("free", "pro"))));
+            WorkflowPlan plan = buildPlan(List.of(new Trigger("form-1", "Form", "form", "form", params)));
+
+            when(triggerClient.updateFormEndpointWorkflowReference(
+                    eq(TENANT_ID), eq(formEndpointId), eq(WORKFLOW_ID), any()))
+                    .thenReturn(new com.apimarketplace.trigger.client.dto.StandaloneFormEndpointDto());
+            when(triggerClient.updateFormEndpoint(eq(TENANT_ID), eq(formEndpointId), any()))
+                    .thenReturn(new com.apimarketplace.trigger.client.dto.StandaloneFormEndpointDto());
+
+            service.syncAllTriggersFromPlan(workflow, plan);
+
+            var captor = org.mockito.ArgumentCaptor.forClass(
+                    com.apimarketplace.trigger.client.dto.StandaloneFormEndpointRequest.class);
+            verify(triggerClient).updateFormEndpoint(eq(TENANT_ID), eq(formEndpointId), captor.capture());
+            List<Map<String, Object>> pushed = captor.getValue().formConfig();
+            assertThat(pushed.get(0)).containsEntry("defaultValue", "Innovation").doesNotContainKey("default");
+            assertThat(pushed.get(0)).containsKey("id");
+            assertThat((List<Map<String, Object>>) pushed.get(1).get("options"))
+                    .extracting(o -> o.get("value")).containsExactly("free", "pro");
+            assertThat(((List<Map<String, Object>>) pushed.get(1).get("options")).get(0)).containsKeys("id", "label");
+        }
+
+        @Test
+        @DisplayName("A field add_node would refuse does not stop the push: the copy follows the plan, the rest canonical")
+        @SuppressWarnings("unchecked")
+        void problemFieldIsStillPushed() {
+            WorkflowEntity workflow = buildWorkflow(null);
+            UUID formEndpointId = UUID.randomUUID();
+            Map<String, Object> params = new HashMap<>();
+            params.put("formEndpointId", formEndpointId.toString());
+            params.put("fields", List.of(
+                    Map.of("name", "tier", "type", "select", "options", List.of()),
+                    Map.of("name", "theme", "type", "text", "default", "Innovation")));
+            WorkflowPlan plan = buildPlan(List.of(new Trigger("form-1", "Form", "form", "form", params)));
+            when(triggerClient.updateFormEndpointWorkflowReference(
+                    eq(TENANT_ID), eq(formEndpointId), eq(WORKFLOW_ID), any()))
+                    .thenReturn(new com.apimarketplace.trigger.client.dto.StandaloneFormEndpointDto());
+            when(triggerClient.updateFormEndpoint(eq(TENANT_ID), eq(formEndpointId), any()))
+                    .thenReturn(new com.apimarketplace.trigger.client.dto.StandaloneFormEndpointDto());
+
+            service.syncAllTriggersFromPlan(workflow, plan);
+
+            var captor = org.mockito.ArgumentCaptor.forClass(
+                    com.apimarketplace.trigger.client.dto.StandaloneFormEndpointRequest.class);
+            verify(triggerClient).updateFormEndpoint(eq(TENANT_ID), eq(formEndpointId), captor.capture());
+            List<Map<String, Object>> pushed = captor.getValue().formConfig();
+            assertThat(pushed).hasSize(2);
+            assertThat(pushed.get(0)).containsEntry("name", "tier").containsEntry("id", "field-0");
+            assertThat(pushed.get(1)).containsEntry("defaultValue", "Innovation").doesNotContainKey("default");
+        }
+
+        @Test
+        @DisplayName("An entry that is not a field object is left out of the copy, never failing the whole push")
+        void nonObjectEntryIsLeftOut() {
+            WorkflowEntity workflow = buildWorkflow(null);
+            UUID formEndpointId = UUID.randomUUID();
+            Map<String, Object> params = new HashMap<>();
+            params.put("formEndpointId", formEndpointId.toString());
+            params.put("fields", List.of("email", Map.of("name", "theme", "type", "text")));
+            WorkflowPlan plan = buildPlan(List.of(new Trigger("form-1", "Form", "form", "form", params)));
+            when(triggerClient.updateFormEndpointWorkflowReference(
+                    eq(TENANT_ID), eq(formEndpointId), eq(WORKFLOW_ID), any()))
+                    .thenReturn(new com.apimarketplace.trigger.client.dto.StandaloneFormEndpointDto());
+            when(triggerClient.updateFormEndpoint(eq(TENANT_ID), eq(formEndpointId), any()))
+                    .thenReturn(new com.apimarketplace.trigger.client.dto.StandaloneFormEndpointDto());
+
+            service.syncAllTriggersFromPlan(workflow, plan);
+
+            var captor = org.mockito.ArgumentCaptor.forClass(
+                    com.apimarketplace.trigger.client.dto.StandaloneFormEndpointRequest.class);
+            verify(triggerClient).updateFormEndpoint(eq(TENANT_ID), eq(formEndpointId), captor.capture());
+            List<Map<String, Object>> pushed = captor.getValue().formConfig();
+            assertThat(pushed).hasSize(1);
+            assertThat(pushed.get(0)).containsEntry("name", "theme");
         }
 
         @Test
@@ -977,6 +1064,36 @@ class PinAwareTriggerSyncServiceTest {
             verify(triggerClient).updateFormEndpointWorkflowReference(
                     eq(TENANT_ID), eq(newFormId), eq(WORKFLOW_ID), eq("Test Workflow"));
             verify(triggerClient).syncFormEndpointTriggerId(eq(WORKFLOW_ID), argThat(id -> id != null && id.contains("form")));
+        }
+
+        @Test
+        @DisplayName("The endpoint created for a stripped clone carries the canonical fields too: defaultValue, [{id, label, value}] options (2026-09-29)")
+        @SuppressWarnings("unchecked")
+        void createdEndpointCarriesCanonicalFields() {
+            WorkflowEntity workflow = buildWorkflowWithOrg(2, "org-acme");
+            UUID newFormId = UUID.randomUUID();
+            Map<String, Object> params = new HashMap<>();
+            params.put("fields", List.of(
+                    Map.of("name", "theme", "type", "text", "default", "Innovation"),
+                    Map.of("name", "tier", "type", "select", "options", List.of("free", "pro"))));
+            Map<String, Object> v2Plan = planMapWithTriggers(List.of(
+                    triggerMapWithParams("form-1", "Contact Form", "form", params)));
+            when(versionService.getVersion(WORKFLOW_ID, 2)).thenReturn(Optional.of(buildVersionEntity(2, v2Plan)));
+            when(triggerClient.getFormEndpoints(TENANT_ID)).thenReturn(Collections.emptyList());
+            com.apimarketplace.trigger.client.dto.StandaloneFormEndpointDto created =
+                    new com.apimarketplace.trigger.client.dto.StandaloneFormEndpointDto();
+            created.setId(newFormId);
+            when(triggerClient.createFormEndpoint(eq(TENANT_ID), isNull(), any(), eq("org-acme"))).thenReturn(created);
+
+            service.syncAllTriggersFromPinnedVersion(workflow);
+
+            var captor = org.mockito.ArgumentCaptor.forClass(
+                    com.apimarketplace.trigger.client.dto.StandaloneFormEndpointRequest.class);
+            verify(triggerClient).createFormEndpoint(eq(TENANT_ID), isNull(), captor.capture(), eq("org-acme"));
+            List<Map<String, Object>> sent = captor.getValue().formConfig();
+            assertThat(sent.get(0)).containsEntry("defaultValue", "Innovation").doesNotContainKey("default");
+            assertThat(((List<Map<String, Object>>) sent.get(1).get("options")).get(1))
+                    .containsEntry("id", "opt-1").containsEntry("label", "pro").containsEntry("value", "pro");
         }
 
         @Test

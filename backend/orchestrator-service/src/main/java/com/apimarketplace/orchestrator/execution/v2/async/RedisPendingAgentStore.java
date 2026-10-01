@@ -73,6 +73,13 @@ public class RedisPendingAgentStore {
     static final String RUN_INDEX_PREFIX = "agent:pending-run-index:";
 
     /**
+     * An attempt that ended as a {@code nodePolicy.timeoutMs} timeout while its agent may still be
+     * running. Kept so the agent's late answer can be billed (its tokens were spent) although it
+     * is no longer delivered. Hyphenated like the run index, so {@link #listAll()} never scans it.
+     */
+    static final String TIMED_OUT_PREFIX = "agent:timed-out:";
+
+    /**
      * Default TTL: must outlive BOTH the worker result-key TTL (1h) AND the longest
      * legitimate run (7200s executionTimeout/inactivityTimeout contract, 130-min recovery
      * hard timeout) - the pending record is also what shields a RUNNING run from the
@@ -145,6 +152,40 @@ public class RedisPendingAgentStore {
             // worst case the recovery scanner won't see this entry and the run can be retried.
             logger.warn("[RedisPendingAgentStore] Failed to store pending agent: correlationId={}, error={}",
                 agent.correlationId(), e.getMessage());
+        }
+    }
+
+    /** Keeps an attempt that ended as a timeout, so its late answer can still be billed. */
+    public void storeTimedOut(PendingAgent agent) {
+        if (agent == null || agent.correlationId() == null) {
+            return;
+        }
+        try {
+            redisTemplate.opsForValue().set(TIMED_OUT_PREFIX + agent.correlationId(),
+                objectMapper.writeValueAsString(toMap(agent)), ttl);
+        } catch (Exception e) {
+            logger.warn("[RedisPendingAgentStore] Could not keep the timed-out attempt (its late answer goes unbilled): correlationId={}, error={}",
+                agent.correlationId(), e.getMessage());
+        }
+    }
+
+    /**
+     * Takes the timed-out attempt of a late answer, once: every replica receives the answer, only
+     * the GETDEL winner bills it.
+     */
+    public Optional<PendingAgent> claimTimedOut(String correlationId) {
+        if (correlationId == null) {
+            return Optional.empty();
+        }
+        try {
+            String json = redisTemplate.opsForValue().getAndDelete(TIMED_OUT_PREFIX + correlationId);
+            return json == null
+                ? Optional.empty()
+                : Optional.ofNullable(fromMap(objectMapper.readValue(json, new TypeReference<>() {})));
+        } catch (Exception e) {
+            logger.warn("[RedisPendingAgentStore] Could not read the timed-out attempt: correlationId={}, error={}",
+                correlationId, e.getMessage());
+            return Optional.empty();
         }
     }
 
@@ -400,6 +441,8 @@ public class RedisPendingAgentStore {
         m.put("startedAtEpochMs", agent.startedAt() != null ? agent.startedAt().toEpochMilli() : null);
         m.put("organizationId", agent.organizationId());
         m.put("loopIteration", agent.loopIteration());
+        m.put("attempt", agent.attempt());
+        m.put("timeoutMs", agent.timeoutMs());
         return m;
     }
 
@@ -433,7 +476,10 @@ public class RedisPendingAgentStore {
             (String) m.get("resolvedUserPrompt"),
             startedAt,
             (String) m.get("organizationId"),
-            m.get("loopIteration") instanceof Number ln ? ln.intValue() : null
+            m.get("loopIteration") instanceof Number ln ? ln.intValue() : null,
+            // Absent on an entry written before the fields existed: a first attempt, no timeout.
+            m.get("attempt") instanceof Number an ? an.intValue() : 1,
+            m.get("timeoutMs") instanceof Number tn ? tn.longValue() : 0L
         );
     }
 }

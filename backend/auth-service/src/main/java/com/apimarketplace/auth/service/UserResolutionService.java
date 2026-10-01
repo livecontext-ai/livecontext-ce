@@ -178,6 +178,13 @@ public class UserResolutionService {
     @Autowired(required = false)
     private AuthEventRecorder authEventRecorder;
 
+    /** Absent outside auth.mode=keycloak. See {@link #isDeletedIdentity}. */
+    @Autowired(required = false)
+    private KeycloakAdminEmailVerifier keycloakAdmin;
+
+    static final int DELETED_IDENTITIES_CAP = 10_000;
+    private final Set<String> deletedIdentities = ConcurrentHashMap.newKeySet();
+
     /**
      * The issuer {@code JwtTokenProvider} stamps on tokens we mint ourselves. Bound from the
      * same property, so the two cannot drift apart into a guard that recognises nothing.
@@ -254,6 +261,12 @@ public class UserResolutionService {
                     // refused, and the Keycloak user that login created is released.
                     if (samlAlias != null) {
                         admitNewSamlAccount(providerId, keycloakJwt, samlAlias);
+                    }
+                    if (isDeletedIdentity(providerId)) {
+                        log.warn("Refusing to create an account for providerId {}: its Keycloak identity no longer "
+                                + "exists (a still-valid token of a purged account)", providerId);
+                        recordFailure(providerTagFromJwt(keycloakJwt), "identity_deleted");
+                        return null;
                     }
                     Optional<User> created = findOrCreateUser(providerId, keycloakJwt);
                     // findOrCreateUser may return an existing-by-email user (Keycloak
@@ -506,6 +519,26 @@ public class UserResolutionService {
             return storedProviderId;
         }
         return requestedProviderId;
+    }
+
+    /**
+     * True only when Keycloak says the identity behind this token is GONE. Access tokens live 14
+     * days, so a purged account's token keeps passing the gateway's signature check; without this
+     * the first request it sends after the purge bootstraps a brand-new empty account for an
+     * identity that no longer exists. Checked only on the create path (once per new account).
+     * Fails open: when Keycloak cannot answer, the account is created as before, because refusing
+     * would block every real sign-up during a Keycloak admin hiccup. A deleted Keycloak id is never
+     * reused, so a "gone" answer is remembered and a replaying client does not reach Keycloak again.
+     */
+    boolean isDeletedIdentity(String providerId) {
+        if (keycloakAdmin == null) return false; // CE / embedded auth: no Keycloak identity
+        if (deletedIdentities.contains(providerId)) return true;
+        boolean gone = keycloakAdmin.identityExists(providerId).map(exists -> !exists).orElse(false);
+        if (gone) {
+            if (deletedIdentities.size() >= DELETED_IDENTITIES_CAP) deletedIdentities.clear();
+            deletedIdentities.add(providerId);
+        }
+        return gone;
     }
 
     private void recordFailure(String providerTag, String reason) {

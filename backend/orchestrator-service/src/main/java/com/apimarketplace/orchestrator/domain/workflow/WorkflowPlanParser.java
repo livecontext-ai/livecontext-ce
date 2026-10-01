@@ -131,18 +131,18 @@ public final class WorkflowPlanParser {
         Map<String, NodePolicy> policies = new HashMap<>();
         collectNodePolicies(policies, (List<Map<String, Object>>) planData.get("mcps"),
                 data -> keyFromLabel("mcp", firstNonBlank(safeString(data.get("label")), safeString(data.get("alias")))),
-                null, true);
+                null);
         collectNodePolicies(policies, (List<Map<String, Object>>) planData.get("tables"),
-                data -> keyFromLabel("table", safeString(data.get("label"))), null, false);
+                data -> keyFromLabel("table", safeString(data.get("label"))), null);
         collectNodePolicies(policies, (List<Map<String, Object>>) planData.get("agents"),
-                data -> keyFromLabel("agent", safeString(data.get("label"))), null, false);
+                data -> keyFromLabel("agent", safeString(data.get("label"))), null);
         collectNodePolicies(policies, (List<Map<String, Object>>) planData.get("cores"),
                 WorkflowPlanParser::coreKeyFromRaw,
                 ((java.util.function.BiConsumer<Map<String, Object>, NodePolicy>)
                         WorkflowPlanParser::rejectContinueOnFailureOnBranchingCore)
-                    .andThen(WorkflowPlanParser::rejectExecuteOnceOnIncompatibleCore), false);
+                    .andThen(WorkflowPlanParser::rejectExecuteOnceOnIncompatibleCore));
         collectNodePolicies(policies, (List<Map<String, Object>>) planData.get("interfaces"),
-                data -> keyFromLabel("interface", safeString(data.get("label"))), null, false);
+                data -> keyFromLabel("interface", safeString(data.get("label"))), null);
         return policies;
     }
 
@@ -150,8 +150,7 @@ public final class WorkflowPlanParser {
             Map<String, NodePolicy> policies,
             List<Map<String, Object>> entries,
             java.util.function.Function<Map<String, Object>, String> keyFn,
-            java.util.function.BiConsumer<Map<String, Object>, NodePolicy> validator,
-            boolean carriesProviderCalls) {
+            java.util.function.BiConsumer<Map<String, Object>, NodePolicy> validator) {
         if (entries == null) return;
         for (Map<String, Object> data : entries) {
             if (data == null || !data.containsKey(NodePolicy.JSON_KEY)) continue;
@@ -164,54 +163,49 @@ public final class WorkflowPlanParser {
             if (validator != null) {
                 validator.accept(data, policy);
             }
-            policy = withoutInapplicableProviderRetry(policy, key, carriesProviderCalls);
             if (!policy.isDefault()) {
                 policies.put(key, policy);
             }
         }
     }
 
+    /** Key of a policy knob the platform removed when it stopped retrying provider refusals. */
+    public static final String REMOVED_PROVIDER_RETRY_KEY = "providerRetryMaxWaitSec";
+
     /**
-     * Drops {@code providerRetryMaxWaitSec} from an entry that makes no catalog tool call.
+     * Refuses the removed {@code providerRetryMaxWaitSec} knob when a tool writes a policy.
      *
-     * <p>Only {@code StepNode} carries this budget to the provider, and only {@code mcps} entries
-     * become StepNodes. Keeping it on an agent, table, core or interface entry would leave the
-     * PARSED policy claiming something the engine cannot honour, which is how a reader comes to
-     * believe a workflow paces itself when it does not.
+     * <p>The PARSER ignores it (a stored plan may still carry it and must keep opening); only a
+     * NEW write is refused, so an agent that sends it learns the platform no longer retries
+     * instead of believing a setting that nothing reads was applied.
      *
-     * <p>Dropped rather than thrown on, deliberately: the tool actions refuse it up front (see
-     * {@code NodePolicyApplier}), so a plan reaching here with it is one hand-written or imported
-     * before that refusal existed, and a parse-time throw would make such a workflow impossible to
-     * OPEN and therefore impossible to repair. A WARN records it.
+     * @return the message, or {@code null} when the raw policy does not carry the key.
      */
-    private static NodePolicy withoutInapplicableProviderRetry(NodePolicy policy, String key,
-                                                               boolean carriesProviderCalls) {
-        if (carriesProviderCalls || policy.providerRetryMaxWaitSec() == null) {
-            return policy;
+    public static String removedProviderRetryRejection(String nodeKey, Object rawPolicy) {
+        if (!(rawPolicy instanceof Map<?, ?> map) || !map.containsKey(REMOVED_PROVIDER_RETRY_KEY)) {
+            return null;
         }
-        logger.warn("Ignoring nodePolicy.providerRetryMaxWaitSec on '{}': only a catalog tool step "
-                + "makes a provider call, so nothing would read it there", key);
-        return new NodePolicy(policy.retryCount(), policy.retryBackoffMs(), policy.continueOnFailure(),
-                policy.timeoutMs(), policy.executeOnce(), null);
+        return "Invalid nodePolicy for node '" + nodeKey + "': providerRetryMaxWaitSec no longer "
+                + "exists. The platform never retries a provider refusal: a call the provider "
+                + "answers with 'too many requests' (429) fails on that first answer. To retry, set "
+                + "retryCount and retryBackoffMs on this node, with a backoff long enough for the "
+                + "provider's limit window (for example 60000 for a per-minute limit). Remove "
+                + "providerRetryMaxWaitSec from the policy and send it again.";
     }
 
     /**
-     * The same rule as a message, for the tool layer to refuse a plan BEFORE it is stored.
-     *
-     * @return the message, or {@code null} when the budget is applicable (or absent).
+     * A copy of a stored {@code nodePolicy} without the removed key, for everything that READS a
+     * plan back to a caller ({@code get_plan}, {@code describe}). Without it a plan stored before
+     * the removal would be refused on its own round trip ({@code get_plan} then {@code set_plan}),
+     * for a key the caller never wrote. Returns {@code null} when nothing is left.
      */
-    public static String providerRetryRejection(String nodeKey, NodePolicy policy,
-                                                boolean carriesProviderCalls) {
-        if (policy == null || policy.providerRetryMaxWaitSec() == null || carriesProviderCalls) {
-            return null;
+    public static Object withoutRemovedProviderRetry(Object rawPolicy) {
+        if (!(rawPolicy instanceof Map<?, ?> map) || !map.containsKey(REMOVED_PROVIDER_RETRY_KEY)) {
+            return rawPolicy;
         }
-        return "Invalid nodePolicy for node '" + nodeKey + "': providerRetryMaxWaitSec applies to a "
-                + "catalog tool step only (a 'mcps' entry). It bounds the wait after a PROVIDER "
-                + "answers 'too many requests', which only a tool call receives; an AI node, a core "
-                + "node (http_request included), a table node and an interface node each retry on "
-                + "their own terms, so use retryCount and retryBackoffMs there. Remove "
-                + "providerRetryMaxWaitSec from this node, or set it on the tool step that calls "
-                + "the provider.";
+        Map<Object, Object> copy = new java.util.LinkedHashMap<>(map);
+        copy.remove(REMOVED_PROVIDER_RETRY_KEY);
+        return copy.isEmpty() ? null : copy;
     }
 
     /**
@@ -245,6 +239,60 @@ public final class WorkflowPlanParser {
                 + "continuing past the failure would traverse ALL its ports at once (every branch/case/choice). "
                 + "Remove continueOnFailure from this node (retryCount is still allowed) or handle the "
                 + "failure on the nodes upstream/downstream of the branch instead.";
+    }
+
+    /** Agent types that pick a branch (a port per category, pass/fail): a failed one picked none. */
+    private static final Set<String> BRANCHING_AGENT_TYPES = Set.of("classify", "guardrail");
+
+    public static boolean isBranchingAgentType(String agentType) {
+        return agentType != null && BRANCHING_AGENT_TYPES.contains(agentType.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Core types that choose where the run goes next without being refused at parse time: a loop
+     * picks its body or its exit. A failed loop picked neither, so continuing past the failure
+     * would start BOTH (past the iteration cap, the body again). The builder refuses
+     * continueOnFailure there ({@link #continueOnFailureRejectionInBuilder}) and the run ignores
+     * it ({@code NodePolicyRunner.effectivePolicy}); a plan stored before that refusal keeps
+     * opening, which a parse-time rejection would break.
+     */
+    private static final Set<String> CONTINUE_IGNORED_CORE_TYPES = Set.of("loop");
+
+    public static boolean isContinueIgnoredCoreType(String coreType) {
+        return coreType != null && CONTINUE_IGNORED_CORE_TYPES.contains(coreType.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * What the builder tools refuse on a core: the parse-time rule ({@link #continueOnFailureRejection})
+     * plus the loop, which only the builder refuses (see {@link #CONTINUE_IGNORED_CORE_TYPES}).
+     *
+     * @return the message, or {@code null} when the policy is acceptable on that core type.
+     */
+    public static String continueOnFailureRejectionInBuilder(String coreType, NodePolicy policy, String nodeKey) {
+        String parseTime = continueOnFailureRejection(coreType, policy, nodeKey);
+        if (parseTime != null || policy == null || !policy.continueOnFailure() || !isContinueIgnoredCoreType(coreType)) {
+            return parseTime;
+        }
+        return "Invalid nodePolicy for node '" + nodeKey + "': continueOnFailure=true is not supported on a "
+                + "loop. A failed loop chose neither its body nor its exit, so continuing past the failure would "
+                + "start both at once. Remove continueOnFailure from this node (retryCount is still allowed) or "
+                + "handle the failure on the nodes around the loop.";
+    }
+
+    /**
+     * The builder's refusal of {@code continueOnFailure: true} on a classify or guardrail agent, for
+     * the reason the branching cores refuse it. Not applied by the parser: a plan stored before the
+     * refusal keeps opening, and the engine runs such a node without the continuation
+     * ({@code NodePolicyRunner.effectivePolicy}).
+     *
+     * @return the message, or {@code null} when the policy is acceptable on that agent type.
+     */
+    public static String continueOnFailureRejectionForAgent(String agentType, NodePolicy policy, String nodeKey) {
+        if (policy == null || !policy.continueOnFailure() || !isBranchingAgentType(agentType)) return null;
+        return "Invalid nodePolicy for node '" + nodeKey + "': continueOnFailure=true is not supported on a "
+                + agentType + " agent. A failed " + agentType + " selects no branch, so continuing past the "
+                + "failure would send its input down EVERY branch at once. Remove continueOnFailure from this "
+                + "node (retryCount is still allowed) or handle the failure after the branches.";
     }
 
     /**

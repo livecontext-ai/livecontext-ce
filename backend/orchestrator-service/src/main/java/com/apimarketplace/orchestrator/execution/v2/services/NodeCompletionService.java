@@ -228,6 +228,21 @@ public class NodeCompletionService {
     }
 
     /**
+     * Writes a split fan-out node's node-level EpochState mark once, from the outcome of the
+     * fan-out that just persisted its items with {@link #emitNodeCompletePerItem}. Delegates to
+     * the idempotent {@code StepCompletionOrchestrator.recordSplitOutcome}.
+     */
+    public void recordSplitOutcome(String runId, String triggerId, String nodeId, int epoch,
+                                   long completed, long failed) {
+        stepCompletionOrchestrator.recordSplitOutcome(runId, triggerId, nodeId, epoch, completed, failed);
+        // The mark decides the node's readiness walk: a context cached before it would still see
+        // the node as unresolved.
+        if (readinessCache != null) {
+            readinessCache.invalidateRun(runId);
+        }
+    }
+
+    /**
      * SINGLE parameterized completion pipeline at the node-completion layer - used by
      * BOTH the terminal path ({@link #emitNodeComplete(WorkflowExecution, ExecutionNode,
      * NodeExecutionResult, TriggerItem, int, ExecutionContext, Integer)} →
@@ -236,7 +251,7 @@ public class NodeCompletionService {
      * between the two dispositions branches on an explicit {@link CompletionKind}
      * accessor at the line where it is decided, so there are no mirror methods to keep
      * in sync. Downstream, both dispositions enter the same
-     * {@link StepCompletionOrchestrator#complete(com.apimarketplace.orchestrator.services.completion.StepCompletionContext, String, CompletionKind, boolean)}
+     * {@link StepCompletionOrchestrator#complete(com.apimarketplace.orchestrator.services.completion.StepCompletionContext, String, CompletionKind)}
      * pipeline (the {@code completeStep}/{@code completeAttempt} entry points used below
      * are thin back-compat shims over it).
      *
@@ -342,32 +357,19 @@ public class NodeCompletionService {
                         execution, nodeId, nodeLabel, stepResultWithMeta, itemIndex, iteration));
             }
         } else {
-            // persistRowInLoopContext divergence - loop context → WS-only (persistRow=false);
-            // non-loop → the attempt row IS persisted. WHY (2026-06-10 audit item 4):
-            //  - Non-loop: the v6 unique index (…, iteration, item_index, epoch, spawn,
-            //    status) admits ONE FAILED row per logical execution, so the FIRST failed
-            //    attempt claims it; later failed attempts - and the terminal FAILED row,
-            //    when all attempts fail - dedupe onto it via ON CONFLICT DO NOTHING (the
-            //    terminal failure's snapshot marks, WS event and billing still apply
-            //    exactly once; only the row's payload keeps the first attempt's annotation).
-            //  - Loop: loop-history reconstruction reads the per-iteration rows; if an
-            //    attempt row claimed the iteration's FAILED slot, the iteration's TERMINAL
-            //    row (carrying policy_attempt=N/N and the final error) would be silently
-            //    ON-CONFLICT-dropped and the DB would record "attempt 1/N" as the
-            //    iteration's terminal state. Skipping attempt rows in loops keeps the
-            //    terminal row authoritative; the attempt history remains visible on the
-            //    WS stream, and the terminal row's policy_attempt/policy_max_attempts
-            //    annotation records how many attempts the iteration consumed.
-            // See CompletionKind.persistsRowInLoopContext.
-            boolean persistRow = !loopContext;
+            // A non-final attempt is WS-only, in a loop or not: an attempt row would claim the
+            // single FAILED slot of the v6 unique index and drop the terminal row, or sit
+            // beside a retry-then-success's COMPLETED row - see CompletionKind.persistsRow.
+            // The attempt history stays visible on the WS stream, and the terminal row's
+            // policy_attempt/policy_max_attempts annotation records how many attempts ran.
             if (context != null && context.triggerId() != null) {
                 completion = stepCompletionOrchestrator.completeAttempt(
                     execution, nodeId, nodeLabel, stepResultWithMeta,
-                    itemIndex, iteration, context.epoch(), context.triggerId(), persistRow);
+                    itemIndex, iteration, context.epoch(), context.triggerId());
             } else {
                 completion = stepCompletionOrchestrator.completeAttempt(
                     execution, nodeId, nodeLabel, stepResultWithMeta,
-                    itemIndex, iteration, context != null ? context.epoch() : 0, null, persistRow);
+                    itemIndex, iteration, context != null ? context.epoch() : 0, null);
             }
         }
 
@@ -415,8 +417,8 @@ public class NodeCompletionService {
      * {@code NON_FINAL_ATTEMPT}. The attempt-emission contract (2026-06-10 audit items
      * 2/3/4: always WS-emitted with {@code policy_attempt}/{@code policy_max_attempts},
      * never mutates StateSnapshot/workflow_epochs/edges, never billed, leaves the node
-     * RUNNING, and the loop/non-loop row-persistence asymmetry) is decided inside that
-     * pipeline at the {@link CompletionKind} branch points - see the
+     * RUNNING, and never writes a step row) is decided inside that pipeline at the
+     * {@link CompletionKind} branch points - see the
      * {@code CompletionKind} accessor javadocs and the inline branch comments for each
      * skip's rationale.
      */

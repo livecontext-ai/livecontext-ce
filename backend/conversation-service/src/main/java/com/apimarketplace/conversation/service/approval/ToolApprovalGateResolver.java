@@ -64,6 +64,46 @@ public class ToolApprovalGateResolver {
         return write(conversationId, gateKey, envelopeJson, label);
     }
 
+    /**
+     * "Don't ask again in this conversation", applied to the turn that is running now.
+     *
+     * <p>The persisted {@code chatConfig.autoAuthorizeTools} covers every later turn, but the
+     * running one read its grants when it started, so its next sensitive call would raise a
+     * new card anyway. agent-service checks this key on each gated call. Best-effort: on a
+     * Redis failure the worst case is that one more card shows in this turn.
+     */
+    public void grantConversationWideForRunningTurn(String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return;
+        }
+        try {
+            redisTemplate.opsForValue().set(StreamRedisKeys.conversationWideApprovalKey(conversationId),
+                    "1", StreamRedisKeys.CONVERSATION_WIDE_APPROVAL_TTL);
+            log.info("[APPROVAL_GATE] Conversation-wide authorization granted for the running turn of {}",
+                    conversationId);
+        } catch (Exception e) {
+            log.warn("[APPROVAL_GATE] Could not record conversation-wide authorization for {}: {}",
+                    conversationId, e.getMessage());
+        }
+    }
+
+    /**
+     * Drop the running-turn grant when a new turn starts. That turn resolves its grants from
+     * the persisted setting, which is the one the user can turn back off: leaving the key in
+     * place would keep skipping cards after the toggle was switched off.
+     */
+    public void clearConversationWideForRunningTurn(String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return;
+        }
+        try {
+            redisTemplate.delete(StreamRedisKeys.conversationWideApprovalKey(conversationId));
+        } catch (Exception e) {
+            log.warn("[APPROVAL_GATE] Could not clear conversation-wide authorization for {}: {}",
+                    conversationId, e.getMessage());
+        }
+    }
+
     private boolean write(String conversationId, String gateKey, String value, String label) {
         if (conversationId == null || conversationId.isBlank() || gateKey == null || gateKey.isBlank()) {
             return false;

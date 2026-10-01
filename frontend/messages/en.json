@@ -1,4 +1,405 @@
 {
+  "partnerDashboard": {
+    "title": "Partner program",
+    "subtitle": "Earn a share of every invoice your clients pay, and carry the official partner badge.",
+    "learnMore": "How the program works",
+    "error": "Could not load your partner program. Try again in a moment.",
+    "selfHosted": {
+      "title": "The partner program is a cloud feature",
+      "body": "It runs on the LiveContext cloud. Join it from your livecontext.ai account."
+    },
+    "terms": {
+      "commission": "{percent}% of every paid invoice",
+      "duration": "For {months} months per customer",
+      "credits": "{credits} free credits for each client you bring",
+      "hold": "Payable after a {days}-day refund window",
+      "commissionRange": "{from}% to {to}% of every paid invoice, by tier"
+    },
+    "apply": {
+      "title": "Apply to become a partner",
+      "intro": "Tell us about your business. We review every application and reply by e-mail, usually within a few days.",
+      "company": "Company or brand",
+      "companyPlaceholder": "Acme Automation",
+      "website": "Website",
+      "audience": "Who do you build for?",
+      "audiencePlaceholder": "For example: real estate agencies, e-commerce brands, internal ops teams",
+      "message": "Anything else we should know?",
+      "submit": "Submit my application",
+      "submitting": "Submitting...",
+      "submitSignIn": "Sign in and send",
+      "terms": "I have read and accept the <link>Partner Program Terms</link> (version {version})."
+    },
+    "pending": {
+      "title": "Application received",
+      "body": "We are reviewing the application for {company}. You will get an e-mail as soon as it is decided, and this page will turn into your partner dashboard.",
+      "submittedOn": "Submitted on {date}"
+    },
+    "rejected": {
+      "title": "Your previous application was not accepted",
+      "note": "Our note: {note}",
+      "again": "You can apply again below."
+    },
+    "errors": {
+      "already_pending": "You already have an application under review.",
+      "already_partner": "You are already a partner.",
+      "missing_company": "Enter your company or brand name.",
+      "invalid_website": "Enter a full website address, starting with https://",
+      "too_long": "One of the fields is too long.",
+      "not_available_in_ce": "The partner program is not available on a self-hosted install.",
+      "generic": "Something went wrong. Try again.",
+      "terms_not_accepted": "Tick the box to accept the Partner Program Terms before applying.",
+      "terms_outdated": "The Partner Program Terms have just been updated. Reload the page to read the new version, then accept it.",
+      "not_partner": "Only partners and applicants have terms to accept."
+    },
+    "toasts": {
+      "applied": "Application sent",
+      "appliedBody": "We will reply by e-mail.",
+      "copied": "Copied",
+      "copyFailed": "Could not copy"
+    },
+    "dashboard": {
+      "inactive": "Your partner code is inactive, so new sign-ups are not attributed to you. Contact us if this is unexpected.",
+      "linkTitle": "Your partner link",
+      "linkHint": "Share this link. New accounts created through it get {credits} free credits and are attributed to you.",
+      "copyLink": "Copy link",
+      "validUntil": "Your code brings new sign-ups until {date}.",
+      "maxUses": "{count, plural, one {Your code can be used by # new account.} other {Your code can be used by up to # new accounts.}}",
+      "code": "Your code:",
+      "copyCode": "Copy code",
+      "yourRate": "Your rate: {percent}% of every paid invoice, for {months} months per customer.",
+      "badgeTitle": "Official partner",
+      "badgeBody": "Your gold badge shows next to your name on your profile and on the templates you publish.",
+      "badgeInactive": "Your badge shows again as soon as your partner code is active.",
+      "stats": {
+        "signups": "Sign-ups",
+        "paying": "Paying customers",
+        "onHold": "On hold",
+        "onHoldHint": "Inside the {days}-day refund window",
+        "payable": "Ready to be paid",
+        "paid": "Paid to you"
+      },
+      "lines": {
+        "title": "Commission history",
+        "empty": "No commission yet. Lines appear here as soon as a customer you referred pays an invoice.",
+        "date": "Invoice date",
+        "invoice": "Invoice (excl. tax)",
+        "commission": "Your commission",
+        "status": "Status",
+        "statusOnHold": "On hold until {date}",
+        "statusPayable": "Ready to be paid",
+        "statusPaid": "Paid on {date}",
+        "statusVoid": "Voided (refund or dispute)"
+      },
+      "payoutTitle": "How you get paid",
+      "payoutBody": "A commission becomes payable {days} days after the invoice, once the refund window has passed. We pay by bank transfer, monthly, once your payable balance reaches USD 50, and issue the invoice for you (self-billing) unless you prefer to send your own. Send your name or company, address, tax number and bank details (IBAN) to <email></email>.",
+      "tier": {
+        "title": "Your tier",
+        "names": {
+          "silver": "Silver",
+          "gold": "Gold",
+          "platinum": "Platinum"
+        },
+        "founder": "Founding partner",
+        "rate": "{percent}% on every paid invoice",
+        "progressLabel": "Progress to {tier}",
+        "progress": "{revenue} of {threshold} to reach {tier}",
+        "top": "You are at the highest tier.",
+        "topFounder": "Founding partner: Platinum for the whole of your participation, under the Partner Program Terms (clause 7.5).",
+        "hint": "An invoice counts toward your tier once it is {days} days old and was not refunded. Your volume never lowers your tier.",
+        "hintGeneric": "An invoice counts toward your tier once it can no longer be refunded. Your volume never lowers your tier."
+      }
+    },
+    "agreement": {
+      "titleFirst": "Accept the Partner Program Terms",
+      "bodyFirst": "Read and accept the <link>Partner Program Terms</link>, the contract of the partner program: until you do, no commission can be paid out to you.",
+      "titleUpdated": "The Partner Program Terms have changed",
+      "bodyUpdated": "Version {version} of the <link>Partner Program Terms</link> now applies. Please read it and confirm that you accept it.",
+      "accept": "I have read and accept the terms (version {version})",
+      "accepting": "Saving...",
+      "accepted": "You accepted the <link>Partner Program Terms</link> (version {version}) on {date}."
+    }
+  },
+  "partnersLanding": {
+    "metadata": {
+      "title": "Partner program for agencies and consultants",
+      "description": "Bring your clients to LiveContext and earn a recurring share of every invoice they pay, rising with your partner tier. An official partner badge and the right to host LiveContext for your clients."
+    },
+    "hero": {
+      "eyebrow": "Partner program",
+      "title": "Earn up to <rate>{max}%</rate> of every invoice your clients pay",
+      "titleGeneric": "Earn a share of every invoice your clients pay",
+      "lead": "For agencies, consultants and freelancers who build automation for clients. Bring them to LiveContext, deliver their workflows and apps, and earn on every invoice they pay, for {months, plural, one {# month} other {# months}} per client.",
+      "leadGeneric": "For agencies, consultants and freelancers who build automation for clients. Bring them to LiveContext, deliver their workflows and apps, and earn on every invoice they pay.",
+      "apply": "Become a partner",
+      "estimate": "See what you could earn",
+      "note": "Free to join. No minimum volume. Every application is reviewed by the team.",
+      "founder": "Founding partners: {percent}% from day one, for life",
+      "founderDays": "{days, plural, one {# day left} other {# days left}}"
+    },
+    "heroCard": {
+      "roleFounder": "Founding partner, Platinum from day one",
+      "role": "Partner for one year",
+      "thisMonth": "Commission in month {month}",
+      "perMonth": "/ month",
+      "fromClients": "from {count} clients on {plan} with {credits} credits",
+      "yearTotal": "Earned over the year",
+      "rate": "Rate reached",
+      "rateValue": "{percent}% ({tier})",
+      "disclosure": "Illustration: a fictional partner. Earnings are computed from our list prices and are not a promise of results.",
+      "chartLabel": "Example: a partner's monthly commission over one year, as their paying clients grow from {from} to {to}",
+      "month": "Month {month}"
+    },
+    "stats": {
+      "label": "Program terms",
+      "commissionValue": "Up to {max}%",
+      "commissionLabel": "of every paid invoice",
+      "monthsValue": "{months, plural, one {# month} other {# months}}",
+      "monthsLabel": "of commission for each client",
+      "joinValue": "{zero}",
+      "joinLabel": "to join, with no minimum volume",
+      "creditsValue": "{credits}",
+      "creditsLabel": "free credits for each client you bring"
+    },
+    "earnings": {
+      "eyebrow": "Your earnings",
+      "title": "What a partner earns, every month",
+      "lead": "Real list prices, billed monthly, at the Platinum rate ({percent}%). The bigger the account, the bigger the commission: a single large client already counts.",
+      "upTo": "Up to",
+      "perMonth": "/ month",
+      "perYear": "{amount} a year",
+      "agency": "Agency",
+      "ownTitle": "Run your own numbers",
+      "ownLead": "Move the sliders: the estimate follows the real tiers, month by month.",
+      "single": "One large client",
+      "large": "Large agency",
+      "clientsOn": "{count, plural, one {One client} other {# clients}} on {plan} with {credits} credits",
+      "billEach": "{bill} a month per client"
+    },
+    "tiers": {
+      "eyebrow": "Partner tiers",
+      "title": "Three tiers. Your rate climbs as your clients pay.",
+      "lead": "Every partner starts at Silver. When the invoices your clients pay reach a threshold, you move up on your own, and you never move back down.",
+      "perInvoice": "of every paid invoice, for {months, plural, one {# month} other {# months}} per client",
+      "rate": "{percent}%",
+      "equivalent": "About {count, plural, one {# client} other {# clients}} on {plan} with {credits} credits ({bill} a month), for a year",
+      "founderShortcut": "Founding partners start here",
+      "silver": {
+        "name": "Silver",
+        "when": "From the day you are approved"
+      },
+      "gold": {
+        "name": "Gold",
+        "when": "Once your clients have paid {amount}"
+      },
+      "platinum": {
+        "name": "Platinum",
+        "when": "Once your clients have paid {amount}"
+      },
+      "rules": {
+        "auto": {
+          "title": "Automatic",
+          "body": "You move up as soon as your clients' paid invoices reach the threshold. There is nothing to ask for."
+        },
+        "never": {
+          "title": "Never goes down",
+          "body": "A tier you reach is yours to keep. The new rate applies to every invoice paid after the change."
+        },
+        "settle": {
+          "title": "Counted after {days, plural, one {# day} other {# days}}",
+          "body": "An invoice counts toward a tier once it is {days, plural, one {# day} other {# days}} old and was not refunded."
+        }
+      },
+      "topTier": "Top tier"
+    },
+    "founder": {
+      "eyebrow": "Founding partners, until {date}",
+      "title": "Start at the top.",
+      "titleRate": "{percent}% from day one, for life.",
+      "body": "Until {date}, the team names a small group of founding partners among the applications it receives. A founding partner starts directly at Platinum, with no threshold to reach, and keeps it for life, under the Partner Program Terms.",
+      "points": {
+        "first": "The Platinum rate ({percent}%) from your very first client",
+        "life": "Platinum for life, under the Partner Program Terms",
+        "badge": "The partner badge, with Platinum on your profile"
+      },
+      "cta": "Apply as a founding partner",
+      "daysLeft": "{days, plural, one {day left to apply} other {days left to apply}}",
+      "closes": "Founding partners are named until {date}.",
+      "termsLink": "Read the Partner Program Terms",
+      "fine": "The team chooses founding partners among the applications received before {date}. Applying does not make you one automatically. “For life” means for the whole of your participation in the program, unless we end it under the Partner Program Terms (for example after 12 months without any commission).",
+      "plate": "Founding partner"
+    },
+    "calculator": {
+      "clients": "Paying clients you bring",
+      "founder": "If the team names me a founding partner (before {date})",
+      "founderGeneric": "If the team names me a founding partner",
+      "byMonth12": "By month 12, you earn",
+      "perMonth": "/ month",
+      "firstMonth": "Month 1",
+      "yearOne": "First year total",
+      "chartLabel": "Your monthly commission over the first year, coloured by tier",
+      "month": "Month {month}",
+      "legend": "{tier} {percent}%",
+      "pathStays": "You stay {tier} this year: bring more clients to move up.",
+      "pathReached": "{tier} from month {month}.",
+      "pathFounder": "{tier} from day one, for life.",
+      "disclaimer": "An estimate, not a promise: it assumes every client subscribes at the start on monthly billing and pays every month, with no refund. Commissions are computed on invoices excluding tax.",
+      "plan": "Their plan",
+      "plans": {
+        "starter": "Starter",
+        "pro": "Pro",
+        "team": "Team"
+      },
+      "credits": "Credits per month",
+      "bill": "{bill} a month per client",
+      "billHint": "List price of this plan and these credits, billed monthly, excluding tax."
+    },
+    "badge": {
+      "eyebrow": "The partner badge",
+      "title": "Your app stands out in the marketplace",
+      "body": "This is the LiveContext marketplace, where clients look for apps. Next to your name, the gold partner badge makes your apps stand out from the rest.",
+      "label": "Official LiveContext partner",
+      "disclosure": "Illustration: the partner, the app and the ratings shown are fictional. The listings around them are real marketplace apps.",
+      "oneBadge": "One badge for every tier. Your profile shows Silver, Gold or Platinum.",
+      "places": {
+        "profile": "On your public profile",
+        "apps": "On every app you publish",
+        "search": "In marketplace listings and search"
+      },
+      "you": "Your app",
+      "appTitle": "Invoice Autopilot",
+      "appDescription": "Reads supplier invoices from Gmail, extracts the totals and books them in QuickBooks.",
+      "marketplace": "LiveContext marketplace",
+      "search": "Search apps, workflows, agents",
+      "profile": "Your profile",
+      "profileApps": "{count, plural, one {# published app} other {# published apps}}",
+      "profileRating": "{rating} ({count, plural, one {# review} other {# reviews}})"
+    },
+    "how": {
+      "eyebrow": "How it works",
+      "title": "Four steps, no minimum volume",
+      "apply": {
+        "title": "Apply",
+        "body": "Tell us about your business and who you build for. It takes two minutes."
+      },
+      "link": {
+        "title": "Get your link",
+        "body": "Once approved you get a partner code, a tracked link and your partner dashboard."
+      },
+      "clients": {
+        "title": "Bring your clients",
+        "body": "Clients who sign up through your link get free credits to start. You build their automations and apps on LiveContext."
+      },
+      "earn": {
+        "title": "Earn every month",
+        "body": "You earn up to {platinum}% of every invoice they pay for {months, plural, one {# month} other {# months}}, payable after a refund window of {days, plural, one {# day} other {# days}}.",
+        "bodyGeneric": "You earn a share of every invoice they pay, paid after a short refund window."
+      }
+    },
+    "benefits": {
+      "eyebrow": "What else you get",
+      "title": "More than a commission",
+      "lead": "Everything you need to sell, deliver and run automation for your clients.",
+      "credits": {
+        "title": "Free credits for your clients",
+        "body": "Clients who sign up through your link start with free credits, on top of what their plan includes."
+      },
+      "hosting": {
+        "title": "Host it for your clients",
+        "body": "The LiveContext license lets you install and run it for each client, on their servers or yours, and bill for that work."
+      },
+      "apps": {
+        "title": "Deliver apps, not just workflows",
+        "body": "Give clients real interfaces, forms and dashboards on top of their automations, and sell a finished product."
+      },
+      "tracking": {
+        "title": "Live tracking",
+        "body": "Follow your sign-ups, paying customers and earnings in your partner dashboard, line by line."
+      },
+      "payout": {
+        "title": "Paid by bank transfer",
+        "body": "Each commission becomes payable after a short refund window, then is paid to you by bank transfer."
+      },
+      "team": {
+        "title": "A direct line to the team",
+        "body": "Tell us what your clients need. Partners help shape what we build next."
+      },
+      "visual": {
+        "creditsAmount": "+{credits}",
+        "creditsUnit": "free credits per client",
+        "signups": "Sign-ups",
+        "paying": "Paying",
+        "earned": "Earned",
+        "payout": "Payout",
+        "paid": "Paid",
+        "client": "Client {letter}",
+        "running": "Running",
+        "ask": "My clients keep asking for a Shopify trigger.",
+        "reply": "Noted, thanks! We will look into it.",
+        "team": "LiveContext team"
+      }
+    },
+    "faq": {
+      "eyebrow": "FAQ",
+      "title": "Questions from partners",
+      "cost": {
+        "question": "How much does it cost to join?",
+        "answer": "Nothing. There is no fee and no minimum volume."
+      },
+      "commission": {
+        "question": "How are commissions calculated?",
+        "answer": "You earn a share of each paid invoice, excluding tax, of the customers who signed up with your link, for {months, plural, one {# month} other {# months}} from their first payment: {silver}% as Silver, up to {platinum}% as Platinum. Each commission is held {days, plural, one {# day} other {# days}} in case of a refund, then becomes payable.",
+        "answerGeneric": "You earn a share of each paid invoice, excluding tax, of the customers who signed up with your link. Each commission is held for a short refund window, then becomes payable."
+      },
+      "payout": {
+        "question": "How and when am I paid?",
+        "answer": "Payable commissions are paid monthly by bank transfer, once your payable balance reaches USD 50 (Partner Program Terms, clause 8). Your partner dashboard shows what is on hold, what is ready to be paid and what was paid."
+      },
+      "clients": {
+        "question": "Which clients count?",
+        "answer": "New accounts created through your link or with your code. A customer is attributed to one partner only, and you cannot refer your own account."
+      },
+      "hosting": {
+        "question": "Can I install LiveContext for my clients?",
+        "answer": "Yes. The LiveContext license lets a service provider install, host and maintain it for each client, one deployment per client. Running it as your own multi-client platform needs a commercial license: write to us."
+      },
+      "credits": {
+        "question": "What do my clients get?",
+        "answer": "{credits} free credits when they sign up through your link, on top of what their plan includes.",
+        "answerGeneric": "Free credits when they sign up through your link, on top of what their plan includes."
+      },
+      "badge": {
+        "question": "When do I get the badge?",
+        "answer": "As soon as your application is approved. It is the same badge for every tier, and it shows as long as your partner code is active."
+      },
+      "tiers": {
+        "question": "How do the tiers work?",
+        "answer": "Every partner starts at Silver ({silver}%). Once the invoices that earn you a commission add up to {goldAmount}, you move to Gold ({gold}%); at {platinumAmount}, to Platinum ({platinum}%). An invoice counts once it is {settleDays, plural, one {# day} other {# days}} old and was not refunded. A tier never goes down, and the new rate applies to the invoices paid after the change."
+      },
+      "founder": {
+        "question": "What is a founding partner?",
+        "answer": "Until {date}, the team names founding partners among the applications it receives: apply with the form on this page. A founding partner starts directly at Platinum ({platinum}%), with no threshold to reach, and keeps it for life: for the whole of their participation, unless it is ended under the Partner Program Terms (for example after 12 months without any commission). After {date}, Platinum is reached on revenue like the other tiers."
+      }
+    },
+    "apply": {
+      "eyebrow": "Apply",
+      "title": "Apply in two minutes",
+      "body": "Tell us about your business and who you build for. We review every application and reply by e-mail.",
+      "question": "A question first?",
+      "contact": "Talk to us",
+      "points": {
+        "free": "Free, with no minimum volume",
+        "reviewed": "Every application is read by the team",
+        "reply": "An answer by e-mail"
+      },
+      "founderNote": "Applications received before {date} are also considered for founding partner: {percent}% from day one.",
+      "signInNote": "Fill it in now: we will ask you to sign in or create your free account when you send it, and keep what you typed.",
+      "sentTitle": "Application sent",
+      "sentBody": "We will review it and reply by e-mail. You can follow it on your partner page.",
+      "openDashboard": "Open my partner page",
+      "alreadyPartnerTitle": "You are already a partner",
+      "alreadyPartnerBody": "Your link, your tier and your earnings are on your partner page."
+    }
+  },
   "avatarPicker": {
     "customize": "Customize",
     "toolLabel": "Tool badge",
@@ -98,6 +499,45 @@
     "shortcutKeysMac": "⌘K"
   },
   "reward": {
+    "personalOffer": {
+      "applied": "Personal offer applied",
+      "appliedUntil": "Personal offer applied. Choose before {date}.",
+      "reservedUntil": "Your offer is reserved for this checkout until {date}.",
+      "reviewRequired": "Your first payment needs review. No bonus has been added. Contact support before another checkout.",
+      "usedWithoutOffer": "Your first paid subscription used this offer eligibility without an offer. No bonus was added.",
+      "granted": "{credits} bonus PAYG credits added.",
+      "usedWithoutBonus": "Your first paid subscription completed with no bonus credits for this pack.",
+      "reversed": "The bonus credits for this offer were reversed after the payment changed status.",
+      "selectedPlan": "Selected plan",
+      "returnToWork": "Return to your work",
+      "attachFailed": "The offer could not be attached to this payment. Please try again.",
+      "paymentPending": "Payment is pending. Your bonus has not been added yet.",
+      "processing": "Your bonus is being checked after payment.",
+      "changeCode": "Change code",
+      "checking": "Checking your personal offer...",
+      "signIn": "Sign in to see your personal offer.",
+      "bonus": "+{credits} one-time PAYG credits after payment (PAYG value {value}).",
+      "annualTotal": "Billed annually: {amount}, before tax.",
+      "noBonus": "Bonus for this pack: 0 credits.",
+      "nextEligible": "Bonus starts at {credits} credits per month.",
+      "firstPurchaseUsed": "Your first paid subscription uses this one-time offer eligibility, even if this pack has no bonus.",
+      "planUnavailable": "No bonus is available for this plan and pack.",
+      "verifyUnavailable": "Could not verify your bonus. Try again before checkout.",
+      "continueWithout": "Continue without the offer",
+      "useOffer": "Use my offer",
+      "errors": {
+        "generic": "This personal offer could not be verified. Try again.",
+        "expired": "This personal offer has expired.",
+        "alreadyUsed": "This personal offer has already been used.",
+        "conflict": "Another conversion benefit is already attached to this account.",
+        "notEligible": "This personal offer is not available for this account.",
+        "checkoutActive": "A checkout with this offer is already in progress.",
+        "unavailable": "This personal offer is unavailable right now.",
+        "firstPaymentRequired": "This checkout has no positive first payment, so the bonus cannot apply. Choose a paid plan or contact support.",
+        "paymentPreviewUnavailable": "We could not verify the first payment amount. No payment was started. Try again or contact support.",
+        "reviewRequired": "Your first payment needs review. No bonus was added. Contact support before another checkout."
+      }
+    },
     "page": {
       "title": "Refer & earn",
       "subtitle": "Invite friends and earn credits when they subscribe, or redeem a code you received."
@@ -124,9 +564,11 @@
     "inline": {
       "toggle": "Have a code?",
       "pending": "Code {code} is waiting: apply it",
-      "apply": "Apply"
+      "apply": "Apply",
+      "close": "Close"
     },
     "redeem": {
+      "personalOfferReady": "Personal offer selected. Its bonus is added only after your first paid subscription.",
       "title": "Redeem a code",
       "subtitle": "Have a referral or promo code? Enter it here.",
       "placeholder": "Enter your code",
@@ -144,6 +586,12 @@
       "signedOutBodyWithCode": "Sign in or create a free account. The code {code} is applied automatically once you are in.",
       "signedOutCta": "Sign in or create an account",
       "errors": {
+        "offerUnavailable": "This offer is not available for this account.",
+        "offerExpired": "This offer has expired.",
+        "offerAlreadyUsed": "This offer has already been used.",
+        "offerNotEligible": "This account is not eligible for this offer.",
+        "offerConflict": "Another conversion benefit is already attached.",
+        "offerCheckoutActive": "A checkout with this offer is already in progress.",
         "invalidCode": "This code doesn't exist.",
         "notRedeemable": "This code isn't available right now.",
         "alreadyRedeemed": "You've already redeemed a code.",
@@ -158,6 +606,13 @@
         "cloudLinkRequired": "Connect your cloud account to redeem a code.",
         "generic": "Could not redeem this code."
       }
+    },
+    "partnerProgram": {
+      "title": "Partner program",
+      "subtitle": "For agencies and freelancers who build for clients",
+      "body": "Not the same as inviting friends: partners earn up to {percent}% of every invoice their clients pay, for {months} months, with an official badge.",
+      "bodyGeneric": "Not the same as inviting friends: partners earn a share of every invoice their clients pay, with an official badge.",
+      "cta": "Discover the partner program"
     }
   },
   "interfaceLinkGate": {
@@ -948,6 +1403,7 @@
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# low-credit bridge} other {# low-credit bridges}}",
           "ORG_INVITATION_PENDING": "{count, plural, one {# organization invitation} other {# organization invitations}}",
           "BADGE_UNLOCKED": "{count, plural, one {# new trophy} other {# new trophies}}",
+          "CREATOR_PUBLISHED": "{count, plural, one {New app from a creator you follow} other {# new apps from creators you follow}}",
           "BUDGET_REACHED": "{count, plural, one {# workflow stopped on its spending cap} other {# workflows stopped on their spending cap}}",
           "CREDIT_LOW": "{count, plural, one {Credits running low} other {Credits running low (#)}}",
           "CREDIT_EXHAUSTED": "{count, plural, one {Out of credits} other {Out of credits (#)}}",
@@ -1151,7 +1607,10 @@
       "waitingWebhookShort": "Waiting for webhook...",
       "sendMessageTrigger": "Send a message to trigger the workflow",
       "waitingMessage": "Waiting for message...",
-      "loadingDetails": "Loading run details..."
+      "loadingDetails": "Loading run details...",
+      "headerRunning": "Run {id}...",
+      "headerDone": "Run {id} {status}",
+      "headerDoneIn": "Run {id} {status} in {duration}"
     },
     "tableView": {
       "notFound": "Table not found",
@@ -1714,6 +2173,7 @@
     "noModelMatchesFilters": "No model matches these filters",
     "clearModelFilters": "Clear filters",
     "resetModelMenu": "Reset",
+    "unlistedModels": "Hidden models",
     "showModeToggle": "Show mode toggle",
     "hideModeToggle": "Hide mode toggle",
     "refresh": "Refresh",
@@ -1783,6 +2243,7 @@
     "showcaseRunHint": "Display results from a past run as a live demo",
     "privateNoShowcaseHint": "Private sharing - showcase is optional. You can share without a run.",
     "workflowTriggerWarning": "This version contains a workflow trigger and cannot be shared. Remove the workflow trigger node first.",
+    "customApiCannotShare": "Custom APIs cannot be shared. This version uses {apis}, defined only in your own account, so anyone installing this app would get nodes that cannot run. Remove those nodes, or share privately instead.",
     "noInterfaceCannotShare": "This version has no interface, so it can't be shared yet. Add at least one interface to your workflow first - it becomes the application visitors open.",
     "previewInterface": "Interface",
     "selectInterface": "Select an interface",
@@ -1964,6 +2425,7 @@
     "filterInterfaces": "Interfaces",
     "filterAgents": "Agents",
     "filterByType": "Filter by type",
+    "filterByCategory": "Filter by category",
     "sortBy": "Sort by",
     "sortPopular": "Most liked",
     "sortRating": "Best rated",
@@ -2109,6 +2571,9 @@
       "familyInterfaces": "Interfaces",
       "familyAgents": "Agents",
       "familyApplications": "Applications",
+      "customApiErrorTitle": "Publishing blocked: this agent uses a custom API",
+      "customApiErrorIntro": "A custom API is defined only in your own account, so it cannot be shared: anyone installing this agent would get tools that cannot run. The APIs below are used by the agent, by a workflow it can run, or by one of its sub-agents.",
+      "customApiErrorFix": "Remove those tools from the agent's selection (a catalog integration can often replace them), or publish with Private visibility, which keeps the agent in your own account where the custom API works.",
       "snapshotTooLargeTitle": "Publication too large",
       "snapshotTooLargeMessage": "The publication exceeds the maximum size ({size} MB, max {max} MB).",
       "snapshotTooLargeRowsMessage": "The table {name} has {items} rows (max {max} rows per published table).",
@@ -3004,6 +3469,7 @@
       "noResourcesAvailable": "No resources available",
       "resourcesSelected": "{count} of {total} resources",
       "duplicateName": "An agent named \"{name}\" already exists. Choose a different name.",
+      "useSuggestedName": "Use \"{name}\"",
       "memoryAccessLabel": "Long-term memory",
       "memoryAccessInfo": "What this agent saves is added to the context of every agent in the workspace. Set it to recall-only for an agent that should use the workspace facts without changing them.",
       "memoryAccessWrite": "Can save and delete",
@@ -3404,6 +3870,59 @@
     }
   },
   "adminCredits": {
+    "personalOffers": {
+      "title": "Personal offers",
+      "subtitle": "Configure the first paid subscription bonus. Draft changes affect only future offers.",
+      "loading": "Loading offers...",
+      "loadFailed": "Could not load offers.",
+      "retry": "Retry",
+      "version": "Policy version",
+      "versionOption": "Version {version} ({state})",
+      "newDraft": "New draft",
+      "newDraftFromVersion": "Copy to new draft",
+      "activate": "Activate",
+      "resume": "Resume",
+      "pause": "Pause",
+      "label": "Internal name",
+      "waitHours": "Wait after credit exhaustion (hours)",
+      "validityHours": "Offer validity (hours)",
+      "checkoutHoldMinutes": "Checkout hold (minutes)",
+      "reminderHours": "Reminder before expiry (hours)",
+      "paygCreditsPerUsd": "PAYG credits per USD",
+      "reminderEnabled": "Send one reminder",
+      "noStacking": "Personal offers do not stack with referral or partner conversion benefits.",
+      "matrixTitle": "Bonus matrix",
+      "matrixHelp": "Enter bonus credits for each offered plan and monthly pack. Leave a cell blank to omit the combination; enter 0 for a valid purchase with no bonus.",
+      "monthlyCredits": "Monthly credits",
+      "cellLabel": "Bonus credits for {plan} with {credits} monthly credits",
+      "notAvailable": "Not available",
+      "saveDraft": "Save draft",
+      "saving": "Saving...",
+      "invalid": "Enter a name and valid nonnegative amounts and delays.",
+      "saved": "Draft saved.",
+      "saveFailed": "Could not save the draft.",
+      "activateConfirm": "Activate this policy for future offers? Existing offers keep their issued terms.",
+      "pauseConfirm": "Pause new offers and remaining sends? Issued offers remain valid.",
+      "activated": "Policy activated.",
+      "paused": "Policy paused.",
+      "stateFailed": "Could not change the policy or code status.",
+      "issuedTitle": "Issued offers",
+      "recipient": "Recipient",
+      "issuedAt": "Issued",
+      "expiresAt": "Expires",
+      "status": "Status",
+      "action": "Action",
+      "disable": "Disable",
+      "disableConfirm": "Disable this issued offer? This action is audited.",
+      "disabled": "Offer disabled.",
+      "noCodes": "No offers issued yet.",
+      "codeStatuses": { "available": "Available", "disabled": "Disabled", "expired": "Expired", "checkout_open": "Checkout open", "pending_payment": "Payment pending", "processing": "Processing", "review_required": "Review required", "granted": "Granted", "clawed_back": "Reversed", "no_bonus": "Used without bonus", "already_used": "Already used", "conflict": "Conflicting benefit", "none": "None" },
+      "states": {
+        "draft": "Draft",
+        "active": "Active",
+        "paused": "Paused"
+      }
+    },
     "title": "Grant credits & plans",
     "subtitle": "Manually add credits or assign a subscription plan to a specific user. Every action is atomic and audited.",
     "adminOnlyBadge": "Admin only",
@@ -4054,8 +4573,22 @@
       "allTiers": "All tiers",
       "filterByState": "State",
       "allStates": "All states",
-      "stateOn": "On",
+      "stateOn": "Listed",
       "stateOff": "Off",
+      "stateUnlisted": "Unlisted",
+      "listing": {
+        "unlist": "Unlist: keep it available but stop offering it in the pickers",
+        "list": "List it again",
+        "unlistFromOff": "Make it available again, unlisted: what uses it runs on it, the pickers do not offer it",
+        "unlistedTooltip": "Unlisted: still available, so the agents, workflows and chats that use it keep running on it. Not offered in the pickers (the message composer shows it under hidden models) and never the default. Its replacement is paused."
+      },
+      "replacementPaused": "(paused)",
+      "replacementPausedTooltip": "Not applied while the model is unlisted: whatever uses it keeps running on it. It applies again if you switch the model off.",
+      "newBadge": "New",
+      "newBadgeTooltip": "Added to the catalog on {date}",
+      "filterNew": "New ({count})",
+      "filterNewTooltip": "Models added to the catalog in the last 14 days",
+      "bulkUnlist": "Unlist",
       "clearFilters": "Clear filters",
       "allProviders": "All providers",
       "providerEnabled": "Provider on",
@@ -4519,6 +5052,10 @@
       }
     },
     "wizard": {
+      "securityNote": {
+        "title": "Encrypted in transit and at rest",
+        "body": "Your credentials travel over TLS and are stored encrypted with AES-256. They are only used to run your automations."
+      },
       "title": "Connect {name}",
       "description": "Connect your account to continue.",
       "successTitle": "Connected!",
@@ -5760,6 +6297,11 @@
         "supportPriority": "Priority 24/7",
         "supportSla": "Priority + SLA"
       }
+    },
+    "planGrid": {
+      "previous": "Previous plans",
+      "next": "Next plans",
+      "goTo": "Show plans from position {n} of {total}"
     },
     "businessPlans": {
       "title": "For teams & organizations",
@@ -7010,25 +7552,19 @@
       "retryCountLabel": "Retry on fail",
       "retryCountHelp": "Extra attempts after a failure (0-10). 0 = no retry.",
       "retryBackoffLabel": "Retry backoff (ms)",
-      "retryBackoffHelp": "Delay between attempts, in milliseconds.",
+      "retryBackoffHelp": "Delay between attempts, in milliseconds (at most 60000). When the provider asks to wait longer than this, its wait is honoured; a provider asking for more than 60 seconds ends the retries.",
+      "retryOnLabel": "Retry on",
+      "retryOnDefault": "Any failure except a permanent refusal",
+      "retryOnRateLimit": "Only when the provider signals a rate limit (429, 503, or a 4xx with a Retry-After or a rate-limit message)",
+      "retryOnHelp": "A request the provider refused as invalid, unauthorized or not found is not retried, unless the refusal is a rate limit; neither is a refusal by the platform for missing credits or a budget. The second option is safer for a node that publishes or writes: it does not re-send after a timeout or most server errors, although a 503 can still arrive after a write went through.",
       "continueOnFailureLabel": "Continue on fail",
-      "continueOnFailureHelp": "If every attempt fails, keep running the next nodes instead of skipping them.",
-      "continueOnFailureBlockedTooltip": "Not available on branching nodes: a failed decision, switch or option selects no branch, so continuing would run all branches at once.",
+      "continueOnFailureHelp": "If every attempt fails, the next nodes still run instead of being skipped, unless the failure is a refusal for missing credits or a budget. The node stays FAILED, and the run ends as it would without this setting. Inside a split, a failed item goes on to the next nodes.",
+      "continueOnFailureBlockedTooltip": "Not available on branching nodes: a failed decision, switch, option, loop, classify or guardrail selects no branch, so continuing would run all branches at once.",
       "timeoutLabel": "Timeout (ms)",
       "timeoutHelp": "Best effort, applies per attempt. 0 = disabled.",
       "executeOnceLabel": "Execute once",
       "executeOnceHelp": "In a split, run for the first item only.",
-      "executeOnceBlockedTooltip": "Not available on split, aggregate, merge or loop nodes: these coordinate all split items, so skipping items would break them.",
-      "providerRetryLabel": "Provider retry budget (seconds)",
-      "providerRetryPlaceholder": "Platform decides",
-      "providerRetryHelp": "Leave empty to let the platform wait out a provider's rate limit. Set 0 if this workflow already paces its own calls.",
-      "providerRetryHelpCededToNode": "This node retries on its own, so the platform does not retry the call underneath it. Set a value to change that.",
-      "providerRetryHelpBoundedByTimeout": "This node's timeout leaves {seconds}s for the platform to wait out a rate limit. Set a value to change that.",
-      "providerRetryHelpCappedByTimeout": "This node's timeout caps it at {seconds}s. Raise the timeout, or lower this, so the two agree.",
-      "providerRetryInfoDefault": "Empty: when a provider answers “too many requests”, the platform waits the delay it asked for and sends the call again, within its own time budget.",
-      "providerRetryInfoZero": "0: the call is never re-sent. Use this when your workflow already handles pacing, with a loop or a retry on this node, because the two would multiply the requests.",
-      "providerRetryInfoCap": "A wait longer than the platform's budget is reduced to it: the step is waiting inside one call, and waiting past that would fail the step even though the call went through.",
-      "providerRetryInfoRunning": "The node stays running while it waits, and once it finishes it shows how many times the call was re-sent."
+      "executeOnceBlockedTooltip": "Not available on split, aggregate, merge or loop nodes: these coordinate all split items, so skipping items would break them."
     },
     "mock": {
       "title": "Mock output",
@@ -11044,15 +11580,23 @@
     }
   },
   "profile": {
+    "partnerAccount": "Official partner",
     "verifiedAccount": "Verified account",
     "metaTitle": "Profile",
     "metaDescription": "View this creator's public profile and the apps they've published.",
     "notFoundTitle": "Profile not found",
     "notFoundSubtitle": "This profile doesn't exist or is private.",
     "message": "Message",
+    "follow": "Subscribe",
+    "following": "Subscribed",
+    "followHint": "Get notified when this creator publishes a new app",
+    "unfollowHint": "Unsubscribe: stop notifications for this creator's new apps",
+    "followError": "Couldn't update your subscription. Try again.",
     "messageComingSoon": "Direct messages are coming soon",
     "appsLabel": "apps",
+    "followerCount": "{count, plural, one {<strong>#</strong> subscriber} other {<strong>#</strong> subscribers}}",
     "memberSince": "Member since",
+    "founderMemberSince": "Founder member since",
     "publishedApps": "Published apps",
     "noApps": "No published apps yet",
     "noAppsHint": "Apps published to the marketplace will show up here.",
@@ -11075,7 +11619,12 @@
     "cancel": "Cancel",
     "saving": "Saving…",
     "saved": "Saved",
-    "viewPublicProfile": "View public profile"
+    "viewPublicProfile": "View public profile",
+    "partnerTier": {
+      "silver": "Silver partner",
+      "gold": "Gold partner",
+      "platinum": "Platinum partner"
+    }
   },
   "dm": {
     "sidebarTitle": "Messages",
@@ -11321,8 +11870,8 @@
             "text": "Two timeouts are in play here and they are independent. The HTTP step has its own transport timeout (5000 ms), while nodePolicy.timeoutMs (15000 ms) caps each attempt of the call itself. Keep the step-level one above the transport one, otherwise the wrapper fires first and hides the real error. And be careful what a timeout means: you stop WAITING for the answer, but the remote server may well have received and processed your request. For anything that writes data, make the call safe to repeat."
           },
           "continueOnFailure": {
-            "label": "continueOnFailure keeps the run alive",
-            "text": "Without it, a failed step marks everything after it as skipped. With it, the run carries on, though the step itself still shows as FAILED. On a hard failure the step does NOT produce the fields you expected (success and data are absent), so an expression pointing at them resolves to nothing and the decision below falls through to else. continueOnFailure is refused on a decision, a switch or an option: a branching step that failed chose no port."
+            "label": "continueOnFailure keeps the run going",
+            "text": "Without it, a failed step marks everything after it as skipped. With it, the steps after it still run, whatever started the run (execute, a trigger, a schedule or the Run button), though the step itself still shows as FAILED and the run ends as it would without it. After a hard failure (an unreachable host, a timeout, an invalid URL) the step does NOT produce the fields you expected (success and data are absent), so an expression pointing at them resolves to nothing and the decision below falls through to else. An HTTP 4xx or 5xx is different: the step succeeds with success set to false, and the decision below routes it to else. continueOnFailure is refused on a decision, a switch, an option, a loop, a classify or a guardrail: a branching step that failed chose no port."
           },
           "stopOnError": {
             "label": "Failing on purpose",
@@ -11333,7 +11882,7 @@
           "succeeded": "Call succeeded",
           "failed": "Call failed"
         },
-        "stopMessage": "The API call failed after every retry attempt."
+        "stopMessage": "The API call returned an error."
       },
       "errorHandler": {
         "title": "React to a failure",
@@ -11818,7 +12367,9 @@
       "generic": "Something went wrong.",
       "notTheNextOccurrence": "Only the next run can be moved on its own. Moving a later one would cancel every run before it. Use \"Every occurrence\" instead, or move the next run.",
       "viewerRole": "Your role in this workspace does not allow changing schedules.",
-      "scheduleRejected": "The schedule could not be changed. It may have been archived."
+      "scheduleRejected": "The schedule could not be changed. It may have been archived.",
+      "agentNameTaken": "Another active agent is already named \"{name}\". Rename this one first, for example to \"{suggestion}\", then resume it.",
+      "agentNameTakenNoSuggestion": "Another active agent is already named \"{name}\". Rename this one first, then resume it."
     },
     "toasts": {
       "movedTitle": "Moved",
@@ -11853,6 +12404,7 @@
     "publicHeading": "Trophies",
     "publicEmpty": "No trophies yet.",
     "showAll": "Show all",
+    "showMore": "Show {count, plural, one {# more trophy} other {# more trophies}}",
     "showLess": "Show less",
     "detail": {
       "requirementLabel": "How to earn it",
@@ -12339,6 +12891,7 @@
     "about": "About",
     "careers": "Careers",
     "soon": "Soon",
+    "partners": "Partners",
     "contact": "Contact",
     "privacy": "Privacy Policy",
     "terms": "Terms of Service",
@@ -15522,7 +16075,7 @@
       "findChats": "Find my chats",
       "findChatsHint": {
         "telegram": "Lists the chats that wrote to your bot recently. Only works before the bot is connected: after that, type the id below.",
-        "slack": "Lists the channels the app was invited to, and your direct messages.",
+        "slack": "Lists your workspace's public channels, the private ones the app was invited to, and your direct messages.",
         "discord": "Lists the channels of the servers your bot was added to.",
         "teams": "Lists your Teams chats."
       },
@@ -15543,13 +16096,13 @@
       "typeChatLabel": "Or type the chat id",
       "typeChatHint": {
         "telegram": "For a group: its id, which starts with -100. For a public channel: @name. Never your bot's own @name.",
-        "slack": "For a channel not listed: its id (right-click the channel, View channel details, at the bottom).",
+        "slack": "For a channel not listed: its name, like #general, or its id (right-click the channel, View channel details, at the bottom). The app joins a public channel by itself.",
         "discord": "For a channel not listed: its id (Developer Mode on, right-click the channel, Copy Channel ID).",
         "teams": "For a chat not listed: its conversation id."
       },
       "chatIdPlaceholder": {
         "telegram": "123456789, -1001234567890 or @mychannel",
-        "slack": "C0123456789",
+        "slack": "#general or C0123456789",
         "discord": "123456789012345678",
         "whatsapp": "+33612345678",
         "teams": "19:abc123@thread.v2"
@@ -15580,7 +16133,7 @@
         },
         "slack": {
           "1": "Connect Slack below and approve the app in your workspace.",
-          "2": "For a channel, type /invite followed by the app name in it. A direct message needs nothing.",
+          "2": "For a private channel, type /invite followed by the app name in it. A public channel or a direct message needs nothing: the app joins a public channel by itself.",
           "3": "Pick the channel or conversation with Find my chats."
         },
         "discord": {
@@ -15718,6 +16271,42 @@
     }
   },
   "partnerProgram": {
+    "applications": {
+      "invalidPercent": "Commission: enter a number between 0 and 100, or leave it empty for the default.",
+      "title": "Applications",
+      "subtitle": "People who applied from the partner page. Approving creates their partner code with the default terms and e-mails them.",
+      "showDecided": "Show decided too",
+      "showPending": "Show pending only",
+      "loading": "Loading applications...",
+      "error": "Could not load the applications.",
+      "empty": "No pending application.",
+      "emptyAll": "No application yet.",
+      "submitted": "Submitted {date}",
+      "noEmail": "No e-mail on the account",
+      "audience": "Builds for",
+      "message": "Message",
+      "note": "Note sent",
+      "codeOverride": "Code (optional)",
+      "percentOverride": "Commission % (optional)",
+      "approve": "Approve",
+      "reject": "Reject",
+      "notePlaceholder": "Note for the applicant (optional)",
+      "confirmReject": "Send rejection",
+      "cancel": "Cancel",
+      "status": {
+        "pending": "Pending",
+        "approved": "Approved",
+        "rejected": "Rejected"
+      },
+      "toasts": {
+        "approvedTitle": "Partner approved",
+        "approvedCode": "Code {code} created.",
+        "rejectedTitle": "Application rejected",
+        "mailed": "The applicant was e-mailed.",
+        "notMailed": "No e-mail could be sent: tell the applicant yourself."
+      },
+      "founder": "Founding partner (Platinum for life)"
+    },
     "title": "Partner program",
     "subtitle": "Creator codes to let a creator try the product, and partner codes with a revenue share for their audience.",
     "selfHosted": {
@@ -15754,7 +16343,8 @@
       "holdDays": "Hold before payable (days)",
       "holdDaysHint": "Covers the refund window: a refunded payment cancels its commission.",
       "partnerMaxUses": "Maximum sign-ups (optional)",
-      "partnerMaxUsesHint": "Empty = no limit. Bounds what a public link can hand out."
+      "partnerMaxUsesHint": "Empty = no limit. Bounds what a public link can hand out.",
+      "commissionTierHint": "The partner earns the higher of this rate and the rate of their tier."
     },
     "list": {
       "title": "Codes",
@@ -15780,16 +16370,38 @@
       "copyLink": "Copy link",
       "activate": "Enable",
       "deactivate": "Disable",
-      "markPaid": "Mark paid"
+      "markPaid": "Mark paid",
+      "tiers": {
+        "silver": "Silver",
+        "gold": "Gold",
+        "platinum": "Platinum"
+      },
+      "founder": "Founder",
+      "makeFounder": "Make founder",
+      "endFounder": "End founder status",
+      "confirmEndFounder": "Confirm: back to the earned tier",
+      "confirmFounder": "Confirm: Platinum for life",
+      "termsAccepted": "Terms {version} accepted on {date}",
+      "termsOutdated": "Terms {version} accepted on {date}, not the current version",
+      "termsMissing": "Terms not accepted: no payout possible"
     },
     "toasts": {
       "createdTitle": "Code created",
       "failureTitle": "Action failed",
       "copied": "Link copied",
       "paidTitle": "Commissions settled",
-      "paidMessage": "{lines} lines marked paid ({amount})."
+      "paidMessage": "{lines} lines marked paid ({amount}).",
+      "founderEndedTitle": "Founder status ended",
+      "founderEndedMessage": "The partner is back on the tier their revenue earned, from their next commission.",
+      "founderTitle": "Founding partner",
+      "founderMessage": "Platinum for life, from their next commission."
     },
     "errors": {
+      "existing_code_inactive": "This applicant already has a partner code, but it is disabled or expired. Re-enable it in the list below, then approve.",
+      "too_long": "The note is too long (500 characters at most).",
+      "invalid_percent": "Enter a percentage between 0 and 100, for example 40 or 12.5.",
+      "not_pending": "This application was already decided.",
+      "application_not_found": "This application no longer exists.",
       "adminOnly": "Only platform administrators can manage the partner program.",
       "generic": "Something went wrong. Try again.",
       "code_taken": "This code is already in use.",
@@ -15802,7 +16414,19 @@
       "missing_partner": "Enter the partner account email.",
       "not_available_in_ce": "The partner program is not available on a self-hosted install.",
       "code_generation_failed": "Could not generate a free code. Try again.",
-      "missing_body": "The request was empty."
+      "missing_body": "The request was empty.",
+      "not_founder": "This partner is not a founding partner.",
+      "founder_closed": "The founder window has closed: no new founding partners can be named.",
+      "partner_code_not_found": "This code is not a partner code.",
+      "terms_not_accepted": "This partner has not accepted the Partner Program Terms yet: no payout is possible until they do."
     }
+  },
+  "realtime": {
+    "reconnecting": "Live updates interrupted. Reconnecting...",
+    "reconnectingHint": "What you see may be out of date until the connection is back.",
+    "reload": "Reload",
+    "dismiss": "Dismiss",
+    "unavailable": "Live updates are not reaching this page.",
+    "unavailableHint": "Pages still work, but changes made elsewhere only show after a reload. If this persists, a proxy or firewall may be blocking the live connection."
   }
 }

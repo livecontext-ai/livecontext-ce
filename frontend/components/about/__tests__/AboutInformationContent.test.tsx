@@ -20,7 +20,7 @@ describe('AboutInformationContent social links', () => {
       Instagram: 'https://www.instagram.com/livecontext.ai/',
       GitHub: 'https://github.com/livecontext-ai',
       TikTok: 'https://www.tiktok.com/@livecontextai',
-      Discord: 'https://discord.gg/5gTuUwhkJ',
+      Discord: 'https://discord.gg/ySUXvs7vq2',
     };
 
     for (const [name, href] of Object.entries(expected)) {

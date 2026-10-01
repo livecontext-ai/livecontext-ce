@@ -158,6 +158,44 @@ describe('ModelPicker - the classify node offers both engines', () => {
     expect(screen.getAllByText('Anthropic').length).toBeGreaterThan(0);
   });
 
+  it('does not offer an UNLISTED decision model (V554), its provider included when nothing else is left', () => {
+    h.categoryData = {
+      ...DECISION_CATALOG,
+      providers: [provider('typesafe', [{ ...model('typesafe', 'jev-legacy', 'decision'), unlisted: true }], 20)],
+    };
+    render(
+      <ModelPicker
+        value={{ provider: '', id: '' }}
+        onChange={noop}
+        filterCapability={CLASSIFY_ENGINES}
+        unionCategory="classification"
+      />,
+    );
+
+    expect(screen.queryByText('TypeSafe')).toBeNull();
+    expect(screen.queryByText('jev-legacy')).toBeNull();
+  });
+
+  it('still shows an unlisted decision model a classify node already runs on', () => {
+    h.categoryData = {
+      ...DECISION_CATALOG,
+      providers: [provider('typesafe', [
+        model('typesafe', 'jev-latest', 'decision'),
+        { ...model('typesafe', 'jev-legacy', 'decision'), unlisted: true },
+      ], 20)],
+    };
+    render(
+      <ModelPicker
+        value={{ provider: 'typesafe', id: 'jev-legacy' }}
+        onChange={noop}
+        filterCapability={CLASSIFY_ENGINES}
+        unionCategory="classification"
+      />,
+    );
+
+    expect(screen.getAllByText('jev-legacy').length).toBeGreaterThan(0);
+  });
+
   it('requests the classification slice, because the chat answer never contains it', () => {
     render(
       <ModelPicker

@@ -95,8 +95,63 @@ public record PendingAgent(
      * Nullable for Redis back-compat: a pre-field serialized PendingAgent deserialises to {@code
      * null}, which the completion treats as iteration 0 (the prior behavior).
      */
-    Integer loopIteration
+    Integer loopIteration,
+    /**
+     * Which attempt of the node's execution this dispatch is: 1 for the first, n for the one
+     * {@code AgentAttemptScheduler} sends after n-1 failures under the node's
+     * {@code nodePolicy.retryCount}. 1 for an entry serialized before the field existed.
+     */
+    int attempt,
+    /**
+     * The node's {@code nodePolicy.timeoutMs} (0 = none): how long this attempt waits for the
+     * agent's answer, counted from {@code startedAt}. Carried on the entry so the recovery scan
+     * can still end the attempt when the precise timer was lost with its instance.
+     */
+    long timeoutMs
 ) {
+    public PendingAgent {
+        if (attempt < 1) attempt = 1;
+        if (timeoutMs < 0) timeoutMs = 0;
+    }
+
+    /**
+     * Constructor of the shape before {@code attempt}/{@code timeoutMs}: a first attempt with no
+     * timeout, which is what every entry was.
+     */
+    public PendingAgent(
+        String correlationId, String runId, String nodeId, String nodeLabel,
+        String dagTriggerId, int epoch, int itemIndex, String itemId,
+        String agentType, String tenantId, Map<String, Object> splitItemData,
+        Map<String, Object> resolvedInputData, String conversationId, String streamId,
+        String executionId, String model, String resolvedSystemPrompt,
+        String resolvedUserPrompt, Instant startedAt, String organizationId, Integer loopIteration
+    ) {
+        this(correlationId, runId, nodeId, nodeLabel, dagTriggerId, epoch, itemIndex,
+             itemId, agentType, tenantId, splitItemData, resolvedInputData,
+             conversationId, streamId, executionId, model, resolvedSystemPrompt,
+             resolvedUserPrompt, startedAt, organizationId, loopIteration, 1, 0L);
+    }
+
+    /**
+     * The next attempt of this dispatch: a new correlation (and, for an agent with a conversation,
+     * a new execution and stream), the same node, item, loop turn and timeout.
+     */
+    public PendingAgent nextAttempt(String newCorrelationId, String newExecutionId, String newStreamId,
+                                    Instant sendAt) {
+        return new PendingAgent(newCorrelationId, runId, nodeId, nodeLabel, dagTriggerId, epoch, itemIndex,
+             itemId, agentType, tenantId, splitItemData, resolvedInputData,
+             conversationId, newStreamId, newExecutionId, model, resolvedSystemPrompt,
+             resolvedUserPrompt, sendAt, organizationId, loopIteration, attempt + 1, timeoutMs);
+    }
+
+    /** This entry, started at {@code sentAt}: the moment its request actually left. */
+    public PendingAgent sentAt(Instant sentAt) {
+        return new PendingAgent(correlationId, runId, nodeId, nodeLabel, dagTriggerId, epoch, itemIndex,
+             itemId, agentType, tenantId, splitItemData, resolvedInputData,
+             conversationId, streamId, executionId, model, resolvedSystemPrompt,
+             resolvedUserPrompt, sentAt, organizationId, loopIteration, attempt, timeoutMs);
+    }
+
     /**
      * Back-compat constructor for call sites that pre-date PR20 organizationId.
      * Delegates with {@code organizationId = null}, which treats the execution

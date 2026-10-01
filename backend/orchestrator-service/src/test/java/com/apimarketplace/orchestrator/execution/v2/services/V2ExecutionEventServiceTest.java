@@ -673,4 +673,38 @@ class V2ExecutionEventServiceTest {
                 org.mockito.ArgumentMatchers.<String>any());
         }
     }
+    @Nested
+    @DisplayName("emitNodeAsyncRunning()")
+    class EmitNodeAsyncRunningTests {
+
+        @Test
+        @DisplayName("REGRESSION: the node policy takes the request BEFORE it is put on the worker queue")
+        void policyTakesTheRequestBeforeTheEnqueue() {
+            // An answer can come back the moment the request is on the queue; if the kept request
+            // (for a retry) and the timeout were set up after the enqueue, that answer's failure
+            // would find nothing to send again.
+            com.apimarketplace.agent.client.queue.AgentQueueProducer producer =
+                mock(com.apimarketplace.agent.client.queue.AgentQueueProducer.class);
+            com.apimarketplace.orchestrator.execution.v2.async.AgentAttemptScheduler scheduler =
+                mock(com.apimarketplace.orchestrator.execution.v2.async.AgentAttemptScheduler.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "agentQueueProducer", producer);
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "agentAttemptScheduler", scheduler);
+            com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan plan =
+                mock(com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan.class);
+            when(execution.getPlan()).thenReturn(plan);
+            when(node.getNodeId()).thenReturn("agent:writer");
+            com.apimarketplace.agent.client.queue.AgentExecutionRequestMessage message =
+                new com.apimarketplace.agent.client.queue.AgentExecutionRequestMessage("c1", "run-123", "agent:writer",
+                    "tenant-1", "agent", "deepseek", "model-x", Map.of("prompt", "p"), "ROLE_USER",
+                    com.apimarketplace.agent.client.queue.AgentExecutionRequestMessage.CURRENT_SCHEMA_VERSION);
+            NodeExecutionResult yielded = mock(NodeExecutionResult.class);
+            when(yielded.output()).thenReturn(Map.of("queueMessage", message));
+
+            service.emitNodeAsyncRunning(execution, node, yielded, triggerItem, 0, null);
+
+            org.mockito.InOrder order = inOrder(scheduler, producer);
+            order.verify(scheduler).onDispatched(plan, "agent:writer", message);
+            order.verify(producer).enqueue(message);
+        }
+    }
 }

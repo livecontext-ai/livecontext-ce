@@ -28,7 +28,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { clampMenuLeft } from '@/lib/utils/menuPlacement';
-import { ChevronDown, RotateCcw } from 'lucide-react';
+import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
 import Image from 'next/image';
 import { cn } from '@/lib/utils';
 import { track } from '@/lib/analytics/analytics';
@@ -69,6 +69,12 @@ export interface ModelFilterLabels {
   clear: string;
   /** The footer's reset control, which puts every control in it back to its default. */
   reset: string;
+  /**
+   * Heading of the collapsed group that lists the models an admin UNLISTED (V554). Optional so
+   * a caller predating it compiles; without it the group is not rendered at all, since an
+   * unlabelled toggle in a menu of labelled rows is worse than no toggle.
+   */
+  unlisted?: string;
 }
 
 /** Per-viewer convenience: the last tier / provider filter, remembered in this browser only. */
@@ -110,6 +116,7 @@ export function ModelSelectorDropdown({
   selectedModel,
   selectedModelData,
   availableModels,
+  unlistedModels,
   setSelectedModel,
   changeModelTitle,
   noModelsLabel,
@@ -131,6 +138,12 @@ export function ModelSelectorDropdown({
   selectedModel: SelectedModel;
   selectedModelData: { name: string; id: string } | undefined;
   availableModels: DropdownModel[];
+  /**
+   * The models an admin UNLISTED (V554): still available, no longer offered. Listed under the
+   * rows, in a group collapsed by default (open when the current selection is one of them),
+   * so they stay reachable without competing with the models the admin does offer.
+   */
+  unlistedModels?: DropdownModel[];
   setSelectedModel: (model: SelectedModel) => void;
   changeModelTitle: string;
   /** Trigger label when the model list is EMPTY and nothing is selected -
@@ -217,10 +230,26 @@ export function ModelSelectorDropdown({
   // The catalogue row behind the current selection. `selectedModelData` is typed
   // as a name and an id, so it cannot answer either verdict below even when a
   // caller happens to pass a fuller object. One scan, two answers.
+  const hiddenModels = React.useMemo(() => unlistedModels ?? [], [unlistedModels]);
   const currentModel = React.useMemo(
-    () => availableModels.find((m) => modelMatches(m, selectedModel)),
-    [availableModels, selectedModel],
+    () => availableModels.find((m) => modelMatches(m, selectedModel))
+      ?? hiddenModels.find((m) => modelMatches(m, selectedModel)),
+    [availableModels, hiddenModels, selectedModel],
   );
+  const selectionIsHidden = React.useMemo(
+    () => hiddenModels.some((m) => modelMatches(m, selectedModel)),
+    [hiddenModels, selectedModel],
+  );
+  // Collapsed by default: these are the models the admin stopped offering. Opened on its own
+  // when the model in hand is one of them, so the menu never hides the current choice.
+  // Re-decided each time the menu opens, during render rather than in an effect, so the
+  // first frame of the open menu already has the group in the right state.
+  const [hiddenOpen, setHiddenOpen] = useState(false);
+  const [menuWasOpen, setMenuWasOpen] = useState(false);
+  if (showModelSelector !== menuWasOpen) {
+    setMenuWasOpen(showModelSelector);
+    if (showModelSelector) setHiddenOpen(selectionIsHidden);
+  }
 
   const selectionBlocked = React.useMemo(() => {
     if (!blockedForModel) return upgradeRequired;
@@ -361,11 +390,14 @@ export function ModelSelectorDropdown({
   }, [staleTier, staleProvider, tierFilter, providerFilter]);
   const effectiveTier = staleTier ? '' : tierFilter;
   const effectiveProvider = staleProvider ? '' : providerFilter;
-  const visibleModels = showFilters
-    ? orderedModels.filter((m) =>
-        (!effectiveTier || m.tier === effectiveTier)
-        && (!effectiveProvider || m.provider === effectiveProvider))
-    : orderedModels;
+  const matchesFilters = (m: DropdownModel) =>
+    (!effectiveTier || m.tier === effectiveTier)
+    && (!effectiveProvider || m.provider === effectiveProvider);
+  const visibleModels = showFilters ? orderedModels.filter(matchesFilters) : orderedModels;
+  // The footer filters narrow this group too: a user who asked for budget models is not
+  // shown a hidden top-tier one.
+  const visibleHiddenModels = showFilters ? hiddenModels.filter(matchesFilters) : hiddenModels;
+  const showHiddenGroup = !!filterLabels?.unlisted && visibleHiddenModels.length > 0;
   const changeTierFilter = (tier: string) => {
     setTierFilter(tier);
     writeStoredFilters({ tier, provider: effectiveProvider });
@@ -395,6 +427,66 @@ export function ModelSelectorDropdown({
     if (effortActive) onReasoningEffortChange?.('');
   };
 
+  // One row renderer for the offered models and the unlisted group alike, so a hidden model
+  // is chosen, priced and badged exactly like a listed one.
+  const renderModelRow = (model: DropdownModel) => {
+    const isSelected = modelMatches(model, selectedModel);
+    const blocked = blockedForModel ? blockedForModel(model) : upgradeRequired;
+    const free = freeTierForModel ? freeTierForModel(model) : false;
+    return (
+      <div
+        key={`${model.provider}:${model.id}`}
+        data-testid={blocked ? 'model-row-blocked' : undefined}
+        onClick={() => {
+          setSelectedModel(selectedModelFromAIModel(model));
+          setShowModelSelector(false);
+          track('chat_model_changed', {
+            model_id: model.id,
+            provider: model.provider,
+            previous_model_id: selectedModel.id || null,
+          });
+        }}
+        className={cn(
+          "group flex items-start gap-2.5 px-2.5 py-2 rounded-lg cursor-pointer transition-colors",
+          "hover:bg-gray-100 dark:hover:bg-gray-800",
+          isSelected && "bg-gray-100 dark:bg-gray-800"
+        )}
+      >
+        {/* Greyed with the name when the balance cannot pay, and the
+            only part of the row that fades: it is decorative, so losing
+            contrast costs nothing, whereas compositing the whole row
+            takes the 11px meta line below AA. Still a choice either
+            way - `blocked` means "cannot pay right now", which a top-up
+            changes, and disabling the row would also hide the notice
+            under the list, the one thing here that says what to do. */}
+        <ServiceLogo as={Image}
+          src={`/icons/services/${model.iconSlug}.svg`}
+          alt={model.provider}
+          width={18}
+          height={18}
+          className={cn("w-[18px] h-[18px] flex-shrink-0 mt-0.5", blocked && "opacity-50")}
+        />
+        <div className="flex-1 min-w-0">
+          <ModelOptionDisplay
+            model={model}
+            upgradeRequired={blocked}
+            freeTier={free}
+            costBasis={costBasis}
+            costProfile="chatConversation"
+          />
+        </div>
+        {/* Revealed on hover for a pointer, always present on a coarse
+            pointer (no hover to reveal it with), and revealed when the
+            button inside it takes focus, so a keyboard does not tab into
+            something invisible. This card is the only place a reader who
+            cannot hover gets the full sentence behind the "Free" chip. */}
+        <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100 transition-opacity">
+          <ModelInfoPopover model={model} freeTier={free} costBasis={costBasis} costProfile="chatConversation" />
+        </div>
+      </div>
+    );
+  };
+
   return (
     // The composer's button row hosts this beside the mic and the send button
     // and can be as narrow as a 320px side panel, so the model NAME is the row's
@@ -411,7 +503,7 @@ export function ModelSelectorDropdown({
         <span className="truncate min-w-0 max-w-[180px] text-sm">
           {selectedModelData?.name
             || selectedModel.id
-            || (availableModels.length === 0 ? noModelsLabel : '')}
+            || (availableModels.length === 0 && hiddenModels.length === 0 ? noModelsLabel : '')}
         </span>
         {/* After the name and before the chevron, and OUTSIDE the truncating
             span: the name is the elastic part of this row (see the wrapper's
@@ -446,7 +538,7 @@ export function ModelSelectorDropdown({
             ...(menuPos.placement === 'above' ? { bottom: menuPos.bottom } : { top: menuPos.top }),
           }}
         >
-          {availableModels.length === 0 && emptyState}
+          {availableModels.length === 0 && hiddenModels.length === 0 && emptyState}
           {showFilters && visibleModels.length === 0 && (
             <div
               className="flex items-center justify-between gap-2 px-3 py-3 text-sm text-theme-secondary"
@@ -464,63 +556,26 @@ export function ModelSelectorDropdown({
             </div>
           )}
           <div className="space-y-0.5 model-selector-scroll pr-1 overflow-y-auto">
-            {visibleModels.map((model) => {
-              const isSelected = modelMatches(model, selectedModel);
-              const blocked = blockedForModel ? blockedForModel(model) : upgradeRequired;
-              const free = freeTierForModel ? freeTierForModel(model) : false;
-              return (
-                <div
-                  key={`${model.provider}:${model.id}`}
-                  data-testid={blocked ? 'model-row-blocked' : undefined}
-                  onClick={() => {
-                    setSelectedModel(selectedModelFromAIModel(model));
-                    setShowModelSelector(false);
-                    track('chat_model_changed', {
-                      model_id: model.id,
-                      provider: model.provider,
-                      previous_model_id: selectedModel.id || null,
-                    });
-                  }}
-                  className={cn(
-                    "group flex items-start gap-2.5 px-2.5 py-2 rounded-lg cursor-pointer transition-colors",
-                    "hover:bg-gray-100 dark:hover:bg-gray-800",
-                    isSelected && "bg-gray-100 dark:bg-gray-800"
-                  )}
+            {visibleModels.map(renderModelRow)}
+            {/* V554: the models the admin unlisted. Discreet on purpose: one muted line under
+                the list, collapsed, and the rows only once it is opened. */}
+            {showHiddenGroup && (
+              <div className="pt-1 mt-1 border-t border-theme" data-testid="model-selector-hidden-group">
+                <button
+                  type="button"
+                  data-model-selector-keep-open
+                  data-testid="model-selector-hidden-toggle"
+                  aria-expanded={hiddenOpen}
+                  onClick={() => setHiddenOpen((open) => !open)}
+                  className="flex w-full items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-theme-secondary transition-colors hover:bg-[var(--bg-secondary)]"
                 >
-                  {/* Greyed with the name when the balance cannot pay, and the
-                      only part of the row that fades: it is decorative, so losing
-                      contrast costs nothing, whereas compositing the whole row
-                      takes the 11px meta line below AA. Still a choice either
-                      way - `blocked` means "cannot pay right now", which a top-up
-                      changes, and disabling the row would also hide the notice
-                      under the list, the one thing here that says what to do. */}
-                  <ServiceLogo as={Image}
-                    src={`/icons/services/${model.iconSlug}.svg`}
-                    alt={model.provider}
-                    width={18}
-                    height={18}
-                    className={cn("w-[18px] h-[18px] flex-shrink-0 mt-0.5", blocked && "opacity-50")}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <ModelOptionDisplay
-                      model={model}
-                      upgradeRequired={blocked}
-                      freeTier={free}
-                      costBasis={costBasis}
-                      costProfile="chatConversation"
-                    />
-                  </div>
-                  {/* Revealed on hover for a pointer, always present on a coarse
-                      pointer (no hover to reveal it with), and revealed when the
-                      button inside it takes focus, so a keyboard does not tab into
-                      something invisible. This card is the only place a reader who
-                      cannot hover gets the full sentence behind the "Free" chip. */}
-                  <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100 transition-opacity">
-                    <ModelInfoPopover model={model} freeTier={free} costBasis={costBasis} costProfile="chatConversation" />
-                  </div>
-                </div>
-              );
-            })}
+                  <ChevronRight className={cn('h-3 w-3 shrink-0 transition-transform duration-150', hiddenOpen && 'rotate-90')} />
+                  <span>{filterLabels?.unlisted}</span>
+                  <span className="tabular-nums">({visibleHiddenModels.length})</span>
+                </button>
+                {hiddenOpen && visibleHiddenModels.map(renderModelRow)}
+              </div>
+            )}
           </div>
           {/* Under the list, never in a row: a row is an option, and this menu
               keeps itself open for anything clicked inside it, so a dialog

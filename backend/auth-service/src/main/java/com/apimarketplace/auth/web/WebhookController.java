@@ -2,6 +2,7 @@
 package com.apimarketplace.auth.web;
 
 import com.apimarketplace.auth.domain.BillingEvent;
+import com.apimarketplace.auth.billing.StripeInvoiceResolver;
 import com.apimarketplace.auth.domain.User;
 import com.apimarketplace.auth.repository.BillingCustomerRepository;
 import com.apimarketplace.auth.repository.BillingEventRepository;
@@ -85,6 +86,15 @@ public class WebhookController {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.apimarketplace.auth.service.RewardService rewardService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.service.PersonalOfferService personalOffers;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.service.PersonalOfferPaymentService personalOfferPayments;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.service.PersonalOfferReversalService personalOfferReversals;
+
     // Partner revenue share (V549): one commission line per paid invoice of a customer a
     // partner referred, voided on refund/dispute. Optional like rewardService above.
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -151,6 +161,16 @@ public class WebhookController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid event");
         }
 
+        // Even a replay of an already-recorded event must repair a missing reversal task.
+        // No provider call happens here; refusing the write keeps Stripe retries possible.
+        if (personalOfferReversals != null) {
+            try {
+                personalOfferReversals.capture(event.getType(), objectMapper.readTree(payload).path("data").path("object"));
+            } catch (Exception unavailable) {
+                logger.error("Could not persist personal offer reversal intent for event {}", event.getId(), unavailable);
+                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body("Retry reversal capture");
+            }
+        }
         try {
             if (billingEventRepository.existsByEventId(event.getId())) {
                 logger.info("Event {} already processed, skipping", event.getId());
@@ -514,6 +534,10 @@ public class WebhookController {
                 parseAndGrantPaygTopup(userId, session.getId(),
                         metadata.get("credit_amount"), metadata.get("tier"));
                 return;  // do NOT wait for customer.subscription.* - none will fire for mode=PAYMENT
+            }
+            if (personalOffers != null && metadata != null && metadata.get("personal_offer_attempt_id") != null) {
+                personalOffers.checkoutCompleted(userId, session.getId(), session.getSubscription(),
+                        metadata.get("personal_offer_attempt_id"));
             }
         }
 
@@ -992,6 +1016,13 @@ public class WebhookController {
         // after a trial). Only PENDING rows transition, so a replayed invoice.paid
         // (typed or RAW) is safe.
         tryQualifyReferralConversion(invoice, subId);
+        if (personalOfferPayments != null) {
+            try {
+                personalOfferPayments.onPaidInvoice(invoice, subId);
+            } catch (Exception e) {
+                logger.error("Personal offer payment handling deferred for invoice {}: {}", invoice.getId(), e.getMessage(), e);
+            }
+        }
     }
 
     /**
@@ -1074,6 +1105,7 @@ public class WebhookController {
             // Partner void first: it guards itself, and must not depend on the clawback below.
             voidPartnerCommission(charge, "REFUNDED");
             clawbackByCustomer(charge.getCustomer(), "REFUNDED");
+            reconcilePersonalReversal(charge);
         } catch (Exception e) {
             logger.error("Error in handleChargeRefunded: {}", e.getMessage(), e);
         }
@@ -1119,6 +1151,7 @@ public class WebhookController {
             com.stripe.model.Charge charge = stripeClient.charges().retrieve(chargeId);
             voidPartnerCommission(charge, reason);
             clawbackByCustomer(charge.getCustomer(), reason);
+            reconcilePersonalReversal(charge);
         } catch (Exception e) {
             logger.error("Dispute clawback resolve failed for charge {}: {}", chargeId, e.getMessage(), e);
         }
@@ -1129,7 +1162,7 @@ public class WebhookController {
         String customerId = charge.getCustomer();
         if (partnerCommissionService == null || customerId == null || customerId.isBlank()) return;
         try {
-            InvoiceLookup invoice = invoiceIdOf(charge);
+            StripeInvoiceResolver.Result invoice = StripeInvoiceResolver.resolve(stripeClient, charge);
             billingCustomerRepository.findByProviderCustomerId(customerId).ifPresent(bc ->
                     partnerCommissionService.voidForRefund(bc.getUser().getId(), invoice.invoiceId(),
                             invoice.failed(), charge.getAmount(), charge.getCurrency(), reason));
@@ -1138,44 +1171,15 @@ public class WebhookController {
         }
     }
 
-    /**
-     * Outcome of resolving the invoice a charge paid: found ({@code invoiceId} set), confirmed
-     * none (null, not failed: the payment belongs to no invoice, so it earned no commission), or
-     * unknown ({@code failed}: no payment intent, or Stripe unreachable).
-     */
-    private record InvoiceLookup(String invoiceId, boolean failed) {}
-
-    /**
-     * The invoice a charge paid. A charge carries no invoice id in this API version; the invoice
-     * payment behind its payment intent does.
-     */
-    private InvoiceLookup invoiceIdOf(com.stripe.model.Charge charge) {
-        String paymentIntent = charge.getPaymentIntent();
-        if (paymentIntent == null || paymentIntent.isBlank()) return new InvoiceLookup(null, true);
-        try {
-            var params = com.stripe.param.InvoicePaymentListParams.builder()
-                    .setPayment(com.stripe.param.InvoicePaymentListParams.Payment.builder()
-                            .setType(com.stripe.param.InvoicePaymentListParams.Payment.Type.PAYMENT_INTENT)
-                            .setPaymentIntent(paymentIntent)
-                            .build())
-                    .setLimit(1L)
-                    .build();
-            var page = stripeClient.invoicePayments().list(params);
-            if (page == null || page.getData() == null || page.getData().isEmpty()) {
-                return new InvoiceLookup(null, false);
-            }
-            return new InvoiceLookup(page.getData().get(0).getInvoice(), false);
-        } catch (Exception e) {
-            logger.warn("Could not resolve the invoice of payment intent {}: {}", paymentIntent, e.getMessage());
-            return new InvoiceLookup(null, true);
-        }
-    }
-
     /** Resolve the referee from the Stripe customer and claw back their referral reward. */
     private void clawbackByCustomer(String customerId, String reason) {
         if (rewardService == null || customerId == null || customerId.isBlank()) return;
         billingCustomerRepository.findByProviderCustomerId(customerId).ifPresent(bc ->
                 rewardService.clawbackByRedeemerUserId(bc.getUser().getId(), reason));
+    }
+
+    private void reconcilePersonalReversal(com.stripe.model.Charge charge) {
+        if (personalOfferReversals != null && charge != null) personalOfferReversals.reconcileCharge(charge.getId());
     }
 
     /**

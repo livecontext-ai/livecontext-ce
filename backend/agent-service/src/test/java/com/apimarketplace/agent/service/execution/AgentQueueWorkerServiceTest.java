@@ -127,6 +127,19 @@ class AgentQueueWorkerServiceTest {
         }
 
         @Test
+        @DisplayName("a task the orchestrator already answered (its wait bound ran out in the queue) is not run, so it spends nothing")
+        void alreadyAnsweredTaskIsSkipped() throws Exception {
+            AgentExecutionTask task = new AgentExecutionTask(
+                "corr-late", AgentExecutionTask.TYPE_AGENT, "{\"prompt\":\"hello\"}", 0, Map.of());
+            when(redisTemplate.hasKey("agent:result:corr-late")).thenReturn(true);
+
+            workerService.processTask(task);
+
+            verify(executionService, never()).executeByType(anyString(), anyString());
+            verify(redisTemplate, never()).convertAndSend(anyString(), anyString());
+        }
+
+        @Test
         @DisplayName("Classify task: routes to classify execution")
         void classifyTaskExecuteAndPublish() throws Exception {
             String payload = "{\"content\":\"test\",\"categories\":[]}";

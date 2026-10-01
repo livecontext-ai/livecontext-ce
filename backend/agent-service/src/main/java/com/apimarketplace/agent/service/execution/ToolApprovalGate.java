@@ -303,13 +303,19 @@ public class ToolApprovalGate {
     }
 
     /**
-     * Block until this call's card is answered, the deadline passes, or the gate proves
-     * unusable.
+     * Block until this call's AUTHORIZATION card is answered, the deadline passes, or the gate
+     * proves unusable.
+     *
+     * <p>Also released as {@link Decision#APPROVED} when the user ticks "don't ask again in
+     * this conversation" on ANOTHER card meanwhile ({@link #isConversationWideApproved}): that
+     * answers this card too, including one the browser has not received yet, is showing in
+     * another tab, or rebuilt after a reload without its hold. Only authorization parks read
+     * it: a connect card or a question is not answered by a permission.
      *
      * @param park what is being parked and for how long; see {@link ParkRequest}
      */
     public Decision awaitDecision(ParkRequest park) {
-        return awaitAnswer(park).decision();
+        return awaitAnswer(park, true).decision();
     }
 
     /**
@@ -317,6 +323,10 @@ public class ToolApprovalGate {
      * Same park, same ceilings, same failure modes; only the return type differs.
      */
     public Answer awaitAnswer(ParkRequest park) {
+        return awaitAnswer(park, false);
+    }
+
+    private Answer awaitAnswer(ParkRequest park, boolean conversationWideReleases) {
         String conversationId = park.conversationId();
         String gateKey = park.gateKey();
         if (!enabled || conversationId == null || conversationId.isBlank()
@@ -338,7 +348,7 @@ public class ToolApprovalGate {
                 log.info("Approval gate skipped for {} - no time budget left before the tool deadline", gateKey);
                 return endPark(key, park.streamId(), Decision.EXPIRED);
             }
-            return pollUntilAnswered(park, key, deadline);
+            return pollUntilAnswered(park, key, deadline, conversationWideReleases);
         } finally {
             // Releases the slot beginPark reserved. Every exit from a started park goes
             // through here; the paths that never start release it themselves.
@@ -346,7 +356,8 @@ public class ToolApprovalGate {
         }
     }
 
-    private Answer pollUntilAnswered(ParkRequest park, String key, long deadline) {
+    private Answer pollUntilAnswered(ParkRequest park, String key, long deadline,
+                                     boolean conversationWideReleases) {
         String gateKey = park.gateKey();
         log.info("Parking tool call {} on approval gate (up to {}ms)", gateKey, deadline - System.currentTimeMillis());
 
@@ -382,6 +393,12 @@ public class ToolApprovalGate {
                     clear(key);
                     return read.answer();
                 }
+            }
+            if (conversationWideReleases && isConversationWideApproved(park.conversationId())) {
+                // After the per-call verdict, so an explicit Deny on this very card still wins.
+                log.info("Approval gate for {} released by a conversation-wide authorization", gateKey);
+                clear(key);
+                return Answer.of(Decision.APPROVED);
             }
             long remaining = deadline - System.currentTimeMillis();
             if (remaining <= 0) {
@@ -519,6 +536,29 @@ public class ToolApprovalGate {
             // turn the user cancelled - the one thing the Stop path promises cannot happen.
             log.warn("Approval gate could not clear {} ({}) - a verdict may outlive its park "
                     + "until the key expires", key, e.getMessage());
+        }
+    }
+
+    /**
+     * True when the user ticked "don't ask again in this conversation" on a card during the
+     * turn that is running now. The turn's own grants were read when it started, before the
+     * box was ticked, so without this every later sensitive call of the same turn raised a
+     * new card anyway. See {@link StreamRedisKeys#conversationWideApprovalKey}.
+     *
+     * <p>Unlike {@link #wasStopped}, this fails CLOSED: an unreadable key means a card, never
+     * an action run without the user's consent.
+     */
+    public boolean isConversationWideApproved(String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return false;
+        }
+        try {
+            return Boolean.TRUE.equals(redisTemplate.hasKey(
+                    StreamRedisKeys.conversationWideApprovalKey(conversationId)));
+        } catch (Exception e) {
+            log.debug("Approval gate could not read the conversation-wide grant for {}: {}",
+                    conversationId, e.getMessage());
+            return false;
         }
     }
 

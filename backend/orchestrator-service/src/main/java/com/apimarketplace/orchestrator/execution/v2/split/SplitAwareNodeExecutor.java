@@ -241,6 +241,18 @@ public class SplitAwareNodeExecutor {
         "executeOnce policy: node executes for the first split item only";
 
     /**
+     * The fan-out failed as a whole (an item threw past its own policy, or the wait timed out). Same
+     * unchecked propagation as before; it is marked so a node-level retry never re-runs every item,
+     * the ones that already succeeded included.
+     */
+    public static final class SplitFanOutFailedException extends RuntimeException
+            implements com.apimarketplace.orchestrator.execution.v2.engine.NodePolicyRunner.NotRetryable {
+        public SplitFanOutFailedException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    /**
      * Executes ONE node body under the node's per-attempt timeout policy
      * ({@code nodePolicy.timeoutMs} via {@code NodePolicyRunner.callWithTimeout}).
      * This is the LEAF wrapping point for every non-fan-out execution path of this
@@ -263,7 +275,7 @@ public class SplitAwareNodeExecutor {
         }
         com.apimarketplace.orchestrator.domain.workflow.NodePolicy policy =
             nodePolicyRunner.resolve(ctx != null ? ctx.plan() : null, node.getNodeId());
-        if (!policy.hasTimeout()) {
+        if (!policy.hasTimeout() || answersFromWorkerQueue(node)) {
             return node.execute(ctx);
         }
         try {
@@ -276,6 +288,18 @@ public class SplitAwareNodeExecutor {
             // historically only saw unchecked exceptions from node.execute.
             throw new RuntimeException(e.getMessage(), e);
         }
+    }
+
+    /**
+     * A queued agent (agent, classify or guardrail on the worker queue) is never bounded here: its
+     * body only sends the request, and its {@code timeoutMs} bounds the ANSWER instead
+     * ({@code AgentAttemptScheduler}). Bounding the dispatch as well abandoned it half-done: a
+     * request registered but never sent, which held its epoch open until the recovery hard
+     * timeout (found by e2e PROD-001.6, 2026-09-29, with timeoutMs=1).
+     */
+    private static boolean answersFromWorkerQueue(ExecutionNode node) {
+        return node instanceof com.apimarketplace.orchestrator.execution.v2.nodes.AgentNode agent
+            && agent.answersFromWorkerQueue();
     }
 
     /**
@@ -893,6 +917,9 @@ public class SplitAwareNodeExecutor {
                                 if (itemMocked != null) {
                                     return itemMocked;
                                 }
+                                if (answersFromWorkerQueue(node)) {
+                                    return node.execute(itemContext);
+                                }
                                 return nodePolicyRunner.callWithTimeout(itemPolicy, nodeId,
                                     () -> node.execute(itemContext));
                             },
@@ -925,7 +952,7 @@ public class SplitAwareNodeExecutor {
         } catch (Exception e) {
             logger.error("[SplitAware] Error waiting for item executions: {}", e.getMessage(), e);
             futures.forEach(f -> f.cancel(true));
-            throw new RuntimeException("Split item execution failed or timed out", e);
+            throw new SplitFanOutFailedException("Split item execution failed or timed out", e);
         }
 
         // Pre-pass: gather completed ItemExecutionResults and count async-running items.
@@ -988,6 +1015,26 @@ public class SplitAwareNodeExecutor {
         boolean hasFailure = false;
         int awaitingSignalCount = 0;
 
+        // Step-by-step fan-out (the path production runs take: no successor traverser, the
+        // ready-loop dispatches the next nodes from a context rebuilt out of the snapshot): the
+        // node-level EpochState mark is written ONCE after every item landed, from THIS fan-out's
+        // own item outcomes (NodeCompletionService.recordSplitOutcome, the same marking rule the
+        // split-async seal applies: all completed -> COMPLETED, all failed -> FAILED, mixed ->
+        // COMPLETED + partial failure). Marking per item instead left a node with one
+        // failed item in BOTH completedNodeIds and failedNodeIds; the rebuild reads FAILED, and
+        // the default continue-anyway split then sent NO item to the next node, the successful
+        // ones included, while the epoch still closed COMPLETED. Only when every item is terminal
+        // here: a pending item (signal, async queue) settles the node through its own path.
+        // A fan-out whose items ALL come back SKIPPED keeps the per-item marks: there is no
+        // COMPLETED or FAILED item to aggregate, and the per-item SKIPPED mark is what resolves the
+        // node for the readiness walk.
+        final boolean aggregateAtEnd = canPersist && !canTraverseSuccessors && !perItemContinuation
+            && completedItemResults.stream().noneMatch(r -> r != null && r.result != null
+                && (r.result.isAwaitingSignal() || r.result.isAsyncRunning()))
+            && completedItemResults.stream().anyMatch(r -> r != null && r.result != null && !r.result.isSkipped());
+        long aggregateCompleted = 0;
+        long aggregateFailed = 0;
+
         // Audit bug #2 activation - open a coalescing session around the per-item
         // completion region so the N per-item markNodeCompleted writes of THIS run
         // coalesce into fewer state_snapshot CAS flushes (and same-path ASSIGNs
@@ -1022,13 +1069,12 @@ public class SplitAwareNodeExecutor {
                 }
 
                 // No silent attempts: each NON-final failed attempt of this item is surfaced
-                // through the ATTEMPT-AWARE pipeline (emitNodeFailedAttempt): WS step event
-                // (+ per-item step_data row in non-loop contexts), annotated with
+                // through the ATTEMPT-AWARE pipeline (emitNodeFailedAttempt): a WS step event
+                // only (no step_data row), annotated with
                 // policy_attempt / policy_max_attempts - but WITHOUT StateSnapshot / edge /
                 // workflow_epochs mutation and WITHOUT billing. Only the final per-item
-                // result below goes through persistItemResult (full pipeline: counts, edges,
-                // billing). 2026-06-10 audit items 2/3/4 - full contract incl. the loop
-                // WS-only asymmetry on NodeCompletionService.emitNodeFailedAttempt.
+                // result below goes through persistItemResult (full pipeline: row, counts,
+                // edges, billing). Full contract on NodeCompletionService.emitNodeFailedAttempt.
                 if (canPersist && itemResult.context != null
                         && itemResult.failedAttempts != null && !itemResult.failedAttempts.isEmpty()) {
                     for (NodeExecutionResult failedAttempt : itemResult.failedAttempts) {
@@ -1090,13 +1136,19 @@ public class SplitAwareNodeExecutor {
                 NodeExecutionResult effectiveItemResult = itemResult.result;
                 if (canPersist && itemResult.context != null) {
                     effectiveItemResult = persistItemResult(execution, node, itemResult.result, triggerItem, itemResult.index,
-                        itemResult.context, perItemContinuation);
+                        itemResult.context, perItemContinuation || aggregateAtEnd);
                     if (effectiveItemResult.isFailure() && !itemResult.result.isFailure()) {
                         // Payload-lost rewrite: sync the summary bookkeeping with the row truth.
                         results.set(results.size() - 1, effectiveItemResult);
                         hasFailure = true;
                         errors.add("Item " + itemResult.index + ": " +
                             effectiveItemResult.errorMessage().orElse("Output payload lost"));
+                    }
+                    // The node-level mark below is this fan-out's outcome, counted on the row truth.
+                    if (effectiveItemResult.isSuccess()) {
+                        aggregateCompleted++;
+                    } else if (effectiveItemResult.isFailure()) {
+                        aggregateFailed++;
                     }
                 }
 
@@ -1158,6 +1210,19 @@ public class SplitAwareNodeExecutor {
             // mutations flush on close, futures complete before we return.
             if (coalescingOpened) {
                 runCoalescingService.closeCoalescing(runId);
+            }
+        }
+
+        if (aggregateAtEnd && (aggregateCompleted > 0 || aggregateFailed > 0)) {
+            try {
+                nodeCompletionService.recordSplitOutcome(runId, context.triggerId(), nodeId, context.epoch(),
+                    aggregateCompleted, aggregateFailed);
+            } catch (Exception e) {
+                // Never let the mark fail the fan-out: its items already ran and were recorded, and
+                // a policy would re-run the whole fan-out, repeating their side effects. The startup
+                // recovery sweep (recordSplitAggregateIfMissing) writes a missing mark from the rows.
+                logger.warn("[SplitAware] Node-level mark failed after the fan-out, left to the recovery sweep: runId={}, nodeId={}, error={}",
+                    runId, nodeId, e.getMessage());
             }
         }
 
@@ -2128,7 +2193,12 @@ public class SplitAwareNodeExecutor {
                     node.getNodeId(), subItemIndex);
             }
 
-            if (result != null && result.isFailure() && execution != null && skipPropagationService != null) {
+            // continueOnFailure: the item failed but traversal goes on for it, so its descendants
+            // must NOT get SKIPPED rows for this item (they are about to run for it).
+            boolean continuedItem = result != null && result.isFailure()
+                && ExecutionMetadataKeys.isContinueOnFailure(result.metadata());
+            if (result != null && result.isFailure() && !continuedItem
+                    && execution != null && skipPropagationService != null) {
                 try {
                     skipPropagationService.cascadeFailureToSuccessors(
                         execution, node, subItemIndex, context.epoch(), context.triggerId(),
@@ -2190,6 +2260,16 @@ public class SplitAwareNodeExecutor {
         metadata.put("split_execution", true);
         metadata.put("split_item_count", results.size());
         metadata.put(ExecutionMetadataKeys.SPLIT_ALREADY_PERSISTED, true);
+
+        // No item succeeded, and every item that FAILED continues (continueOnFailure; an item a
+        // node returned SKIPPED has nothing to continue): the node-level result says so too, so
+        // the node does not cascade SKIPPED and its successors run for the continued items.
+        if (allFailed && !results.isEmpty()
+                && results.stream().filter(NodeExecutionResult::isFailure)
+                    .allMatch(r -> ExecutionMetadataKeys.isContinueOnFailure(r.metadata()))) {
+            output.put(ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE, true);
+            metadata.put(ExecutionMetadataKeys.POLICY_CONTINUE_ON_FAILURE, true);
+        }
         if (successorsHandled) {
             metadata.put(ExecutionMetadataKeys.SPLIT_SUCCESSORS_HANDLED, true);
         }
@@ -2794,7 +2874,7 @@ public class SplitAwareNodeExecutor {
         } catch (Exception e) {
             logger.error("[SplitAware] Error waiting for nested split executions: {}", e.getMessage(), e);
             futures.forEach(f -> f.cancel(true));
-            throw new RuntimeException("Nested split execution failed or timed out", e);
+            throw new SplitFanOutFailedException("Nested split execution failed or timed out", e);
         }
 
         // Collect results
@@ -3217,7 +3297,7 @@ public class SplitAwareNodeExecutor {
      * {@link SplitAggregateHandler}) that need to know which items routed
      * through a node's predecessors. Wraps the private helper with an
      * {@code allItems} = {@code 0..totalItems-1} pre-computed set and
-     * uses the DB-backed {@code findCompletedItemIndicesByEpoch} query
+     * uses the DB-backed {@code findPassedItemIndicesByEpoch} query (COMPLETED, plus FAILED items that continue)
      * (more resilient than in-memory split context, which is lost on
      * restart).
      *
@@ -3329,7 +3409,8 @@ public class SplitAwareNodeExecutor {
             }
 
             try {
-                List<Integer> completedIndices = stepDataRepository.findCompletedItemIndicesByEpoch(
+                // Items that PASS the predecessor: completed, or failed with continueOnFailure.
+                List<Integer> completedIndices = stepDataRepository.findPassedItemIndicesByEpoch(
                     runId, predKey, epoch);
 
                 if (completedIndices == null || completedIndices.isEmpty()) {

@@ -260,8 +260,21 @@ LiveContext CE is licensed under the **LiveContext Sustainable Use License
 1.0**, see [LICENSE](LICENSE). You are free to use, self-host, modify and
 redistribute it, including in production and for the internal business purposes
 of your organization. One limitation matters: you may not offer it to third
-parties on a hosted or embedded basis as a competing commercial product. For
-anything outside that, write to oss@livecontext.ai.
+parties on a hosted or embedded basis as a competing commercial product.
+Agencies and consultants may install, host and maintain it for their clients,
+one deployment per client (section 7 of the LICENSE). The
+[licensing FAQ](LICENSING.md) explains both in plain language. For anything
+outside that, write to oss@livecontext.ai.
+
+**Agencies, consultants and freelancers:** the license already lets you run
+LiveContext for your clients. Join the
+[partner program](https://livecontext.ai/partners) to also earn a revenue
+share on the clients you bring to the LiveContext cloud and carry the official
+partner badge. For a multi-client, white-label or embedded offering, write to
+oss@livecontext.ai about a commercial license.
+
+Contributions are welcome: contributors sign a one-time
+[Contributor License Agreement](CLA.md), see [CONTRIBUTING](CONTRIBUTING.md).
 
 The **LiveContext** name and logo are trademarks of their owner and are not
 covered by the license, see [TRADEMARKS](TRADEMARKS.md). Third-party components

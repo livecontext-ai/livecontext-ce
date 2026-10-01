@@ -255,6 +255,9 @@ public class AgentWorkflowFireService {
                                        Map<String, Object> payload) {
         TriggerType type = TriggerType.fromString(trigger.type());
         validateFireable(type);
+        if (type == TriggerType.FORM) {
+            payload = withFormFieldDefaults(trigger, payload);
+        }
         validatePayload(type, trigger, payload);
         String triggerId = trigger.getNormalizedKey();
         // Agent-supplied payload is LLM-controlled and adversarial-shaped -
@@ -264,6 +267,31 @@ public class AgentWorkflowFireService {
                 com.apimarketplace.orchestrator.trigger.ReusableTriggerService.sanitizePlanMarker(payload);
         log.info("[AgentFire] Firing trigger={} type={} on run={}", triggerId, type, run.getRunIdPublic());
         return reusableTriggerService.executeTrigger(run, triggerId, type, sanitized);
+    }
+
+    /**
+     * Fill each form field the payload leaves missing or blank with the field's default, the way
+     * the public form submits its pre-filled values. Without it a required field WITH a default
+     * refused an execute that sent no value for it. A value the caller sent always wins; a field
+     * with no default is left alone, so a required one still fails validation.
+     *
+     * @return the payload itself when no default applies, else a new map
+     */
+    Map<String, Object> withFormFieldDefaults(Trigger trigger, Map<String, Object> payload) {
+        Object fieldsRaw = trigger.params() != null ? trigger.params().get("fields") : null;
+        if (!(fieldsRaw instanceof List<?> fields)) return payload;
+        Map<String, Object> filled = payload != null ? new LinkedHashMap<>(payload) : new LinkedHashMap<>();
+        List<String> applied = new ArrayList<>();
+        for (Object fieldObj : fields) {
+            if (!(fieldObj instanceof Map<?, ?> field) || !(field.get("name") instanceof String name)) continue;
+            Object defaultValue = FormFieldDefaults.of(field);
+            if (defaultValue == null || !FormFieldDefaults.isBlank(filled.get(name))) continue;
+            filled.put(name, defaultValue);
+            applied.add(name);
+        }
+        if (applied.isEmpty()) return payload;
+        log.info("[AgentFire] Form trigger {}: defaults applied to {}", trigger.getNormalizedKey(), applied);
+        return filled;
     }
 
     /**
@@ -526,6 +554,16 @@ public class AgentWorkflowFireService {
             log.warn("Epoch counts unavailable for {} runs: {}", runIds.size(), e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * The most recent epoch in which {@code nodeId} ran in this run, for a node-output read
+     * that did not name one. Null ONLY when the node never produced a step row here. A lookup
+     * failure propagates instead: turning it into null would tell the agent "this node never
+     * ran", a wrong answer given as a fact; the caller reports it as its own error.
+     */
+    public Integer latestEpochForNode(String runId, String nodeId) {
+        return stepDataRepository.findLatestEpochByRunIdAndNormalizedKey(runId, nodeId);
     }
 
     /**
@@ -1809,6 +1847,9 @@ public class AgentWorkflowFireService {
                             fieldInfo.put("type", field.containsKey("type") ? field.get("type") : "string");
                             fieldInfo.put("required", isRequired);
                             if (field.containsKey("label")) fieldInfo.put("label", field.get("label"));
+                            // Used when data_inputs omits the field (withFormFieldDefaults).
+                            Object defaultValue = FormFieldDefaults.of(field);
+                            if (defaultValue != null) fieldInfo.put("default", defaultValue);
                             requiredData.put(name, fieldInfo);
                             example.put(name, isRequired ? "<required>" : "<optional>");
                         }

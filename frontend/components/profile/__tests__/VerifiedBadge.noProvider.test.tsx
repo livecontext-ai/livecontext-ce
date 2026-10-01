@@ -12,7 +12,9 @@ vi.mock('next-intl', () => ({
 
 const getVerifiedUserIds = vi.fn();
 vi.mock('@/lib/api/unified-api-service', () => ({
-  unifiedApiService: { getVerifiedUserIds: (ids: Array<string | number>) => getVerifiedUserIds(ids) },
+  unifiedApiService: {
+    getUserBadges: async (ids: Array<string | number>) => ({ verified: await getVerifiedUserIds(ids), partners: [] }),
+  },
 }));
 
 import { VerifiedBadge } from '../VerifiedBadge';

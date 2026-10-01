@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import JsonLd from '@/components/seo/JsonLd';
 import { LandingShell } from '@/components/landing/LandingShell';
 import { IS_CE } from '@/lib/edition';
-import { fetchAllPublicPublications, fetchVerifiedPublisherHandles } from '@/lib/marketplace/publicPublications';
+import { fetchAllPublicPublications, fetchPublisherBadgeHandles } from '@/lib/marketplace/publicPublications';
 import { isLinkable } from '@/lib/marketplace/indexability';
 import { listingListItem } from '@/lib/marketplace/listingJsonLd';
 import PublicationCardSsr from './_components/PublicationCardSsr';
@@ -96,7 +96,7 @@ export default async function MarketplaceIndexPage() {
 
   // One lookup for the whole grid: authors repeat across listings, so this is a
   // handful of handles even on a page showing the entire catalogue.
-  const verifiedPublishers = await fetchVerifiedPublisherHandles(
+  const publisherBadges = await fetchPublisherBadgeHandles(
     publications.map((publication) => publication.publisherHandle),
   );
 
@@ -153,7 +153,11 @@ export default async function MarketplaceIndexPage() {
                 publication={publication}
                 publisherVerified={
                   !!publication.publisherHandle
-                  && verifiedPublishers.has(publication.publisherHandle.toLowerCase())
+                  && publisherBadges.verified.has(publication.publisherHandle.toLowerCase())
+                }
+                publisherPartner={
+                  !!publication.publisherHandle
+                  && publisherBadges.partners.has(publication.publisherHandle.toLowerCase())
                 }
               />
             ))}

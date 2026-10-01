@@ -145,6 +145,23 @@ class AgentTriggerSchemaTest {
         }
 
         @Test
+        @DisplayName("FORM field default is exposed (execute applies it when data_inputs omits the field), absent when none")
+        void formExposesFieldDefault() {
+            WorkflowPlan plan = planWith(formTrigger("Demande", List.of(
+                    Map.of("name", "theme", "type", "text", "required", true, "default", "Innovation"),
+                    Map.of("name", "auteur", "type", "text", "required", false, "defaultValue", "Ada"),
+                    Map.of("name", "note", "type", "text", "required", false)
+            )));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> fields =
+                    (List<Map<String, Object>>) AgentTriggerSchema.dataInputsSchema(plan).get("fields");
+            assertThat(fields.get(0)).containsEntry("default", "Innovation");
+            assertThat(fields.get(1)).containsEntry("default", "Ada");
+            assertThat(fields.get(2)).doesNotContainKey("default");
+        }
+
+        @Test
         @DisplayName("CHAT trigger advertises message:required canonical field")
         void chatExposesMessageField() {
             WorkflowPlan plan = planWith(simpleTrigger("Greet", "chat"));

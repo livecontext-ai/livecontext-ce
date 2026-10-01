@@ -60,7 +60,7 @@ const subscribe = vi.fn<(...args: unknown[]) => () => void>((channel: unknown, h
   return vi.fn();
 });
 vi.mock('@/lib/websocket', () => ({ wsClient: { subscribe: (...a: unknown[]) => subscribe(...a) } }));
-vi.mock('@/lib/websocket/ws-client', () => ({ wsClient: { subscribe: (...a: unknown[]) => subscribe(...a) } }));
+vi.mock('@/lib/websocket/ws-client', () => ({ wsClient: { onReconnected: () => () => {}, subscribe: (...a: unknown[]) => subscribe(...a) } }));
 
 import { StreamingProvider, useStreaming } from '../StreamingContext';
 import { ApiError } from '@/lib/api/api-client';

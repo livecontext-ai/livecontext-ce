@@ -76,6 +76,15 @@ public final class TokenUsageConventions {
     }
 
     /**
+     * True when {@code provider}'s prompt total CONTAINS its cached tokens: the Claude Code
+     * bridge (inclusive total) and every subset reporter. False only for the Anthropic API,
+     * whose prompt total is the fresh input alone.
+     */
+    public static boolean promptTotalCarriesCachedTokens(String provider) {
+        return shapeOf(provider) != PromptShape.ADDITIVE_EXCLUSIVE;
+    }
+
+    /**
      * True when {@code provider} counts cache tokens BESIDE the prompt total and is
      * billed off those counters, rather than off a cached subset inside it.
      */
@@ -89,7 +98,21 @@ public final class TokenUsageConventions {
      * at its cache-read price. Shape-independent, so it is the only place the two
      * conventions meet.
      */
-    private record Breakdown(long plainInput, long cacheWrite, long cacheRead) {}
+    public record Breakdown(long plainInput, long cacheWrite, long cacheRead) {}
+
+    /**
+     * Split one usage report into the three input classes a provider prices differently,
+     * reading the counters in {@code reportedBy}'s own convention.
+     *
+     * <p>For a caller that has to PRICE tokens rather than re-label them: the budget guards
+     * project a run's cost from these three classes, so a cache read is projected at its
+     * cache price and not, as before 2026-09-30, at the full input rate (a Claude Code
+     * turn, which is mostly cache reads, was projected at about five times its debit).
+     */
+    public static Breakdown inputBreakdown(String reportedBy, long promptTokens, long cacheWriteTokens,
+                                           long cacheReadTokens, long cachedTokens) {
+        return decompose(shapeOf(reportedBy), promptTokens, cacheWriteTokens, cacheReadTokens, cachedTokens);
+    }
 
     /** Input-side counters in the billed provider's own convention. */
     public record InputCounts(long promptTokens, long cacheReadTokens,

@@ -124,8 +124,9 @@ public final class TenantBudgetGuard implements PreIterationGuard {
         // exceed the cached balance. Conservative: this is a snapshot, not authoritative
         // - the post-execution consume in AgentObservabilityService still does the final
         // reconciliation and may reject for races.
-        BigDecimal runCostSoFar = costCalculator.computeCost(
-            ctx.promptTokensSoFar(), ctx.completionTokensSoFar());
+        // Cache-aware: a cache read is priced at its cache price, as the ledger debits it.
+        BigDecimal runCostSoFar = costCalculator.computeCost(ctx.provider(),
+            ctx.promptTokensSoFar(), ctx.completionTokensSoFar(), ctx.cacheTokensSoFar());
 
         // V162: short-circuit when consumed already meets or exceeds balance - symmetric
         // with the JS bridge guard's `if (consumed >= this.balance) return deny('exhausted')`.
@@ -153,15 +154,24 @@ public final class TenantBudgetGuard implements PreIterationGuard {
         //   monotonic growth ramp.
         // - worstCaseSingleIter: contextWindow × maxOutputTokens × rates. Captures
         //   step-function bursts (cruise → 21x burst). Invariant to growth pattern.
+        // - cache miss: the last call again, with everything it read from the cache
+        //   written anew. Every other branch prices the cache mix of past calls (a read is
+        //   ~0.1x input), so one miss (5-minute cache expiry during a long tool call) would
+        //   otherwise overdraw the balance by about ten times its projection. Zero for the
+        //   direct Anthropic API (see ModelCostCalculator.cacheMissReserve).
         // Take the max so any branch alone can trip the guard early.
         long avgPrompt = ctx.avgPromptTokensPerIteration();
         long avgCompletion = ctx.avgCompletionTokensPerIteration();
         long lastDeltaPrompt = ctx.lastIterationPromptTokens();
         long lastDeltaCompletion = ctx.lastIterationCompletionTokens();
-        BigDecimal growthProj = costCalculator.computeCost(avgPrompt, avgCompletion);
-        BigDecimal lastDeltaProj = costCalculator.computeCost(lastDeltaPrompt, lastDeltaCompletion)
+        BigDecimal growthProj = costCalculator.computeCost(ctx.provider(),
+            avgPrompt, avgCompletion, ctx.avgCacheTokensPerIteration());
+        BigDecimal lastDeltaProj = costCalculator.computeCost(ctx.provider(),
+                lastDeltaPrompt, lastDeltaCompletion, ctx.lastIterationCacheTokens())
             .multiply(LAST_DELTA_SAFETY_FACTOR);
-        BigDecimal nextProjected = growthProj.max(lastDeltaProj);
+        BigDecimal cacheMissProj = costCalculator.cacheMissReserve(ctx.provider(),
+            lastDeltaPrompt, lastDeltaCompletion, ctx.lastIterationCacheTokens());
+        BigDecimal nextProjected = growthProj.max(lastDeltaProj).max(cacheMissProj);
         BigDecimal worstCase = costCalculator.worstCaseSingleIter();
         if (worstCase != null) {
             nextProjected = nextProjected.max(worstCase);
@@ -170,12 +180,13 @@ public final class TenantBudgetGuard implements PreIterationGuard {
 
         if (totalProjected.compareTo(cachedBalance) >= 0) {
             String detail = String.format(
-                "tenant balance %s would be exceeded (run=%s + next=%s [growth=%s, lastDelta=%s, worstCase=%s] = %s)",
+                "tenant balance %s would be exceeded (run=%s + next=%s [growth=%s, lastDelta=%s, cacheMiss=%s, worstCase=%s] = %s)",
                 cachedBalance.toPlainString(),
                 runCostSoFar.toPlainString(),
                 nextProjected.toPlainString(),
                 growthProj.toPlainString(),
                 lastDeltaProj.toPlainString(),
+                cacheMissProj.toPlainString(),
                 worstCase != null ? worstCase.toPlainString() : "unknown",
                 totalProjected.toPlainString());
             return GuardResult.deny(AgentStopReason.BUDGET_EXHAUSTED, "tenant", detail);

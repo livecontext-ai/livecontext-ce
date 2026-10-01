@@ -176,12 +176,15 @@ class ApplicationExecuteModuleStopRunTest {
         WorkflowRunEntity run = run(TENANT_ID, null);
         when(runStopToolHandler.resolveTargetRunId(any(), any())).thenReturn(RUN_ID);
         when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
-        when(runStopToolHandler.isCallerOwnRun(eq(run), any())).thenReturn(true);
         when(runStopToolHandler.stop(eq(run), any(), any(), eq("application")))
                 .thenReturn(ToolExecutionResult.success(Map.of("status", "CANCELLED", "self", true)));
 
-        ToolExecutionResult result = stopRun(Map.of(),
-                context(List.of(UUID.randomUUID().toString())));
+        // The caller runs inside RUN_ID: the credential the platform stamps on an agent
+        // executing inside a run (the own-run rule now lives in ApplicationRunAllowList).
+        ToolExecutionResult result = stopRun(Map.of(), new ToolExecutionContext(TENANT_ID,
+                Map.of("allowedApplicationIds", List.of(UUID.randomUUID().toString()),
+                        "__workflowRunId__", RUN_ID),
+                Map.of(), Set.of(), null, null, null, null));
 
         assertThat(result.success()).isTrue();
         verify(runStopToolHandler).stop(eq(run), any(), any(), eq("application"));

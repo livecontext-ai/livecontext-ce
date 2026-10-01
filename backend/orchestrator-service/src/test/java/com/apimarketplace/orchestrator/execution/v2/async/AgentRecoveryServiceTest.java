@@ -250,6 +250,38 @@ class AgentRecoveryServiceTest {
     }
 
     @Test
+    @DisplayName("REGRESSION: scanPending hands every entry with no result to the node policy, which sends a lost retry or ends a lost timeout")
+    void scanHandsUnansweredEntriesToTheNodePolicy() {
+        // The retry and the timeout of a queued agent run on local timers; after a restart (or a
+        // timer refused at shutdown) this scan is the only thing that acts on them.
+        AgentAttemptScheduler attemptScheduler = mock(AgentAttemptScheduler.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(recoveryService, "attemptScheduler", attemptScheduler);
+        PendingAgent waiting = agent("c-wait", Instant.now());
+        registry.registerFromRecovery(waiting);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.get("agent:result:c-wait")).thenReturn(null);
+
+        recoveryService.scanPending();
+
+        verify(attemptScheduler).recover(waiting);
+    }
+
+    @Test
+    @DisplayName("an entry whose result is found is delivered, and never handed to the node policy")
+    void deliveredEntryIsNotHandedToTheNodePolicy() {
+        AgentAttemptScheduler attemptScheduler = mock(AgentAttemptScheduler.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(recoveryService, "attemptScheduler", attemptScheduler);
+        registry.registerFromRecovery(agent("c-done", Instant.now()));
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.get("agent:result:c-done")).thenReturn("{\"success\":true,\"text\":\"ok\"}");
+        when(completionService.onAgentResult(any())).thenReturn(true);
+
+        recoveryService.scanPending();
+
+        verify(attemptScheduler, never()).recover(any());
+    }
+
+    @Test
     @DisplayName("scanPending leaves fresh entries with no result alone")
     void scanLeavesFreshEntriesAlone() {
         PendingAgent fresh = agent("c-fresh", Instant.now());

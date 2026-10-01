@@ -202,6 +202,22 @@ export default function PublishAgentModal({
                 </ul>
                 <p className="text-sm text-theme-secondary mb-6">{t('allAccessErrorFix')}</p>
               </>
+            ) : error?.kind === 'customApi' ? (
+              <>
+                <h2 className="text-xl font-semibold text-theme-primary mb-2">{t('customApiErrorTitle')}</h2>
+                <p className="text-sm text-theme-secondary mb-4">{t('customApiErrorIntro')}</p>
+                <ul className="text-sm text-theme-primary text-left mb-4 space-y-1.5 bg-theme-secondary rounded-xl p-4">
+                  {error.customApis.map((api) => (
+                    <li key={api.apiSlug || api.apiName}>
+                      <span className="font-medium">{api.apiName}</span>
+                      {api.toolIdentifiers.length > 0 && (
+                        <span className="text-theme-secondary">{': '}{api.toolIdentifiers.join(', ')}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-sm text-theme-secondary mb-6">{t('customApiErrorFix')}</p>
+              </>
             ) : error?.kind === 'tooLarge' ? (
               <>
                 <h2 className="text-xl font-semibold text-theme-primary mb-2">{t('snapshotTooLargeTitle')}</h2>

@@ -1062,6 +1062,7 @@ export default function SettingsOverviewPage() {
                     {t('advanced.deleteWarning')}
                   </p>
                   <Button
+                    data-testid="settings-delete-account"
                     variant="destructive"
                     onClick={() => {
                       setShowDeleteConfirm(true);
@@ -1142,6 +1143,7 @@ export default function SettingsOverviewPage() {
                 {t('common.cancel')}
               </Button>
               <Button
+                data-testid="settings-delete-account-confirm"
                 variant="destructive"
                 size="sm"
                 className="h-8 px-3"

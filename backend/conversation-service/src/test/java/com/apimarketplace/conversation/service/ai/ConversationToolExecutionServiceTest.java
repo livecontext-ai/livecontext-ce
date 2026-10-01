@@ -626,6 +626,33 @@ class ConversationToolExecutionServiceTest {
         }
 
         @Test
+        @DisplayName("credential(action='help') returns the tool reference instead of an unknown-action error")
+        void helpActionReturnsTheReference() {
+            ToolResult result = execute("credential", Map.of("action", "help"), Map.of());
+
+            assertThat(result.success()).isTrue();
+            assertThat(result.content())
+                    .contains("\"tool\":\"credential\"")
+                    .contains("set_variable")
+                    .contains("FORCING A RECONNECT");
+        }
+
+        @Test
+        @DisplayName("help, the unknown-action error and the definition enum list the same actions")
+        void actionListsCannotDrift() throws Exception {
+            List<String> actions = com.apimarketplace.agent.prompt.ConversationToolDefinitions.CREDENTIAL_ACTIONS;
+            ToolResult help = execute("credential", Map.of("action", "help"), Map.of());
+            ToolResult unknown = execute("credential", Map.of("action", "rotate"), Map.of());
+
+            Map<?, ?> helpBody = new com.fasterxml.jackson.databind.ObjectMapper().readValue(help.content(), Map.class);
+            assertThat(helpBody.get("actions")).isEqualTo(actions);
+            assertThat(unknown.error()).contains(String.join(", ", actions));
+            assertThat(com.apimarketplace.agent.prompt.ConversationToolDefinitions.getConversationTools(false).stream()
+                    .filter(t -> "credential".equals(t.name())).findFirst().orElseThrow()
+                    .parameters().get(0).enumValues()).isEqualTo(actions);
+        }
+
+        @Test
         @DisplayName("unknown action → error listing the valid actions")
         void unknownActionListsValidActions() {
             ToolResult result = execute("credential", Map.of("action", "rotate"), Map.of());

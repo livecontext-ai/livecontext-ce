@@ -4,8 +4,12 @@ import * as React from 'react';
 import { Sparkles } from 'lucide-react';
 import { ChatPanelContent } from '@/components/app/ChatPanelContent';
 import { pathMatchesAnyPattern, type SidePanelTab } from '@/contexts/SidePanelContext';
+import { AI_CHAT_TAB_ID } from '@/lib/sidePanel/tabResource';
+import { takeOnScreenBeforeReload } from '@/lib/sidePanel/onScreenAcrossReload';
 
-export const AI_CHAT_TAB_ID = 'ai-chat';
+// Re-exported from its owner so the existing import path keeps working (ChatPanelContent reads
+// it too, and importing it from here would be a cycle through this module's ChatPanelContent).
+export { AI_CHAT_TAB_ID };
 
 /**
  * Pages where the AI Chat right-panel tab must NOT appear, regardless of how the user got there:
@@ -63,8 +67,16 @@ export function openAiChatTab(sidePanel: AiChatTabRegistrar): void {
 /**
  * Register the AI Chat tab without opening the panel - used for global auto-registration
  * so the tab is always present (in pages where it's allowed) without forcing the panel open.
+ *
+ * The one exception is a page left by a reload while its AI Chat was on screen (an OAuth connect
+ * started from the chat, an F5): the chat is brought back open, so the conversation that was
+ * waiting can carry on. See onScreenAcrossReload.
  */
-export function registerAiChatTab(sidePanel: AiChatTabRegistrar): void {
+export function registerAiChatTab(sidePanel: AiChatTabRegistrar, pathname: string | null = null): void {
+  if (sidePanel.openTab && takeOnScreenBeforeReload(AI_CHAT_TAB_ID, pathname)) {
+    sidePanel.openTab(buildAiChatTab());
+    return;
+  }
   if (!sidePanel.addTab) return;
   sidePanel.addTab(buildAiChatTab());
 }

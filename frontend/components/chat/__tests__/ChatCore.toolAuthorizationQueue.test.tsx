@@ -194,7 +194,7 @@ describe('ChatCore tool authorization', () => {
 
     await waitFor(() => {
       // 4th arg is the held-call key: undefined here because nothing is parked.
-      expect(mocks.approveToolAuthorization).toHaveBeenCalledWith('conversation-1', 'application:execute', false, undefined);
+      expect(mocks.approveToolAuthorization).toHaveBeenCalledWith('conversation-1', 'application:execute', false, undefined, false);
     });
     await waitFor(() => {
       expect(screen.getByTestId('queued-message')).toHaveTextContent(RESUME_CONTINUE);
@@ -258,6 +258,164 @@ describe('ChatCore tool authorization', () => {
     });
   });
 
+  it('blanketApproveAsksTheBackendToApplyItToTheRunningTurn', async () => {
+    // Regression: the box used to be persisted only for LATER turns, so the released call's
+    // turn raised a new card on its next sensitive call right after "don't ask again".
+    setPending(executeAuthorization);
+    mocks.streaming.isStreamingConversation.mockReturnValue(true);
+
+    render(<ChatCore conversationId="conversation-1" conversation={null} messages={[]} onSendMessage={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'approve-blanket' }));
+
+    await waitFor(() => {
+      expect(mocks.approveToolAuthorization)
+        .toHaveBeenCalledWith('conversation-1', 'application:execute', false, undefined, true);
+    });
+  });
+
+  describe('"don\'t ask again" with sibling cards on screen', () => {
+    const heldFirst = { rule: 'workflow:execute', toolName: 'workflow', action: 'execute', toolCallId: 'call-A', blocking: true, gateKey: 'call-A', argsSummary: '{}', timestamp: 1 };
+    const heldSecond = { rule: 'workflow:pin', toolName: 'workflow', action: 'pin', toolCallId: 'call-B', blocking: true, gateKey: 'call-B', argsSummary: '{}', timestamp: 2 };
+
+    function setSiblings(...auths: object[]) {
+      mocks.streaming.getStreamState.mockReturnValue({
+        status: 'streaming', streamId: 'stream-1', content: 'working',
+        error: null, toolActivities: [], pendingServiceApprovals: [], pendingToolAuthorizations: auths,
+      });
+      mocks.streaming.getPendingToolAuthorizations.mockReturnValue(auths);
+      mocks.streaming.isStreamingConversation.mockReturnValue(true);
+    }
+
+    it('clears the other HELD card from the screen and leaves its release to the backend', async () => {
+      setSiblings(heldFirst, heldSecond);
+      mocks.approveToolAuthorization.mockResolvedValue(true);
+
+      render(<ChatCore conversationId="conversation-1" conversation={null} messages={[]} onSendMessage={vi.fn()} />);
+      fireEvent.click(screen.getAllByRole('button', { name: 'approve-blanket' })[0]!);
+
+      await waitFor(() => {
+        expect(mocks.streaming.clearToolAuthorization).toHaveBeenCalledWith('conversation-1', 'auth:workflow:pin#call-B');
+      });
+      expect(mocks.approveToolAuthorization)
+        .toHaveBeenCalledWith('conversation-1', 'workflow:execute', false, 'call-A', true);
+      // The backend releases the held sibling on the conversation-wide grant. Approving it
+      // from here as well would race that release, lose, and queue a redundant turn.
+      expect(mocks.approveToolAuthorization).toHaveBeenCalledTimes(1);
+      expect(useMessageQueueStore.getState().getQueue('conversation-1')).toHaveLength(0);
+    });
+
+    it('answers a sibling rebuilt after a reload (no hold) and queues the resume that runs it', async () => {
+      const rebuilt = { rule: 'workflow:pin', toolName: 'workflow', action: 'pin', toolCallId: 'call-B', argsSummary: '{}', timestamp: 2 };
+      setSiblings(heldFirst, rebuilt);
+      mocks.approveToolAuthorization.mockResolvedValue(true);
+
+      render(<ChatCore conversationId="conversation-1" conversation={null} messages={[]} onSendMessage={vi.fn()} />);
+      fireEvent.click(screen.getAllByRole('button', { name: 'approve-blanket' })[0]!);
+
+      await waitFor(() => {
+        expect(mocks.approveToolAuthorization)
+          .toHaveBeenCalledWith('conversation-1', 'workflow:pin', false, undefined, true);
+      });
+      // Nothing is holding that call any more: only a new turn (with the grant) runs it.
+      await waitFor(() => {
+        expect(screen.getByTestId('queued-message')).toHaveTextContent(RESUME_CONTINUE);
+      });
+    });
+
+    it('a failed approve for a rebuilt sibling still resumes, so the action is not lost', async () => {
+      const rebuilt = { rule: 'workflow:pin', toolName: 'workflow', action: 'pin', toolCallId: 'call-B', argsSummary: '{}', timestamp: 2 };
+      setSiblings(heldFirst, rebuilt);
+      mocks.approveToolAuthorization.mockImplementation(async (_c: string, rule: string) => {
+        if (rule === 'workflow:pin') throw new Error('network');
+        return true;
+      });
+
+      render(<ChatCore conversationId="conversation-1" conversation={null} messages={[]} onSendMessage={vi.fn()} />);
+      fireEvent.click(screen.getAllByRole('button', { name: 'approve-blanket' })[0]!);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('queued-message')).toHaveTextContent(RESUME_CONTINUE);
+      });
+    });
+
+    it('leaves every sibling on screen when "do not ask again" could not be recorded', async () => {
+      setSiblings(heldFirst, heldSecond);
+      mocks.approveToolAuthorization.mockRejectedValue(new Error('network'));
+
+      render(<ChatCore conversationId="conversation-1" conversation={null} messages={[]} onSendMessage={vi.fn()} />);
+      fireEvent.click(screen.getAllByRole('button', { name: 'approve-blanket' })[0]!);
+
+      await waitFor(() => expect(mocks.approveToolAuthorization).toHaveBeenCalledTimes(1));
+      // Nothing released the held sibling server-side, so hiding its card would strand it.
+      await waitFor(() => {
+        expect(screen.getByTestId('queued-message')).toHaveTextContent(RESUME_CONTINUE);
+      });
+      expect(mocks.streaming.clearToolAuthorization).not.toHaveBeenCalledWith('conversation-1', 'auth:workflow:pin#call-B');
+    });
+
+    it('on an install card, applies the "do not ask again" choice right away and clears the held sibling', async () => {
+      setSiblings(acquireAuthorization, heldSecond);
+
+      render(<ChatCore conversationId="conversation-1" conversation={null} messages={[]} onSendMessage={vi.fn()} />);
+      fireEvent.click(screen.getAllByRole('button', { name: 'approve-blanket' })[0]!);
+
+      await waitFor(() => expect(screen.getByTestId('acquire-modal')).toBeInTheDocument());
+      // Regression: the install path returned before any approve call, so no conversation-wide
+      // grant was recorded and the next sensitive call of the turn asked again.
+      expect(mocks.approveToolAuthorization)
+        .toHaveBeenCalledWith('conversation-1', 'application:acquire', false, undefined, true);
+      expect(mocks.streaming.clearToolAuthorization).toHaveBeenCalledWith('conversation-1', 'auth:workflow:pin#call-B');
+      expect(mocks.updateConfig).toHaveBeenCalledWith({ autoAuthorizeTools: true });
+    });
+
+    it('leaves an install card alone, and a plain approve leaves every sibling alone', async () => {
+      setSiblings(heldFirst, acquireAuthorization, heldSecond);
+      mocks.approveToolAuthorization.mockResolvedValue(true);
+
+      render(<ChatCore conversationId="conversation-1" conversation={null} messages={[]} onSendMessage={vi.fn()} />);
+      // Plain approve first: nothing but its own card is touched.
+      fireEvent.click(screen.getAllByRole('button', { name: 'approve' })[0]!);
+      await waitFor(() => expect(mocks.approveToolAuthorization).toHaveBeenCalledTimes(1));
+      expect(mocks.streaming.clearToolAuthorization).not.toHaveBeenCalledWith('conversation-1', 'auth:workflow:pin#call-B');
+
+      // Then "don't ask again" on the remaining pin card: the install card stays, since
+      // approving it means the USER installs.
+      fireEvent.click(screen.getAllByRole('button', { name: 'approve-blanket' })[1]!);
+      await waitFor(() => {
+        expect(mocks.approveToolAuthorization)
+          .toHaveBeenCalledWith('conversation-1', 'workflow:pin', false, 'call-B', true);
+      });
+      expect(mocks.approveToolAuthorization)
+        .not.toHaveBeenCalledWith('conversation-1', 'application:acquire', expect.anything(), expect.anything());
+      expect(mocks.streaming.clearToolAuthorization).not.toHaveBeenCalledWith('conversation-1', 'auth:application:acquire#call-2');
+    });
+  });
+
+  it('brings a newly shown card into view even when the reader had scrolled up', () => {
+    mocks.streaming.getStreamState.mockReturnValue(null);
+    mocks.streaming.getPendingToolAuthorizations.mockReturnValue([]);
+    mocks.streaming.isStreamingConversation.mockReturnValue(false);
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => { cb(0); return 0; });
+    try {
+      const { rerender } = render(<ChatCore conversationId="conversation-1" conversation={null} messages={[]} onSendMessage={vi.fn()} />);
+      const container = document.querySelector('.chat-messages-container') as HTMLElement;
+      Object.defineProperty(container, 'scrollHeight', { configurable: true, value: 2000 });
+      container.scrollTop = 100;
+
+      // The agent raises a card.
+      setPending(executeAuthorization);
+      rerender(<ChatCore conversationId="conversation-1" conversation={null} messages={[]} onSendMessage={vi.fn()} />);
+      expect(container.scrollTop).toBe(2000);
+
+      // A re-render of a card already seen never moves the page again.
+      container.scrollTop = 100;
+      rerender(<ChatCore conversationId="conversation-1" conversation={null} messages={[]} onSendMessage={vi.fn()} />);
+      expect(container.scrollTop).toBe(100);
+    } finally {
+      rafSpy.mockRestore();
+    }
+  });
+
   it('executeApproveWithNoActiveStreamQueuesResumeByDefaultThenAutoDrains', async () => {
     vi.useFakeTimers();
     setPending(executeAuthorization);
@@ -272,7 +430,7 @@ describe('ChatCore tool authorization', () => {
     });
 
     // 4th arg is the held-call key: undefined here because nothing is parked.
-    expect(mocks.approveToolAuthorization).toHaveBeenCalledWith('conversation-1', 'application:execute', false, undefined);
+    expect(mocks.approveToolAuthorization).toHaveBeenCalledWith('conversation-1', 'application:execute', false, undefined, false);
     expect(useMessageQueueStore.getState().getQueue('conversation-1')).toHaveLength(1);
     expect(useMessageQueueStore.getState().getQueue('conversation-1')[0]?.content).toBe(RESUME_CONTINUE);
     expect(onSendMessage).not.toHaveBeenCalled();

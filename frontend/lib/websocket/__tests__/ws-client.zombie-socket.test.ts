@@ -337,18 +337,19 @@ describe('subscribing on a socket that died without saying so', () => {
     expect(subscribeFramesFor(ws2, CHANNEL)).toHaveLength(1);
   });
 
-  it('a subscribe after the server said goaway does not resurrect the connection', async () => {
+  it('a subscribe after the server said goaway does not jump the retry-after it asked for', async () => {
     // goaway is how the gateway sheds a user who is at their connection cap. Reconnecting
-    // into it is precisely the hammering it asked us to stop.
+    // into it at once is precisely the hammering it asked us to stop - but giving up for
+    // good (what this used to pin) left the tab deaf, see ws-client.goaway-and-resync.test.ts.
     const ws1 = await bringUp();
-    ws1.serverMsg({ v: 1, type: 'goaway', ts: Date.now(), payload: {} });
+    ws1.serverMsg({ v: 1, type: 'goaway', ts: Date.now(), payload: { reason: 'max_connections', retryAfterMs: 30000 } });
     const socketsBefore = MockWebSocket.instances.length;
 
     wsClient.subscribe(CHANNEL, vi.fn());
-    await vi.advanceTimersByTimeAsync(60000);
+    await vi.advanceTimersByTimeAsync(29000);
 
     expect(MockWebSocket.instances.length).toBe(socketsBefore);
-    expect(wsClient.status).toBe('disconnected');
+    expect(wsClient.status).toBe('reconnecting');
   });
 
   it('an action on a healthy socket still resolves on its ack', async () => {

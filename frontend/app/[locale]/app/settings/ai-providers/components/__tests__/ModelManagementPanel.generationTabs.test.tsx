@@ -136,6 +136,10 @@ async function openTab(container: HTMLElement, id: string) {
   await waitFor(() => {
     expect(mocks.getEffectiveModels.mock.calls.length).toBeGreaterThan(before);
     expect(lastAsked()).toBe(expected);
+    // A new call only proves the fetch was ISSUED. Until it lands the panel is
+    // the loading spinner, tab bar included, so wait for the bar to be back.
+    // Deliberately not "this tab is pressed": that is what callers assert.
+    expect(container.querySelector('button[data-category-id]')).not.toBeNull();
   });
 }
 
@@ -158,6 +162,14 @@ describe('ModelManagementPanel - the generation tabs are retired', () => {
       container.querySelector(`button[data-category-id="${id}"]`)!.getAttribute('aria-pressed') === 'true');
 
     expect(pressed()).toEqual(['chat']);
+
+    // The switch's fetch lands a macrotask later, as it does on a loaded CI
+    // runner. A tab switch swaps the whole panel, tab bar included, for the
+    // loading spinner until that fetch lands, so reading the bar while it is
+    // still in flight finds no tab at all. openTab must wait for the landing.
+    mocks.getEffectiveModels.mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve(modelFixture()), 50)),
+    );
 
     await openTab(container, 'browser_agent');
 

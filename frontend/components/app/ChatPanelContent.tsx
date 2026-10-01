@@ -22,16 +22,21 @@ import { resolveFreeTierPreferredModel } from '@/lib/models/freeTierModel';
 import { usePreferFreeTierModel } from '@/lib/hooks/usePreferFreeTierModel';
 import { useStreaming } from '@/contexts/StreamingContext';
 import { useVisibleModels, AIModel, SelectedModel, EMPTY_SELECTED_MODEL, modelMatches, selectedModelFromAIModel, selectedModelEquals, getEffectiveDefaultSelectedModel } from '@/hooks/useModels';
+import { isSelectionAvailable } from '@/lib/models/selection';
 import { useUnifiedAppSafe } from '@/contexts/UnifiedAppContext';
 import { conversationApi, type Message } from '@/lib/api/conversationApi';
 import { reconcileMessageIdentity } from '@/lib/utils/messageUtils';
 import { consumeDraftChatConfig, usePrimeUserChatDefaults } from '@/hooks/useChatConfig';
+import { useConversationResync } from '@/hooks/chat/useConversationResync';
 import { useTranslations } from 'next-intl';
 import { usePathname } from 'next/navigation';
 import type { AttachmentRef } from '@/lib/api/attachmentApi';
 import { subscribeAiChatMessages } from '@/lib/sidePanelChat';
 import { isOrbiChat } from '@/components/chat/orbi/isOrbiChat';
 import type { Conversation } from '@/lib/api/conversationApi';
+import { markSidePanelConversation } from '@/lib/sidePanel/sidePanelConversations';
+import { useMarkOnScreenAcrossReload } from '@/lib/sidePanel/onScreenAcrossReload';
+import { AI_CHAT_TAB_ID } from '@/lib/sidePanel/tabResource';
 
 // Storage key prefix - suffixed with page context for per-page conversations
 const SIDE_PANEL_CONVERSATION_PREFIX = 'livecontext_side_panel_conversation_id';
@@ -56,10 +61,25 @@ function buildStorageKey(pathname: string | null): string {
     : `${SIDE_PANEL_CONVERSATION_PREFIX}:${section}`;
 }
 
+/**
+ * A catalogue model as the composer dropdown wants it. Spreads the full AIModel so the
+ * dropdown's enriched display (capability icons, context window, deprecation, rate-limit
+ * popover) has the data it needs without a second round-trip. Module scope so the memos that
+ * call it do not depend on a function recreated every render.
+ */
+function toDropdownModel(model: AIModel) {
+  return {
+    ...model,
+    provider: model.provider.charAt(0).toUpperCase() + model.provider.slice(1),
+    providerSlug: model.provider.toLowerCase(),
+    iconSlug: PROVIDER_ICON_MAP[model.provider.toLowerCase()] || model.provider.toLowerCase(),
+  };
+}
+
 export function ChatPanelContent() {
   const t = useTranslations();
   const streaming = useStreaming();
-  const { models, defaultModel, isLoading: modelsLoading, error: modelsError } = useVisibleModels();
+  const { models, unlistedModels, defaultModel, isLoading: modelsLoading, error: modelsError } = useVisibleModels();
   // Same gate as ModelPicker: never show the no-provider empty state while the
   // catalog is loading or after a fetch error - only once it RESOLVED empty.
   const modelsResolvedEmpty = !modelsLoading && !modelsError;
@@ -90,7 +110,9 @@ export function ChatPanelContent() {
     () => (defaultAIModel ? selectedModelFromAIModel(defaultAIModel) : getEffectiveDefaultSelectedModel()),
     [defaultAIModel],
   );
-  const isValidModel = models.length > 0 && !!appSelectedModel.id && models.some(m => modelMatches(m, appSelectedModel));
+  // An UNLISTED model (V554) picked from the composer's hidden group is still a valid choice.
+  const isValidModel = (models.length > 0 || (unlistedModels ?? []).length > 0)
+    && isSelectionAvailable(appSelectedModel, models, unlistedModels);
   const selectedModel: SelectedModel = isValidModel ? appSelectedModel : effectiveDefault;
 
   useEffect(() => {
@@ -112,19 +134,11 @@ export function ChatPanelContent() {
 
   const [showModelSelector, setShowModelSelector] = useState(false);
 
-  const availableModels = useMemo(() => {
-    // Spread the full AIModel so the dropdown's enriched display
-    // (capability icons, context window, deprecation, rate-limit popover)
-    // has the data it needs without a second round-trip.
-    return models.map((model: AIModel) => ({
-      ...model,
-      provider: model.provider.charAt(0).toUpperCase() + model.provider.slice(1),
-      providerSlug: model.provider.toLowerCase(),
-      iconSlug: PROVIDER_ICON_MAP[model.provider.toLowerCase()] || model.provider.toLowerCase(),
-    }));
-  }, [models]);
+  const availableModels = useMemo(() => models.map(toDropdownModel), [models]);
+  const hiddenModels = useMemo(() => (unlistedModels ?? []).map(toDropdownModel), [unlistedModels]);
 
-  const selectedModelData = availableModels.find(m => modelMatches(m, selectedModel));
+  const selectedModelData = availableModels.find(m => modelMatches(m, selectedModel))
+    ?? hiddenModels.find(m => modelMatches(m, selectedModel));
 
   // Model selector now lives in the composer (left of the mic). ModelSelectorDropdown
   // owns its own outside-click handling, so no effect is needed here.
@@ -135,6 +149,7 @@ export function ChatPanelContent() {
       selectedModel={selectedModel}
       selectedModelData={selectedModelData}
       availableModels={availableModels}
+      unlistedModels={hiddenModels}
       setSelectedModel={setSelectedModel}
       changeModelTitle={t('actions.changeModel')}
       noModelsLabel={modelsResolvedEmpty ? t('aiProviders.noProviderCta.noModels') : undefined}
@@ -150,9 +165,11 @@ export function ChatPanelContent() {
   );
 
   const [conversationId, setConversationId] = useState<string | null>(null);
-  // What the panel knows about its conversation, for the Orbi gate: a stored id can point at a
-  // conversation this panel did not create, so it is read, never assumed.
-  const [conversationMeta, setConversationMeta] = useState<Pick<Conversation, 'id' | 'kind' | 'agentId'> | null>(null);
+  // The conversation as read, whole: for the Orbi gate (a stored id can point at a conversation
+  // this panel did not create, so it is read, never assumed), and for the cards the agent left
+  // waiting (a credential to connect...), which ChatCore rebuilds from its pendingActions after a
+  // reload. Without it, the card of an OAuth round trip never came back and nothing resumed.
+  const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const conversationIdRef = useRef<string | null>(null);
@@ -163,6 +180,41 @@ export function ChatPanelContent() {
     conversationIdRef.current = conversationId;
   }, [conversationId]);
 
+  // What this chat's agent builds opens beside it, not in front of it (sidePanelConversations).
+  useEffect(() => {
+    markSidePanelConversation(conversationId);
+  }, [conversationId]);
+
+  // Mounted means on screen (the tab is not keepMounted): a reload brings the chat back open.
+  useMarkOnScreenAcrossReload(AI_CHAT_TAB_ID);
+
+  // Read again when a turn ends, which is when the agent's waiting cards are saved.
+  const refreshConversation = useCallback(async (cid: string) => {
+    try {
+      const reread = await conversationApi.getConversation(cid) as Conversation | null;
+      if (reread?.id === cid && conversationIdRef.current === cid) setConversation(reread);
+    } catch {
+      // Keeps what it had: the messages reload reports its own failure.
+    }
+  }, []);
+
+  // The panel's one silent re-read of its conversation. Identity-preserving: an unchanged thread
+  // reconciles to the same array, so the reconciliation commits nothing and is invisible. Dropped
+  // when the panel has moved to another conversation meanwhile (a page change resets it). The
+  // conversation itself is read again too: its waiting cards are saved when a turn ends.
+  const rereadMessages = useCallback(async (cid: string) => {
+    void refreshConversation(cid);
+    try {
+      const reloaded = await conversationApi.getRecentMessagesAsc(cid);
+      if (conversationIdRef.current !== cid) return;
+      if (Array.isArray(reloaded)) setMessages(prev => reconcileMessageIdentity(prev, reloaded));
+    } catch (err) {
+      console.error('[ChatPanelContent] Failed to reload messages:', err);
+    }
+  }, [refreshConversation]);
+  // Re-read on a WebSocket reconnect, and when a stream of this conversation ends or errors.
+  const resync = useConversationResync(conversationId, rereadMessages);
+
   // Load the side-panel conversation - re-runs when storageKey changes (page navigation)
   useEffect(() => {
     if (loadedKeyRef.current === storageKey) return;
@@ -170,7 +222,7 @@ export function ChatPanelContent() {
 
     // Reset state for new page context
     setConversationId(null);
-    setConversationMeta(null);
+    setConversation(null);
     conversationIdRef.current = null;
     setMessages([]);
 
@@ -184,20 +236,16 @@ export function ChatPanelContent() {
 
         if (storedId) {
           try {
-            const conv = await conversationApi.getConversation(storedId) as any;
+            const conv = await conversationApi.getConversation(storedId) as Conversation | null;
             if (conv?.id) {
               setConversationId(conv.id);
-              setConversationMeta({ id: conv.id, kind: conv.kind, agentId: conv.agentId });
+              setConversation(conv);
               conversationIdRef.current = conv.id;
               const msgs = await conversationApi.getRecentMessagesAsc(conv.id);
               if (Array.isArray(msgs)) setMessages(msgs);
               streaming.checkAndReconnect(conv.id, {
-                onStreamComplete: async (cid) => {
-                  const reloaded = await conversationApi.getRecentMessagesAsc(cid);
-                  // Identity-preserving: the reconciliation must not repaint the thread the
-                  // user is reading (see reconcileMessageIdentity).
-                  if (Array.isArray(reloaded)) setMessages(prev => reconcileMessageIdentity(prev, reloaded));
-                },
+                onStreamComplete: resync.onStreamComplete,
+                onError: resync.onError,
               });
               return;
             }
@@ -215,7 +263,7 @@ export function ChatPanelContent() {
     };
 
     loadConversation();
-  }, [streaming, storageKey]);
+  }, [streaming, storageKey, resync]);
 
   const handleSendMessage = useCallback(async (content?: string, attachments?: AttachmentRef[], defaultSkillIds?: string[], opts?: { keepPendingActions?: boolean }) => {
     if (!content?.trim()) return;
@@ -244,7 +292,7 @@ export function ChatPanelContent() {
         if (newConv?.id) {
           cid = newConv.id;
           setConversationId(cid);
-          setConversationMeta({ id: newConv.id, kind: newConv.kind, agentId: newConv.agentId });
+          setConversation(newConv);
           conversationIdRef.current = cid;
           if (typeof window !== 'undefined') {
             sessionStorage.setItem(storageKey, cid);
@@ -297,25 +345,17 @@ export function ChatPanelContent() {
           })),
         },
         {
-          onStreamComplete: async (convId) => {
-            try {
-              const reloaded = await conversationApi.getRecentMessagesAsc(convId);
-              // Identity-preserving: an unchanged thread reconciles to the same array, so the
-              // end-of-stream reconciliation commits nothing and is invisible.
-              if (Array.isArray(reloaded)) setMessages(prev => reconcileMessageIdentity(prev, reloaded));
-            } catch (err) {
-              console.error('[ChatPanelContent] Failed to reload messages:', err);
-            }
-          },
-          onError: (err) => {
+          onStreamComplete: resync.onStreamComplete,
+          onError: (err, erroredConvId) => {
             console.error('[ChatPanelContent] Stream error:', err);
+            resync.onError(err, erroredConvId);
           },
         },
       );
     } catch (err) {
       console.error('[ChatPanelContent] Error sending message:', err);
     }
-  }, [selectedModel, messages, streaming]);
+  }, [selectedModel, messages, streaming, resync]);
 
   const handleStopStream = useCallback(() => {
     if (conversationIdRef.current) {
@@ -383,6 +423,7 @@ export function ChatPanelContent() {
           />
         )}
         conversationId={conversationId}
+        conversation={conversation}
         messages={messages}
         isLoading={isLoading}
         onSendMessage={handleSendMessage}
@@ -393,7 +434,7 @@ export function ChatPanelContent() {
         leadingControl={leadingControl}
         welcomeLayout
         welcomeTitle={<WelcomeTitle>{t('sidePanel.welcomeTitle')}</WelcomeTitle>}
-        showOrbi={isOrbiChat({ conversationId, conversation: conversationMeta, agentId: null }) ? 'compact' : false}
+        showOrbi={isOrbiChat({ conversationId, conversation, agentId: null }) ? 'compact' : false}
       />
 
       {/* Mounted only while open: the dialog asks the catalogue for its models, and a panel that

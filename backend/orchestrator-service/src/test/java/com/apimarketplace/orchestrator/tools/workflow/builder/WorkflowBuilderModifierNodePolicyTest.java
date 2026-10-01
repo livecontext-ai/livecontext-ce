@@ -107,25 +107,29 @@ class WorkflowBuilderModifierNodePolicyTest {
     void policyNeverLandsInTheToolParams() {
         WorkflowBuilderSession session = session();
 
-        modifyWithPolicy(session, "Publish", Map.of("providerRetryMaxWaitSec", 0));
+        modifyWithPolicy(session, "Publish", Map.of("retryCount", 1));
 
         Map<String, Object> node = publishNode(session);
         assertThat((Map<String, Object>) node.get("params"))
                 .as("an argument the endpoint never declared is either ignored or rejected by the "
                         + "provider, and either way the policy did nothing")
                 .containsOnlyKeys("caption");
-        assertThat(node).doesNotContainKey("providerRetryMaxWaitSec");
+        assertThat(node).doesNotContainKey("retryCount");
     }
 
     @Test
-    @DisplayName("a zero provider budget survives, because that is the whole point of the setting")
-    void zeroProviderBudgetSurvives() {
+    @DisplayName("REGRESSION: the removed provider-retry budget is refused on a tool step, and nothing is written")
+    void removedProviderBudgetIsRefusedOnAToolStep() {
         WorkflowBuilderSession session = session();
 
-        modifyWithPolicy(session, "Publish", Map.of("providerRetryMaxWaitSec", 0));
+        ToolExecutionResult result = modifyWithPolicy(session, "Publish",
+                Map.of("providerRetryMaxWaitSec", 0));
 
-        assertThat(publishNode(session).get(NodePolicy.JSON_KEY))
-                .isEqualTo(Map.of("providerRetryMaxWaitSec", 0));
+        assertThat(result.success()).isFalse();
+        assertThat(result.error())
+                .contains("never retries a provider refusal")
+                .contains("retryBackoffMs");
+        assertThat(publishNode(session)).doesNotContainKey(NodePolicy.JSON_KEY);
     }
 
     @Test
@@ -275,7 +279,7 @@ class WorkflowBuilderModifierNodePolicyTest {
     }
 
     @Test
-    @DisplayName("a provider-retry budget on a node that calls no provider is refused")
+    @DisplayName("the removed provider-retry budget on a node that calls no provider is refused too")
     void providerBudgetOnANonToolNodeIsRefused() {
         WorkflowBuilderSession session = session();
         addDecision(session);
@@ -284,7 +288,7 @@ class WorkflowBuilderModifierNodePolicyTest {
                 Map.of("providerRetryMaxWaitSec", 0));
 
         assertThat(result.success()).isFalse();
-        assertThat(result.error()).contains("catalog tool step only").contains("left unchanged");
+        assertThat(result.error()).contains("no longer exists").contains("left unchanged");
         assertThat(session.getCores().get(0)).doesNotContainKey(NodePolicy.JSON_KEY);
     }
 

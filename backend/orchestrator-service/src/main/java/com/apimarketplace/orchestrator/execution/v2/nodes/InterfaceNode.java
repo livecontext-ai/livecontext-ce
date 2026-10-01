@@ -445,14 +445,16 @@ public class InterfaceNode extends BaseNode {
             return Optional.empty();
         }
         try {
-            // Centralised resolution: resolveTemplateSnapshot calls render() then applies
-            // {{var|default}} substitution using items[0].data() - same path as the screenshot
-            // sidecar consumes, so rendered_html matches the iframe + the captured PNG.
+            // Centralised resolution, scoped to THIS execution's (spawn, itemIndex) - the same
+            // coordinates the screenshot sidecar is fed, so rendered_html matches the captured
+            // PNG, and inside a split it shows this item rather than another one's data.
             return renderService.resolveTemplateSnapshot(
                 parsedInterfaceId,
                 context.runId(),
                 context.tenantId(),
-                effectiveEpoch
+                effectiveEpoch,
+                context.spawn(),
+                context.itemIndex()
             );
         } catch (Exception e) {
             // Continue-on-failure: cosmetic feature must never break the workflow.

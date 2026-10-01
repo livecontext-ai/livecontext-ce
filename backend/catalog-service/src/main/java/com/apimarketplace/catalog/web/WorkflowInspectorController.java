@@ -1,10 +1,12 @@
 package com.apimarketplace.catalog.web;
 
+import com.apimarketplace.catalog.dto.CustomApiRefDTO;
 import com.apimarketplace.catalog.dto.ToolBatchRequest;
 import com.apimarketplace.catalog.dto.WorkflowApiDTO;
 import com.apimarketplace.catalog.dto.WorkflowToolDTO;
 import com.apimarketplace.catalog.dto.WorkflowToolDetailDTO;
 import com.apimarketplace.catalog.service.WorkflowInspectorService;
+import com.apimarketplace.common.web.TenantResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -301,6 +303,45 @@ public class WorkflowInspectorController {
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             log.error("Error in batch tool fetch: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    /**
+     * Report which of the CALLER'S OWN custom APIs the given tool identifiers use.
+     * POST /api/workflow-inspector/custom-apis
+     *
+     * <p>Custom APIs are private to the tenant that registered them, so a workflow or
+     * agent built on one cannot be shared: the acquirer's catalog has no such API.
+     * The publish surfaces call this to warn before submitting; publication-service
+     * enforces the same rule server-side via its internal twin.
+     *
+     * <p>Identifiers accept an mcp node's {@code apiSlug/toolSlug}, an agent tool grant's
+     * {@code apiSlug:toolSlug}, a bare {@code tool_slug}, or an {@code api_tools.id} UUID.
+     * (Wider than {@code /tools/batch}, which matches {@code tool_slug} or the id only.)
+     *
+     * <p>Scoped to the caller's workspace on purpose: this is a warning surface for the
+     * caller's own plan, and an unscoped answer would let anyone probe slugs to learn
+     * other tenants' private API names. The publish gate (internal twin) stays unscoped,
+     * because an acquired workflow can carry a node built on its publisher's custom API.
+     *
+     * Request body: {@code {"toolSlugs": ["my-api/do-thing", ...]}}
+     * Response: {@code {"customApis": [{"apiSlug": ..., "apiName": ..., "toolIdentifiers": [...]}]}}
+     */
+    @PostMapping("/custom-apis")
+    public ResponseEntity<Map<String, Object>> findCustomApiRefs(
+            @RequestBody ToolBatchRequest request,
+            @RequestHeader(value = "X-User-ID", required = false) String userId) {
+        try {
+            List<String> identifiers = request != null ? request.toolSlugs() : null;
+            if (identifiers == null || identifiers.isEmpty() || userId == null || userId.isBlank()) {
+                return ResponseEntity.ok(Map.of("customApis", List.of()));
+            }
+            List<CustomApiRefDTO> customApis = workflowInspectorService.findCustomApiRefsInScope(
+                    identifiers, userId, TenantResolver.currentRequestOrganizationId());
+            return ResponseEntity.ok(Map.of("customApis", customApis));
+        } catch (Exception e) {
+            log.error("Error resolving custom API references: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }

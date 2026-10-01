@@ -31,7 +31,23 @@ describe('mapProfile', () => {
       joinedAt: '2026-01-15T09:00:00',
       searchIndexable: true,
       verified: true,
+      partner: false,
+      partnerTier: null,
     });
+  });
+
+  it('carries the partner tier only for a partner, and only a known tier', () => {
+    expect(mapProfile(rawProfile({ partner: true, partnerTier: 'gold' }))?.partnerTier).toBe('gold');
+    expect(mapProfile(rawProfile({ partner: false, partnerTier: 'gold' }))?.partnerTier).toBeNull();
+    expect(mapProfile(rawProfile({ partner: true, partnerTier: 'diamond' }))?.partnerTier).toBeNull();
+    expect(mapProfile(rawProfile({ partner: true }))?.partnerTier).toBeNull();
+  });
+
+  it('carries the official-partner badge only on an explicit true', () => {
+    expect(mapProfile(rawProfile({ partner: true }))?.partner).toBe(true);
+    for (const partner of [undefined, 'true', 1, null, false]) {
+      expect(mapProfile(rawProfile({ partner }))?.partner).toBe(false);
+    }
   });
 
   it.each([

@@ -150,6 +150,53 @@ describe('filterVisibleModels', () => {
   });
 });
 
+describe('filterVisibleModels - unlisted models (V554)', () => {
+  const unlisted = (m: AIModel): AIModel => ({ ...m, unlisted: true });
+  const gpt5 = model('openai', 'gpt-5', 'cloud');
+  const gpt4o = unlisted(model('openai', 'gpt-4o', 'cloud'));
+  const codexOld = unlisted(model('codex', 'gpt-4.1', 'bridge'));
+  const legacyOnly = unlisted(model('mistral', 'mistral-large-2', 'cloud'));
+  const catalog = {
+    models: [gpt5, gpt4o, codexOld, legacyOnly],
+    providers: [
+      provider('openai', [gpt5, gpt4o]),
+      provider('codex', [codexOld]),
+      provider('mistral', [legacyOnly]),
+    ],
+    defaultModel: 'gpt-5',
+    defaultProvider: 'openai',
+    isLoading: false,
+    error: null,
+    refresh: async () => {},
+  };
+
+  it('moves unlisted models out of models/providers into unlistedModels, for an admin too', () => {
+    const out = filterVisibleModels(catalog, true);
+
+    expect(out.models.map(m => m.id)).toEqual(['gpt-5']);
+    expect(out.providers.map(p => p.name)).toEqual(['openai']);
+    expect(out.providers[0].models.map(m => m.id)).toEqual(['gpt-5']);
+    expect(out.unlistedModels?.map(m => `${m.provider}/${m.id}`))
+      .toEqual(['openai/gpt-4o', 'codex/gpt-4.1', 'mistral/mistral-large-2']);
+  });
+
+  it('a non-admin never gets a bridge, not even among the unlisted', () => {
+    const out = filterVisibleModels(catalog, false);
+
+    expect(out.unlistedModels?.map(m => m.id)).toEqual(['gpt-4o', 'mistral-large-2']);
+  });
+
+  it('a provider left with only unlisted models disappears from the provider list', () => {
+    expect(filterVisibleModels(catalog, false).providers.map(p => p.name)).toEqual(['openai']);
+  });
+
+  it('leaves the defaults alone: the backend already never picks an unlisted one', () => {
+    const out = filterVisibleModels(catalog, true);
+    expect(out.defaultModel).toBe('gpt-5');
+    expect(out.defaultProvider).toBe('openai');
+  });
+});
+
 describe('toNonBridgeSelectedModel (compaction-summariser seed guard)', () => {
   // A CLI bridge can never serve the summariser's bare single completion, so
   // seeding must never produce a bridge pair - it falls back to the first
@@ -223,5 +270,39 @@ describe('toNonBridgeSelectedModel (compaction-summariser seed guard)', () => {
   it('returns EMPTY for a bridge seed when the cache is not populated', () => {
     expect(toNonBridgeSelectedModel({ provider: 'claude-code', id: 'x' }, null))
       .toBe(EMPTY_SELECTED_MODEL);
+  });
+});
+
+describe('toNonBridgeSelectedModel - unlisted models (V554)', () => {
+  it('never falls back to an unlisted model, even the provider default or the first row', () => {
+    const data: ModelsData = {
+      providers: [
+        provider('claude-code', [model('claude-code', 'claude-opus-4-6', 'bridge')], 1),
+        provider('anthropic', [
+          { ...model('anthropic', 'claude-3-opus', 'cloud'), unlisted: true },
+          model('anthropic', 'claude-haiku-4-5', 'cloud'),
+        ], 2),
+      ],
+      defaultProvider: 'claude-code',
+      defaultModel: 'claude-opus-4-6',
+    };
+    // The provider's declared default is the unlisted one.
+    data.providers[1].defaultModel = 'claude-3-opus';
+
+    expect(toNonBridgeSelectedModel({ provider: 'claude-code', id: 'claude-opus-4-6' }, data))
+      .toEqual({ provider: 'anthropic', id: 'claude-haiku-4-5' });
+  });
+
+  it('skips a provider whose only non-bridge models are unlisted', () => {
+    const data: ModelsData = {
+      providers: [
+        provider('mistral', [{ ...model('mistral', 'mistral-large-2', 'cloud'), unlisted: true }], 1),
+        provider('openai', [model('openai', 'gpt-5', 'cloud')], 2),
+      ],
+      defaultProvider: 'mistral',
+      defaultModel: 'mistral-large-2',
+    };
+
+    expect(toNonBridgeSelectedModel(EMPTY_SELECTED_MODEL, data)).toEqual({ provider: 'openai', id: 'gpt-5' });
   });
 });

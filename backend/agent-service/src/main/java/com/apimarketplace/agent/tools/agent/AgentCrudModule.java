@@ -809,9 +809,19 @@ public class AgentCrudModule implements ToolModule {
         } catch (com.apimarketplace.auth.client.entitlement.LimitExceededException e) {
             refundCreateSlot(tenantId, turnId);
             return ToolExecutionResult.failure(ToolErrorCode.EXTERNAL_SERVICE_ERROR, e.getMessage());
+        } catch (com.apimarketplace.agent.service.AgentNameConflictException e) {
+            // Name already held by an active agent: nothing was created, so the slot is refunded.
+            refundCreateSlot(tenantId, turnId);
+            return nameConflictResult(e);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // Lost a race at the unique index: same answer as the checked duplicate.
+            refundCreateSlot(tenantId, turnId);
+            return nameConflictFromIndex(e)
+                .orElseGet(() -> ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                    "Failed to create agent: " + e.getMessage()));
         } catch (IllegalArgumentException e) {
             // Validation failures (temperature/max_iterations/execution_timeout bounds,
-            // duplicate name, blank tenant, …). Surface the message verbatim so the LLM
+            // blank tenant, …). Surface the message verbatim so the LLM
             // sees exactly which bound it violated and can self-correct on the next call.
             refundCreateSlot(tenantId, turnId);
             return ToolExecutionResult.failure(ToolErrorCode.EXTERNAL_SERVICE_ERROR, e.getMessage());
@@ -1444,6 +1454,15 @@ public class AgentCrudModule implements ToolModule {
             Map<String, Object> metadata = Map.of("visualization",
                 Map.of("type", "agent", "id", result.getId().toString(), "title", result.getName()));
             return ToolExecutionResult.success(responseMap, metadata);
+        } catch (com.apimarketplace.agent.service.AgentNameConflictException e) {
+            return nameConflictResult(e);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // An update that lost the race renamed (or re-activated) THIS agent: rename advice.
+            return com.apimarketplace.agent.service.AgentNameConflictException
+                .fromIndexViolation(e, (org, taken) -> agentService.allocateAgentNameForRename(org, taken, id), true)
+                .map(AgentCrudModule::nameConflictResult)
+                .orElseGet(() -> ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                    "Failed to update agent: " + e.getMessage()));
         } catch (IllegalArgumentException e) {
             // Validation failures (temperature/max_iterations/execution_timeout bounds, …).
             // Surface the message verbatim so the LLM can self-correct on the next call.
@@ -1451,6 +1470,42 @@ public class AgentCrudModule implements ToolModule {
         } catch (Exception e) {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to update agent: " + e.getMessage());
         }
+    }
+
+    /**
+     * A typed name (create, or update with a new name) is already held by an active agent of
+     * the workspace. Refused on purpose, never renamed silently: an agent retrying create in a
+     * loop must stop here, not mint "Name (2)", "Name (3)"... The message states both ways out
+     * (update the existing agent, or repeat the call with the free name) and the metadata
+     * carries them as fields: {@code suggested_name}, {@code existing_agent_id}.
+     */
+    static ToolExecutionResult nameConflictResult(com.apimarketplace.agent.service.AgentNameConflictException e) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("code", "AGENT_NAME_CONFLICT");
+        if (e.getName() != null) meta.put("name", e.getName());
+        if (e.getSuggestedName() != null) meta.put("suggested_name", e.getSuggestedName());
+        if (e.getExistingAgentId() != null) meta.put("existing_agent_id", e.getExistingAgentId().toString());
+        if (e.isRename()) {
+            // Renaming your own agent: the other agent is not the one you meant, only the name can change.
+            meta.put("next_action", e.getSuggestedName() != null
+                ? "Repeat the same update with name='" + e.getSuggestedName() + "'."
+                : "Repeat the same update with a different name.");
+            return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_CONFLICT, e.getMessage(), meta);
+        }
+        String ifExisting = e.getExistingAgentId() != null
+            ? "If you meant the existing agent, call agent(action='update', agent_id='" + e.getExistingAgentId() + "') instead. "
+            : "If you meant the existing agent, find its ID with agent(action='list') and call agent(action='update') on it instead. ";
+        meta.put("next_action", ifExisting + (e.getSuggestedName() != null
+            ? "Otherwise repeat the same call with name='" + e.getSuggestedName() + "'."
+            : "Otherwise repeat the same call with a different name."));
+        return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_CONFLICT, e.getMessage(), meta);
+    }
+
+    /** The unique index refused a CREATE (a concurrent writer won); mapped to the same conflict. */
+    private Optional<ToolExecutionResult> nameConflictFromIndex(org.springframework.dao.DataIntegrityViolationException e) {
+        return com.apimarketplace.agent.service.AgentNameConflictException
+            .fromIndexViolation(e, (org, name) -> agentService.allocateAgentName(org, name))
+            .map(AgentCrudModule::nameConflictResult);
     }
 
     // ==================== Delete ====================
@@ -2037,7 +2092,9 @@ public class AgentCrudModule implements ToolModule {
         // itself stays unfiltered - it also
         // backs validation, where dropping a bridge would invalidate the agents already stored on one.
         boolean callerIsAdmin = com.apimarketplace.common.web.AdminRoleGuard.isAdmin(callerRoles(context));
+        // Unlisted models (V554) are runnable but not offered, same as in help_models.
         List<AvailableModel> available = modelCatalogService.listAvailableModels().stream()
+                .filter(m -> !m.unlisted())
                 .filter(m -> !BridgeProviders.isHiddenFromUser(
                         bridgeProviderSaveGuard == null || bridgeProviderSaveGuard.isSelfHosted(),
                         callerIsAdmin,

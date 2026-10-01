@@ -18,6 +18,7 @@ import { useMobileDetection } from '@/hooks/useMobileDetection';
 import { scrollToAndHighlightMessage } from '@/lib/chat/messageActivity';
 import { HighlightedApps } from '@/components/chat/HighlightedApps';
 import { HomeDynamicTitle } from '@/components/chat/HomeDynamicTitle';
+import { ROTATING_TITLE_SLOT_CLASS } from './WelcomeTitle';
 import { HomeSuggestionChips } from '@/components/chat/HomeSuggestionChips';
 import { HomeModeSwitch } from '@/components/chat/HomeModeSwitch';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
@@ -248,7 +249,9 @@ export function ChatPageLayout({
                     <div className="hidden sm:flex sm:flex-col w-full">
                       {/* Title + composer anchored at ~22vh so the tools popup has room above */}
                       <div className="pt-[22vh] shrink-0 mx-auto max-w-4xl px-2 w-full">
-                        <div className="text-center max-w-md mx-auto mb-8">
+                        {/* Fixed-height slot: a rotation that wraps the title to a second line
+                            must not move the composer below it (see ROTATING_TITLE_SLOT_CLASS). */}
+                        <div className={`text-center max-w-md mx-auto mb-8 ${ROTATING_TITLE_SLOT_CLASS}`} data-testid="home-title-slot">
                           <HomeDynamicTitle paused={interactionPaused} />
                         </div>
 

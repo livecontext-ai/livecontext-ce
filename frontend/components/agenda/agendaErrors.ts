@@ -1,4 +1,5 @@
 import { agendaFailureOf } from '@/lib/api/orchestrator/agenda.service';
+import { readAgentNameConflict } from '@/lib/agents/agentNameConflict';
 
 /**
  * Which sentence a refusal should become.
@@ -19,6 +20,8 @@ export interface AgendaErrorText {
   key: string | null;
   /** The server's own explanation, when it sent one worth showing. */
   detail?: string;
+  /** Values for the placeholders of `key`. */
+  values?: Record<string, string>;
 }
 
 /**
@@ -26,6 +29,16 @@ export interface AgendaErrorText {
  *          are more specific than anything this can say.
  */
 export function agendaErrorText(error: unknown): AgendaErrorText {
+  // Resuming a paused agent re-activates it, and another active agent may have taken its
+  // name meanwhile: the server refuses with the name and the first free one. Say that, in
+  // the user's language, instead of the server's English sentence.
+  const nameConflict = readAgentNameConflict(error);
+  if (nameConflict) {
+    const name = nameConflict.name ?? '';
+    return nameConflict.suggestedName
+      ? { key: 'errors.agentNameTaken', values: { name, suggestion: nameConflict.suggestedName } }
+      : { key: 'errors.agentNameTakenNoSuggestion', values: { name } };
+  }
   const { reason, detail } = agendaFailureOf(error);
   switch (reason) {
     case 'PATTERN_NOT_SHIFTABLE':

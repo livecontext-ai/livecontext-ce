@@ -259,6 +259,77 @@ class ConversationSharingServiceTest {
         }
     }
 
+    // ──────────────── findSharedInScope (share-link creation check) ────────────────
+
+    /**
+     * publication-service asks this before it files a CONVERSATION share link for a caller: the
+     * link lands in the caller's workspace, so it may only name a shared conversation of that
+     * workspace. Before it existed, any user could file a link naming someone else's cs_ token.
+     */
+    @Nested
+    @DisplayName("findSharedInScope")
+    class FindSharedInScope {
+
+        private static final String ORG_A = "org-a";
+        private static final String ORG_B = "org-b";
+
+        private Conversation sharedConversationOfOrgA() {
+            Conversation conv = buildConversation(CONV_ID, USER_ID);
+            conv.setOrganizationId(ORG_A);
+            conv.setShareToken("cs_shared");
+            conv.setShareMode("read");
+            when(conversationRepository.findByShareTokenHash(TokenAtRest.hash("cs_shared"))).thenReturn(Optional.of(conv));
+            return conv;
+        }
+
+        @Test
+        @DisplayName("answers the conversation for a caller of its own workspace")
+        void answersForSameWorkspace() {
+            sharedConversationOfOrgA();
+
+            assertThat(service.findSharedInScope("cs_shared", USER_ID, ORG_A))
+                    .map(Conversation::getId).contains(CONV_ID);
+        }
+
+        @Test
+        @DisplayName("refuses a caller of another workspace, even the conversation's own user: the link would be filed there")
+        void refusesAnotherWorkspace() {
+            sharedConversationOfOrgA();
+
+            assertThat(service.findSharedInScope("cs_shared", OTHER_USER, ORG_B)).isEmpty();
+            assertThat(service.findSharedInScope("cs_shared", USER_ID, ORG_B))
+                    .as("strict scope, not the owner-or-org tolerance of enableSharing").isEmpty();
+        }
+
+        @Test
+        @DisplayName("answers a teammate of the same workspace: the workspace is the scope, as in the sidebar")
+        void answersTeammateOfSameWorkspace() {
+            sharedConversationOfOrgA();
+
+            assertThat(service.findSharedInScope("cs_shared", OTHER_USER, ORG_A))
+                    .map(Conversation::getId).contains(CONV_ID);
+        }
+
+        @Test
+        @DisplayName("refuses a conversation with no share mode at all")
+        void refusesNullShareMode() {
+            sharedConversationOfOrgA().setShareMode(null);
+
+            assertThat(service.findSharedInScope("cs_shared", USER_ID, ORG_A)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("refuses a conversation whose sharing is off, and an unknown token")
+        void refusesSharingOffAndUnknownToken() {
+            Conversation conv = sharedConversationOfOrgA();
+            conv.setShareMode("off");
+            when(conversationRepository.findByShareTokenHash(TokenAtRest.hash("cs_unknown"))).thenReturn(Optional.empty());
+
+            assertThat(service.findSharedInScope("cs_shared", USER_ID, ORG_A)).isEmpty();
+            assertThat(service.findSharedInScope("cs_unknown", USER_ID, ORG_A)).isEmpty();
+        }
+    }
+
     // ──────────────── PR28 - org-aware authorization ────────────────
 
     @Nested

@@ -108,7 +108,8 @@ class LifecycleEmailServiceTest {
                 Map.entry("timezone", "UTC"),
                 Map.entry("country", "XX"),
                 Map.entry("marketing_consent", "no"),
-                Map.entry("activated", "no"));
+                Map.entry("activated", "no"),
+                Map.entry("personal_offer_available", "no"));
     }
 
     @Test
@@ -669,5 +670,53 @@ class LifecycleEmailServiceTest {
         service.emit(USER_ID, LifecycleEvents.USER_ACTIVATED, Map.of());
 
         verify(resend).sendEvent("ada@example.com", LifecycleEvents.USER_ACTIVATED, Map.of());
+    }
+
+    @Test
+    void personalOfferClaimFollowsConsentAndContactSync() {
+        user.setMarketingConsent(true);
+        when(resend.upsertContact(anyString(), any(), anyMap())).thenReturn(true);
+        when(resend.sendEventResult(anyString(), anyString(), anyMap()))
+                .thenReturn(ResendClient.EventResult.ACCEPTED);
+        java.util.concurrent.atomic.AtomicInteger claimed = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicReference<ResendClient.EventResult> outcome =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
+        var dispatch = service.submitPersonalOffer(USER_ID, LifecycleEvents.PERSONAL_OFFER_INITIAL_DUE,
+                locale -> Map.of("code", "ABC234"), () -> { claimed.incrementAndGet(); return true; },
+                user::isMarketingConsent, outcome::set);
+
+        assertThat(dispatch).isEqualTo(LifecycleEmailService.Dispatch.QUEUED);
+        assertThat(claimed.get()).isEqualTo(1);
+        assertThat(outcome.get()).isEqualTo(ResendClient.EventResult.ACCEPTED);
+        InOrder order = inOrder(resend);
+        order.verify(resend).upsertContact(anyString(), any(), anyMap());
+        order.verify(resend).sendEventResult(eq("ada@example.com"),
+                eq(LifecycleEvents.PERSONAL_OFFER_INITIAL_DUE), anyMap());
+    }
+
+    @Test
+    void personalOfferOptOutBeforeClaimDoesNotConsumeStep() {
+        java.util.concurrent.atomic.AtomicInteger claims = new java.util.concurrent.atomic.AtomicInteger();
+        service.submitPersonalOffer(USER_ID, LifecycleEvents.PERSONAL_OFFER_INITIAL_DUE,
+                locale -> Map.of("code", "ABC234"), () -> { claims.incrementAndGet(); return true; },
+                () -> true, result -> {});
+
+        assertThat(claims.get()).isZero();
+        verify(resend, never()).sendEventResult(anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    void personalOfferContactFailureLeavesKnownNotSentOutcome() {
+        user.setMarketingConsent(true);
+        when(resend.upsertContact(anyString(), any(), anyMap())).thenReturn(false);
+        java.util.concurrent.atomic.AtomicReference<ResendClient.EventResult> outcome =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
+        service.submitPersonalOffer(USER_ID, LifecycleEvents.PERSONAL_OFFER_INITIAL_DUE,
+                locale -> Map.of("code", "ABC234"), () -> true, () -> true, outcome::set);
+
+        assertThat(outcome.get()).isEqualTo(ResendClient.EventResult.NOT_SENT);
+        verify(resend, never()).sendEventResult(anyString(), anyString(), anyMap());
     }
 }

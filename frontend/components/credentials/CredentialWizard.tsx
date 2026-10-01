@@ -30,6 +30,7 @@ import {
   Eye,
   EyeOff,
   Info,
+  ShieldCheck,
 } from "lucide-react";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import Image from "next/image";
@@ -1869,6 +1870,22 @@ export function CredentialWizard({
 
         {/* Progress stepper */}
         {renderProgressStepper()}
+
+        {/* Reassurance on the entry steps. Worded as "in transit and at rest"
+            on purpose: the backend decrypts the secret to call the provider,
+            so "end-to-end" would be a false claim. */}
+        {(step === "configure" || step === "oauth-config") && (
+          <div
+            data-testid="credential-security-note"
+            className="flex items-start gap-2.5 rounded-xl border border-green-200 bg-green-50 px-3 py-2.5 dark:border-green-900/50 dark:bg-green-950/20"
+          >
+            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-theme-primary">{t("securityNote.title")}</p>
+              <p className="text-sm text-theme-secondary">{t("securityNote.body")}</p>
+            </div>
+          </div>
+        )}
 
         {/* Loading state */}
         {step === "loading" && (
